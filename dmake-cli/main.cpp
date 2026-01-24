@@ -4,19 +4,29 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <CLI/CLI.hpp> // Include CLI11 header
 
 int main(int argc, char* argv[]) {
-    std::string file_path_str = "CMakeLists.txt";
-    if (argc > 1) {
-        file_path_str = argv[1];
+    CLI::App app{"dmake - A CMake-like build system interpreter"};
+
+    std::string directory_path_str;
+    app.add_option("directory", directory_path_str, "Path to the project directory containing CMakeLists.txt")
+       ->required()
+       ->check(CLI::ExistingDirectory);
+
+    CLI11_PARSE(app, argc, argv);
+
+    std::filesystem::path directory_path(directory_path_str);
+    std::filesystem::path cmake_lists_path = directory_path / "CMakeLists.txt";
+
+    if (!std::filesystem::exists(cmake_lists_path)) {
+        std::cerr << "Error: CMakeLists.txt not found in " << directory_path.string() << std::endl;
+        return 1;
     }
 
-    std::filesystem::path file_path(file_path_str);
-    std::filesystem::path script_dir = file_path.parent_path();
-
-    std::ifstream file(file_path);
+    std::ifstream file(cmake_lists_path);
     if (!file) {
-        std::cerr << "Could not open file: " << file_path << std::endl;
+        std::cerr << "Error: Could not open file: " << cmake_lists_path << std::endl;
         return 1;
     }
 
@@ -28,7 +38,7 @@ int main(int argc, char* argv[]) {
     auto ast_or_error = parser.parse();
 
     if (ast_or_error) {
-        dmake::Interpreter interpreter(script_dir.string(), &std::cout, &std::cerr);
+        dmake::Interpreter interpreter(directory_path.string(), &std::cout, &std::cerr);
         interpreter.interpret(ast_or_error.value());
         interpreter.run_build();
     } else {

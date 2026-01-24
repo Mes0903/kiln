@@ -1,12 +1,36 @@
 #include "cmake-language.hpp"
 
 #include <cctype>
+#include <algorithm>
 
 namespace dmake {
 
 Parser::Parser(std::string_view content) : content_(content) {}
 
-std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
+// Helper to peek at the next identifier without consuming it
+std::string Parser::peek_identifier() {
+    auto original_pos = pos_;
+    auto original_row = row_;
+    auto original_col = col_;
+
+    consume_whitespace();
+    
+    size_t start_pos = pos_;
+    while (pos_ < content_.length() && (std::isalnum(content_[pos_]) || content_[pos_] == '_')) {
+        pos_++;
+    }
+    std::string identifier(content_.substr(start_pos, pos_ - start_pos));
+    
+    // Restore parser state
+    pos_ = original_pos;
+    row_ = original_row;
+    col_ = original_col;
+
+    return identifier;
+}
+
+
+std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::vector<std::string>& terminators) {
     std::vector<AstNode> ast;
     while (pos_ < content_.length()) {
         consume_whitespace();
@@ -14,14 +38,70 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
             break;
         }
 
+        auto next_command = peek_identifier();
+        if (std::find(terminators.begin(), terminators.end(), next_command) != terminators.end()) {
+            break; 
+        }
+
         auto command_or_error = parse_command_invocation();
-        if (command_or_error) {
-            ast.emplace_back(std::move(command_or_error.value()));
-        } else {
+        if (!command_or_error) {
             return std::unexpected(command_or_error.error());
+        }
+        
+        std::string identifier_lower = command_or_error.value().identifier;
+        std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+
+        if (identifier_lower == "if") {
+            auto if_block_or_error = parse_if_block(command_or_error.value());
+            if(!if_block_or_error) {
+                return std::unexpected(if_block_or_error.error());
+            }
+            ast.emplace_back(std::move(if_block_or_error.value()));
+        } else {
+            ast.emplace_back(std::move(command_or_error.value()));
         }
     }
     return ast;
+}
+
+std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocation& if_command) {
+    IfBlock if_block;
+    if_block.condition = if_command.arguments;
+
+    auto then_branch_or_error = parse_block({"else", "endif"});
+    if (!then_branch_or_error) {
+        return std::unexpected(then_branch_or_error.error());
+    }
+    if_block.then_branch = std::move(then_branch_or_error.value());
+    
+    auto next_command = peek_identifier();
+    if(next_command == "else") {
+        auto else_command_or_error = parse_command_invocation(); // consume "else"
+        if (!else_command_or_error) {
+            return std::unexpected(else_command_or_error.error());
+        }
+
+        auto else_branch_or_error = parse_block({"endif"});
+        if (!else_branch_or_error) {
+            return std::unexpected(else_branch_or_error.error());
+        }
+        if_block.else_branch = std::move(else_branch_or_error.value());
+    }
+    
+    auto endif_command_or_error = parse_command_invocation(); // consume "endif"
+    if (!endif_command_or_error) {
+         return std::unexpected(endif_command_or_error.error());
+    }
+    if (endif_command_or_error.value().identifier != "endif") {
+        return std::unexpected(ParseError{row_, col_, "Expected 'endif'"});
+    }
+
+    return if_block;
+}
+
+std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
+    return parse_block({});
 }
 
 void Parser::consume_whitespace() {

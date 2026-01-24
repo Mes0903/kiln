@@ -1,4 +1,5 @@
 #include "interperter.hpp"
+#include <stack>
 
 #include <iostream>
 #include <sstream>
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 
 namespace dmake {
 
@@ -111,213 +113,248 @@ std::string LibraryTarget::get_build_command(const std::string& build_dir, const
 
 // --- Interpreter Method Implementations ---
 
-Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err) 
-    : script_dir_(std::move(script_dir)), build_dir_("build"), out_(out), err_(err) {
-    std::filesystem::path full_build_path = std::filesystem::path(script_dir_) / build_dir_;
-    if (!std::filesystem::exists(full_build_path)) {
-        std::filesystem::create_directories(full_build_path);
+Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
+    : build_dir_("build"), out_(out), err_(err), parent_(parent) {
+    call_stack_.push({std::move(script_dir), {}});
+    call_stack_.top().variables["CMAKE_CURRENT_SOURCE_DIR"] = call_stack_.top().script_dir;
+
+    if (parent_ == nullptr) {
+        add_builtin("message", [this](const std::vector<Argument>& args) {
+            if (args.empty()) {
+                return;
+            }
+
+            size_t arg_idx = 0;
+            std::string mode = "INFO"; // Default mode
+
+            if (!args[0].quoted) {
+                std::string first_arg = evaluate_argument(args[0]);
+                std::transform(first_arg.begin(), first_arg.end(), first_arg.begin(), ::toupper);
+
+                if (first_arg == "STATUS") {
+                    mode = "STATUS";
+                    arg_idx = 1;
+                } else if (first_arg == "WARNING") {
+                    mode = "WARN";
+                    arg_idx = 1;
+                } else if (first_arg == "FATAL_ERROR") {
+                    mode = "FATAL";
+                    arg_idx = 1;
+                } else if (first_arg == "ERROR") {
+                    mode = "ERROR";
+                    arg_idx = 1;
+                }
+            }
+
+            std::ostringstream oss;
+            for (size_t i = arg_idx; i < args.size(); ++i) {
+                oss << evaluate_argument(args[i]);
+                if (i < args.size() - 1) {
+                    oss << " ";
+                }
+            }
+            std::string message_content = oss.str();
+
+            if (mode == "STATUS") {
+                print_message("STATUS", message_content, false);
+            } else if (mode == "WARN") {
+                print_message("WARN", message_content, true);
+            } else if (mode == "ERROR") {
+                print_message("ERROR", message_content, true);
+            } else if (mode == "FATAL") {
+                print_message("FATAL", message_content, true);
+                exit(1);
+            } else { // INFO
+                print_message("INFO", message_content, false);
+            }
+        });
+
+        add_builtin("set", [this](const std::vector<Argument>& args) {
+            if (args.size() < 2) {
+                print_message("ERROR", "set() requires at least 2 arguments", true);
+                return;
+            }
+            std::string var_name = evaluate_argument(args[0]);
+            std::string value;
+            for (size_t i = 1; i < args.size(); ++i) {
+                value += evaluate_argument(args[i]);
+            }
+            set_variable(var_name, value);
+        });
+
+        add_builtin("add_executable", [this](const std::vector<Argument>& args) {
+            if (args.empty()) {
+                print_message("ERROR", "add_executable() requires a target name", true);
+                return;
+            }
+            std::string name = evaluate_argument(args[0]);
+            auto target = std::make_shared<ExecutableTarget>(name);
+            std::vector<std::string> sources;
+            for(size_t i = 1; i < args.size(); ++i) {
+                sources.push_back(evaluate_argument(args[i]));
+            }
+            target->add_sources(sources, PropertyVisibility::PRIVATE);
+            targets_[name] = target;
+        });
+
+        add_builtin("add_library", [this](const std::vector<Argument>& args) {
+             if (args.size() < 2) {
+                print_message("ERROR", "add_library() requires a name and sources", true);
+                return;
+            }
+            std::string name = evaluate_argument(args[0]);
+            std::vector<std::string> sources;
+            bool is_shared = false;
+            for(size_t i = 1; i < args.size(); ++i) {
+                std::string arg_val = evaluate_argument(args[i]);
+                if(arg_val == "SHARED") {
+                    is_shared = true;
+                } else if (arg_val != "STATIC") { // Ignore STATIC
+                    sources.push_back(arg_val);
+                }
+            }
+
+            TargetType type = is_shared ? TargetType::SHARED_LIBRARY : TargetType::STATIC_LIBRARY;
+            auto target = std::make_shared<LibraryTarget>(name, type);
+            target->add_sources(sources, PropertyVisibility::PRIVATE);
+            targets_[name] = target;
+        });
+
+        add_builtin("target_include_directories", [this](const std::vector<Argument>& args) {
+            if (args.size() < 2) {
+                print_message("ERROR", "target_include_directories() requires a target and directories", true);
+                return;
+            }
+            std::string target_name = evaluate_argument(args[0]);
+            auto it = targets_.find(target_name);
+            if (it == targets_.end()) {
+                print_message("ERROR", "target_include_directories() given unknown target: " + target_name, true);
+                return;
+            }
+
+            PropertyVisibility visibility = PropertyVisibility::PRIVATE;
+            std::vector<std::string> dirs;
+            for(size_t i = 1; i < args.size(); ++i) {
+                 std::string arg_val = evaluate_argument(args[i]);
+                if (arg_val == "PUBLIC") {
+                    visibility = PropertyVisibility::PUBLIC;
+                } else if (arg_val == "PRIVATE") {
+                    visibility = PropertyVisibility::PRIVATE;
+                } else if (arg_val == "INTERFACE") {
+                    visibility = PropertyVisibility::INTERFACE;
+                } else {
+                    dirs.push_back(arg_val);
+                }
+            }
+            it->second->add_include_directories(dirs, visibility);
+        });
+
+        add_builtin("target_link_libraries", [this](const std::vector<Argument>& args) {
+            if (args.size() < 2) {
+                print_message("ERROR", "target_link_libraries() requires a target and libraries", true);
+                return;
+            }
+            std::string target_name = evaluate_argument(args[0]);
+            auto it = targets_.find(target_name);
+            if (it == targets_.end()) {
+                print_message("ERROR", "target_link_libraries() given unknown target: " + target_name, true);
+                return;
+            }
+
+            PropertyVisibility visibility = PropertyVisibility::PRIVATE;
+            std::vector<std::string> libs;
+            for(size_t i = 1; i < args.size(); ++i) {
+                std::string arg_val = evaluate_argument(args[i]);
+                if (arg_val == "PUBLIC") {
+                    visibility = PropertyVisibility::PUBLIC;
+                } else if (arg_val == "PRIVATE") {
+                    visibility = PropertyVisibility::PRIVATE;
+                } else if (arg_val == "INTERFACE") {
+                    visibility = PropertyVisibility::INTERFACE;
+                } else {
+                    libs.push_back(arg_val);
+                }
+            }
+            it->second->add_linked_libraries(libs, visibility);
+        });
+
+        add_builtin("set_target_properties", [this](const std::vector<Argument>& args) {
+            if (args.size() < 4) {
+                 print_message("ERROR", "set_target_properties() has incorrect format", true);
+                 return;
+            }
+            std::string target_name = evaluate_argument(args[0]);
+            auto it = targets_.find(target_name);
+            if (it == targets_.end()) {
+                print_message("ERROR", "set_target_properties() given unknown target: " + target_name, true);
+                return;
+            }
+
+            if(evaluate_argument(args[1]) != "PROPERTIES") {
+                print_message("ERROR", "set_target_properties() expected PROPERTIES keyword", true);
+                return;
+            }
+
+            for(size_t i = 2; i < args.size() - 1; i+=2) {
+                std::string key = evaluate_argument(args[i]);
+                std::string value = evaluate_argument(args[i+1]);
+                if (key == "OUTPUT_NAME") {
+                    it->second->set_output_name(value);
+                }
+            }
+        });
+
+        add_builtin("cmake_minimum_required", [this](const std::vector<Argument>&) {
+            print_message("INFO", "Ignoring cmake_minimum_required command.", false);
+        });
+
+        add_builtin("project", [this](const std::vector<Argument>&) {
+            print_message("INFO", "Ignoring project command.", false);
+        });
+
+        add_builtin("add_subdirectory", [this](const std::vector<Argument>& args) {
+            if (args.empty()) {
+                print_message("ERROR", "add_subdirectory() requires a directory argument", true);
+                return;
+            }
+            std::string subdir_name = evaluate_argument(args[0]);
+            std::filesystem::path subdir_path = std::filesystem::path(call_stack_.top().script_dir) / subdir_name;
+            std::filesystem::path cmake_lists_path = subdir_path / "CMakeLists.txt";
+
+            if (!std::filesystem::exists(cmake_lists_path)) {
+                print_message("ERROR", "CMakeLists.txt not found in " + subdir_path.string(), true);
+                return;
+            }
+
+            std::string content;
+            std::ifstream file(cmake_lists_path);
+            if(file) {
+                std::ostringstream ss;
+                ss << file.rdbuf();
+                content = ss.str();
+            } else {
+                print_message("ERROR", "Could not read " + cmake_lists_path.string(), true);
+                return;
+            }
+
+            Interpreter sub_interpreter(subdir_path.string(), out_, err_, this);
+            Parser sub_parser(content);
+            auto ast_or_error = sub_parser.parse();
+            if (ast_or_error) {
+                sub_interpreter.interpret(ast_or_error.value());
+            } else {
+                print_message("ERROR", "Failed to parse " + cmake_lists_path.string() + ": " + ast_or_error.error().reason, true);
+            }
+        });
     }
-    
-    variables_["CMAKE_CURRENT_SOURCE_DIR"] = script_dir_;
-
-    add_builtin("message", [this](const std::vector<Argument>& args) {
-        if (args.empty()) {
-            return;
-        }
-
-        size_t arg_idx = 0;
-        std::string mode = "INFO"; // Default mode
-
-        if (!args[0].quoted) {
-            std::string first_arg = evaluate_argument(args[0]);
-            std::transform(first_arg.begin(), first_arg.end(), first_arg.begin(), ::toupper);
-
-            if (first_arg == "STATUS") {
-                mode = "STATUS";
-                arg_idx = 1;
-            } else if (first_arg == "WARNING") {
-                mode = "WARN";
-                arg_idx = 1;
-            } else if (first_arg == "FATAL_ERROR") {
-                mode = "FATAL";
-                arg_idx = 1;
-            } else if (first_arg == "ERROR") {
-                mode = "ERROR";
-                arg_idx = 1;
-            }
-        }
-
-        std::ostringstream oss;
-        for (size_t i = arg_idx; i < args.size(); ++i) {
-            oss << evaluate_argument(args[i]);
-            if (i < args.size() - 1) {
-                oss << " ";
-            }
-        }
-        std::string message_content = oss.str();
-
-        if (mode == "STATUS") {
-            print_message("STATUS", message_content, false);
-        } else if (mode == "WARN") {
-            print_message("WARN", message_content, true);
-        } else if (mode == "ERROR") {
-            print_message("ERROR", message_content, true);
-        } else if (mode == "FATAL") {
-            print_message("FATAL", message_content, true);
-            exit(1);
-        } else { // INFO
-            print_message("INFO", message_content, false);
-        }
-    });
-
-    add_builtin("set", [this](const std::vector<Argument>& args) {
-        if (args.size() < 2) {
-            print_message("ERROR", "set() requires at least 2 arguments", true);
-            return;
-        }
-        std::string var_name = evaluate_argument(args[0]);
-        std::string value;
-        for (size_t i = 1; i < args.size(); ++i) {
-            value += evaluate_argument(args[i]);
-        }
-        variables_[var_name] = value;
-    });
-
-    add_builtin("add_executable", [this](const std::vector<Argument>& args) {
-        if (args.empty()) {
-            print_message("ERROR", "add_executable() requires a target name", true);
-            return;
-        }
-        std::string name = evaluate_argument(args[0]);
-        auto target = std::make_shared<ExecutableTarget>(name);
-        std::vector<std::string> sources;
-        for(size_t i = 1; i < args.size(); ++i) {
-            sources.push_back(evaluate_argument(args[i]));
-        }
-        target->add_sources(sources, PropertyVisibility::PRIVATE);
-        targets_[name] = target;
-    });
-
-    add_builtin("add_library", [this](const std::vector<Argument>& args) {
-         if (args.size() < 2) {
-            print_message("ERROR", "add_library() requires a name and sources", true);
-            return;
-        }
-        std::string name = evaluate_argument(args[0]);
-        std::vector<std::string> sources;
-        bool is_shared = false;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string arg_val = evaluate_argument(args[i]);
-            if(arg_val == "SHARED") {
-                is_shared = true;
-            } else if (arg_val != "STATIC") { // Ignore STATIC
-                sources.push_back(arg_val);
-            }
-        }
-
-        TargetType type = is_shared ? TargetType::SHARED_LIBRARY : TargetType::STATIC_LIBRARY;
-        auto target = std::make_shared<LibraryTarget>(name, type);
-        target->add_sources(sources, PropertyVisibility::PRIVATE);
-        targets_[name] = target;
-    });
-
-    add_builtin("target_include_directories", [this](const std::vector<Argument>& args) {
-        if (args.size() < 2) {
-            print_message("ERROR", "target_include_directories() requires a target and directories", true);
-            return;
-        }
-        std::string target_name = evaluate_argument(args[0]);
-        auto it = targets_.find(target_name);
-        if (it == targets_.end()) {
-            print_message("ERROR", "target_include_directories() given unknown target: " + target_name, true);
-            return;
-        }
-
-        PropertyVisibility visibility = PropertyVisibility::PRIVATE;
-        std::vector<std::string> dirs;
-        for(size_t i = 1; i < args.size(); ++i) {
-             std::string arg_val = evaluate_argument(args[i]);
-            if (arg_val == "PUBLIC") {
-                visibility = PropertyVisibility::PUBLIC;
-            } else if (arg_val == "PRIVATE") {
-                visibility = PropertyVisibility::PRIVATE;
-            } else if (arg_val == "INTERFACE") {
-                visibility = PropertyVisibility::INTERFACE;
-            } else {
-                dirs.push_back(arg_val);
-            }
-        }
-        it->second->add_include_directories(dirs, visibility);
-    });
-
-    add_builtin("target_link_libraries", [this](const std::vector<Argument>& args) {
-        if (args.size() < 2) {
-            print_message("ERROR", "target_link_libraries() requires a target and libraries", true);
-            return;
-        }
-        std::string target_name = evaluate_argument(args[0]);
-        auto it = targets_.find(target_name);
-        if (it == targets_.end()) {
-            print_message("ERROR", "target_link_libraries() given unknown target: " + target_name, true);
-            return;
-        }
-
-        PropertyVisibility visibility = PropertyVisibility::PRIVATE;
-        std::vector<std::string> libs;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string arg_val = evaluate_argument(args[i]);
-            if (arg_val == "PUBLIC") {
-                visibility = PropertyVisibility::PUBLIC;
-            } else if (arg_val == "PRIVATE") {
-                visibility = PropertyVisibility::PRIVATE;
-            } else if (arg_val == "INTERFACE") {
-                visibility = PropertyVisibility::INTERFACE;
-            } else {
-                libs.push_back(arg_val);
-            }
-        }
-        it->second->add_linked_libraries(libs, visibility);
-    });
-
-    add_builtin("set_target_properties", [this](const std::vector<Argument>& args) {
-        if (args.size() < 4) {
-             print_message("ERROR", "set_target_properties() has incorrect format", true);
-             return;
-        }
-        std::string target_name = evaluate_argument(args[0]);
-        auto it = targets_.find(target_name);
-        if (it == targets_.end()) {
-            print_message("ERROR", "set_target_properties() given unknown target: " + target_name, true);
-            return;
-        }
-        
-        if(evaluate_argument(args[1]) != "PROPERTIES") {
-            print_message("ERROR", "set_target_properties() expected PROPERTIES keyword", true);
-            return;
-        }
-
-        for(size_t i = 2; i < args.size() - 1; i+=2) {
-            std::string key = evaluate_argument(args[i]);
-            std::string value = evaluate_argument(args[i+1]);
-            if (key == "OUTPUT_NAME") {
-                it->second->set_output_name(value);
-            }
-        }
-    });
-
-    add_builtin("cmake_minimum_required", [this](const std::vector<Argument>&) {
-        print_message("INFO", "Ignoring cmake_minimum_required command.", false);
-    });
-
-    add_builtin("project", [this](const std::vector<Argument>&) {
-        print_message("INFO", "Ignoring project command.", false);
-    });
 }
 
 void Interpreter::interpret(const std::vector<AstNode>& ast) {
     for (const auto& node : ast) {
         if (std::holds_alternative<CommandInvocation>(node)) {
             execute_command(std::get<CommandInvocation>(node));
+        } else if (std::holds_alternative<IfBlock>(node)) {
+            execute_if_block(std::get<IfBlock>(node));
         }
     }
 }
@@ -327,7 +364,7 @@ void Interpreter::run_build() {
 
     for (const auto& [name, target] : targets_) {
         if(target->get_type() != TargetType::EXECUTABLE) {
-             std::string command = target->get_build_command(build_dir_, script_dir_);
+             std::string command = target->get_build_command(build_dir_, call_stack_.top().script_dir);
             print_message("INFO", "Building target: " + name, false);
             print_message("INFO", "Command: " + command, false);
             int result = system(command.c_str());
@@ -340,7 +377,7 @@ void Interpreter::run_build() {
     }
      for (const auto& [name, target] : targets_) {
         if(target->get_type() == TargetType::EXECUTABLE) {
-             std::string command = target->get_build_command(build_dir_, script_dir_);
+             std::string command = target->get_build_command(build_dir_, call_stack_.top().script_dir);
             print_message("INFO", "Building target: " + name, false);
             print_message("INFO", "Command: " + command, false);
             int result = system(command.c_str());
@@ -356,16 +393,71 @@ void Interpreter::run_build() {
 }
 
 void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
-    builtins_[name] = func;
+    if (parent_) {
+        parent_->add_builtin(name, func);
+    } else {
+        builtins_[name] = func;
+    }
 }
 
 void Interpreter::execute_command(const CommandInvocation& cmd) {
+    if (parent_) {
+        parent_->execute_command(cmd);
+        return;
+    }
     auto it = builtins_.find(cmd.identifier);
     if (it != builtins_.end()) {
         it->second(cmd.arguments);
     } else {
-        print_message("ERROR", "Unknown command: " + cmd.identifier, true);
+        print_message("FATAL", "Unknown command: " + cmd.identifier, true);
     }
+}
+
+void Interpreter::execute_if_block(const IfBlock& if_block) {
+    if (evaluate_condition(if_block.condition)) {
+        interpret(if_block.then_branch);
+    } else {
+        interpret(if_block.else_branch);
+    }
+}
+
+bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
+    if (condition.empty()) {
+        return false;
+    }
+
+    const auto& arg = condition[0];
+    std::string value;
+
+    if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
+        // This is a simple unquoted argument, like `MY_VAR` in `if(MY_VAR)`.
+        // It could be a variable name, or a literal.
+        const std::string& potential_var = std::get<std::string>(arg.parts[0]);
+
+        bool is_var = false;
+        if (!call_stack_.empty()) {
+            const auto& current_frame_vars = call_stack_.top().variables;
+            if(current_frame_vars.count(potential_var)) is_var = true;
+        }
+
+        if (is_var) {
+            value = get_variable(potential_var);
+        } else {
+            value = potential_var;
+        }
+
+    } else {
+        // Quoted argument or contains ${...}, so we just evaluate it.
+        value = evaluate_argument(arg);
+    }
+
+    std::transform(value.begin(), value.end(), value.begin(), ::toupper);
+
+    if (value == "FALSE" || value == "OFF" || value == "0" || value.empty()) {
+        return false;
+    }
+
+    return true;
 }
 
 std::string Interpreter::evaluate_argument(const Argument& arg) {
@@ -375,15 +467,30 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
             result += std::get<std::string>(part);
         } else if (std::holds_alternative<VariableReference>(part)) {
             const auto& var_ref = std::get<VariableReference>(part);
-            auto it = variables_.find(var_ref.name);
-            if (it != variables_.end()) {
-                result += it->second;
-            } else {
-                result += "${" + var_ref.name + "}";
-            }
+            result += get_variable(var_ref.name);
         }
     }
     return result;
+}
+
+std::string Interpreter::get_variable(const std::string& var_name) const {
+    if (!call_stack_.empty()) {
+        const auto& current_frame_vars = call_stack_.top().variables;
+        auto it = current_frame_vars.find(var_name);
+        if (it != current_frame_vars.end()) {
+            return it->second;
+        }
+    }
+    if (parent_) {
+        return parent_->get_variable(var_name);
+    }
+    return "";
+}
+
+void Interpreter::set_variable(const std::string& var_name, const std::string& value) {
+    if (!call_stack_.empty()) {
+        call_stack_.top().variables[var_name] = value;
+    }
 }
 
 void Interpreter::print_message(const std::string& mode, const std::string& message, bool is_error) {

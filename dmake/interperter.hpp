@@ -7,6 +7,7 @@
 #include <unistd.h> // For isatty
 #include <vector>
 #include <memory> // For std::shared_ptr
+#include <stack>
 
 namespace dmake {
 
@@ -66,11 +67,16 @@ public:
 };
 
 
+struct CallFrame {
+    std::string script_dir;
+    std::map<std::string, std::string> variables;
+};
+
 class Interpreter {
 public:
     using BuiltinFunction = std::function<void(const std::vector<Argument>&)>;
 
-    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr);
+    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr);
 
     void interpret(const std::vector<AstNode>& ast);
     void run_build();
@@ -79,15 +85,21 @@ public:
 
 private:
     void execute_command(const CommandInvocation& cmd);
+    void execute_if_block(const IfBlock& if_block);
+    bool evaluate_condition(const std::vector<Argument>& condition);
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
-    std::string script_dir_;
+    std::string get_variable(const std::string& var_name) const;
+    void set_variable(const std::string& var_name, const std::string& value);
+
+
     std::string build_dir_;
     std::ostream* out_;
     std::ostream* err_;
-    std::map<std::string, std::string> variables_;
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
+    Interpreter* parent_ = nullptr;
+    std::stack<CallFrame> call_stack_;
 };
 
 } // namespace dmake

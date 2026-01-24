@@ -13,7 +13,8 @@ add_library(dmake SHARED
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(dmake_cli dmake-cli/main.cpp)
-target_link_libraries(dmake_cli PRIVATE dmake)
+find_package(CLI11 CONFIG REQUIRED)
+target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11)
 set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake
 )
