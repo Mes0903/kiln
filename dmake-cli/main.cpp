@@ -43,7 +43,33 @@ int main(int argc, char* argv[]) {
         interpreter.run_build();
     } else {
         const auto& error = ast_or_error.error();
-        std::cerr << "Parse failed at " << error.row << ":" << error.col << " - " << error.reason << std::endl;
+
+        // Print header with file location
+        std::cerr << cmake_lists_path.string() << ":" << error.row << ":" << error.col << ": error: " << error.reason << std::endl;
+
+        // Find the start of the error line by counting newlines
+        size_t line_start = 0;
+        size_t current_line = 1;
+        for (size_t i = 0; i < content.size() && current_line < error.row; ++i) {
+            if (content[i] == '\n') {
+                ++current_line;
+                line_start = i + 1;
+            }
+        }
+
+        // Find the end of the line
+        size_t line_end = content.find('\n', line_start);
+        if (line_end == std::string::npos) line_end = content.size();
+
+        std::string line = content.substr(line_start, line_end - line_start);
+
+        // Print the line with line number
+        std::cerr << "    " << error.row << " | " << line << std::endl;
+
+        // Print the pointer
+        std::string prefix = "    " + std::to_string(error.row) + " | ";
+        std::cerr << std::string(prefix.length() + error.col - 1, ' ') << "^" << std::endl;
+
         return 1;
     }
 
