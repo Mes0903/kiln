@@ -92,7 +92,7 @@ public:
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
-    std::expected<void, InterpreterError> run_build();
+    std::expected<void, InterpreterError> run_build(int jobs = 0);
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
 

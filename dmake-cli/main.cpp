@@ -14,6 +14,9 @@ int main(int argc, char* argv[]) {
        ->required()
        ->check(CLI::ExistingDirectory);
 
+    int jobs = 0;
+    app.add_option("-j,--parallel", jobs, "Number of parallel jobs to run (default: 0, which uses all available cores)");
+
     CLI11_PARSE(app, argc, argv);
 
     std::filesystem::path directory_path(directory_path_str);
@@ -96,7 +99,7 @@ int main(int argc, char* argv[]) {
     }
 
 
-    auto build_result = interpreter.run_build();
+    auto build_result = interpreter.run_build(jobs);
     if (!build_result) {
         const auto& error = build_result.error();
         std::cerr << "\033[1;31merror:\033[0m " << error.message << std::endl;

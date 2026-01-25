@@ -128,8 +128,8 @@ Interpreter* Interpreter::get_root() {
     return r;
 }
 
-std::expected<void, InterpreterError> Interpreter::run_build() {
-    if (parent_ != nullptr) return get_root()->run_build();
+std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
+    if (parent_ != nullptr) return get_root()->run_build(jobs);
 
     std::string root_dir = call_stack_.top().script_dir;
     std::filesystem::path full_build_path = std::filesystem::path(root_dir) / build_dir_;
@@ -164,7 +164,7 @@ std::expected<void, InterpreterError> Interpreter::run_build() {
 
     // 2. Execute the build graph
     print_message("STATUS", "Starting build...");
-    auto result = graph.execute(full_build_path.string());
+    auto result = graph.execute(full_build_path.string(), jobs);
 
     if (!result) {
         return std::unexpected(InterpreterError{current_file_, 0, 0, result.error()});

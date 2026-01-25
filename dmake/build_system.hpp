@@ -34,8 +34,8 @@ public:
     // Checks for cycles and returns an error message if one is found
     std::optional<std::string> check_for_cycles();
     
-    // Executes the graph. Currently single-threaded.
-    std::expected<void, std::string> execute(const std::string& build_dir);
+    // Executes the graph.
+    std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
 
     // Helpers for artifact task generation
     bool has_task(const std::string& id) const { return tasks_.count(id); }
@@ -44,6 +44,7 @@ public:
 private:
     std::map<std::string, BuildTask> tasks_;
     mutable std::mutex output_mutex_;
+    mutable std::mutex state_mutex_;
     
     // Incremental build logic
     std::expected<std::string, std::string> calculate_signature(const BuildTask& task);

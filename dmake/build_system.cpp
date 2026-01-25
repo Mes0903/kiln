@@ -6,6 +6,9 @@
 #include <filesystem>
 #include <algorithm>
 #include <array>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
 
 namespace dmake {
 
@@ -55,9 +58,8 @@ std::optional<std::string> BuildGraph::check_for_cycles() {
     return std::nullopt;
 }
 
-std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir) {
+std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir, int jobs) {
     // 1. Resolve cross-artifact dependencies
-    // If a task input is produced by another task, add a dependency
     std::map<std::string, std::string> file_to_task;
     for (const auto& [id, task] : tasks_) {
         for (const auto& out : task.outputs) file_to_task[out] = id;
@@ -78,9 +80,17 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cache = load_cache(build_dir);
     std::map<std::string, std::string> new_cache;
 
-    // 3. Simple topological sort execution (single-threaded for now)
+    // 3. Parallel execution
     std::set<std::string> completed;
-    std::vector<std::string> ready;
+    std::set<std::string> running;
+    std::string fatal_error;
+    std::mutex loop_mutex;
+    std::condition_variable cv;
+
+    if (jobs <= 0) {
+        jobs = std::thread::hardware_concurrency();
+        if (jobs <= 0) jobs = 2;
+    }
 
     auto is_ready = [&](const std::string& id) {
         for (const auto& dep : tasks_[id].dependencies) {
@@ -90,15 +100,57 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     };
 
     auto start_time = std::chrono::steady_clock::now();
-    size_t total_tasks = tasks_.size();
-    while (completed.size() < tasks_.size()) {
-        bool progress = false;
-        for (const auto& [id, task] : tasks_) {
-            if (completed.count(id)) continue;
-            if (is_ready(id)) {
-                // Check if we can skip
+    
+    while (true) {
+        std::vector<std::string> to_start;
+        {
+            std::unique_lock<std::mutex> lock(loop_mutex);
+            if (!fatal_error.empty()) return std::unexpected(fatal_error);
+            if (completed.size() == tasks_.size()) break;
+
+            for (const auto& [id, task] : tasks_) {
+                if (completed.count(id) == 0 && running.count(id) == 0 && is_ready(id)) {
+                    to_start.push_back(id);
+                }
+            }
+
+            if (to_start.empty() && running.empty()) {
+                // Stall detection
+                std::ostringstream oss;
+                oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
+                for (const auto& [id, task] : tasks_) {
+                    if (completed.count(id)) continue;
+                    oss << "\n  - " << id << " depends on: ";
+                    for (const auto& dep : task.dependencies) {
+                        if (completed.find(dep) == completed.end()) oss << dep << " ";
+                    }
+                }
+                return std::unexpected(oss.str());
+            }
+
+            if (to_start.empty()) {
+                cv.wait(lock);
+                continue;
+            }
+        }
+
+        for (const auto& id : to_start) {
+            {
+                std::unique_lock<std::mutex> lock(loop_mutex);
+                if (running.size() >= static_cast<size_t>(jobs)) break;
+                running.insert(id);
+            }
+
+            std::thread([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
+                const auto& task = tasks_.at(id);
+                
                 auto sig_res = calculate_signature(task);
-                if (!sig_res) return std::unexpected(sig_res.error());
+                if (!sig_res) {
+                    std::lock_guard<std::mutex> lock(loop_mutex);
+                    fatal_error = sig_res.error();
+                    cv.notify_all();
+                    return;
+                }
                 std::string sig = *sig_res;
 
                 bool outputs_exist = true;
@@ -108,12 +160,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                 if (outputs_exist && cache.count(id) && cache[id] == sig) {
                     // Skip
-                    new_cache[id] = sig;
-                    completed.insert(id);
-                    progress = true;
-                    continue;
                 } else {
-                    // Execute
                     std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
                     std::string verb = "Compiling";
                     std::string target_display = std::filesystem::path(id).filename().string();
@@ -122,48 +169,51 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         verb = "  Linking";
                     }
 
-                    // Cargo style: Green Bold Verb, followed by artifact and file
                     {
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m [" 
                                   << artifact_name << "] " << target_display << std::endl;
                     }
 
-                    // Ensure output directories exist
                     for (const auto& out : task.outputs) {
                         std::error_code ec;
                         std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
-                        if (ec) return std::unexpected("Failed to create directory for " + out + ": " + ec.message());
+                        if (ec) {
+                            std::lock_guard<std::mutex> lock(loop_mutex);
+                            fatal_error = "Failed to create directory for " + out + ": " + ec.message();
+                            cv.notify_all();
+                            return;
+                        }
                     }
                     
                     auto result = run_command(task.command);
                     if (result.exit_code != 0) {
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         if (!result.output.empty()) std::cerr << result.output << std::endl;
-                        return std::unexpected("Command failed: " + task.command);
+                        
+                        std::lock_guard<std::mutex> lock_loop(loop_mutex);
+                        fatal_error = "Command failed: " + task.command;
+                        cv.notify_all();
+                        return;
                     } else if (!result.output.empty()) {
-                        // Success but has output (likely warnings)
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         std::cout << result.output << std::endl;
                     }
                 }
 
-                new_cache[id] = sig;
-                completed.insert(id);
-                progress = true;
-            }
-        }
-        if (!progress) {
-            std::ostringstream oss;
-            oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
-            for (const auto& [id, task] : tasks_) {
-                if (completed.count(id)) continue;
-                oss << "\n  - " << id << " depends on: ";
-                for (const auto& dep : task.dependencies) {
-                    if (completed.find(dep) == completed.end()) oss << dep << " ";
+                {
+                    std::lock_guard<std::mutex> lock(loop_mutex);
+                    new_cache[id] = sig;
+                    completed.insert(id);
+                    running.erase(id);
+                    cv.notify_all();
                 }
-            }
-            return std::unexpected(oss.str());
+            }).detach();
+        }
+
+        std::unique_lock<std::mutex> lock(loop_mutex);
+        if (running.size() >= static_cast<size_t>(jobs) || to_start.empty()) {
+            cv.wait(lock);
         }
     }
 
@@ -261,11 +311,15 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
 }
 
 std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& path) {
-    auto it = stat_cache_.find(path);
-    if (it != stat_cache_.end()) return it->second;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        auto it = stat_cache_.find(path);
+        if (it != stat_cache_.end()) return it->second;
+    }
 
     try {
         auto time = std::filesystem::last_write_time(path);
+        std::lock_guard<std::mutex> lock(state_mutex_);
         stat_cache_[path] = time;
         return time;
     } catch (...) {
@@ -358,7 +412,10 @@ std::expected<void, std::string> BuildGraph::save_cache(const std::string& build
 }
 
 std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
-    if (compiler_version_cache_) return *compiler_version_cache_;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (compiler_version_cache_) return *compiler_version_cache_;
+    }
 
     std::array<char, 128> buffer;
     std::string result;
@@ -381,6 +438,8 @@ std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
     }
 
     if (result.back() == '\n') result.pop_back();
+    
+    std::lock_guard<std::mutex> lock(state_mutex_);
     compiler_version_cache_ = result;
 
     return *compiler_version_cache_;
