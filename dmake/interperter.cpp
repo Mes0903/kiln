@@ -1,6 +1,7 @@
 #include "interperter.hpp"
 #include "builtins/registry.hpp"
 #include <stack>
+#include <set>
 
 #include <iostream>
 #include <sstream>
@@ -131,40 +132,83 @@ Interpreter* Interpreter::get_root() {
 std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
     if (parent_ != nullptr) return get_root()->run_build(jobs);
 
-    std::string root_dir = call_stack_.top().script_dir;
-    std::filesystem::path full_build_path = std::filesystem::path(root_dir) / build_dir_;
+    std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
 
     print_message("STATUS", "Generating build graph...");
     BuildGraph graph;
 
-    // 1. Generate tasks for all artifacts
+    // 1. Resolve cross-artifact library dependencies and propagate properties
     for (const auto& [name, artifact] : artifacts_) {
-        artifact->generate_tasks(graph, build_dir_, root_dir);
+        // Helper to recursively collect interface properties
+        std::set<std::string> visited;
+        std::function<void(const std::shared_ptr<Artifact>&)> propagate = [&](const std::shared_ptr<Artifact>& dep) {
+            if (visited.count(dep->get_name())) return;
+            visited.insert(dep->get_name());
+
+            // Propagate includes, defs, and opts from dep to artifact
+            artifact->add_include_directories(dep->get_include_directories(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
+            artifact->add_include_directories(dep->get_include_directories(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
+            
+            artifact->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
+            artifact->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
+            
+            artifact->add_compile_options(dep->get_compile_options(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
+            artifact->add_compile_options(dep->get_compile_options(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
+
+            // Recurse into dep's dependencies
+            auto collect_deps = [&](PropertyVisibility vis) {
+                for (const auto& lib_name : dep->get_linked_libraries(vis)) {
+                    if (artifacts_.count(lib_name)) {
+                        propagate(artifacts_[lib_name]);
+                    }
+                }
+            };
+            collect_deps(PropertyVisibility::PUBLIC);
+            collect_deps(PropertyVisibility::INTERFACE);
+        };
+
+        auto add_lib_deps = [&](PropertyVisibility vis) {
+            for (const auto& lib_name : artifact->get_linked_libraries(vis)) {
+                if (artifacts_.count(lib_name)) {
+                    auto dep = artifacts_[lib_name];
+                    propagate(dep);
+                }
+            }
+        };
+        
+        add_lib_deps(PropertyVisibility::PRIVATE);
+        add_lib_deps(PropertyVisibility::PUBLIC);
     }
 
-    // Resolve cross-artifact library dependencies
+    // 2. Generate tasks for all artifacts
     for (const auto& [name, artifact] : artifacts_) {
-        std::string out_path = artifact->get_output_path(build_dir_, root_dir);
+        artifact->generate_tasks(graph);
+    }
+
+    // Link dependency resolution (adding inputs to link tasks)
+    for (const auto& [name, artifact] : artifacts_) {
+        std::string out_path = artifact->get_output_path();
         if (graph.has_task(out_path)) {
             auto& link_task = graph.get_task(out_path);
             
-            auto add_lib_deps = [&](PropertyVisibility vis) {
+            auto add_lib_inputs = [&](PropertyVisibility vis) {
                 for (const auto& lib_name : artifact->get_linked_libraries(vis)) {
                     if (artifacts_.count(lib_name)) {
-                        std::string lib_out = artifacts_[lib_name]->get_output_path(build_dir_, root_dir);
+                        auto dep = artifacts_[lib_name];
+                        std::string lib_out = dep->get_output_path();
                         link_task.inputs.push_back(lib_out);
                     }
                 }
             };
-            
-            add_lib_deps(PropertyVisibility::PRIVATE);
-            add_lib_deps(PropertyVisibility::PUBLIC);
+            add_lib_inputs(PropertyVisibility::PRIVATE);
+            add_lib_inputs(PropertyVisibility::PUBLIC);
         }
     }
 
-    // 2. Execute the build graph
+    // 3. Execute the build graph
     print_message("STATUS", "Starting build...");
-    auto result = graph.execute(full_build_path.string(), jobs);
+    auto result = graph.execute(root_binary_dir, jobs);
+
 
     if (!result) {
         return std::unexpected(InterpreterError{current_file_, 0, 0, result.error()});
@@ -175,19 +219,21 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
 }
 
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
-    : build_dir_("build"), out_(out), err_(err), parent_(parent) {
-    call_stack_.push({std::move(script_dir), {}});
+    : out_(out), err_(err), parent_(parent) {
+    
+    std::filesystem::path abs_script_dir = std::filesystem::absolute(script_dir).lexically_normal();
+    call_stack_.push({abs_script_dir.string(), {}});
 
     auto& vars = call_stack_.top().variables;
-    vars["CMAKE_CURRENT_SOURCE_DIR"] = call_stack_.top().script_dir;
-    vars["CMAKE_CURRENT_BINARY_DIR"] = (std::filesystem::path(vars["CMAKE_CURRENT_SOURCE_DIR"]) / build_dir_).string();
+    vars["CMAKE_CURRENT_SOURCE_DIR"] = abs_script_dir.string();
 
     if (parent_ == nullptr) {
-        // Global root variables
+        build_dir_ = "build";
+        std::filesystem::path abs_binary_dir = abs_script_dir / build_dir_;
+        
         vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
-        vars["CMAKE_BINARY_DIR"] = vars["CMAKE_CURRENT_BINARY_DIR"];
-        vars["PROJECT_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
-        vars["PROJECT_BINARY_DIR"] = vars["CMAKE_CURRENT_BINARY_DIR"];
+        vars["CMAKE_BINARY_DIR"] = abs_binary_dir.string();
+        vars["CMAKE_CURRENT_BINARY_DIR"] = abs_binary_dir.string();
 
         vars["CMAKE_VERSION"] = "3.20.0";
         vars["CMAKE_MAJOR_VERSION"] = "3";
@@ -293,6 +339,14 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             }
             interp.set_loop_control(Interpreter::LoopControl::CONTINUE);
         });
+    } else {
+        vars["CMAKE_SOURCE_DIR"] = parent_->get_variable("CMAKE_SOURCE_DIR");
+        vars["CMAKE_BINARY_DIR"] = parent_->get_variable("CMAKE_BINARY_DIR");
+        build_dir_ = parent_->build_dir_;
+
+        // Calculate CMAKE_CURRENT_BINARY_DIR based on relative path from source root
+        std::filesystem::path rel_path = std::filesystem::relative(abs_script_dir, parent_->get_variable("CMAKE_SOURCE_DIR"));
+        vars["CMAKE_CURRENT_BINARY_DIR"] = (std::filesystem::path(vars["CMAKE_BINARY_DIR"]) / rel_path).lexically_normal().string();
     }
 }
 

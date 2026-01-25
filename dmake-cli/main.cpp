@@ -22,7 +22,14 @@ int main(int argc, char* argv[]) {
 
     CLI11_PARSE(app, argc, argv);
 
-    std::filesystem::path directory_path(directory_path_str);
+    std::filesystem::path directory_path;
+    try {
+        directory_path = std::filesystem::canonical(directory_path_str);
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error: Invalid project directory: " << e.what() << std::endl;
+        return 1;
+    }
+
     std::filesystem::path cmake_lists_path = directory_path / "CMakeLists.txt";
 
     if (!std::filesystem::exists(cmake_lists_path)) {

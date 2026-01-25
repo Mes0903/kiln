@@ -161,14 +161,13 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 if (outputs_exist && cache.count(id) && cache[id] == sig) {
                     // Skip
                 } else {
-                    std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
-                    std::string verb = "Compiling";
-                    std::string target_display = std::filesystem::path(id).filename().string();
-
-                    if (id == (task.parent_artifact ? task.parent_artifact->get_output_path(build_dir, "") : "")) {
-                        verb = "  Linking";
-                    }
-
+                                        std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
+                                        std::string verb = "Compiling";
+                                        std::string target_display = std::filesystem::path(id).filename().string();
+                                        
+                                        if (id == (task.parent_artifact ? task.parent_artifact->get_output_path() : "")) {
+                                            verb = "  Linking";
+                                        }
                     {
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
@@ -290,26 +289,27 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
     FILE* pipe = popen(scan_cmd.c_str(), "r");
     if (!pipe) return std::unexpected("Failed to execute g++ for header scanning");
 
-    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-        std::string line(buffer.data());
-        if (line.starts_with(".")) {
-            // Lines look like ". /path/to/header.h" or ".. /path/to/header.h"
-            size_t first_space = line.find(' ');
-            if (first_space != std::string::npos) {
-                std::string header = line.substr(first_space + 1);
-                if (!header.empty() && header.back() == '\n') header.pop_back();
-                headers.push_back(header);
+        std::string full_output;
+        while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+            std::string line(buffer.data());
+            full_output += line;
+            if (line.starts_with(".")) {
+                // Lines look like ". /path/to/header.h" or ".. /path/to/header.h"
+                size_t first_space = line.find(' ');
+                if (first_space != std::string::npos) {
+                    std::string header = line.substr(first_space + 1);
+                    if (!header.empty() && header.back() == '\n') header.pop_back();
+                    headers.push_back(header);
+                }
             }
         }
+        
+        int status = pclose(pipe);
+        if (status != 0) {
+            return std::unexpected("Header scanning failed for " + source + " with exit code " + std::to_string(status) + "\nOutput:\n" + full_output);
+        }
+        return headers;
     }
-
-    int status = pclose(pipe);
-    if (status != 0) {
-        return std::unexpected("Header scanning failed with exit code " + std::to_string(status));
-    }
-    return headers;
-}
-
 std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& path) {
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
