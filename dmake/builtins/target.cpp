@@ -25,7 +25,12 @@ void register_target_builtins(Interpreter& interp) {
         artifact->add_link_directories(root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
 
         std::vector<std::string> sources;
-        for(size_t i = 1; i < args.size(); ++i) sources.push_back(interp.evaluate_argument(args[i]));
+        for(size_t i = 1; i < args.size(); ++i) {
+            CMakeList lst(interp.evaluate_argument(args[i]));
+            for(const auto& file : lst) {
+                sources.push_back(file);
+            }
+        }
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
         root->artifacts_[name] = artifact;
     });
