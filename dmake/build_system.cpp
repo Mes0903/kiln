@@ -89,6 +89,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         return true;
     };
 
+    size_t total_tasks = tasks_.size();
     while (completed.size() < tasks_.size()) {
         bool progress = false;
         for (const auto& [id, task] : tasks_) {
@@ -106,9 +107,19 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                 if (outputs_exist && cache.count(id) && cache[id] == sig) {
                     // Skip
+                    new_cache[id] = sig;
+                    completed.insert(id);
+                    progress = true;
+                    continue;
                 } else {
                     // Execute
-                    std::cout << "  " << task.command << std::endl;
+                    size_t current_step = completed.size() + 1;
+                    std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
+                    
+                    // ANSI coloring for better visibility
+                    std::cout << "\033[1;32m[" << current_step << "/" << total_tasks << "]\033[0m "
+                              << "Building [" << artifact_name << "] " << id << std::endl;
+
                     // Ensure output directories exist
                     for (const auto& out : task.outputs) {
                         std::error_code ec;
@@ -125,7 +136,18 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 progress = true;
             }
         }
-        if (!progress) return std::unexpected("Internal error: Build graph stalled (unresolved dependencies)");
+        if (!progress) {
+            std::ostringstream oss;
+            oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
+            for (const auto& [id, task] : tasks_) {
+                if (completed.count(id)) continue;
+                oss << "\n  - " << id << " depends on: ";
+                for (const auto& dep : task.dependencies) {
+                    if (completed.find(dep) == completed.end()) oss << dep << " ";
+                }
+            }
+            return std::unexpected(oss.str());
+        }
     }
 
     return save_cache(build_dir, new_cache);

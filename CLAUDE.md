@@ -85,6 +85,31 @@ All errors use `std::expected` for proper propagation:
 
 **Target build ordering**: Libraries are built before executables to ensure dependencies are available.
 
+## Incremental Build System
+
+**Cache Location**:
+- `<build_dir>/.dmake_cache` stores task signatures.
+
+**Signature Logic**:
+- Task signatures include: command string, compiler version, dmake version, and timestamps of all input files (including discovered headers).
+- **Header Discovery**:
+    1. Fast path: Parse `.d` files generated during compilation.
+    2. Fallback: Run `g++ -H -E` to scan for headers if `.d` files are missing.
+- **Stat Cache**: `BuildGraph` maintains an internal cache of file timestamps to minimize disk I/O.
+
+## Error Handling & Debugging
+
+**Build Graph Stalls**:
+- If the build cannot progress (e.g., due to an unresolvable dependency cycle), `dmake` will print a detailed list of remaining tasks and their missing dependencies.
+
+**Circular Dependencies**:
+- Detected during graph construction before any commands are executed.
+- Reports the full path of the cycle (e.g., `libA -> libB -> libA`).
+
+**System Errors**:
+- Compiler execution failures (e.g., `g++` not found) during version check or header scanning are fatal and stop the build.
+- Directory creation and cache writing errors are handled gracefully with detailed error messages.
+
 ## Testing
 
 Tests use Catch2 and are located in `tests/interpreter_tests.cpp`. The test helper `run_script()` creates a minimal interpreter with a custom `message()` builtin that captures output.

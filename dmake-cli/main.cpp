@@ -86,14 +86,15 @@ int main(int argc, char* argv[]) {
 
     dmake::Interpreter interpreter(directory_path.string(), &std::cout, &std::cerr);
     interpreter.set_current_file(cmake_lists_path.string());
-    interpreter.print_message("STATUS", "Finished collecting build information");
 
     auto interpret_result = interpreter.interpret(ast_or_error.value());
+    interpreter.print_message("STATUS", "Finished collecting build information");
     if (!interpret_result) {
         const auto& error = interpret_result.error();
         print_error_context(error.file, error.row, error.col, error.message);
         return 1;
     }
+
 
     auto build_result = interpreter.run_build();
     if (!build_result) {
