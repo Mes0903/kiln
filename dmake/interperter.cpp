@@ -438,6 +438,16 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
             if (!result) {
                 return result;
             }
+        } else if (std::holds_alternative<FunctionBlock>(node)) {
+            auto result = execute_function_block(std::get<FunctionBlock>(node));
+            if (!result) {
+                return result;
+            }
+        } else if (std::holds_alternative<MacroBlock>(node)) {
+            auto result = execute_macro_block(std::get<MacroBlock>(node));
+            if (!result) {
+                return result;
+            }
         }
     }
     return {};
@@ -524,6 +534,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     current_cmd_row_ = cmd.row;
     current_cmd_col_ = cmd.col;
 
+    // Check for builtins
     auto it = builtins_.find(cmd.identifier);
     if (it != builtins_.end()) {
         it->second(cmd.arguments);
@@ -531,10 +542,22 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
             clear_fatal_error();
             return std::unexpected(*error);
         }
-    } else {
-        return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, "Unknown command: " + cmd.identifier});
+        return {};
     }
-    return {};
+
+    // Check for user-defined functions
+    auto func_it = user_functions_.find(cmd.identifier);
+    if (func_it != user_functions_.end()) {
+        return invoke_user_function(cmd.identifier, cmd.arguments);
+    }
+
+    // Check for user-defined macros
+    auto macro_it = user_macros_.find(cmd.identifier);
+    if (macro_it != user_macros_.end()) {
+        return invoke_user_macro(cmd.identifier, cmd.arguments);
+    }
+
+    return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, "Unknown command: " + cmd.identifier});
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
@@ -543,6 +566,204 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     } else {
         return interpret(if_block.else_branch);
     }
+}
+
+std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& function_block) {
+    // Register the function definition (store in root interpreter)
+    if (parent_) {
+        // Delegate to parent
+        UserFunction func{function_block.parameters, function_block.body};
+        parent_->user_functions_[function_block.name] = func;
+    } else {
+        UserFunction func{function_block.parameters, function_block.body};
+        user_functions_[function_block.name] = func;
+    }
+    return {};
+}
+
+std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& macro_block) {
+    // Register the macro definition (store in root interpreter)
+    if (parent_) {
+        // Delegate to parent
+        UserMacro macro{macro_block.parameters, macro_block.body};
+        parent_->user_macros_[macro_block.name] = macro;
+    } else {
+        UserMacro macro{macro_block.parameters, macro_block.body};
+        user_macros_[macro_block.name] = macro;
+    }
+    return {};
+}
+
+std::expected<void, InterpreterError> Interpreter::invoke_user_function(const std::string& name, const std::vector<Argument>& args) {
+    // Functions create a NEW scope (new call frame)
+    // Variables set inside the function do NOT affect the parent scope
+
+    const UserFunction* func = nullptr;
+    if (parent_) {
+        // Look up in parent
+        auto it = parent_->user_functions_.find(name);
+        if (it != parent_->user_functions_.end()) {
+            func = &it->second;
+        }
+    } else {
+        auto it = user_functions_.find(name);
+        if (it != user_functions_.end()) {
+            func = &it->second;
+        }
+    }
+
+    if (!func) {
+        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_,
+            "Unknown function: " + name});
+    }
+
+    // Create a new call frame for the function
+    CallFrame new_frame{call_stack_.top().script_dir, {}};
+
+    // Set ARGC
+    new_frame.variables["ARGC"] = std::to_string(args.size());
+
+    // Set ARGV (all arguments as a single string)
+    std::ostringstream argv_stream;
+    for (size_t i = 0; i < args.size(); ++i) {
+        argv_stream << evaluate_argument(args[i]);
+        if (i < args.size() - 1) {
+            argv_stream << ";";
+        }
+    }
+    new_frame.variables["ARGV"] = argv_stream.str();
+
+    // Set ARGN (arguments beyond the declared parameters)
+    std::ostringstream argn_stream;
+    for (size_t i = func->parameters.size(); i < args.size(); ++i) {
+        argn_stream << evaluate_argument(args[i]);
+        if (i < args.size() - 1) {
+            argn_stream << ";";
+        }
+    }
+    new_frame.variables["ARGN"] = argn_stream.str();
+
+    // Set individual ARGV0, ARGV1, etc.
+    for (size_t i = 0; i < args.size(); ++i) {
+        new_frame.variables["ARGV" + std::to_string(i)] = evaluate_argument(args[i]);
+    }
+
+    // Set named parameters
+    for (size_t i = 0; i < func->parameters.size() && i < args.size(); ++i) {
+        new_frame.variables[func->parameters[i]] = evaluate_argument(args[i]);
+    }
+
+    // Push the new frame and execute the function body
+    call_stack_.push(new_frame);
+    auto result = interpret(func->body);
+    call_stack_.pop();
+
+    return result;
+}
+
+std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const std::string& name, const std::vector<Argument>& args) {
+    // Macros do NOT create a new scope
+    // Variables set inside the macro affect the current scope
+
+    const UserMacro* macro = nullptr;
+    if (parent_) {
+        // Look up in parent
+        auto it = parent_->user_macros_.find(name);
+        if (it != parent_->user_macros_.end()) {
+            macro = &it->second;
+        }
+    } else {
+        auto it = user_macros_.find(name);
+        if (it != user_macros_.end()) {
+            macro = &it->second;
+        }
+    }
+
+    if (!macro) {
+        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_,
+            "Unknown macro: " + name});
+    }
+
+    // Save current variables that we'll override
+    std::map<std::string, std::string> saved_vars;
+    auto save_if_exists = [&](const std::string& var_name) {
+        if (!call_stack_.empty()) {
+            auto it = call_stack_.top().variables.find(var_name);
+            if (it != call_stack_.top().variables.end()) {
+                saved_vars[var_name] = it->second;
+            }
+        }
+    };
+
+    save_if_exists("ARGC");
+    save_if_exists("ARGV");
+    save_if_exists("ARGN");
+    for (size_t i = 0; i < args.size(); ++i) {
+        save_if_exists("ARGV" + std::to_string(i));
+    }
+    for (const auto& param : macro->parameters) {
+        save_if_exists(param);
+    }
+
+    // Set ARGC
+    set_variable("ARGC", std::to_string(args.size()));
+
+    // Set ARGV (all arguments as a single string)
+    std::ostringstream argv_stream;
+    for (size_t i = 0; i < args.size(); ++i) {
+        argv_stream << evaluate_argument(args[i]);
+        if (i < args.size() - 1) {
+            argv_stream << ";";
+        }
+    }
+    set_variable("ARGV", argv_stream.str());
+
+    // Set ARGN (arguments beyond the declared parameters)
+    std::ostringstream argn_stream;
+    for (size_t i = macro->parameters.size(); i < args.size(); ++i) {
+        argn_stream << evaluate_argument(args[i]);
+        if (i < args.size() - 1) {
+            argn_stream << ";";
+        }
+    }
+    set_variable("ARGN", argn_stream.str());
+
+    // Set individual ARGV0, ARGV1, etc.
+    for (size_t i = 0; i < args.size(); ++i) {
+        set_variable("ARGV" + std::to_string(i), evaluate_argument(args[i]));
+    }
+
+    // Set named parameters
+    for (size_t i = 0; i < macro->parameters.size() && i < args.size(); ++i) {
+        set_variable(macro->parameters[i], evaluate_argument(args[i]));
+    }
+
+    // Execute the macro body in the current scope
+    auto result = interpret(macro->body);
+
+    // Restore saved variables (but NOT other variables that may have been set in the macro)
+    for (const auto& [var_name, var_value] : saved_vars) {
+        set_variable(var_name, var_value);
+    }
+
+    // Remove ARGC, ARGV, etc. if they weren't saved
+    auto remove_if_not_saved = [&](const std::string& var_name) {
+        if (saved_vars.find(var_name) == saved_vars.end() && !call_stack_.empty()) {
+            call_stack_.top().variables.erase(var_name);
+        }
+    };
+
+    remove_if_not_saved("ARGC");
+    remove_if_not_saved("ARGV");
+    remove_if_not_saved("ARGN");
+    for (size_t i = 0; i < args.size(); ++i) {
+        remove_if_not_saved("ARGV" + std::to_string(i));
+    }
+    for (const auto& param : macro->parameters) {
+        remove_if_not_saved(param);
+    }
+
+    return result;
 }
 
 bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
@@ -598,11 +819,16 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
 }
 
 std::string Interpreter::get_variable(const std::string& var_name) const {
+    // Search through all frames in the call stack (from top to bottom)
     if (!call_stack_.empty()) {
-        const auto& current_frame_vars = call_stack_.top().variables;
-        auto it = current_frame_vars.find(var_name);
-        if (it != current_frame_vars.end()) {
-            return it->second;
+        std::stack<CallFrame> temp_stack = call_stack_;
+        while (!temp_stack.empty()) {
+            const auto& frame_vars = temp_stack.top().variables;
+            auto it = frame_vars.find(var_name);
+            if (it != frame_vars.end()) {
+                return it->second;
+            }
+            temp_stack.pop();
         }
     }
     if (parent_) {

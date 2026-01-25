@@ -81,6 +81,16 @@ struct CallFrame {
     std::map<std::string, std::string> variables;
 };
 
+struct UserFunction {
+    std::vector<std::string> parameters;
+    std::vector<AstNode> body;
+};
+
+struct UserMacro {
+    std::vector<std::string> parameters;
+    std::vector<AstNode> body;
+};
+
 class Interpreter {
 public:
     using BuiltinFunction = std::function<void(const std::vector<Argument>&)>;
@@ -103,6 +113,10 @@ protected:
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
     std::expected<void, InterpreterError> execute_if_block(const IfBlock& if_block);
+    std::expected<void, InterpreterError> execute_function_block(const FunctionBlock& function_block);
+    std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
+    std::expected<void, InterpreterError> invoke_user_function(const std::string& name, const std::vector<Argument>& args);
+    std::expected<void, InterpreterError> invoke_user_macro(const std::string& name, const std::vector<Argument>& args);
     bool evaluate_condition(const std::vector<Argument>& condition);
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
@@ -115,6 +129,8 @@ private:
     std::ostream* err_;
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
+    std::map<std::string, UserFunction> user_functions_;
+    std::map<std::string, UserMacro> user_macros_;
     Interpreter* parent_ = nullptr;
     std::stack<CallFrame> call_stack_;
     std::string current_file_;

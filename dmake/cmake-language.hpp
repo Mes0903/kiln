@@ -27,13 +27,27 @@ struct Argument {
 
 struct CommandInvocation;
 struct IfBlock;
+struct FunctionBlock;
+struct MacroBlock;
 
-using AstNode = std::variant<CommandInvocation, IfBlock>;
+using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock>;
 
 struct IfBlock {
     std::vector<Argument> condition;
     std::vector<AstNode> then_branch;
     std::vector<AstNode> else_branch;
+};
+
+struct FunctionBlock {
+    std::string name;
+    std::vector<std::string> parameters;
+    std::vector<AstNode> body;
+};
+
+struct MacroBlock {
+    std::string name;
+    std::vector<std::string> parameters;
+    std::vector<AstNode> body;
 };
 
 struct CommandInvocation {
@@ -58,6 +72,8 @@ private:
     std::string peek_identifier();
     std::expected<std::vector<AstNode>, ParseError> parse_block(const std::vector<std::string>& terminators);
     std::expected<IfBlock, ParseError> parse_if_block(const CommandInvocation& if_command);
+    std::expected<FunctionBlock, ParseError> parse_function_block(const CommandInvocation& function_command);
+    std::expected<MacroBlock, ParseError> parse_macro_block(const CommandInvocation& macro_command);
     void consume_whitespace();
     std::expected<CommandInvocation, ParseError> parse_command_invocation();
     std::expected<Argument, ParseError> parse_argument();

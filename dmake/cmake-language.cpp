@@ -58,6 +58,18 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
                 return std::unexpected(if_block_or_error.error());
             }
             ast.emplace_back(std::move(if_block_or_error.value()));
+        } else if (identifier_lower == "function") {
+            auto function_block_or_error = parse_function_block(command_or_error.value());
+            if(!function_block_or_error) {
+                return std::unexpected(function_block_or_error.error());
+            }
+            ast.emplace_back(std::move(function_block_or_error.value()));
+        } else if (identifier_lower == "macro") {
+            auto macro_block_or_error = parse_macro_block(command_or_error.value());
+            if(!macro_block_or_error) {
+                return std::unexpected(macro_block_or_error.error());
+            }
+            ast.emplace_back(std::move(macro_block_or_error.value()));
         } else {
             ast.emplace_back(std::move(command_or_error.value()));
         }
@@ -98,6 +110,102 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
     }
 
     return if_block;
+}
+
+std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const CommandInvocation& function_command) {
+    FunctionBlock function_block;
+
+    if (function_command.arguments.empty()) {
+        return std::unexpected(ParseError{function_command.row, function_command.col, "function() requires a name"});
+    }
+
+    // First argument is the function name
+    if (!function_command.arguments[0].parts.empty() &&
+        std::holds_alternative<std::string>(function_command.arguments[0].parts[0])) {
+        function_block.name = std::get<std::string>(function_command.arguments[0].parts[0]);
+    } else {
+        return std::unexpected(ParseError{function_command.row, function_command.col, "function() name must be a simple identifier"});
+    }
+
+    // Remaining arguments are parameter names
+    for (size_t i = 1; i < function_command.arguments.size(); ++i) {
+        if (!function_command.arguments[i].parts.empty() &&
+            std::holds_alternative<std::string>(function_command.arguments[i].parts[0])) {
+            function_block.parameters.push_back(std::get<std::string>(function_command.arguments[i].parts[0]));
+        } else {
+            return std::unexpected(ParseError{function_command.row, function_command.col, "function() parameters must be simple identifiers"});
+        }
+    }
+
+    // Parse the body
+    auto body_or_error = parse_block({"endfunction"});
+    if (!body_or_error) {
+        return std::unexpected(body_or_error.error());
+    }
+    function_block.body = std::move(body_or_error.value());
+
+    // Consume endfunction
+    auto endfunction_command_or_error = parse_command_invocation();
+    if (!endfunction_command_or_error) {
+        return std::unexpected(endfunction_command_or_error.error());
+    }
+
+    std::string identifier_lower = endfunction_command_or_error.value().identifier;
+    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (identifier_lower != "endfunction") {
+        return std::unexpected(ParseError{row_, col_, "Expected 'endfunction'"});
+    }
+
+    return function_block;
+}
+
+std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInvocation& macro_command) {
+    MacroBlock macro_block;
+
+    if (macro_command.arguments.empty()) {
+        return std::unexpected(ParseError{macro_command.row, macro_command.col, "macro() requires a name"});
+    }
+
+    // First argument is the macro name
+    if (!macro_command.arguments[0].parts.empty() &&
+        std::holds_alternative<std::string>(macro_command.arguments[0].parts[0])) {
+        macro_block.name = std::get<std::string>(macro_command.arguments[0].parts[0]);
+    } else {
+        return std::unexpected(ParseError{macro_command.row, macro_command.col, "macro() name must be a simple identifier"});
+    }
+
+    // Remaining arguments are parameter names
+    for (size_t i = 1; i < macro_command.arguments.size(); ++i) {
+        if (!macro_command.arguments[i].parts.empty() &&
+            std::holds_alternative<std::string>(macro_command.arguments[i].parts[0])) {
+            macro_block.parameters.push_back(std::get<std::string>(macro_command.arguments[i].parts[0]));
+        } else {
+            return std::unexpected(ParseError{macro_command.row, macro_command.col, "macro() parameters must be simple identifiers"});
+        }
+    }
+
+    // Parse the body
+    auto body_or_error = parse_block({"endmacro"});
+    if (!body_or_error) {
+        return std::unexpected(body_or_error.error());
+    }
+    macro_block.body = std::move(body_or_error.value());
+
+    // Consume endmacro
+    auto endmacro_command_or_error = parse_command_invocation();
+    if (!endmacro_command_or_error) {
+        return std::unexpected(endmacro_command_or_error.error());
+    }
+
+    std::string identifier_lower = endmacro_command_or_error.value().identifier;
+    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (identifier_lower != "endmacro") {
+        return std::unexpected(ParseError{row_, col_, "Expected 'endmacro'"});
+    }
+
+    return macro_block;
 }
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
