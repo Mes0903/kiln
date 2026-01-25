@@ -1,5 +1,6 @@
 #include "interperter.hpp"
 #include "builtins/registry.hpp"
+#include "dmake/CMakeList.hpp"
 #include <deque>
 #include <stack>
 #include <set>
@@ -18,50 +19,7 @@
 
 namespace dmake {
 
-// --- CMakeList Method Implementations ---
 
-std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
-    if (str.empty()) {
-        return {};
-    }
-
-    std::vector<std::string> result;
-    std::string current;
-
-    for (char c : str) {
-        if (c == ';') {
-            result.push_back(current);
-            current.clear();
-        } else {
-            current += c;
-        }
-    }
-
-    result.push_back(current);
-
-    return result;
-}
-
-CMakeList::CMakeList(const std::string& semicolon_separated)
-    : items_(split_by_semicolon(semicolon_separated)) {
-}
-
-CMakeList::CMakeList(const std::vector<std::string>& items)
-    : items_(items) {
-}
-
-CMakeList::CMakeList(std::initializer_list<std::string> items)
-    : items_(items) {
-}
-
-CMakeList CMakeList::from_arguments(const std::vector<Argument>& args, Interpreter* interp) {
-    std::vector<std::string> items;
-    items.reserve(args.size());
-    for (const auto& arg : args) {
-        items.push_back(interp->evaluate_argument(arg));
-    }
-    return CMakeList(items);
-}
 
 std::string CMakeList::to_string() const {
     if (items_.empty()) {
@@ -445,7 +403,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     loop_depth_++;
     CMakeList items;
     if (std::holds_alternative<ForeachSimple>(block.params)) {
-        items = CMakeList::from_arguments(std::get<ForeachSimple>(block.params).items, this);
+        items = from_arguments(std::get<ForeachSimple>(block.params).items);
     } else if (std::holds_alternative<ForeachRange>(block.params)) {
         const auto& r = std::get<ForeachRange>(block.params);
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
@@ -456,7 +414,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     } else if (std::holds_alternative<ForeachIn>(block.params)) {
         const auto& in = std::get<ForeachIn>(block.params);
         for (const auto& l : in.lists) items.append(CMakeList(get_variable(evaluate_argument(l))));
-        items.append(CMakeList::from_arguments(in.items, this));
+        items.append(from_arguments(in.items));
     }
 
     for (const auto& item : items) {
@@ -472,7 +430,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_function(const UserFunction& func, const std::vector<Argument>& args) {
     CallFrame frame{call_stack_.front().script_dir, {}};
-    CMakeList all = CMakeList::from_arguments(args, this);
+    CMakeList all = from_arguments(args);
     frame.variables["ARGC"] = std::to_string(all.size());
     frame.variables["ARGV"] = all.to_string();
     frame.variables["ARGN"] = all.sublist(func.parameters.size(), all.size()).to_string();
@@ -495,7 +453,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args) {
     std::map<std::string, std::string> saved;
-    CMakeList all = CMakeList::from_arguments(args, this);
+    CMakeList all = from_arguments(args);
     auto save = [&](const std::string& k) { if (call_stack_.front().variables.count(k)) saved[k] = call_stack_.front().variables[k]; };
     save("ARGC"); save("ARGV"); save("ARGN");
     for (size_t i = 0; i < all.size(); ++i) save("ARGV" + std::to_string(i));
@@ -593,6 +551,15 @@ void Interpreter::print_message(const std::string& mode, const std::string& msg,
     else if (mode == "FATAL") { p = "[FATAL]"; c = colors::MAGENTA; }
     if (color) os << c << p << " " << msg << colors::RESET << std::endl;
     else os << p << " " << msg << std::endl;
+}
+
+CMakeList Interpreter::from_arguments(const std::vector<Argument>& args) {
+    std::vector<std::string> items;
+    items.reserve(args.size());
+    for (const auto& arg : args) {
+        items.push_back(evaluate_argument(arg));
+    }
+    return CMakeList(items);
 }
 
 }

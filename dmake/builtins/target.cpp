@@ -19,10 +19,15 @@ void register_target_builtins(Interpreter& interp) {
             artifact->set_cxx_standard(cxx_std);
         }
 
+        // Inherit accumulated include and link directories
+        auto* root = interp.get_root();
+        artifact->add_include_directories(root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
+        artifact->add_link_directories(root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
+
         std::vector<std::string> sources;
         for(size_t i = 1; i < args.size(); ++i) sources.push_back(interp.evaluate_argument(args[i]));
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
-        interp.get_root()->artifacts_[name] = artifact;
+        root->artifacts_[name] = artifact;
     });
 
     interp.add_builtin("add_library", [](Interpreter& interp, const std::vector<Argument>& args) {
@@ -36,7 +41,12 @@ void register_target_builtins(Interpreter& interp) {
         for(size_t i = 1; i < args.size(); ++i) {
             std::string val = interp.evaluate_argument(args[i]);
             if(val == "SHARED") is_shared = true;
-            else if (val != "STATIC") sources.push_back(val);
+            else if (val != "STATIC") {
+                CMakeList lst(val);
+                for(const auto& file : lst) {
+                    sources.push_back(file);
+                }
+            }
         }
         auto artifact = std::make_shared<LibraryArtifact>(name, is_shared ? ArtifactType::SHARED_LIBRARY : ArtifactType::STATIC_LIBRARY, src_dir, bin_dir);
 
@@ -46,8 +56,13 @@ void register_target_builtins(Interpreter& interp) {
             artifact->set_cxx_standard(cxx_std);
         }
 
+        // Inherit accumulated include and link directories
+        auto* root = interp.get_root();
+        artifact->add_include_directories(root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
+        artifact->add_link_directories(root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
+
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
-        interp.get_root()->artifacts_[name] = artifact;
+        root->artifacts_[name] = artifact;
     });
 
     interp.add_builtin("target_include_directories", [](Interpreter& interp, const std::vector<Argument>& args) {
@@ -175,6 +190,44 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         it->second->add_precompiled_headers(headers, vis);
+    });
+
+    interp.add_builtin("include_directories", [](Interpreter& interp, const std::vector<Argument>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("include_directories() requires at least one directory argument");
+            return;
+        }
+
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        auto& root_dirs = interp.get_root()->accumulated_include_directories_;
+
+        for (const auto& arg : args) {
+            std::string dir = interp.evaluate_argument(arg);
+            // Resolve relative paths to absolute based on current source directory
+            std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
+                std::filesystem::path(dir) :
+                std::filesystem::path(src_dir) / dir;
+            root_dirs.push_back(resolved.string());
+        }
+    });
+
+    interp.add_builtin("link_directories", [](Interpreter& interp, const std::vector<Argument>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("link_directories() requires at least one directory argument");
+            return;
+        }
+
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        auto& root_dirs = interp.get_root()->accumulated_link_directories_;
+
+        for (const auto& arg : args) {
+            std::string dir = interp.evaluate_argument(arg);
+            // Resolve relative paths to absolute based on current source directory
+            std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
+                std::filesystem::path(dir) :
+                std::filesystem::path(src_dir) / dir;
+            root_dirs.push_back(resolved.string());
+        }
     });
 }
 

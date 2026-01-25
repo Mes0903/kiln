@@ -32,6 +32,9 @@ public:
     void add_include_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility);
     const std::vector<std::string>& get_include_directories(PropertyVisibility visibility) const;
 
+    void add_link_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility);
+    const std::vector<std::string>& get_link_directories(PropertyVisibility visibility) const;
+
     void add_compile_definitions(const std::vector<std::string>& defs, PropertyVisibility visibility);
     const std::vector<std::string>& get_compile_definitions(PropertyVisibility visibility) const;
 
@@ -69,6 +72,7 @@ protected:
     std::map<PropertyVisibility, std::vector<std::string>> sources_;
     std::map<PropertyVisibility, std::vector<std::string>> linked_libraries_;
     std::map<PropertyVisibility, std::vector<std::string>> include_directories_;
+    std::map<PropertyVisibility, std::vector<std::string>> link_directories_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_definitions_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_options_;
     std::map<PropertyVisibility, std::vector<std::string>> precompiled_headers_;

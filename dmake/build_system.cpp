@@ -161,13 +161,13 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 if (outputs_exist && cache.count(id) && cache[id] == sig) {
                     // Skip
                 } else {
-                                        std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
-                                        std::string verb = "Compiling";
-                                        std::string target_display = std::filesystem::path(id).filename().string();
-                                        
-                                        if (id == (task.parent_artifact ? task.parent_artifact->get_output_path() : "")) {
-                                            verb = "  Linking";
-                                        }
+                    std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
+                    std::string verb = "Compiling";
+                    std::string target_display = std::filesystem::path(id).filename().string();
+
+                    if (id == (task.parent_artifact ? task.parent_artifact->get_output_path() : "")) {
+                        verb = "  Linking";
+                    }
                     {
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
@@ -308,7 +308,7 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
                 }
             }
         }
-        
+
         int status = pclose(pipe);
         if (status != 0) {
             return std::unexpected("Header scanning failed for " + source + " with exit code " + std::to_string(status) + "\nOutput:\n" + full_output);

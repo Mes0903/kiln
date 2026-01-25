@@ -11,7 +11,7 @@ void register_variable_builtins(Interpreter& interp) {
         }
         std::string var_name = interp.evaluate_argument(args[0]);
         std::vector<Argument> value_args(args.begin() + 1, args.end());
-        CMakeList value_list = CMakeList::from_arguments(value_args, &interp);
+        CMakeList value_list = interp.from_arguments(value_args);
         interp.set_variable(var_name, value_list.to_string());
     });
 

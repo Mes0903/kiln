@@ -36,6 +36,16 @@ const std::vector<std::string>& Artifact::get_include_directories(PropertyVisibi
     return (it != include_directories_.end()) ? it->second : empty;
 }
 
+void Artifact::add_link_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility) {
+    link_directories_[visibility].insert(link_directories_[visibility].end(), dirs.begin(), dirs.end());
+}
+
+const std::vector<std::string>& Artifact::get_link_directories(PropertyVisibility visibility) const {
+    static const std::vector<std::string> empty;
+    auto it = link_directories_.find(visibility);
+    return (it != link_directories_.end()) ? it->second : empty;
+}
+
 void Artifact::add_compile_definitions(const std::vector<std::string>& defs, PropertyVisibility visibility) {
     compile_definitions_[visibility].insert(compile_definitions_[visibility].end(), defs.begin(), defs.end());
 }
@@ -290,7 +300,13 @@ void ExecutableArtifact::generate_tasks(BuildGraph& graph) {
         link.dependencies.insert(obj);
     }
     
+    // Add link directories
     cmd << " -L" << binary_dir_;
+    for (const auto& dir : get_link_directories(PropertyVisibility::PRIVATE)) {
+        cmd << " -L" << dir;
+    }
+
+    // Add linked libraries
     for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) {
         cmd << " -l" << lib;
     }
