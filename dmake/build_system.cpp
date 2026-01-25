@@ -8,7 +8,7 @@
 #include <array>
 #include <thread>
 #include <condition_variable>
-#include <atomic>
+#include <functional>
 
 namespace dmake {
 
@@ -100,7 +100,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     };
 
     auto start_time = std::chrono::steady_clock::now();
-    
+
     while (true) {
         std::vector<std::string> to_start;
         {
@@ -143,7 +143,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
             std::thread([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
                 const auto& task = tasks_.at(id);
-                
+
                 auto sig_res = calculate_signature(task);
                 if (!sig_res) {
                     std::lock_guard<std::mutex> lock(loop_mutex);
@@ -164,14 +164,14 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
                     std::string verb = "Compiling";
                     std::string target_display = std::filesystem::path(id).filename().string();
-                    
+
                     if (id == (task.parent_artifact ? task.parent_artifact->get_output_path(build_dir, "") : "")) {
                         verb = "  Linking";
                     }
 
                     {
                         std::lock_guard<std::mutex> lock(output_mutex_);
-                        std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m [" 
+                        std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
                                   << artifact_name << "] " << target_display << std::endl;
                     }
 
@@ -185,12 +185,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             return;
                         }
                     }
-                    
+
                     auto result = run_command(task.command);
                     if (result.exit_code != 0) {
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         if (!result.output.empty()) std::cerr << result.output << std::endl;
-                        
+
                         std::lock_guard<std::mutex> lock_loop(loop_mutex);
                         fatal_error = "Command failed: " + task.command;
                         cv.notify_all();
@@ -219,10 +219,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    
+
     {
         std::lock_guard<std::mutex> lock(output_mutex_);
-        std::cout << "\033[1;32m" << std::setw(12) << "Finished" << "\033[0m build in " 
+        std::cout << "\033[1;32m" << std::setw(12) << "Finished" << "\033[0m build in "
                 << std::fixed << std::setprecision(2) << duration.count() / 1000.0 << "s" << std::endl;
     }
 
@@ -247,17 +247,17 @@ BuildGraph::CommandResult BuildGraph::run_command(const std::string& command) {
 std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
     std::ifstream file(path);
     if (!file) return {};
-    
+
     std::vector<std::string> deps;
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    
+
     size_t colon = content.find(':');
     if (colon == std::string::npos) return {};
-    
+
     std::string deps_part = content.substr(colon + 1);
     std::replace(deps_part.begin(), deps_part.end(), '\\', ' ');
     std::replace(deps_part.begin(), deps_part.end(), '\n', ' ');
-    
+
     std::stringstream ss(deps_part);
     std::string dep;
     while (ss >> dep) {
@@ -272,7 +272,7 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
     std::string word;
     std::string flags;
     std::string source;
-    
+
     while (ss >> word) {
         if (word.starts_with("-I") || word.starts_with("-D")) {
             flags += " " + word;
@@ -280,16 +280,16 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
             source = word;
         }
     }
-    
+
     if (source.empty()) return std::vector<std::string>{};
 
     std::string scan_cmd = "g++ -H -E " + flags + " " + source + " 2>&1 > /dev/null";
     std::array<char, 256> buffer;
     std::vector<std::string> headers;
-    
+
     FILE* pipe = popen(scan_cmd.c_str(), "r");
     if (!pipe) return std::unexpected("Failed to execute g++ for header scanning");
-    
+
     while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
         std::string line(buffer.data());
         if (line.starts_with(".")) {
@@ -302,7 +302,7 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
             }
         }
     }
-    
+
     int status = pclose(pipe);
     if (status != 0) {
         return std::unexpected("Header scanning failed with exit code " + std::to_string(status));
@@ -331,13 +331,13 @@ std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& pat
 std::expected<std::string, std::string> BuildGraph::calculate_signature(const BuildTask& task) {
     std::ostringstream oss;
     oss << "cmd:" << task.command << "|";
-    
+
     auto version_res = get_compiler_version();
     if (!version_res) return std::unexpected(version_res.error());
     oss << "compiler:" << *version_res << "|";
-    
+
     oss << "dmake:" << get_dmake_version() << "|";
-    
+
     // 1. Primary inputs
     for (const auto& in : task.inputs) {
         if (std::filesystem::exists(in)) {
@@ -377,7 +377,7 @@ std::map<std::string, std::string> BuildGraph::load_cache(const std::string& bui
     std::map<std::string, std::string> cache;
     std::ifstream file(std::filesystem::path(build_dir) / ".dmake_cache");
     if (!file) return cache;
-    
+
     std::string line;
     while (std::getline(file, line)) {
         size_t sep = line.find('=');
@@ -432,13 +432,13 @@ std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
     if (status != 0) {
         return std::unexpected("g++ --version failed with exit code " + std::to_string(status));
     }
-    
+
     if (result.empty()) {
         return std::unexpected("g++ --version produced no output");
     }
 
     if (result.back() == '\n') result.pop_back();
-    
+
     std::lock_guard<std::mutex> lock(state_mutex_);
     compiler_version_cache_ = result;
 

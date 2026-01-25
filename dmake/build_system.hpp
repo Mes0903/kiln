@@ -4,8 +4,6 @@
 #include <vector>
 #include <map>
 #include <set>
-#include <memory>
-#include <functional>
 #include <expected>
 #include <optional>
 #include <filesystem>
@@ -21,7 +19,7 @@ struct BuildTask {
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     Artifact* parent_artifact = nullptr;
-    
+
     // For graph execution
     std::set<std::string> dependencies; // Task IDs we depend on
     std::set<std::string> dependents;   // Task IDs that depend on us
@@ -30,10 +28,10 @@ struct BuildTask {
 class BuildGraph {
 public:
     void add_task(BuildTask task);
-    
+
     // Checks for cycles and returns an error message if one is found
     std::optional<std::string> check_for_cycles();
-    
+
     // Executes the graph.
     std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
 
@@ -45,19 +43,19 @@ private:
     std::map<std::string, BuildTask> tasks_;
     mutable std::mutex output_mutex_;
     mutable std::mutex state_mutex_;
-    
+
     // Incremental build logic
     std::expected<std::string, std::string> calculate_signature(const BuildTask& task);
     std::map<std::string, std::string> load_cache(const std::string& build_dir);
     std::expected<void, std::string> save_cache(const std::string& build_dir, const std::map<std::string, std::string>& cache);
-    
+
     std::filesystem::file_time_type get_file_time(const std::string& path);
     std::map<std::string, std::filesystem::file_time_type> stat_cache_;
-    
+
     std::expected<std::string, std::string> get_compiler_version();
     std::optional<std::string> compiler_version_cache_;
     std::string get_dmake_version() { return "0.1.0-alpha (task-refactor)"; }
-    
+
     // Parsers for .d files (header dependencies)
     std::vector<std::string> parse_deps_file(const std::string& path);
 
