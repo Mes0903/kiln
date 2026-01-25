@@ -127,14 +127,25 @@ final_build_dir = build_root / config
 
 ### Standard Configurations
 
-| Config | CMAKE_BUILD_TYPE | Typical Flags |
-|--------|------------------|---------------|
-| debug (default) | Debug | -g -O0 |
-| release | Release | -O3 -DNDEBUG |
-| relwithdebinfo | RelWithDebInfo | -g -O2 -DNDEBUG |
-| minsizerel | MinSizeRel | -Os -DNDEBUG |
+| Config | CMAKE_BUILD_TYPE | Default CMAKE_CXX_FLAGS_<CONFIG> |
+|--------|------------------|----------------------------------|
+| debug (default) | Debug | `-g -O0` |
+| release | Release | `-O3 -DNDEBUG` |
+| relwithdebinfo | RelWithDebInfo | `-g -O2 -DNDEBUG` |
+| minsizerel | MinSizeRel | `-Os -DNDEBUG` |
 
-**Note**: Compiler flags must be set via `target_compile_options()` in CMakeLists.txt. dmake does not automatically apply flags based on CMAKE_BUILD_TYPE.
+**Compiler Flags**:
+- Default CMAKE_CXX_FLAGS_<CONFIG> are automatically set for standard configurations
+- Flags are applied to all targets created with `add_executable()` or `add_library()`
+- Users can override defaults by setting variables in CMakeLists.txt or via `-D` flag:
+  ```cmake
+  set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -fsanitize=address")
+  ```
+  or
+  ```bash
+  dmake . --config debug -DCMAKE_CXX_FLAGS_DEBUG="-g -O0 -fsanitize=address"
+  ```
+- Additional flags can be added per-target with `target_compile_options()`
 
 ### Cache Isolation
 

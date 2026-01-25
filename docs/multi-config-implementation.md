@@ -211,29 +211,48 @@ Users can use custom build types (e.g., `--config profile`):
 
 **Solution**: Allow it. User explicitly chose this structure.
 
-## Future Enhancements
+## Implemented: CMAKE_CXX_FLAGS Support
 
-### Global Compiler Flags
+✅ **COMPLETED**: Automatic compiler flag support has been implemented.
 
-Currently, compiler flags must be set per-target using `target_compile_options()`. Future enhancement could add:
+### How It Works
 
-1. **CMAKE_CXX_FLAGS support**:
+**Default Flags** (set in dmake-cli/main.cpp):
+```cpp
+CMAKE_CXX_FLAGS_DEBUG = "-g -O0"
+CMAKE_CXX_FLAGS_RELEASE = "-O3 -DNDEBUG"
+CMAKE_CXX_FLAGS_RELWITHDEBINFO = "-g -O2 -DNDEBUG"
+CMAKE_CXX_FLAGS_MINSIZEREL = "-Os -DNDEBUG"
+```
+
+**Application** (in add_executable/add_library):
+- Reads `CMAKE_CXX_FLAGS` (base flags for all configs)
+- Reads `CMAKE_CXX_FLAGS_<CONFIG>` based on current CMAKE_BUILD_TYPE
+- Splits flags by whitespace and applies via `artifact->add_compile_options()`
+
+**Override Methods**:
+1. In CMakeLists.txt:
    ```cmake
-   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
-   endif()
+   set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -fsanitize=address")
    ```
 
-2. **Automatic flag injection** (like real CMake):
-   - Set CMAKE_CXX_FLAGS_DEBUG, CMAKE_CXX_FLAGS_RELEASE, etc.
-   - Apply them automatically in build_compile_command()
-
-3. **Global compile options builtin**:
-   ```cmake
-   add_compile_options(-Wall -Wextra)
+2. Via command line:
+   ```bash
+   dmake . --config debug -DCMAKE_CXX_FLAGS_DEBUG="-g -Og"
    ```
 
-These are out of scope for the initial multi-config implementation.
+3. Per-target (additive):
+   ```cmake
+   add_executable(myapp main.cpp)
+   target_compile_options(myapp PRIVATE -Wall -Wextra)
+   ```
+
+### Future Enhancements
+
+Possible additions:
+1. **add_compile_options()** builtin for global flags
+2. **CMAKE_<LANG>_COMPILER** support for non-g++ compilers
+3. **Toolchain file support**
 
 ## Testing Strategy
 

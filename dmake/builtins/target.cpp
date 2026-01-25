@@ -1,6 +1,8 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../artifact.hpp"
+#include <sstream>
+#include <algorithm>
 
 namespace dmake {
 
@@ -17,6 +19,31 @@ void register_target_builtins(Interpreter& interp) {
         std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
         if (!cxx_std.empty()) {
             artifact->set_cxx_standard(cxx_std);
+        }
+
+        // Apply CMAKE_CXX_FLAGS and CMAKE_CXX_FLAGS_<CONFIG>
+        auto apply_cxx_flags = [&](const std::string& flags_var) {
+            std::string flags = interp.get_variable(flags_var);
+            if (!flags.empty()) {
+                // Split flags by spaces and add individually
+                std::istringstream iss(flags);
+                std::vector<std::string> flag_list;
+                std::string flag;
+                while (iss >> flag) {
+                    flag_list.push_back(flag);
+                }
+                if (!flag_list.empty()) {
+                    artifact->add_compile_options(flag_list, PropertyVisibility::PRIVATE);
+                }
+            }
+        };
+
+        apply_cxx_flags("CMAKE_CXX_FLAGS");
+        std::string build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+        if (!build_type.empty()) {
+            std::string upper_type = build_type;
+            std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), ::toupper);
+            apply_cxx_flags("CMAKE_CXX_FLAGS_" + upper_type);
         }
 
         // Inherit accumulated include and link directories
@@ -59,6 +86,31 @@ void register_target_builtins(Interpreter& interp) {
         std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
         if (!cxx_std.empty()) {
             artifact->set_cxx_standard(cxx_std);
+        }
+
+        // Apply CMAKE_CXX_FLAGS and CMAKE_CXX_FLAGS_<CONFIG>
+        auto apply_cxx_flags = [&](const std::string& flags_var) {
+            std::string flags = interp.get_variable(flags_var);
+            if (!flags.empty()) {
+                // Split flags by spaces and add individually
+                std::istringstream iss(flags);
+                std::vector<std::string> flag_list;
+                std::string flag;
+                while (iss >> flag) {
+                    flag_list.push_back(flag);
+                }
+                if (!flag_list.empty()) {
+                    artifact->add_compile_options(flag_list, PropertyVisibility::PRIVATE);
+                }
+            }
+        };
+
+        apply_cxx_flags("CMAKE_CXX_FLAGS");
+        std::string build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+        if (!build_type.empty()) {
+            std::string upper_type = build_type;
+            std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), ::toupper);
+            apply_cxx_flags("CMAKE_CXX_FLAGS_" + upper_type);
         }
 
         // Inherit accumulated include and link directories

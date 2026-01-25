@@ -10,6 +10,15 @@ void register_variable_builtins(Interpreter& interp) {
             return;
         }
         std::string var_name = interp.evaluate_argument(args[0]);
+
+        // Warn if trying to modify CMAKE_BUILD_TYPE during script execution
+        if (var_name == "CMAKE_BUILD_TYPE") {
+            interp.print_message("WARN",
+                "Modifying CMAKE_BUILD_TYPE in CMakeLists.txt is NOT RECOMMENDED. "
+                "Use --config flag to set the build configuration.",
+                false);
+        }
+
         std::vector<Argument> value_args(args.begin() + 1, args.end());
         CMakeList value_list = interp.from_arguments(value_args);
         interp.set_variable(var_name, value_list.to_string());

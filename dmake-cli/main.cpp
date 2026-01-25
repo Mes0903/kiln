@@ -23,6 +23,15 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> definitions;
     app.add_option("-D", definitions, "Define a variable in the format VAR=VALUE or VAR");
 
+    std::string config = "debug";
+    app.add_option("-c,--config", config, "Build configuration (debug, release, relwithdebinfo, minsizerel)")
+       ->transform(CLI::Transformer({
+           {"debug", "debug"},
+           {"release", "release"},
+           {"relwithdebinfo", "relwithdebinfo"},
+           {"minsizerel", "minsizerel"}
+       }, CLI::ignore_case));
+
     CLI11_PARSE(app, argc, argv);
 
     std::filesystem::path directory_path;
@@ -40,12 +49,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::filesystem::path build_path;
+    // Determine build root directory
+    std::filesystem::path build_root;
     if (build_directory_str.empty()) {
-        build_path = directory_path / "build";
+        build_root = directory_path / "build";
     } else {
-        build_path = std::filesystem::absolute(build_directory_str).lexically_normal();
+        build_root = std::filesystem::absolute(build_directory_str).lexically_normal();
     }
+
+    // Normalize config to lowercase for directory name
+    std::string config_lower = config;
+    std::transform(config_lower.begin(), config_lower.end(), config_lower.begin(), ::tolower);
+
+    // Append config to build root to get final build path
+    std::filesystem::path build_path = build_root / config_lower;
 
     if (build_path == directory_path) {
         std::cerr << "Error: Build directory cannot be the same as the source directory: " << directory_path.string() << std::endl;
@@ -124,6 +141,51 @@ int main(int argc, char* argv[]) {
             interpreter.set_variable(def, "ON");
         }
     }
+
+    // Helper to convert config to proper CMake case
+    auto to_cmake_case = [](const std::string& config) -> std::string {
+        if (config.empty()) return "";
+        std::string result = config;
+        result[0] = std::toupper(result[0]);
+        // Handle special cases
+        if (result == "Relwithdebinfo") return "RelWithDebInfo";
+        if (result == "Minsizerel") return "MinSizeRel";
+        return result;
+    };
+
+    // Check if CMAKE_BUILD_TYPE was set via -D
+    bool cmake_build_type_set = false;
+    for (const auto& def : definitions) {
+        if (def.starts_with("CMAKE_BUILD_TYPE=") || def == "CMAKE_BUILD_TYPE") {
+            cmake_build_type_set = true;
+            break;
+        }
+    }
+
+    // Set CMAKE_BUILD_TYPE if not already set via -D flag
+    if (!cmake_build_type_set) {
+        interpreter.set_variable("CMAKE_BUILD_TYPE", to_cmake_case(config));
+    }
+
+    // Set baseline CMAKE_CXX_FLAGS_<CONFIG> if not already set
+    // These provide sensible defaults but can be overridden by user
+    auto set_default_flags = [&](const std::string& var, const std::string& flags) {
+        bool already_set = false;
+        for (const auto& def : definitions) {
+            if (def.starts_with(var + "=") || def == var) {
+                already_set = true;
+                break;
+            }
+        }
+        if (!already_set && interpreter.get_variable(var).empty()) {
+            interpreter.set_variable(var, flags);
+        }
+    };
+
+    set_default_flags("CMAKE_CXX_FLAGS_DEBUG", "-g -O0");
+    set_default_flags("CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
+    set_default_flags("CMAKE_CXX_FLAGS_RELWITHDEBINFO", "-g -O2 -DNDEBUG");
+    set_default_flags("CMAKE_CXX_FLAGS_MINSIZEREL", "-Os -DNDEBUG");
 
     auto interpret_result = interpreter.interpret(ast_or_error.value());
     interpreter.print_message("STATUS", "Finished collecting build information");
