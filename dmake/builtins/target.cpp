@@ -12,6 +12,13 @@ void register_target_builtins(Interpreter& interp) {
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
 
         auto artifact = std::make_shared<ExecutableArtifact>(name, src_dir, bin_dir);
+
+        // Set C++ standard from CMAKE_CXX_STANDARD if available
+        std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
+        if (!cxx_std.empty()) {
+            artifact->set_cxx_standard(cxx_std);
+        }
+
         std::vector<std::string> sources;
         for(size_t i = 1; i < args.size(); ++i) sources.push_back(interp.evaluate_argument(args[i]));
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
@@ -32,6 +39,13 @@ void register_target_builtins(Interpreter& interp) {
             else if (val != "STATIC") sources.push_back(val);
         }
         auto artifact = std::make_shared<LibraryArtifact>(name, is_shared ? ArtifactType::SHARED_LIBRARY : ArtifactType::STATIC_LIBRARY, src_dir, bin_dir);
+
+        // Set C++ standard from CMAKE_CXX_STANDARD if available
+        std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
+        if (!cxx_std.empty()) {
+            artifact->set_cxx_standard(cxx_std);
+        }
+
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
         interp.get_root()->artifacts_[name] = artifact;
     });
@@ -120,8 +134,14 @@ void register_target_builtins(Interpreter& interp) {
         if (it == artifacts.end()) return;
         if(interp.evaluate_argument(args[1]) != "PROPERTIES") return;
         for(size_t i = 2; i < args.size() - 1; i+=2) {
-            if (interp.evaluate_argument(args[i]) == "OUTPUT_NAME")
-                it->second->set_output_name(interp.evaluate_argument(args[i+1]));
+            std::string prop_name = interp.evaluate_argument(args[i]);
+            std::string prop_value = interp.evaluate_argument(args[i+1]);
+
+            if (prop_name == "OUTPUT_NAME") {
+                it->second->set_output_name(prop_value);
+            } else if (prop_name == "CXX_STANDARD") {
+                it->second->set_cxx_standard(prop_value);
+            }
         }
     });
 

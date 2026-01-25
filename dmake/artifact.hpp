@@ -43,18 +43,29 @@ public:
 
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
-    
+
+    void set_cxx_standard(std::string standard);
+    const std::string& get_cxx_standard() const;
+
     virtual std::string get_output_path() const = 0;
 
     // The core task generation logic
     virtual void generate_tasks(BuildGraph& graph) = 0;
 
 protected:
+    // Helper methods for task generation
+    void generate_object_tasks(BuildGraph& graph, std::vector<std::string>& obj_files,
+                               const std::string& pch_gch_path, const std::string& pch_include_arg,
+                               bool is_shared);
+    std::string build_compile_command(const std::string& source, const std::string& output,
+                                      const std::string& pch_include_arg, bool is_shared) const;
+
     std::string name_;
     std::string output_name_;
     ArtifactType type_;
     std::string source_dir_;
     std::string binary_dir_;
+    std::string cxx_standard_;
     std::map<PropertyVisibility, std::vector<std::string>> sources_;
     std::map<PropertyVisibility, std::vector<std::string>> linked_libraries_;
     std::map<PropertyVisibility, std::vector<std::string>> include_directories_;

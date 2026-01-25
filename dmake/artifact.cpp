@@ -74,6 +74,14 @@ const std::string& Artifact::get_output_name() const {
     return output_name_.empty() ? name_ : output_name_;
 }
 
+void Artifact::set_cxx_standard(std::string standard) {
+    cxx_standard_ = std::move(standard);
+}
+
+const std::string& Artifact::get_cxx_standard() const {
+    return cxx_standard_;
+}
+
 std::string ExecutableArtifact::get_output_path() const {
     auto path = std::filesystem::path(binary_dir_) / get_output_name();
     return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
@@ -90,6 +98,81 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
     std::filesystem::path src(source_file);
     std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / (src.filename().string() + ".o");
     return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
+}
+
+std::string Artifact::build_compile_command(const std::string& source, const std::string& output,
+                                             const std::string& pch_include_arg, bool is_shared) const {
+    std::ostringstream cmd;
+    cmd << "g++";
+
+    // Add C++ standard
+    if (!cxx_standard_.empty()) {
+        cmd << " -std=c++" << cxx_standard_;
+    }
+
+    // Add color diagnostics
+    if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
+
+    // Add compile options
+    for (const auto& opt : get_compile_options(PropertyVisibility::PRIVATE)) cmd << " " << opt;
+    for (const auto& opt : get_compile_options(PropertyVisibility::PUBLIC)) cmd << " " << opt;
+
+    // Add compile definitions
+    for (const auto& def : get_compile_definitions(PropertyVisibility::PRIVATE)) cmd << " -D" << def;
+    for (const auto& def : get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
+
+    // Dependency file generation
+    cmd << " -MMD -MF " << output << ".d";
+
+    // Position independent code for shared libraries
+    if (is_shared) cmd << " -fPIC";
+
+    // Output specification
+    cmd << " -c -o " << output;
+
+    // Include directories
+    for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
+        cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
+    for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
+        cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
+
+    // Add source directory to include path if using PCH (so headers referenced in PCH can be found)
+    if (!pch_include_arg.empty()) {
+        cmd << " -I" << source_dir_;
+    }
+
+    // PCH include
+    if (!pch_include_arg.empty()) cmd << pch_include_arg;
+
+    // Source file
+    cmd << " " << source;
+
+    return cmd.str();
+}
+
+void Artifact::generate_object_tasks(BuildGraph& graph, std::vector<std::string>& obj_files,
+                                      const std::string& pch_gch_path, const std::string& pch_include_arg,
+                                      bool is_shared) {
+    for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
+        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
+        std::string obj = get_obj_path(binary_dir_, src_abs.string());
+        obj_files.push_back(obj);
+
+        BuildTask task;
+        task.id = obj;
+        task.parent_artifact = this;
+        task.command = build_compile_command(src_abs.string(), obj, pch_include_arg, is_shared);
+        task.inputs.push_back(src_abs.string());
+        task.outputs.push_back(obj);
+        task.outputs.push_back(obj + ".d");
+
+        // Add PCH dependency if present
+        if (!pch_gch_path.empty()) {
+            task.dependencies.insert(pch_gch_path);
+        }
+
+        graph.add_task(std::move(task));
+    }
 }
 
 // Returns (pch_gch_path, pch_include_arg). Both empty if no PCH needed.
@@ -111,14 +194,28 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     std::ostringstream wrapper_content;
     for (const auto& hdr : private_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
     for (const auto& hdr : public_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
+    std::string content = wrapper_content.str();
 
-    std::filesystem::create_directories(std::filesystem::path(pch_wrapper).parent_path());
-    std::ofstream wrapper_file(pch_wrapper);
-    if (!wrapper_file) {
-        throw std::runtime_error("Failed to create PCH wrapper file: " + pch_wrapper);
+    // Only write if file doesn't exist or content changed (to preserve timestamp for incremental builds)
+    bool needs_write = true;
+    if (std::filesystem::exists(pch_wrapper)) {
+        std::ifstream existing(pch_wrapper);
+        if (existing) {
+            std::string existing_content((std::istreambuf_iterator<char>(existing)), std::istreambuf_iterator<char>());
+            if (existing_content == content) {
+                needs_write = false;
+            }
+        }
     }
-    wrapper_file << wrapper_content.str();
-    wrapper_file.close();
+
+    if (needs_write) {
+        std::filesystem::create_directories(std::filesystem::path(pch_wrapper).parent_path());
+        std::ofstream wrapper_file(pch_wrapper);
+        if (!wrapper_file) {
+            throw std::runtime_error("Failed to create PCH wrapper file: " + pch_wrapper);
+        }
+        wrapper_file << content;
+    }
 
     // Create PCH compile task
     BuildTask pch_task;
@@ -126,7 +223,13 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     pch_task.parent_artifact = const_cast<Artifact*>(artifact);
 
     std::ostringstream cmd;
-    cmd << "g++ -std=c++23";
+    cmd << "g++";
+
+    // Add C++ standard
+    if (!artifact->get_cxx_standard().empty()) {
+        cmd << " -std=c++" << artifact->get_cxx_standard();
+    }
+
     if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
 
     // Add compile options
@@ -164,61 +267,20 @@ void ExecutableArtifact::generate_tasks(BuildGraph& graph) {
     // 1. Generate PCH task if needed
     auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, this, false);
 
-    // 2. Create Compile Tasks
-    for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
-        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
-        std::string obj = get_obj_path(binary_dir_, src_abs.string());
-        obj_files.push_back(obj);
-        
-        BuildTask task;
-        task.id = obj;
-        task.parent_artifact = this;
-        
-        std::ostringstream cmd;
-        cmd << "g++ -std=c++23";
-        if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
-        
-        // Add compile options
-        for (const auto& opt : get_compile_options(PropertyVisibility::PRIVATE)) cmd << " " << opt;
-        for (const auto& opt : get_compile_options(PropertyVisibility::PUBLIC)) cmd << " " << opt;
-        
-        // Add compile definitions
-        for (const auto& def : get_compile_definitions(PropertyVisibility::PRIVATE)) cmd << " -D" << def;
-        for (const auto& def : get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
-        
-        cmd << " -MMD -MF " << obj << ".d -c -o " << obj;
-
-        for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
-            cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-        for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
-            cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-
-        // Add PCH include if present
-        if (!pch_include_arg.empty()) cmd << pch_include_arg;
-
-        cmd << " " << src_abs.string();
-
-        task.command = cmd.str();
-        task.inputs.push_back(src_abs.string());
-        task.outputs.push_back(obj);
-        task.outputs.push_back(obj + ".d");
-
-        // Add PCH dependency if present
-        if (!pch_gch_path.empty()) {
-            task.dependencies.insert(pch_gch_path);
-        }
-
-        graph.add_task(std::move(task));
-    }
+    // 2. Generate object file tasks
+    generate_object_tasks(graph, obj_files, pch_gch_path, pch_include_arg, false);
 
     // 3. Create Link Task
     std::string output_path = get_output_path();
     BuildTask link;
     link.id = output_path;
     link.parent_artifact = this;
-    
+
     std::ostringstream cmd;
-    cmd << "g++ -std=c++23";
+    cmd << "g++";
+    if (!cxx_standard_.empty()) {
+        cmd << " -std=c++" << cxx_standard_;
+    }
     if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
     cmd << " -Wl,-rpath,'$ORIGIN'";
     cmd << " -o " << link.id;
@@ -245,64 +307,22 @@ void LibraryArtifact::generate_tasks(BuildGraph& graph) {
     // 1. Generate PCH task if needed
     auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, this, is_shared);
 
-    // 2. Create Compile Tasks
-    for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
-        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
-        std::string obj = get_obj_path(binary_dir_, src_abs.string());
-        obj_files.push_back(obj);
-        
-        BuildTask task;
-        task.id = obj;
-        task.parent_artifact = this;
-        
-        std::ostringstream cmd;
-        cmd << "g++ -std=c++23";
-        if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
-        
-        // Add compile options
-        for (const auto& opt : get_compile_options(PropertyVisibility::PRIVATE)) cmd << " " << opt;
-        for (const auto& opt : get_compile_options(PropertyVisibility::PUBLIC)) cmd << " " << opt;
-        
-        // Add compile definitions
-        for (const auto& def : get_compile_definitions(PropertyVisibility::PRIVATE)) cmd << " -D" << def;
-        for (const auto& def : get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
-        
-        cmd << " -MMD -MF " << obj << ".d";
-        if (is_shared) cmd << " -fPIC";
-        cmd << " -c -o " << obj;
-        
-        for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
-            cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-        for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
-            cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
+    // 2. Generate object file tasks
+    generate_object_tasks(graph, obj_files, pch_gch_path, pch_include_arg, is_shared);
 
-        // Add PCH include if present
-        if (!pch_include_arg.empty()) cmd << pch_include_arg;
-
-        cmd << " " << src_abs.string();
-
-        task.command = cmd.str();
-        task.inputs.push_back(src_abs.string());
-        task.outputs.push_back(obj);
-        task.outputs.push_back(obj + ".d");
-
-        // Add PCH dependency if present
-        if (!pch_gch_path.empty()) {
-            task.dependencies.insert(pch_gch_path);
-        }
-
-        graph.add_task(std::move(task));
-    }
-
+    // 3. Create link/archive task
     std::string output_path = get_output_path();
     
     BuildTask link;
     link.id = output_path;
     link.parent_artifact = this;
-    
+
     std::ostringstream cmd;
     if (is_shared) {
-        cmd << "g++ -std=c++23";
+        cmd << "g++";
+        if (!cxx_standard_.empty()) {
+            cmd << " -std=c++" << cxx_standard_;
+        }
         if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
         cmd << " -Wl,-rpath,'$ORIGIN'";
         cmd << " -shared -o " << link.id;
