@@ -20,7 +20,7 @@ namespace dmake {
 
 std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
     if (str.empty()) {
-        return {}; 
+        return {};
     }
 
     std::vector<std::string> result;
@@ -120,97 +120,6 @@ CMakeList CMakeList::sublist(size_t begin_idx, size_t length) const {
     return CMakeList(subvec);
 }
 
-// --- Target Method Implementations ---
-
-void Target::add_sources(const std::vector<std::string>& sources, PropertyVisibility visibility) {
-    sources_[visibility].insert(sources_[visibility].end(), sources.begin(), sources.end());
-}
-
-const std::vector<std::string>& Target::get_sources(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = sources_.find(visibility);
-    return (it != sources_.end()) ? it->second : empty;
-}
-
-void Target::add_linked_libraries(const std::vector<std::string>& libs, PropertyVisibility visibility) {
-    linked_libraries_[visibility].insert(linked_libraries_[visibility].end(), libs.begin(), libs.end());
-}
-
-const std::vector<std::string>& Target::get_linked_libraries(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = linked_libraries_.find(visibility);
-    return (it != linked_libraries_.end()) ? it->second : empty;
-}
-
-void Target::add_include_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility) {
-    include_directories_[visibility].insert(include_directories_[visibility].end(), dirs.begin(), dirs.end());
-}
-
-const std::vector<std::string>& Target::get_include_directories(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = include_directories_.find(visibility);
-    return (it != include_directories_.end()) ? it->second : empty;
-}
-
-void Target::set_output_name(std::string output_name) {
-    output_name_ = std::move(output_name);
-}
-
-const std::string& Target::get_output_name() const {
-    return output_name_.empty() ? name_ : output_name_;
-}
-
-// --- ExecutableTarget Method Implementations ---
-
-std::string ExecutableTarget::get_build_command(const std::string& build_dir, const std::string& script_dir) const {
-    std::ostringstream cmd;
-    std::filesystem::path output_path = std::filesystem::path(script_dir) / build_dir / get_output_name();
-    cmd << "g++ -std=c++23 -o " << output_path.string();
-
-    for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE)) {
-        std::filesystem::path include_path = std::filesystem::path(script_dir) / dir;
-        cmd << " -I" << include_path.string();
-    }
-     for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC)) {
-        std::filesystem::path include_path = std::filesystem::path(script_dir) / dir;
-        cmd << " -I" << include_path.string();
-    }
-
-    for (const auto& source : get_sources(PropertyVisibility::PRIVATE)) {
-        std::filesystem::path source_path = std::filesystem::path(script_dir) / source;
-        cmd << " " << source_path.string();
-    }
-
-    std::filesystem::path build_path = std::filesystem::path(script_dir) / build_dir;
-    cmd << " -L" << build_path.string();
-    for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) {
-        cmd << " -l" << lib;
-    }
-    return cmd.str();
-}
-
-// --- LibraryTarget Method Implementations ---
-
-std::string LibraryTarget::get_build_command(const std::string& build_dir, const std::string& script_dir) const {
-    std::ostringstream cmd;
-    std::string lib_name = "lib" + get_output_name() + ".so";
-    std::filesystem::path output_path = std::filesystem::path(script_dir) / build_dir / lib_name;
-    cmd << "g++ -std=c++23 -shared -fPIC -o " << output_path.string();
-
-    for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE)) {
-        cmd << " -I" << (std::filesystem::path(script_dir) / dir).string();
-    }
-    for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC)) {
-        cmd << " -I" << (std::filesystem::path(script_dir) / dir).string();
-    }
-
-    for (const auto& source : get_sources(PropertyVisibility::PRIVATE)) {
-        cmd << " " << (std::filesystem::path(script_dir) / source).string();
-    }
-
-    return cmd.str();
-}
-
 // --- Interpreter Method Implementations ---
 
 Interpreter* Interpreter::get_root() {
@@ -219,10 +128,36 @@ Interpreter* Interpreter::get_root() {
     return r;
 }
 
+std::expected<void, InterpreterError> Interpreter::run_build() {
+    if (parent_ != nullptr) return get_root()->run_build();
+
+    std::string root_dir = call_stack_.top().script_dir;
+    std::filesystem::path full_build_path = std::filesystem::path(root_dir) / build_dir_;
+
+    print_message("STATUS", "Generating build graph...");
+    BuildGraph graph;
+
+    // 1. Generate tasks for all artifacts
+    for (const auto& [name, artifact] : artifacts_) {
+        artifact->generate_tasks(graph, build_dir_, root_dir);
+    }
+
+    // 2. Execute the build graph
+    print_message("STATUS", "Starting build...");
+    auto result = graph.execute(full_build_path.string());
+
+    if (!result) {
+        return std::unexpected(InterpreterError{current_file_, 0, 0, result.error()});
+    }
+
+    print_message("STATUS", "Build finished.");
+    return {};
+}
+
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
     : build_dir_("build"), out_(out), err_(err), parent_(parent) {
     call_stack_.push({std::move(script_dir), {}});
-    
+
     auto& vars = call_stack_.top().variables;
     vars["CMAKE_CURRENT_SOURCE_DIR"] = call_stack_.top().script_dir;
     vars["CMAKE_CURRENT_BINARY_DIR"] = (std::filesystem::path(vars["CMAKE_CURRENT_SOURCE_DIR"]) / build_dir_).string();
@@ -297,8 +232,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             bool optional = false;
             for (size_t i = 1; i < args.size(); ++i) if (interp.evaluate_argument(args[i]) == "OPTIONAL") optional = true;
 
-            std::filesystem::path path = std::filesystem::path(file_arg).is_absolute() ? 
-                std::filesystem::path(file_arg) : 
+            std::filesystem::path path = std::filesystem::path(file_arg).is_absolute() ?
+                std::filesystem::path(file_arg) :
                 std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_arg;
             if (!path.has_extension()) path.replace_extension(".cmake");
 
@@ -371,32 +306,6 @@ std::optional<InterpreterError> Interpreter::get_fatal_error() const {
 
 void Interpreter::clear_fatal_error() {
     get_root()->fatal_error_ = std::nullopt;
-}
-
-std::expected<void, InterpreterError> Interpreter::run_build() {
-    print_message("STATUS", "Starting build...", false);
-    auto& targets = get_root()->targets_;
-
-    auto build_target = [&](const std::string& name, const std::shared_ptr<Target>& target) {
-        std::string cmd = target->get_build_command(build_dir_, get_root()->call_stack_.top().script_dir);
-        print_message("INFO", "Building target: " + name, false);
-        print_message("INFO", "Command: " + cmd, false);
-        if (system(cmd.c_str()) != 0) {
-            print_message("ERROR", "Failed to build target: " + name, true);
-        } else {
-            print_message("INFO", "Successfully built target: " + name, false);
-        }
-    };
-
-    for (const auto& [name, target] : targets) {
-        if (target->get_type() != TargetType::EXECUTABLE) build_target(name, target);
-    }
-    for (const auto& [name, target] : targets) {
-        if (target->get_type() == TargetType::EXECUTABLE) build_target(name, target);
-    }
-
-    print_message("STATUS", "Build finished.", false);
-    return {};
 }
 
 void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
@@ -525,7 +434,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
 
 bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
     if (condition.empty()) return false;
-    
+
     const auto& arg = condition[0];
     std::string val;
 

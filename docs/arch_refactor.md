@@ -30,19 +30,14 @@ A `BuildGraph` collects all tasks and discovers edges via input/output matching.
 - **Error Reporting**: If a Gray -> Gray transition occurs, backtrace the stack to print the cycle path (e.g., `libA -> libB -> libA`).
 
 ### Phase 3: Incremental Check (Signature Analysis)
-Each task generates a **Signature** to determine if it needs to be re-run. A task is skipped only if its signature matches the value stored in `.dmake_cache` AND its output files exist.
+Each task generates a **Signature** to determine if it needs to be re-run.
 
 **Signature Components**:
-- **Command String**: Any change in flags (e.g., `-O2` to `-O3`) invalidates the task.
-- **Input Files**: Contents/timestamps of all source files.
-- **Header Dependencies**:
-    - During compilation, we will use compiler flags (e.g., `-MMD`) to generate dependency files (`.d`).
-    - The `Executor` will parse these files to track which headers were actually included.
-    - If any included header changes, the corresponding `Compile Task` is invalidated.
-- **Environment Context**:
-    - **Compiler Version**: The version string of `g++` (or the active compiler).
-    - **dmake Version**: The version of the build tool itself (using a dummy string for now).
-    - If the compiler or dmake is updated, a full rebuild may be triggered to ensure consistency.
+- **Command String & Environment**: Flags, compiler version, and dmake version.
+- **Input Files & Header Dependencies**:
+    - **Discovery**: Use `g++ -H` or parse `.d` files to identify all included headers.
+    - **Optimization (Stat Cache)**: Maintain a memory cache of file modification times. The system will only query the filesystem once per file path per build session, preventing $O(N \times M)$ disk hits for common headers.
+- **Decision**: A task is skipped only if its signature matches `.dmake_cache` AND all output files exist.
 
 ### Phase 4: Parallel Execution & UI
 A multi-threaded `Executor` processes the DAG:

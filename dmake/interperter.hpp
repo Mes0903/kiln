@@ -1,12 +1,12 @@
-#pragma once
-
 #include "cmake-language.hpp"
+#include "artifact.hpp"
+#include "build_system.hpp"
 #include <map>
 #include <functional>
 #include <iostream>
-#include <unistd.h> // For isatty
+#include <unistd.h> 
 #include <vector>
-#include <memory> // For std::shared_ptr
+#include <memory> 
 #include <stack>
 #include <expected>
 #include <optional>
@@ -28,52 +28,6 @@ namespace colors {
     const std::string CYAN = "\033[36m";
     const std::string MAGENTA = "\033[35m";
 } // namespace colors
-
-enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, INTERFACE_LIBRARY };
-enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
-
-class Target {
-public:
-    Target(std::string name, TargetType type) : name_(std::move(name)), type_(type) {}
-    virtual ~Target() = default;
-
-    const std::string& get_name() const { return name_; }
-    TargetType get_type() const { return type_; }
-
-    void add_sources(const std::vector<std::string>& sources, PropertyVisibility visibility);
-    const std::vector<std::string>& get_sources(PropertyVisibility visibility) const;
-
-    void add_linked_libraries(const std::vector<std::string>& libs, PropertyVisibility visibility);
-    const std::vector<std::string>& get_linked_libraries(PropertyVisibility visibility) const;
-
-    void add_include_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility);
-    const std::vector<std::string>& get_include_directories(PropertyVisibility visibility) const;
-
-    void set_output_name(std::string output_name);
-    const std::string& get_output_name() const;
-
-    virtual std::string get_build_command(const std::string& build_dir, const std::string& script_dir) const = 0;
-
-protected:
-    std::string name_;
-    std::string output_name_;
-    TargetType type_;
-    std::map<PropertyVisibility, std::vector<std::string>> sources_;
-    std::map<PropertyVisibility, std::vector<std::string>> linked_libraries_;
-    std::map<PropertyVisibility, std::vector<std::string>> include_directories_;
-};
-
-class ExecutableTarget : public Target {
-public:
-    explicit ExecutableTarget(std::string name) : Target(std::move(name), TargetType::EXECUTABLE) {}
-    std::string get_build_command(const std::string& build_dir, const std::string& script_dir) const override;
-};
-
-class LibraryTarget : public Target {
-public:
-    LibraryTarget(std::string name, TargetType type) : Target(std::move(name), type) {}
-    std::string get_build_command(const std::string& build_dir, const std::string& script_dir) const override;
-};
 
 // Forward declaration
 class Interpreter;
@@ -185,7 +139,7 @@ private:
     
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
-    std::map<std::string, std::shared_ptr<Target>> targets_;
+    std::map<std::string, std::shared_ptr<Artifact>> artifacts_;
     
     // Scope-local state
     std::map<std::string, UserFunction> user_functions_;

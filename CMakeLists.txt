@@ -8,13 +8,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(dmake SHARED
     dmake/cmake-language.cpp
     dmake/interperter.cpp
+    dmake/artifact.cpp
+    dmake/build_system.cpp
     dmake/builtins/message.cpp
     dmake/builtins/variable.cpp
     dmake/builtins/list.cpp
     dmake/builtins/target.cpp
     dmake/builtins/project.cpp
-    dmake/utils.cpp
-    dmake/inner/blake2b.c
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -1,0 +1,326 @@
+#include "build_system.hpp"
+#include "artifact.hpp"
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <algorithm>
+#include <array>
+
+namespace dmake {
+
+void BuildGraph::add_task(BuildTask task) {
+    std::string id = task.id;
+    tasks_[id] = std::move(task);
+}
+
+std::optional<std::string> BuildGraph::check_for_cycles() {
+    std::map<std::string, int> color; // 0: White, 1: Gray, 2: Black
+    std::vector<std::string> stack;
+
+    std::function<std::optional<std::string>(const std::string&)> visit = [&](const std::string& u) -> std::optional<std::string> {
+        color[u] = 1; // Gray
+        stack.push_back(u);
+
+        for (const auto& v : tasks_[u].dependencies) {
+            if (color[v] == 1) { // Cycle!
+                std::ostringstream oss;
+                oss << "Circular dependency detected: ";
+                for (size_t i = 0; i < stack.size(); ++i) {
+                    if (stack[i] == v) {
+                        for (size_t j = i; j < stack.size(); ++j) oss << tasks_[stack[j]].id << " -> ";
+                        oss << v;
+                        break;
+                    }
+                }
+                return oss.str();
+            }
+            if (color[v] == 0) {
+                auto res = visit(v);
+                if (res) return res;
+            }
+        }
+
+        color[u] = 2; // Black
+        stack.pop_back();
+        return std::nullopt;
+    };
+
+    for (const auto& [id, task] : tasks_) {
+        if (color[id] == 0) {
+            auto res = visit(id);
+            if (res) return res;
+        }
+    }
+    return std::nullopt;
+}
+
+std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir) {
+    // 1. Resolve cross-artifact dependencies
+    // If a task input is produced by another task, add a dependency
+    std::map<std::string, std::string> file_to_task;
+    for (const auto& [id, task] : tasks_) {
+        for (const auto& out : task.outputs) file_to_task[out] = id;
+    }
+
+    for (auto& [id, task] : tasks_) {
+        for (const auto& in : task.inputs) {
+            if (file_to_task.count(in) && file_to_task[in] != id) {
+                task.dependencies.insert(file_to_task[in]);
+            }
+        }
+    }
+
+    auto cycle_err = check_for_cycles();
+    if (cycle_err) return std::unexpected(*cycle_err);
+
+    // 2. Incremental check
+    auto cache = load_cache(build_dir);
+    std::map<std::string, std::string> new_cache;
+
+    // 3. Simple topological sort execution (single-threaded for now)
+    std::set<std::string> completed;
+    std::vector<std::string> ready;
+
+    auto is_ready = [&](const std::string& id) {
+        for (const auto& dep : tasks_[id].dependencies) {
+            if (completed.find(dep) == completed.end()) return false;
+        }
+        return true;
+    };
+
+    while (completed.size() < tasks_.size()) {
+        bool progress = false;
+        for (const auto& [id, task] : tasks_) {
+            if (completed.count(id)) continue;
+            if (is_ready(id)) {
+                // Check if we can skip
+                auto sig_res = calculate_signature(task);
+                if (!sig_res) return std::unexpected(sig_res.error());
+                std::string sig = *sig_res;
+
+                bool outputs_exist = true;
+                for (const auto& out : task.outputs) {
+                    if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+                }
+
+                if (outputs_exist && cache.count(id) && cache[id] == sig) {
+                    // Skip
+                } else {
+                    // Execute
+                    std::cout << "  " << task.command << std::endl;
+                    // Ensure output directories exist
+                    for (const auto& out : task.outputs) {
+                        std::error_code ec;
+                        std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
+                        if (ec) return std::unexpected("Failed to create directory for " + out + ": " + ec.message());
+                    }
+                    
+                    int res = std::system(task.command.c_str());
+                    if (res != 0) return std::unexpected("Command failed: " + task.command);
+                }
+
+                new_cache[id] = sig;
+                completed.insert(id);
+                progress = true;
+            }
+        }
+        if (!progress) return std::unexpected("Internal error: Build graph stalled (unresolved dependencies)");
+    }
+
+    return save_cache(build_dir, new_cache);
+}
+
+std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) return {};
+    
+    std::vector<std::string> deps;
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    
+    size_t colon = content.find(':');
+    if (colon == std::string::npos) return {};
+    
+    std::string deps_part = content.substr(colon + 1);
+    std::replace(deps_part.begin(), deps_part.end(), '\\', ' ');
+    std::replace(deps_part.begin(), deps_part.end(), '\n', ' ');
+    
+    std::stringstream ss(deps_part);
+    std::string dep;
+    while (ss >> dep) {
+        deps.push_back(dep);
+    }
+    return deps;
+}
+
+static std::expected<std::vector<std::string>, std::string> get_headers_via_h_flag(const std::string& command) {
+    // Extract include flags and the source file from the command
+    std::stringstream ss(command);
+    std::string word;
+    std::string flags;
+    std::string source;
+    
+    while (ss >> word) {
+        if (word.starts_with("-I") || word.starts_with("-D")) {
+            flags += " " + word;
+        } else if (word.ends_with(".cpp") || word.ends_with(".c") || word.ends_with(".cc")) {
+            source = word;
+        }
+    }
+    
+    if (source.empty()) return std::vector<std::string>{};
+
+    std::string scan_cmd = "g++ -H -E " + flags + " " + source + " 2>&1 > /dev/null";
+    std::array<char, 256> buffer;
+    std::vector<std::string> headers;
+    
+    FILE* pipe = popen(scan_cmd.c_str(), "r");
+    if (!pipe) return std::unexpected("Failed to execute g++ for header scanning");
+    
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        std::string line(buffer.data());
+        if (line.starts_with(".")) {
+            // Lines look like ". /path/to/header.h" or ".. /path/to/header.h"
+            size_t first_space = line.find(' ');
+            if (first_space != std::string::npos) {
+                std::string header = line.substr(first_space + 1);
+                if (!header.empty() && header.back() == '\n') header.pop_back();
+                headers.push_back(header);
+            }
+        }
+    }
+    
+    int status = pclose(pipe);
+    if (status != 0) {
+        return std::unexpected("Header scanning failed with exit code " + std::to_string(status));
+    }
+    return headers;
+}
+
+std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& path) {
+    auto it = stat_cache_.find(path);
+    if (it != stat_cache_.end()) return it->second;
+
+    try {
+        auto time = std::filesystem::last_write_time(path);
+        stat_cache_[path] = time;
+        return time;
+    } catch (...) {
+        // Return a very old time if we can't stat the file
+        return std::filesystem::file_time_type::min();
+    }
+}
+
+std::expected<std::string, std::string> BuildGraph::calculate_signature(const BuildTask& task) {
+    std::ostringstream oss;
+    oss << "cmd:" << task.command << "|";
+    
+    auto version_res = get_compiler_version();
+    if (!version_res) return std::unexpected(version_res.error());
+    oss << "compiler:" << *version_res << "|";
+    
+    oss << "dmake:" << get_dmake_version() << "|";
+    
+    // 1. Primary inputs
+    for (const auto& in : task.inputs) {
+        if (std::filesystem::exists(in)) {
+            oss << in << ":" << get_file_time(in).time_since_epoch().count() << "|";
+        }
+    }
+
+    // 2. Header dependencies from .d files (fast path)
+    bool found_deps = false;
+    for (const auto& out : task.outputs) {
+        if (out.ends_with(".d") && std::filesystem::exists(out)) {
+            auto deps = parse_deps_file(out);
+            for (const auto& dep : deps) {
+                if (std::filesystem::exists(dep)) {
+                    oss << "dep:" << dep << ":" << get_file_time(dep).time_since_epoch().count() << "|";
+                }
+            }
+            found_deps = true;
+        }
+    }
+
+    // 3. If no .d file exists but it's a compile task, use g++ -H (slow but accurate path)
+    if (!found_deps && (task.command.find(" -c ") != std::string::npos)) {
+        auto headers_res = get_headers_via_h_flag(task.command);
+        if (!headers_res) return std::unexpected(headers_res.error());
+        for (const auto& header : *headers_res) {
+            if (std::filesystem::exists(header)) {
+                oss << "ext_dep:" << header << ":" << get_file_time(header).time_since_epoch().count() << "|";
+            }
+        }
+    }
+
+    return oss.str();
+}
+
+std::map<std::string, std::string> BuildGraph::load_cache(const std::string& build_dir) {
+    std::map<std::string, std::string> cache;
+    std::ifstream file(std::filesystem::path(build_dir) / ".dmake_cache");
+    if (!file) return cache;
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        size_t sep = line.find('=');
+        if (sep != std::string::npos) {
+            cache[line.substr(0, sep)] = line.substr(sep + 1);
+        }
+    }
+    return cache;
+}
+
+std::expected<void, std::string> BuildGraph::save_cache(const std::string& build_dir, const std::map<std::string, std::string>& cache) {
+    std::error_code ec;
+    std::filesystem::create_directories(build_dir, ec);
+    if (ec) {
+        return std::unexpected("Failed to create build directory: " + build_dir + " (" + ec.message() + ")");
+    }
+
+    std::ofstream file(std::filesystem::path(build_dir) / ".dmake_cache");
+    if (!file) {
+        return std::unexpected("Failed to open cache file for writing: " + (std::filesystem::path(build_dir) / ".dmake_cache").string());
+    }
+
+    for (const auto& [id, sig] : cache) {
+        file << id << "=" << sig << "\n";
+    }
+
+    if (!file) {
+        return std::unexpected("Failed to write to cache file");
+    }
+
+    return {};
+}
+
+std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
+    if (compiler_version_cache_) return *compiler_version_cache_;
+
+    std::array<char, 128> buffer;
+    std::string result;
+    FILE* pipe = popen("g++ --version 2>/dev/null | head -n 1", "r");
+    if (!pipe) {
+        return std::unexpected("Failed to execute g++ to get version");
+    }
+
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        result += buffer.data();
+    }
+
+    int status = pclose(pipe);
+    if (status != 0) {
+        return std::unexpected("g++ --version failed with exit code " + std::to_string(status));
+    }
+    
+    if (result.empty()) {
+        return std::unexpected("g++ --version produced no output");
+    }
+
+    if (result.back() == '\n') result.pop_back();
+    compiler_version_cache_ = result;
+
+    return *compiler_version_cache_;
+}
+
+} // namespace dmake
