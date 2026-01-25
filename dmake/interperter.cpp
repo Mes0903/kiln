@@ -142,6 +142,26 @@ std::expected<void, InterpreterError> Interpreter::run_build() {
         artifact->generate_tasks(graph, build_dir_, root_dir);
     }
 
+    // Resolve cross-artifact library dependencies
+    for (const auto& [name, artifact] : artifacts_) {
+        std::string out_path = artifact->get_output_path(build_dir_, root_dir);
+        if (graph.has_task(out_path)) {
+            auto& link_task = graph.get_task(out_path);
+            
+            auto add_lib_deps = [&](PropertyVisibility vis) {
+                for (const auto& lib_name : artifact->get_linked_libraries(vis)) {
+                    if (artifacts_.count(lib_name)) {
+                        std::string lib_out = artifacts_[lib_name]->get_output_path(build_dir_, root_dir);
+                        link_task.inputs.push_back(lib_out);
+                    }
+                }
+            };
+            
+            add_lib_deps(PropertyVisibility::PRIVATE);
+            add_lib_deps(PropertyVisibility::PUBLIC);
+        }
+    }
+
     // 2. Execute the build graph
     print_message("STATUS", "Starting build...");
     auto result = graph.execute(full_build_path.string());

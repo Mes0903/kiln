@@ -32,6 +32,8 @@ public:
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
     
+    virtual std::string get_output_path(const std::string& build_dir, const std::string& script_dir) const = 0;
+
     // The core task generation logic
     virtual void generate_tasks(BuildGraph& graph, const std::string& build_dir, const std::string& script_dir) = 0;
 
@@ -47,12 +49,14 @@ protected:
 class ExecutableArtifact : public Artifact {
 public:
     explicit ExecutableArtifact(std::string name) : Artifact(std::move(name), ArtifactType::EXECUTABLE) {}
+    std::string get_output_path(const std::string& build_dir, const std::string& script_dir) const override;
     void generate_tasks(BuildGraph& graph, const std::string& build_dir, const std::string& script_dir) override;
 };
 
 class LibraryArtifact : public Artifact {
 public:
     LibraryArtifact(std::string name, ArtifactType type) : Artifact(std::move(name), type) {}
+    std::string get_output_path(const std::string& build_dir, const std::string& script_dir) const override;
     void generate_tasks(BuildGraph& graph, const std::string& build_dir, const std::string& script_dir) override;
 };
 
