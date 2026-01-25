@@ -162,8 +162,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             } else if (mode == "ERROR") {
                 print_message("ERROR", message_content, true);
             } else if (mode == "FATAL") {
-                print_message("FATAL", message_content, true);
-                exit(1);
+                set_fatal_error(message_content);
             } else { // INFO
                 print_message("INFO", message_content, false);
             }
@@ -322,7 +321,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             std::filesystem::path cmake_lists_path = subdir_path / "CMakeLists.txt";
 
             if (!std::filesystem::exists(cmake_lists_path)) {
-                print_message("ERROR", "CMakeLists.txt not found in " + subdir_path.string(), true);
+                set_fatal_error("CMakeLists.txt not found in " + subdir_path.string());
                 return;
             }
 
@@ -333,33 +332,77 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 ss << file.rdbuf();
                 content = ss.str();
             } else {
-                print_message("ERROR", "Could not read " + cmake_lists_path.string(), true);
+                set_fatal_error("Could not read " + cmake_lists_path.string());
                 return;
             }
 
             Interpreter sub_interpreter(subdir_path.string(), out_, err_, this);
+            sub_interpreter.set_current_file(cmake_lists_path.string());
             Parser sub_parser(content);
             auto ast_or_error = sub_parser.parse();
             if (ast_or_error) {
-                sub_interpreter.interpret(ast_or_error.value());
+                auto result = sub_interpreter.interpret(ast_or_error.value());
+                if (!result) {
+                    // Propagate the error - it already has the correct file/line info
+                    set_fatal_error(result.error());
+                }
             } else {
-                print_message("ERROR", "Failed to parse " + cmake_lists_path.string() + ": " + ast_or_error.error().reason, true);
+                const auto& parse_error = ast_or_error.error();
+                set_fatal_error(InterpreterError{cmake_lists_path.string(), parse_error.row, parse_error.col, parse_error.reason});
             }
         });
     }
 }
 
-void Interpreter::interpret(const std::vector<AstNode>& ast) {
+std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<AstNode>& ast) {
     for (const auto& node : ast) {
         if (std::holds_alternative<CommandInvocation>(node)) {
-            execute_command(std::get<CommandInvocation>(node));
+            auto result = execute_command(std::get<CommandInvocation>(node));
+            if (!result) {
+                return result;
+            }
         } else if (std::holds_alternative<IfBlock>(node)) {
-            execute_if_block(std::get<IfBlock>(node));
+            auto result = execute_if_block(std::get<IfBlock>(node));
+            if (!result) {
+                return result;
+            }
         }
+    }
+    return {};
+}
+
+void Interpreter::set_fatal_error(const std::string& message) {
+    if (parent_) {
+        parent_->set_fatal_error(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, message});
+    } else {
+        fatal_error_ = InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, message};
     }
 }
 
-void Interpreter::run_build() {
+void Interpreter::set_fatal_error(const InterpreterError& error) {
+    if (parent_) {
+        parent_->set_fatal_error(error);
+    } else {
+        fatal_error_ = error;
+    }
+}
+
+std::optional<InterpreterError> Interpreter::get_fatal_error() const {
+    if (parent_) {
+        return parent_->get_fatal_error();
+    }
+    return fatal_error_;
+}
+
+void Interpreter::clear_fatal_error() {
+    if (parent_) {
+        parent_->clear_fatal_error();
+    } else {
+        fatal_error_ = std::nullopt;
+    }
+}
+
+std::expected<void, InterpreterError> Interpreter::run_build() {
     print_message("STATUS", "Starting build...", false);
 
     for (const auto& [name, target] : targets_) {
@@ -390,6 +433,7 @@ void Interpreter::run_build() {
     }
 
     print_message("STATUS", "Build finished.", false);
+    return {};
 }
 
 void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
@@ -400,24 +444,32 @@ void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
     }
 }
 
-void Interpreter::execute_command(const CommandInvocation& cmd) {
+std::expected<void, InterpreterError> Interpreter::execute_command(const CommandInvocation& cmd) {
     if (parent_) {
-        parent_->execute_command(cmd);
-        return;
+        return parent_->execute_command(cmd);
     }
+
+    current_cmd_row_ = cmd.row;
+    current_cmd_col_ = cmd.col;
+
     auto it = builtins_.find(cmd.identifier);
     if (it != builtins_.end()) {
         it->second(cmd.arguments);
+        if (auto error = get_fatal_error()) {
+            clear_fatal_error();
+            return std::unexpected(*error);
+        }
     } else {
-        print_message("FATAL", "Unknown command: " + cmd.identifier, true);
+        return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, "Unknown command: " + cmd.identifier});
     }
+    return {};
 }
 
-void Interpreter::execute_if_block(const IfBlock& if_block) {
+std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
     if (evaluate_condition(if_block.condition)) {
-        interpret(if_block.then_branch);
+        return interpret(if_block.then_branch);
     } else {
-        interpret(if_block.else_branch);
+        return interpret(if_block.else_branch);
     }
 }
 

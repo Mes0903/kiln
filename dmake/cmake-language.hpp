@@ -39,6 +39,8 @@ struct IfBlock {
 struct CommandInvocation {
     std::string identifier;
     std::vector<Argument> arguments;
+    size_t row = 0;
+    size_t col = 0;
 };
 
 class Parser {

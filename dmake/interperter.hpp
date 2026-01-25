@@ -8,8 +8,17 @@
 #include <vector>
 #include <memory> // For std::shared_ptr
 #include <stack>
+#include <expected>
+#include <optional>
 
 namespace dmake {
+
+struct InterpreterError {
+    std::string file;
+    size_t row;
+    size_t col;
+    std::string message;
+};
 
 // ANSI escape codes for colors
 namespace colors {
@@ -78,14 +87,22 @@ public:
 
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr);
 
-    void interpret(const std::vector<AstNode>& ast);
-    void run_build();
+    std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
+    std::expected<void, InterpreterError> run_build();
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
 
+    void set_current_file(const std::string& file) { current_file_ = file; }
+
+protected:
+    void set_fatal_error(const std::string& message);
+    void set_fatal_error(const InterpreterError& error);
+    std::optional<InterpreterError> get_fatal_error() const;
+    void clear_fatal_error();
+
 private:
-    void execute_command(const CommandInvocation& cmd);
-    void execute_if_block(const IfBlock& if_block);
+    std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
+    std::expected<void, InterpreterError> execute_if_block(const IfBlock& if_block);
     bool evaluate_condition(const std::vector<Argument>& condition);
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
@@ -100,6 +117,10 @@ private:
     std::map<std::string, std::shared_ptr<Target>> targets_;
     Interpreter* parent_ = nullptr;
     std::stack<CallFrame> call_stack_;
+    std::string current_file_;
+    std::optional<InterpreterError> fatal_error_;
+    size_t current_cmd_row_ = 0;
+    size_t current_cmd_col_ = 0;
 };
 
 } // namespace dmake

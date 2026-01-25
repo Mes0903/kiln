@@ -168,6 +168,10 @@ void Parser::consume_whitespace() {
 }
 
 std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() {
+    // Save location at start of command
+    size_t cmd_row = row_;
+    size_t cmd_col = col_;
+
     // Parse identifier
     size_t start_pos = pos_;
     while (pos_ < content_.length() && (std::isalnum(content_[pos_]) || content_[pos_] == '_')) {
@@ -189,7 +193,7 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     pos_++;
     col_++;
 
-    CommandInvocation cmd_inv{std::move(identifier), {}};
+    CommandInvocation cmd_inv{std::move(identifier), {}, cmd_row, cmd_col};
 
     // Parse arguments
     while (pos_ < content_.length()) {
