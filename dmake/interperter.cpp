@@ -351,6 +351,78 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 set_fatal_error(InterpreterError{cmake_lists_path.string(), parse_error.row, parse_error.col, parse_error.reason});
             }
         });
+
+        add_builtin("include", [this](const std::vector<Argument>& args) {
+            if (args.empty()) {
+                set_fatal_error("include() requires a file argument");
+                return;
+            }
+
+            std::string file_arg = evaluate_argument(args[0]);
+
+            // Check for OPTIONAL keyword
+            bool optional = false;
+            for (size_t i = 1; i < args.size(); ++i) {
+                std::string arg_val = evaluate_argument(args[i]);
+                if (arg_val == "OPTIONAL") {
+                    optional = true;
+                }
+            }
+
+            // Resolve file path (absolute or relative to current source dir)
+            std::filesystem::path include_path;
+            if (std::filesystem::path(file_arg).is_absolute()) {
+                include_path = file_arg;
+            } else {
+                include_path = std::filesystem::path(call_stack_.top().script_dir) / file_arg;
+            }
+
+            // Add .cmake extension if no extension present
+            if (!include_path.has_extension()) {
+                include_path.replace_extension(".cmake");
+            }
+
+            if (!std::filesystem::exists(include_path)) {
+                if (optional) {
+                    return; // Silently ignore missing optional files
+                }
+                set_fatal_error("include() could not find file: " + include_path.string());
+                return;
+            }
+
+            // Read the file
+            std::string content;
+            std::ifstream file(include_path);
+            if (file) {
+                std::ostringstream ss;
+                ss << file.rdbuf();
+                content = ss.str();
+            } else {
+                set_fatal_error("include() could not read file: " + include_path.string());
+                return;
+            }
+
+            // Parse the file
+            Parser parser(content);
+            auto ast_or_error = parser.parse();
+            if (!ast_or_error) {
+                const auto& parse_error = ast_or_error.error();
+                set_fatal_error(InterpreterError{include_path.string(), parse_error.row, parse_error.col, parse_error.reason});
+                return;
+            }
+
+            // Execute in current scope - save and restore current file
+            std::string saved_file = current_file_;
+            current_file_ = include_path.string();
+
+            auto result = interpret(ast_or_error.value());
+
+            current_file_ = saved_file;
+
+            if (!result) {
+                set_fatal_error(result.error());
+            }
+        });
     }
 }
 
