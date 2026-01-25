@@ -91,6 +91,14 @@ Interpreter* Interpreter::get_root() {
 }
 
 std::expected<void, BuildError> Interpreter::run_build(int jobs) {
+    // Sanity check CMAKE_BUILD_TYPE
+    std::array<std::string, 4> stanard_build_types_lower = {"debug", "release", "minsize", "relwithdebinfo"};
+    auto build_type = get_variable("CMAKE_BUILD_TYPE");
+    std::transform(build_type.begin(), build_type.end(), build_type.begin(), ::tolower);
+    if (std::find(stanard_build_types_lower.begin(), stanard_build_types_lower.end(), build_type) == stanard_build_types_lower.end()) {
+        print_message("WARN", "Build type '" + build_type + "' is not a standard build type. Things MIGHT go wrong.");
+    }
+
     if (parent_ != nullptr) return get_root()->run_build(jobs);
 
     std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");

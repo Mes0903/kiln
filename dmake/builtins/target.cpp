@@ -7,14 +7,8 @@
 namespace dmake {
 
 void register_target_builtins(Interpreter& interp) {
-    interp.add_builtin("add_executable", [](Interpreter& interp, const std::vector<Argument>& args) {
-        if (args.empty()) return;
-        std::string name = interp.evaluate_argument(args[0]);
-        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-        std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
-
-        auto artifact = std::make_shared<ExecutableArtifact>(name, src_dir, bin_dir);
-
+    // Helper to configure common artifact properties (C++ standard, flags, inherited directories)
+    auto configure_artifact = [](Interpreter& interp, const std::shared_ptr<Artifact>& artifact) {
         // Set C++ standard from CMAKE_CXX_STANDARD if available
         std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
         if (!cxx_std.empty()) {
@@ -50,6 +44,16 @@ void register_target_builtins(Interpreter& interp) {
         auto* root = interp.get_root();
         artifact->add_include_directories(root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
         artifact->add_link_directories(root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
+    };
+
+    interp.add_builtin("add_executable", [&configure_artifact](Interpreter& interp, const std::vector<Argument>& args) {
+        if (args.empty()) return;
+        std::string name = interp.evaluate_argument(args[0]);
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+
+        auto artifact = std::make_shared<ExecutableArtifact>(name, src_dir, bin_dir);
+        configure_artifact(interp, artifact);
 
         std::vector<std::string> sources;
         for(size_t i = 1; i < args.size(); ++i) {
@@ -59,10 +63,10 @@ void register_target_builtins(Interpreter& interp) {
             }
         }
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
-        root->artifacts_[name] = artifact;
+        interp.get_root()->artifacts_[name] = artifact;
     });
 
-    interp.add_builtin("add_library", [](Interpreter& interp, const std::vector<Argument>& args) {
+    interp.add_builtin("add_library", [&configure_artifact](Interpreter& interp, const std::vector<Argument>& args) {
         if (args.size() < 2) return;
         std::string name = interp.evaluate_argument(args[0]);
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
@@ -81,45 +85,10 @@ void register_target_builtins(Interpreter& interp) {
             }
         }
         auto artifact = std::make_shared<LibraryArtifact>(name, is_shared ? ArtifactType::SHARED_LIBRARY : ArtifactType::STATIC_LIBRARY, src_dir, bin_dir);
-
-        // Set C++ standard from CMAKE_CXX_STANDARD if available
-        std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
-        if (!cxx_std.empty()) {
-            artifact->set_cxx_standard(cxx_std);
-        }
-
-        // Apply CMAKE_CXX_FLAGS and CMAKE_CXX_FLAGS_<CONFIG>
-        auto apply_cxx_flags = [&](const std::string& flags_var) {
-            std::string flags = interp.get_variable(flags_var);
-            if (!flags.empty()) {
-                // Split flags by spaces and add individually
-                std::istringstream iss(flags);
-                std::vector<std::string> flag_list;
-                std::string flag;
-                while (iss >> flag) {
-                    flag_list.push_back(flag);
-                }
-                if (!flag_list.empty()) {
-                    artifact->add_compile_options(flag_list, PropertyVisibility::PRIVATE);
-                }
-            }
-        };
-
-        apply_cxx_flags("CMAKE_CXX_FLAGS");
-        std::string build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-        if (!build_type.empty()) {
-            std::string upper_type = build_type;
-            std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), ::toupper);
-            apply_cxx_flags("CMAKE_CXX_FLAGS_" + upper_type);
-        }
-
-        // Inherit accumulated include and link directories
-        auto* root = interp.get_root();
-        artifact->add_include_directories(root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
-        artifact->add_link_directories(root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
+        configure_artifact(interp, artifact);
 
         artifact->add_sources(sources, PropertyVisibility::PRIVATE);
-        root->artifacts_[name] = artifact;
+        interp.get_root()->artifacts_[name] = artifact;
     });
 
     interp.add_builtin("target_include_directories", [](Interpreter& interp, const std::vector<Argument>& args) {

@@ -2,6 +2,9 @@
 
 Better C/C++ builds that just work with CMake as an input language.
 
+> ![NOTE]
+> Experimental project, G++ only
+
 ## Building and using
 
 The project can be built with CMake.
