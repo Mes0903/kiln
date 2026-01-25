@@ -748,12 +748,16 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         }
         // regex
         else if(op == "MATCHES") {
+            pos++; // Consume operator
+            if (pos >= condition.size()) {
+                error_msg = "MATCHES operator requires a right operand";
+                return false;
+            }
             std::string pattern = evaluate_token(condition[pos++]);
             std::regex regex(pattern);
             std::smatch match;
             std::string left = evaluate_token(condition[start_pos]);
-            std::regex_match(left, match, regex);
-            return match.size() > 0;
+            return std::regex_search(left, match, regex);
         }
 
         // Not a comparison operator - return the unary/primary result

@@ -940,14 +940,13 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
     )");
     REQUIRE(output == "pass\n");
 
-    // BROKEN
-    // output = run_script(R"(
-    //     set(A "10")
-    //     set(B "20")
-    //     set(C "15")
-    //     if(A MATCHES "^[0-9]+$" AND B MATCHES "^[0-9]+$" AND C MATCHES "^[0-9]+$")
-    //         message("pass")
-    //     endif()
-    // )");
-    // REQUIRE(output == "pass\n");
+    output = run_script(R"(
+        set(A "10")
+        set(B "20")
+        set(C "15")
+        if(A MATCHES "^[0-9]+$" AND B MATCHES "^[0-9]+$" AND C MATCHES "^[0-9]+$")
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
 }
