@@ -13,6 +13,8 @@ add_library(dmake SHARED
     dmake/builtins/list.cpp
     dmake/builtins/target.cpp
     dmake/builtins/project.cpp
+    dmake/utils.cpp
+    dmake/inner/blake2b.c
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
