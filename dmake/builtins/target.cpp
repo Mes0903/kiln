@@ -59,6 +59,14 @@ void register_target_builtins(Interpreter& interp) {
         for(size_t i = 1; i < args.size(); ++i) {
             CMakeList lst(interp.evaluate_argument(args[i]));
             for(const auto& file : lst) {
+                std::filesystem::path p(file);
+                if (!p.is_absolute()) {
+                    p = std::filesystem::path(src_dir) / p;
+                }
+                if (!std::filesystem::exists(p)) {
+                    interp.set_fatal_error("Source file not found: " + p.string());
+                    return;
+                }
                 sources.push_back(file);
             }
         }
@@ -77,9 +85,18 @@ void register_target_builtins(Interpreter& interp) {
         for(size_t i = 1; i < args.size(); ++i) {
             std::string val = interp.evaluate_argument(args[i]);
             if(val == "SHARED") is_shared = true;
-            else if (val != "STATIC") {
+            else if (val == "STATIC") is_shared = false;
+            else {
                 CMakeList lst(val);
                 for(const auto& file : lst) {
+                    std::filesystem::path p(file);
+                    if (!p.is_absolute()) {
+                        p = std::filesystem::path(src_dir) / p;
+                    }
+                    if (!std::filesystem::exists(p)) {
+                        interp.set_fatal_error("Source file not found: " + p.string());
+                        return;
+                    }
                     sources.push_back(file);
                 }
             }

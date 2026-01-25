@@ -32,6 +32,24 @@ void register_variable_builtins(Interpreter& interp) {
         std::string var_name = interp.evaluate_argument(args[0]);
         interp.unset_variable(var_name);
     });
+
+    interp.add_builtin("option", [](Interpreter& interp, const std::vector<Argument>& args) {
+        if (args.size() < 2) {
+            interp.print_message("ERROR", "option() requires at least 2 arguments", true);
+            return;
+        }
+        std::string option_name = interp.evaluate_argument(args[0]);
+        std::string help_message = interp.evaluate_argument(args[1]);
+        (void)help_message; // Ignore the help message
+        std::string value = "ON";
+        if(args.size() > 2) {
+            value = interp.evaluate_argument(args[2]);
+        }
+        if(!interp.is_variable_set(option_name)) {
+            interp.set_variable(option_name, value);
+        }
+    });
+
 }
 
 } // namespace dmake

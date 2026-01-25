@@ -3,7 +3,6 @@
 #include "dmake/CMakeList.hpp"
 #include "dmake/cmake-language.hpp"
 #include <deque>
-#include <stack>
 #include <set>
 
 #include <iostream>
@@ -867,6 +866,20 @@ bool Interpreter::unset_variable(const std::string& name) {
         auto it2 = it->variables.find(name);
         if (it2 != it->variables.end()) {
             it->variables.erase(it2);
+            return true;
+        }
+        it++;
+    }
+    return false;
+}
+
+bool Interpreter::is_variable_set(const std::string& name) const {
+    if (call_stack_.empty())
+        return false;
+    auto it = call_stack_.begin();
+    while(it != call_stack_.end()) {
+        auto it2 = it->variables.find(name);
+        if (it2 != it->variables.end()) {
             return true;
         }
         it++;
