@@ -15,6 +15,112 @@
 
 namespace dmake {
 
+// --- CMakeList Method Implementations ---
+
+std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
+    if (str.empty()) {
+        return {}; // Empty string = empty list
+    }
+
+    std::vector<std::string> result;
+    std::string current;
+
+    for (char c : str) {
+        if (c == ';') {
+            result.push_back(current);
+            current.clear();
+        } else {
+            current += c;
+        }
+    }
+
+    // Add the last element
+    result.push_back(current);
+
+    return result;
+}
+
+CMakeList::CMakeList(const std::string& semicolon_separated)
+    : items_(split_by_semicolon(semicolon_separated)) {
+}
+
+CMakeList::CMakeList(const std::vector<std::string>& items)
+    : items_(items) {
+}
+
+CMakeList::CMakeList(std::initializer_list<std::string> items)
+    : items_(items) {
+}
+
+CMakeList CMakeList::from_arguments(const std::vector<Argument>& args, Interpreter* interp) {
+    std::vector<std::string> items;
+    items.reserve(args.size());
+    for (const auto& arg : args) {
+        items.push_back(interp->evaluate_argument(arg));
+    }
+    return CMakeList(items);
+}
+
+std::string CMakeList::to_string() const {
+    if (items_.empty()) {
+        return "";
+    }
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < items_.size(); ++i) {
+        oss << items_[i];
+        if (i < items_.size() - 1) {
+            oss << ";";
+        }
+    }
+    return oss.str();
+}
+
+std::vector<std::string> CMakeList::to_vector() const {
+    return items_;
+}
+
+void CMakeList::append(const std::string& item) {
+    items_.push_back(item);
+}
+
+void CMakeList::append(const CMakeList& other) {
+    items_.insert(items_.end(), other.items_.begin(), other.items_.end());
+}
+
+void CMakeList::reverse() {
+    std::reverse(items_.begin(), items_.end());
+}
+
+void CMakeList::sort() {
+    std::sort(items_.begin(), items_.end());
+}
+
+void CMakeList::remove_duplicates() {
+    // Preserve order while removing duplicates
+    std::vector<std::string> unique_items;
+    std::vector<std::string> seen;
+
+    for (const auto& item : items_) {
+        if (std::find(seen.begin(), seen.end(), item) == seen.end()) {
+            unique_items.push_back(item);
+            seen.push_back(item);
+        }
+    }
+
+    items_ = std::move(unique_items);
+}
+
+CMakeList CMakeList::sublist(size_t begin_idx, size_t length) const {
+    if (begin_idx >= items_.size()) {
+        return CMakeList();
+    }
+
+    size_t end_idx = std::min(begin_idx + length, items_.size());
+    std::vector<std::string> subvec(items_.begin() + begin_idx, items_.begin() + end_idx);
+    return CMakeList(subvec);
+}
+
 // --- Target Method Implementations ---
 
 void Target::add_sources(const std::vector<std::string>& sources, PropertyVisibility visibility) {
@@ -174,11 +280,123 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 return;
             }
             std::string var_name = evaluate_argument(args[0]);
-            std::string value;
-            for (size_t i = 1; i < args.size(); ++i) {
-                value += evaluate_argument(args[i]);
-            }
+
+            // Build the value as a list if multiple arguments provided
+            std::vector<Argument> value_args(args.begin() + 1, args.end());
+            CMakeList value_list = CMakeList::from_arguments(value_args, this);
+            std::string value = value_list.to_string();
+
             set_variable(var_name, value);
+        });
+
+        add_builtin("list", [this](const std::vector<Argument>& args) {
+            if (args.size() < 2) {
+                print_message("ERROR", "list() requires at least 2 arguments", true);
+                return;
+            }
+
+            std::string operation = evaluate_argument(args[0]);
+            std::transform(operation.begin(), operation.end(), operation.begin(), ::toupper);
+
+            if (operation == "LENGTH") {
+                // list(LENGTH <list_var> <output_var>)
+                if (args.size() != 3) {
+                    print_message("ERROR", "list(LENGTH) requires exactly 3 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                std::string output_var = evaluate_argument(args[2]);
+
+                CMakeList list(get_variable(list_var));
+                set_variable(output_var, std::to_string(list.size()));
+            }
+            else if (operation == "GET") {
+                // list(GET <list_var> <index> [<index> ...] <output_var>)
+                if (args.size() < 4) {
+                    print_message("ERROR", "list(GET) requires at least 4 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                CMakeList list(get_variable(list_var));
+
+                CMakeList result_list;
+                for (size_t i = 2; i < args.size() - 1; ++i) {
+                    std::string index_str = evaluate_argument(args[i]);
+                    size_t index = std::stoul(index_str);
+                    if (index < list.size()) {
+                        result_list.append(list[index]);
+                    }
+                }
+
+                std::string output_var = evaluate_argument(args[args.size() - 1]);
+                set_variable(output_var, result_list.to_string());
+            }
+            else if (operation == "APPEND") {
+                // list(APPEND <list_var> [<element> ...])
+                if (args.size() < 2) {
+                    print_message("ERROR", "list(APPEND) requires at least 2 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                CMakeList list(get_variable(list_var));
+
+                for (size_t i = 2; i < args.size(); ++i) {
+                    list.append(evaluate_argument(args[i]));
+                }
+
+                set_variable(list_var, list.to_string());
+            }
+            else if (operation == "REVERSE") {
+                // list(REVERSE <list_var>)
+                if (args.size() != 2) {
+                    print_message("ERROR", "list(REVERSE) requires exactly 2 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                CMakeList list(get_variable(list_var));
+                list.reverse();
+                set_variable(list_var, list.to_string());
+            }
+            else if (operation == "SORT") {
+                // list(SORT <list_var>)
+                if (args.size() != 2) {
+                    print_message("ERROR", "list(SORT) requires exactly 2 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                CMakeList list(get_variable(list_var));
+                list.sort();
+                set_variable(list_var, list.to_string());
+            }
+            else if (operation == "REMOVE_DUPLICATES") {
+                // list(REMOVE_DUPLICATES <list_var>)
+                if (args.size() != 2) {
+                    print_message("ERROR", "list(REMOVE_DUPLICATES) requires exactly 2 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                CMakeList list(get_variable(list_var));
+                list.remove_duplicates();
+                set_variable(list_var, list.to_string());
+            }
+            else if (operation == "SUBLIST") {
+                // list(SUBLIST <list_var> <begin> <length> <output_var>)
+                if (args.size() != 5) {
+                    print_message("ERROR", "list(SUBLIST) requires exactly 5 arguments", true);
+                    return;
+                }
+                std::string list_var = evaluate_argument(args[1]);
+                size_t begin_idx = std::stoul(evaluate_argument(args[2]));
+                size_t length = std::stoul(evaluate_argument(args[3]));
+                std::string output_var = evaluate_argument(args[4]);
+
+                CMakeList list(get_variable(list_var));
+                CMakeList sublist = list.sublist(begin_idx, length);
+                set_variable(output_var, sublist.to_string());
+            }
+            else {
+                print_message("ERROR", "list() unknown operation: " + operation, true);
+            }
         });
 
         add_builtin("add_executable", [this](const std::vector<Argument>& args) {
@@ -620,37 +838,27 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const st
     // Create a new call frame for the function
     CallFrame new_frame{call_stack_.top().script_dir, {}};
 
-    // Set ARGC
-    new_frame.variables["ARGC"] = std::to_string(args.size());
+    // Build list of all evaluated arguments
+    CMakeList all_args = CMakeList::from_arguments(args, this);
 
-    // Set ARGV (all arguments as a single string)
-    std::ostringstream argv_stream;
-    for (size_t i = 0; i < args.size(); ++i) {
-        argv_stream << evaluate_argument(args[i]);
-        if (i < args.size() - 1) {
-            argv_stream << ";";
-        }
-    }
-    new_frame.variables["ARGV"] = argv_stream.str();
+    // Set ARGC
+    new_frame.variables["ARGC"] = std::to_string(all_args.size());
+
+    // Set ARGV (all arguments as semicolon-separated list)
+    new_frame.variables["ARGV"] = all_args.to_string();
 
     // Set ARGN (arguments beyond the declared parameters)
-    std::ostringstream argn_stream;
-    for (size_t i = func->parameters.size(); i < args.size(); ++i) {
-        argn_stream << evaluate_argument(args[i]);
-        if (i < args.size() - 1) {
-            argn_stream << ";";
-        }
-    }
-    new_frame.variables["ARGN"] = argn_stream.str();
+    CMakeList extra_args = all_args.sublist(func->parameters.size(), all_args.size());
+    new_frame.variables["ARGN"] = extra_args.to_string();
 
     // Set individual ARGV0, ARGV1, etc.
-    for (size_t i = 0; i < args.size(); ++i) {
-        new_frame.variables["ARGV" + std::to_string(i)] = evaluate_argument(args[i]);
+    for (size_t i = 0; i < all_args.size(); ++i) {
+        new_frame.variables["ARGV" + std::to_string(i)] = all_args[i];
     }
 
     // Set named parameters
-    for (size_t i = 0; i < func->parameters.size() && i < args.size(); ++i) {
-        new_frame.variables[func->parameters[i]] = evaluate_argument(args[i]);
+    for (size_t i = 0; i < func->parameters.size() && i < all_args.size(); ++i) {
+        new_frame.variables[func->parameters[i]] = all_args[i];
     }
 
     // Push the new frame and execute the function body
@@ -695,10 +903,13 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const std::
         }
     };
 
+    // Build list of all evaluated arguments
+    CMakeList all_args = CMakeList::from_arguments(args, this);
+
     save_if_exists("ARGC");
     save_if_exists("ARGV");
     save_if_exists("ARGN");
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (size_t i = 0; i < all_args.size(); ++i) {
         save_if_exists("ARGV" + std::to_string(i));
     }
     for (const auto& param : macro->parameters) {
@@ -706,36 +917,23 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const std::
     }
 
     // Set ARGC
-    set_variable("ARGC", std::to_string(args.size()));
+    set_variable("ARGC", std::to_string(all_args.size()));
 
-    // Set ARGV (all arguments as a single string)
-    std::ostringstream argv_stream;
-    for (size_t i = 0; i < args.size(); ++i) {
-        argv_stream << evaluate_argument(args[i]);
-        if (i < args.size() - 1) {
-            argv_stream << ";";
-        }
-    }
-    set_variable("ARGV", argv_stream.str());
+    // Set ARGV (all arguments as semicolon-separated list)
+    set_variable("ARGV", all_args.to_string());
 
     // Set ARGN (arguments beyond the declared parameters)
-    std::ostringstream argn_stream;
-    for (size_t i = macro->parameters.size(); i < args.size(); ++i) {
-        argn_stream << evaluate_argument(args[i]);
-        if (i < args.size() - 1) {
-            argn_stream << ";";
-        }
-    }
-    set_variable("ARGN", argn_stream.str());
+    CMakeList extra_args = all_args.sublist(macro->parameters.size(), all_args.size());
+    set_variable("ARGN", extra_args.to_string());
 
     // Set individual ARGV0, ARGV1, etc.
-    for (size_t i = 0; i < args.size(); ++i) {
-        set_variable("ARGV" + std::to_string(i), evaluate_argument(args[i]));
+    for (size_t i = 0; i < all_args.size(); ++i) {
+        set_variable("ARGV" + std::to_string(i), all_args[i]);
     }
 
     // Set named parameters
-    for (size_t i = 0; i < macro->parameters.size() && i < args.size(); ++i) {
-        set_variable(macro->parameters[i], evaluate_argument(args[i]));
+    for (size_t i = 0; i < macro->parameters.size() && i < all_args.size(); ++i) {
+        set_variable(macro->parameters[i], all_args[i]);
     }
 
     // Execute the macro body in the current scope

@@ -75,6 +75,55 @@ public:
     std::string get_build_command(const std::string& build_dir, const std::string& script_dir) const override;
 };
 
+// Forward declaration
+class Interpreter;
+
+// Helper class for CMake list operations
+// In CMake, lists are semicolon-separated strings
+class CMakeList {
+public:
+    // Constructors
+    CMakeList() = default;
+    explicit CMakeList(const std::string& semicolon_separated);
+    explicit CMakeList(const std::vector<std::string>& items);
+    CMakeList(std::initializer_list<std::string> items);
+
+    // Factory methods
+    static CMakeList from_arguments(const std::vector<Argument>& args, Interpreter* interp);
+
+    // Conversion
+    std::string to_string() const;
+    std::vector<std::string> to_vector() const;
+
+    // Access
+    size_t size() const { return items_.size(); }
+    bool empty() const { return items_.empty(); }
+    const std::string& operator[](size_t idx) const { return items_[idx]; }
+    const std::string& at(size_t idx) const { return items_.at(idx); }
+
+    // Iteration
+    auto begin() const { return items_.begin(); }
+    auto end() const { return items_.end(); }
+    auto begin() { return items_.begin(); }
+    auto end() { return items_.end(); }
+
+    // Modification
+    void append(const std::string& item);
+    void append(const CMakeList& other);
+    void push_back(const std::string& item) { append(item); }
+
+    // List operations (like CMake's list command)
+    void reverse();
+    void sort();
+    void remove_duplicates();
+    CMakeList sublist(size_t begin_idx, size_t length) const;
+
+private:
+    std::vector<std::string> items_;
+
+    // Helper to split semicolon-separated string
+    static std::vector<std::string> split_by_semicolon(const std::string& str);
+};
 
 struct CallFrame {
     std::string script_dir;

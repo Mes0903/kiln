@@ -261,3 +261,103 @@ TEST_CASE("Function can read parent variables", "[interpreter][function]") {
     )");
     REQUIRE(output == "from parent\n");
 }
+
+TEST_CASE("set() creates lists from multiple arguments", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;b;c\n");
+}
+
+TEST_CASE("list(LENGTH) returns list length", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "x" "y" "z")
+        list(LENGTH MY_LIST len)
+        message("${len}")
+    )");
+    REQUIRE(output == "3\n");
+}
+
+TEST_CASE("list(GET) retrieves elements by index", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d")
+        list(GET MY_LIST 0 result0)
+        list(GET MY_LIST 2 result2)
+        message("${result0}")
+        message("${result2}")
+    )");
+    REQUIRE(output == "a\nc\n");
+}
+
+TEST_CASE("list(GET) can retrieve multiple indices", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d")
+        list(GET MY_LIST 0 2 3 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "a;c;d\n");
+}
+
+TEST_CASE("list(APPEND) adds elements to list", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b")
+        list(APPEND MY_LIST "c" "d")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;b;c;d\n");
+}
+
+TEST_CASE("list(REVERSE) reverses the list", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "1" "2" "3")
+        list(REVERSE MY_LIST)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "3;2;1\n");
+}
+
+TEST_CASE("list(SORT) sorts the list", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "c" "a" "b")
+        list(SORT MY_LIST)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;b;c\n");
+}
+
+TEST_CASE("list(REMOVE_DUPLICATES) removes duplicate items", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "a" "c" "b")
+        list(REMOVE_DUPLICATES MY_LIST)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;b;c\n");
+}
+
+TEST_CASE("list(SUBLIST) extracts sublist", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e")
+        list(SUBLIST MY_LIST 1 3 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "b;c;d\n");
+}
+
+TEST_CASE("CMakeList handles empty lists", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(EMPTY_LIST "")
+        list(LENGTH EMPTY_LIST len)
+        message("${len}")
+    )");
+    REQUIRE(output == "0\n");
+}
+
+TEST_CASE("CMakeList handles semicolons in variable references", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(LIST1 "a;b;c")
+        list(LENGTH LIST1 len)
+        message("${len}")
+    )");
+    REQUIRE(output == "3\n");
+}
