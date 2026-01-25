@@ -13,10 +13,25 @@ dmake is a simplified CMake-like build system written in C++23. It parses a subs
 mkdir -p build && cd build && cmake .. && make
 ```
 
-**Run tests:**
+**Run unit tests:**
 ```bash
 ./build/dmake_tests
 ```
+
+**Run integration tests:**
+
+```bash
+# Requires path to dmake binary
+./tests/integration/run_tests.sh ./build/dmake
+```
+
+**Adding integration tests:**
+1. Create a new directory in `tests/integration/<test-name>`
+2. Add a `CMakeLists.txt` and source files
+3. Add a `test.sh` script that:
+   - Takes the dmake binary path as `$1`
+   - Executes build commands
+   - Verifies outputs/behavior (return 0 for success)
 
 **Run a specific test:**
 ```bash
@@ -219,6 +234,19 @@ To add tests:
 1. Add a new `TEST_CASE` in `tests/interpreter_tests.cpp`
 2. Use `run_script()` for simple interpreter tests
 3. For parser tests, create a `Parser` directly and check `parse()` results
+
+For integration tests, they live in `tests/integration`. These are actual project tests using a shell script to invoke `dmake` and check if artifacts are generated correctly.
+
+To add integration tests:
+* Add a new directory in `tests/integration` with a `test.sh` script that invokes `$1` (passed by `run_tests.sh`, path to dmake binary) and checks the output files exist
+
+## Self hosting
+
+The project can self host. To self host, follow these steps:
+
+* Build `dmake` with `cmake` if not already built
+* in `build/` run `path/to/dmake ..`
+* Default build is debug so binary in `build/debug/dmake`
 
 ## Code Locations
 
