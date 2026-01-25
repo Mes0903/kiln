@@ -483,104 +483,280 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
 bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
     if (condition.empty()) return false;
 
-    auto evaluate_single_condition = [&](const Argument& arg) -> std::string {
-        if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
-            std::string name = std::get<std::string>(arg.parts[0]);
-            std::string var_val = get_variable(name);
-            if (!var_val.empty() || name == "0" || name == "FALSE" || name == "OFF") {
-                return var_val;
-            } else {
-                return name;
-            }
-        } else {
-            return evaluate_argument(arg);
-        }
+    // Set of keywords that should not be dereferenced as variables
+    static const std::set<std::string> keywords = {
+        "NOT", "AND", "OR",
+        "DEFINED", "TARGET", "EXISTS", "COMMAND", "POLICY", "TEST",
+        "IS_DIRECTORY", "IS_SYMLINK", "IS_ABSOLUTE",
+        "EQUAL", "LESS", "GREATER", "LESS_EQUAL", "GREATER_EQUAL", "NOT_EQUAL",
+        "STREQUAL", "STRLESS", "STRGREATER", "STRLESS_EQUAL", "STRGREATER_EQUAL",
+        "VERSION_EQUAL", "VERSION_LESS", "VERSION_GREATER",
+        "VERSION_LESS_EQUAL", "VERSION_GREATER_EQUAL",
+        "MATCHES", "IN_LIST"
     };
 
+    // Helper to get the string value of an argument token
+    // For unquoted arguments that are not keywords, dereference as variable
+    auto get_token_string = [&](const Argument& arg) -> std::string {
+        if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
+            return std::get<std::string>(arg.parts[0]);
+        }
+        return evaluate_argument(arg);
+    };
+
+    // Helper to check if a string looks like a numeric constant
+    auto is_numeric_constant = [](const std::string& s) -> bool {
+        if (s.empty()) return false;
+        size_t start = 0;
+        if (s[0] == '-' || s[0] == '+') start = 1;
+        if (start >= s.length()) return false;
+
+        // Check if rest of string is numeric
+        for (size_t i = start; i < s.length(); ++i) {
+            if (!std::isdigit(s[i]) && s[i] != '.') return false;
+        }
+        return true;
+    };
+
+    // Helper to check if a variable is defined in any scope
+    auto is_variable_defined = [&](const std::string& name) -> bool {
+        for (const auto& frame : call_stack_) {
+            if (frame.variables.contains(name)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Helper to evaluate an argument, dereferencing variables unless it's a keyword or constant
+    // CMake behavior (pre-CMP0054):
+    // - Keywords and quoted strings are returned as-is
+    // - Numeric constants are returned as-is
+    // - Everything else is dereferenced as a variable:
+    //   - If defined, return the variable's value (even if empty)
+    //   - If undefined, return empty string
+    auto evaluate_token = [&](const Argument& arg) -> std::string {
+        std::string token = get_token_string(arg);
+
+        // Don't dereference keywords or quoted strings
+        if (arg.quoted || keywords.contains(token)) {
+            return token;
+        }
+
+        // Don't dereference numeric constants (0, 1, -5, 3.14, etc.)
+        if (is_numeric_constant(token)) {
+            return token;
+        }
+
+        // Dereference as variable
+        // If defined: return value (even if empty)
+        // If undefined: return empty string
+        // Note: This means undefined variables evaluate to empty (falsy)
+        //       but named boolean constants like TRUE, FALSE, ON, OFF, YES, NO, Y, N
+        //       are treated as variable names that dereference to empty if not defined
+        return get_variable(token);
+    };
+
+    // Check if a value is truthy according to CMake rules (case-insensitive)
     auto is_truthy = [&](const std::string& val) -> bool {
+        if (val.empty()) return false;
+
         std::string upper_val = val;
         std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
-        return !(upper_val == "FALSE" || upper_val == "OFF" || upper_val == "0" || upper_val.empty() || upper_val == "NOTFOUND" || upper_val == "IGNORE");
-    };
 
-    if (condition.size() == 1) {
-        std::string val = evaluate_single_condition(condition[0]);
-        return is_truthy(val);
-    }
-
-    if(condition.size() == 2) {
-        std::string op = evaluate_single_condition(condition[0]);
-        std::string right = evaluate_argument(condition[1]);
-
-        if (op == "NOT") {
-            return !is_truthy(right);
-        }
-        if(op == "TARGET") {
-            return artifacts_.contains(right);
-        }
-        if(op == "DEFINED") {
-            auto it = call_stack_.begin();
-            while (it != call_stack_.end()) {
-                if (it->variables.contains(right)) {
-                    return true;
-                }
-                ++it;
-            }
+        // False constants (case-insensitive)
+        if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
+            upper_val == "FALSE" || upper_val == "N" || upper_val == "IGNORE" ||
+            upper_val == "NOTFOUND" || upper_val.ends_with("-NOTFOUND")) {
             return false;
         }
-    }
 
-    if (condition.size() == 3) {
-        std::string left = evaluate_single_condition(condition[0]);
-        std::string op = evaluate_argument(condition[1]);
-        std::string right = evaluate_single_condition(condition[2]);
+        return true;
+    };
 
-        if (op == "EQUAL") {
-            return left == right;
-        } else if (op == "NOT_EQUAL") {
-            return left != right;
-        } else if (op == "LESS") {
-            return std::stod(left) < std::stod(right);
-        } else if (op == "GREATER") {
-            return std::stod(left) > std::stod(right);
-        } else if (op == "LESS_EQUAL") {
-            return std::stod(left) <= std::stod(right);
-        } else if (op == "GREATER_EQUAL") {
-            return std::stod(left) >= std::stod(right);
-        } else if (op == "STREQUAL") {
-            return left == right;
-        } else if (op == "STRLESS") {
-            return left < right;
-        } else if (op == "STRGREATER") {
-            return left > right;
-        } else if (op == "VERSION_EQUAL") {
-            return left == right;
-        } else if (op == "VERSION_LESS") {
-            return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end());
-        } else if (op == "VERSION_GREATER") {
-            return std::lexicographical_compare(right.begin(), right.end(), left.begin(), left.end());
-        } else if (op == "VERSION_LESS_EQUAL") {
-            return left == right || std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end());
-        } else if (op == "VERSION_GREATER_EQUAL") {
-            return left == right || std::lexicographical_compare(right.begin(), right.end(), left.begin(), left.end());
-        } else if (op == "NOT") {
-            return !evaluate_condition({condition.begin() + 2, condition.end()});
+    // Recursive descent parser with proper CMake precedence
+    // Precedence (high to low): unary tests > binary tests > NOT > AND/OR
+    size_t pos = 0;
+
+    std::function<bool()> parse_or;
+    std::function<bool()> parse_and;
+    std::function<bool()> parse_not;
+    std::function<bool()> parse_comparison;
+    std::function<bool()> parse_unary_or_primary;
+
+    // AND/OR have lowest precedence and evaluate left-to-right
+    // NOTE: CMake does NOT short-circuit - both sides are always evaluated
+    parse_or = [&]() -> bool {
+        bool left = parse_and();
+
+        while (pos < condition.size()) {
+            std::string token = get_token_string(condition[pos]);
+            if (token == "OR") {
+                pos++;
+                bool right = parse_and();  // Always evaluate right side (no short-circuit)
+                left = left || right;
+            } else {
+                break;
+            }
         }
-    }
+        return left;
+    };
 
-    if (condition.size() > 3) {
-        std::string logic_op = evaluate_argument(condition[1]);
-        if (logic_op == "AND") {
-            return evaluate_condition({condition[0]}) && evaluate_condition({condition.begin() + 2, condition.end()});
-        } else if (logic_op == "OR") {
-            return evaluate_condition({condition[0]}) || evaluate_condition({condition.begin() + 2, condition.end()});
-        } else if (logic_op == "NOT") {
-            return !evaluate_condition({condition.begin() + 2, condition.end()});
+    parse_and = [&]() -> bool {
+        bool left = parse_not();
+
+        while (pos < condition.size()) {
+            std::string token = get_token_string(condition[pos]);
+            if (token == "AND") {
+                pos++;
+                bool right = parse_not();  // Always evaluate right side (no short-circuit)
+                left = left && right;
+            } else {
+                break;
+            }
         }
+        return left;
+    };
+
+    // NOT has higher precedence than AND/OR but lower than comparisons
+    parse_not = [&]() -> bool {
+        if (pos >= condition.size()) return false;
+
+        std::string token = get_token_string(condition[pos]);
+        if (token == "NOT") {
+            pos++;
+            return !parse_not();  // Right-associative
+        }
+        return parse_comparison();
+    };
+
+    // Binary comparison operators (EQUAL, LESS, STREQUAL, etc.)
+    parse_comparison = [&]() -> bool {
+        if (pos >= condition.size()) return false;
+
+        // Save start position in case this isn't a comparison
+        size_t start_pos = pos;
+
+        // Try to parse left operand
+        bool unary_result = parse_unary_or_primary();
+
+        // Check if next token is a binary operator
+        if (pos >= condition.size()) {
+            return unary_result;
+        }
+
+        std::string op = get_token_string(condition[pos]);
+
+        // Numeric comparisons
+        if (op == "EQUAL" || op == "LESS" || op == "GREATER" ||
+            op == "LESS_EQUAL" || op == "GREATER_EQUAL" || op == "NOT_EQUAL") {
+            pos++;
+            if (pos >= condition.size()) return false;
+
+            std::string left = evaluate_token(condition[start_pos]);
+            std::string right = evaluate_token(condition[pos++]);
+
+            try {
+                double left_num = std::stod(left);
+                double right_num = std::stod(right);
+
+                if (op == "EQUAL") return left_num == right_num;
+                if (op == "NOT_EQUAL") return left_num != right_num;
+                if (op == "LESS") return left_num < right_num;
+                if (op == "GREATER") return left_num > right_num;
+                if (op == "LESS_EQUAL") return left_num <= right_num;
+                if (op == "GREATER_EQUAL") return left_num >= right_num;
+            } catch (...) {
+                // Fallback to string comparison for EQUAL/NOT_EQUAL
+                if (op == "EQUAL") return left == right;
+                if (op == "NOT_EQUAL") return left != right;
+                return false;
+            }
+        }
+        // String comparisons
+        else if (op == "STREQUAL" || op == "STRLESS" || op == "STRGREATER" ||
+                 op == "STRLESS_EQUAL" || op == "STRGREATER_EQUAL") {
+            pos++;
+            if (pos >= condition.size()) return false;
+
+            std::string left = evaluate_token(condition[start_pos]);
+            std::string right = evaluate_token(condition[pos++]);
+
+            if (op == "STREQUAL") return left == right;
+            if (op == "STRLESS") return left < right;
+            if (op == "STRGREATER") return left > right;
+            if (op == "STRLESS_EQUAL") return left <= right;
+            if (op == "STRGREATER_EQUAL") return left >= right;
+        }
+        // Version comparisons (simplified - real CMake does component-wise comparison)
+        else if (op.starts_with("VERSION_")) {
+            pos++;
+            if (pos >= condition.size()) return false;
+
+            std::string left = evaluate_token(condition[start_pos]);
+            std::string right = evaluate_token(condition[pos++]);
+
+            if (op == "VERSION_EQUAL") {
+                return left == right;
+            }
+            // Simplified lexicographic comparison (real CMake splits on . and compares numerically)
+            bool less = std::lexicographical_compare(
+                left.begin(), left.end(), right.begin(), right.end());
+
+            if (op == "VERSION_LESS") return less;
+            if (op == "VERSION_GREATER") return !less && left != right;
+            if (op == "VERSION_LESS_EQUAL") return less || left == right;
+            if (op == "VERSION_GREATER_EQUAL") return !less || left == right;
+        }
+
+        // Not a comparison operator - return the unary/primary result
+        return unary_result;
+    };
+
+    // Unary operators (highest precedence) and primary values
+    parse_unary_or_primary = [&]() -> bool {
+        if (pos >= condition.size()) return false;
+
+        std::string token = get_token_string(condition[pos]);
+
+        // Unary operators that take one argument
+        if (token == "DEFINED") {
+            pos++;
+            if (pos >= condition.size()) return false;
+
+            // DEFINED takes a variable name (don't dereference it)
+            std::string var_name = get_token_string(condition[pos++]);
+
+            // Check if variable is defined in any scope
+            for (const auto& frame : call_stack_) {
+                if (frame.variables.contains(var_name)) {
+                    return true;
+                }
+            }
+            return false;
+        } else if (token == "TARGET") {
+            pos++;
+            if (pos >= condition.size()) return false;
+
+            std::string target_name = get_token_string(condition[pos++]);
+            return artifacts_.contains(target_name);
+        }
+        // Add other unary operators here (EXISTS, COMMAND, etc.) as needed
+
+        // Primary value - evaluate and check truthiness
+        std::string val = evaluate_token(condition[pos++]);
+        return is_truthy(val);
+    };
+
+    // Start parsing at the lowest precedence level (OR)
+    bool result = parse_or();
+
+    // Warn if we didn't consume all tokens (indicates malformed condition)
+    if (pos < condition.size()) {
+        // Could set an error here, but for now just use the result we got
     }
 
-    // TODO: This should error
-    return false;
+    return result;
 }
 
 std::string Interpreter::evaluate_argument(const Argument& arg) {

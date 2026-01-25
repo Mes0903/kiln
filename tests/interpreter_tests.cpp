@@ -631,3 +631,268 @@ TEST_CASE("break in macro affects caller loop", "[interpreter][foreach][macro]")
     )");
     REQUIRE(output == "1\ndone\n");
 }
+
+TEST_CASE("if condition: AND operator", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(X "1")
+        set(Y "1")
+        if(X AND Y)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(X "1")
+        set(Y "0")
+        if(X AND Y)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: OR operator", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(X "0")
+        set(Y "1")
+        if(X OR Y)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(X "0")
+        set(Y "0")
+        if(X OR Y)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: NOT operator", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(X "0")
+        if(NOT X)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(X "1")
+        if(NOT X)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: numeric comparisons", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(A "5")
+        set(B "10")
+        if(A LESS B)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(A "10")
+        set(B "10")
+        if(A EQUAL B)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(A "15")
+        set(B "10")
+        if(A GREATER B)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: string comparisons", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(A "abc")
+        set(B "xyz")
+        if(A STRLESS B)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(A "hello")
+        set(B "hello")
+        if(A STREQUAL B)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: DEFINED operator", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(VAR "value")
+        if(DEFINED VAR)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        if(DEFINED NONEXISTENT)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // DEFINED should work even if variable has empty value
+    output = run_script(R"(
+        set(EMPTY "")
+        if(DEFINED EMPTY)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: true constants (case-insensitive)", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(T1 "TRUE")
+        set(T2 "True")
+        set(T3 "ON")
+        set(T4 "YES")
+        set(T5 "1")
+        if(T1 AND T2 AND T3 AND T4 AND T5)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: false constants (case-insensitive)", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(F1 "FALSE")
+        set(F2 "False")
+        set(F3 "OFF")
+        set(F4 "NO")
+        set(F5 "0")
+        set(F6 "NOTFOUND")
+        set(F7 "IGNORE")
+        if(F1 OR F2 OR F3 OR F4 OR F5 OR F6 OR F7)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: empty string is falsy", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(EMPTY "")
+        if(EMPTY)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: undefined variable is falsy", "[interpreter][if]") {
+    auto output = run_script(R"(
+        unset(UNDEF)
+        if(UNDEF)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: operator precedence", "[interpreter][if]") {
+    // AND has higher precedence than OR
+    // 1 OR 0 AND 0 should be: 1 OR (0 AND 0) = 1 OR 0 = 1
+    auto output = run_script(R"(
+        set(ONE "1")
+        set(ZERO "0")
+        if(ONE OR ZERO AND ZERO)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // NOT has higher precedence than AND
+    // NOT 0 AND 1 should be: (NOT 0) AND 1 = 1 AND 1 = 1
+    output = run_script(R"(
+        set(ONE "1")
+        set(ZERO "0")
+        if(NOT ZERO AND ONE)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+TEST_CASE("if condition: complex expressions", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(A "10")
+        set(B "20")
+        set(C "15")
+        if(A LESS B AND B GREATER C)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        set(A "5")
+        set(B "10")
+        if(A LESS B OR A GREATER B)
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
+// TEST_CASE("if condition: invalid conditions", "[interpreter][if][negaitve]") {
+//     auto output = run_script(R"(
+//         set(A "10")
+//         set(B "20")
+//         set(C "15")
+//         if(A B C)
+//             message("pass")
+//         endif()
+//     )");
+// }
