@@ -265,6 +265,18 @@ TEST_CASE("Function can read parent variables", "[interpreter][function]") {
     REQUIRE(output == "from parent\n");
 }
 
+TEST_CASE("Common CMake variables are initialized", "[interpreter]") {
+    // Note: run_script uses an empty string for script_dir
+    auto output = run_script(R"(
+        message("SRC=${CMAKE_SOURCE_DIR}")
+        message("BIN=${CMAKE_BINARY_DIR}")
+        message("VER=${CMAKE_MAJOR_VERSION}")
+    )");
+    REQUIRE(output.find("SRC=") != std::string::npos);
+    REQUIRE(output.find("BIN=") != std::string::npos);
+    REQUIRE(output.find("VER=3") != std::string::npos);
+}
+
 TEST_CASE("set() creates lists from multiple arguments", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "a" "b" "c")

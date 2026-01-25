@@ -1,4 +1,5 @@
 #include "interperter.hpp"
+#include "builtins/registry.hpp"
 #include <stack>
 
 #include <iostream>
@@ -221,177 +222,48 @@ Interpreter* Interpreter::get_root() {
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
     : build_dir_("build"), out_(out), err_(err), parent_(parent) {
     call_stack_.push({std::move(script_dir), {}});
-    call_stack_.top().variables["CMAKE_CURRENT_SOURCE_DIR"] = call_stack_.top().script_dir;
+    
+    auto& vars = call_stack_.top().variables;
+    vars["CMAKE_CURRENT_SOURCE_DIR"] = call_stack_.top().script_dir;
+    vars["CMAKE_CURRENT_BINARY_DIR"] = (std::filesystem::path(vars["CMAKE_CURRENT_SOURCE_DIR"]) / build_dir_).string();
 
     if (parent_ == nullptr) {
-        add_builtin("message", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.empty()) return;
+        // Global root variables
+        vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
+        vars["CMAKE_BINARY_DIR"] = vars["CMAKE_CURRENT_BINARY_DIR"];
+        vars["PROJECT_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
+        vars["PROJECT_BINARY_DIR"] = vars["CMAKE_CURRENT_BINARY_DIR"];
 
-            size_t arg_idx = 0;
-            std::string mode = "INFO";
+        vars["CMAKE_VERSION"] = "3.20.0";
+        vars["CMAKE_MAJOR_VERSION"] = "3";
+        vars["CMAKE_MINOR_VERSION"] = "20";
+        vars["CMAKE_PATCH_VERSION"] = "0";
 
-            if (!args[0].quoted) {
-                std::string first_arg = interp.evaluate_argument(args[0]);
-                std::transform(first_arg.begin(), first_arg.end(), first_arg.begin(), ::toupper);
+        vars["CMAKE_FILES_DIRECTORY"] = "/CMakeFiles";
 
-                if (first_arg == "STATUS") { mode = "STATUS"; arg_idx = 1; }
-                else if (first_arg == "WARNING") { mode = "WARN"; arg_idx = 1; }
-                else if (first_arg == "FATAL_ERROR") { mode = "FATAL"; arg_idx = 1; }
-                else if (first_arg == "ERROR") { mode = "ERROR"; arg_idx = 1; }
-            }
+        // Platform flags
+#ifdef __unix__
+        vars["UNIX"] = "1";
+#endif
+#ifdef __APPLE__
+        vars["APPLE"] = "1";
+#endif
+#ifdef _WIN32
+        vars["WIN32"] = "1";
+#endif
 
-            std::ostringstream oss;
-            for (size_t i = arg_idx; i < args.size(); ++i) {
-                oss << interp.evaluate_argument(args[i]);
-                if (i < args.size() - 1) oss << " ";
-            }
-            std::string content = oss.str();
+        vars["CMAKE_EXECUTABLE_SUFFIX"] = "";
+        vars["CMAKE_SHARED_LIBRARY_SUFFIX"] = ".so";
+        vars["CMAKE_STATIC_LIBRARY_SUFFIX"] = ".a";
 
-            if (mode == "FATAL") interp.set_fatal_error(content);
-            else interp.print_message(mode, content, mode == "WARN" || mode == "ERROR");
-        });
+        // Register non-internal builtins
+        register_message_builtins(*this);
+        register_variable_builtins(*this);
+        register_list_builtins(*this);
+        register_target_builtins(*this);
+        register_project_builtins(*this);
 
-        add_builtin("set", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.size() < 2) {
-                interp.print_message("ERROR", "set() requires at least 2 arguments", true);
-                return;
-            }
-            std::string var_name = interp.evaluate_argument(args[0]);
-            std::vector<Argument> value_args(args.begin() + 1, args.end());
-            CMakeList value_list = CMakeList::from_arguments(value_args, &interp);
-            interp.set_variable(var_name, value_list.to_string());
-        });
-
-        add_builtin("list", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.size() < 2) {
-                interp.print_message("ERROR", "list() requires at least 2 arguments", true);
-                return;
-            }
-
-            std::string operation = interp.evaluate_argument(args[0]);
-            std::transform(operation.begin(), operation.end(), operation.begin(), ::toupper);
-
-            if (operation == "LENGTH") {
-                if (args.size() != 3) { interp.print_message("ERROR", "list(LENGTH) requires 3 args", true); return; }
-                CMakeList list(interp.get_variable(interp.evaluate_argument(args[1])));
-                interp.set_variable(interp.evaluate_argument(args[2]), std::to_string(list.size()));
-            } else if (operation == "GET") {
-                if (args.size() < 4) { interp.print_message("ERROR", "list(GET) requires 4+ args", true); return; }
-                CMakeList list(interp.get_variable(interp.evaluate_argument(args[1])));
-                CMakeList result;
-                for (size_t i = 2; i < args.size() - 1; ++i) {
-                    size_t idx = std::stoul(interp.evaluate_argument(args[i]));
-                    if (idx < list.size()) result.append(list[idx]);
-                }
-                interp.set_variable(interp.evaluate_argument(args[args.size() - 1]), result.to_string());
-            } else if (operation == "APPEND") {
-                std::string var = interp.evaluate_argument(args[1]);
-                CMakeList list(interp.get_variable(var));
-                for (size_t i = 2; i < args.size(); ++i) list.append(interp.evaluate_argument(args[i]));
-                interp.set_variable(var, list.to_string());
-            } else if (operation == "REVERSE") {
-                std::string var = interp.evaluate_argument(args[1]);
-                CMakeList list(interp.get_variable(var));
-                list.reverse();
-                interp.set_variable(var, list.to_string());
-            } else if (operation == "SORT") {
-                std::string var = interp.evaluate_argument(args[1]);
-                CMakeList list(interp.get_variable(var));
-                list.sort();
-                interp.set_variable(var, list.to_string());
-            } else if (operation == "REMOVE_DUPLICATES") {
-                std::string var = interp.evaluate_argument(args[1]);
-                CMakeList list(interp.get_variable(var));
-                list.remove_duplicates();
-                interp.set_variable(var, list.to_string());
-            } else if (operation == "SUBLIST") {
-                if (args.size() != 5) { interp.print_message("ERROR", "list(SUBLIST) requires 5 args", true); return; }
-                CMakeList list(interp.get_variable(interp.evaluate_argument(args[1])));
-                size_t start = std::stoul(interp.evaluate_argument(args[2]));
-                size_t len = std::stoul(interp.evaluate_argument(args[3]));
-                interp.set_variable(interp.evaluate_argument(args[4]), list.sublist(start, len).to_string());
-            }
-        });
-
-        add_builtin("add_executable", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.empty()) return;
-            std::string name = interp.evaluate_argument(args[0]);
-            auto target = std::make_shared<ExecutableTarget>(name);
-            std::vector<std::string> sources;
-            for(size_t i = 1; i < args.size(); ++i) sources.push_back(interp.evaluate_argument(args[i]));
-            target->add_sources(sources, PropertyVisibility::PRIVATE);
-            interp.get_root()->targets_[name] = target;
-        });
-
-        add_builtin("add_library", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.size() < 2) return;
-            std::string name = interp.evaluate_argument(args[0]);
-            std::vector<std::string> sources;
-            bool is_shared = false;
-            for(size_t i = 1; i < args.size(); ++i) {
-                std::string val = interp.evaluate_argument(args[i]);
-                if(val == "SHARED") is_shared = true;
-                else if (val != "STATIC") sources.push_back(val);
-            }
-            auto target = std::make_shared<LibraryTarget>(name, is_shared ? TargetType::SHARED_LIBRARY : TargetType::STATIC_LIBRARY);
-            target->add_sources(sources, PropertyVisibility::PRIVATE);
-            interp.get_root()->targets_[name] = target;
-        });
-
-        add_builtin("target_include_directories", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.size() < 2) return;
-            std::string name = interp.evaluate_argument(args[0]);
-            auto& targets = interp.get_root()->targets_;
-            auto it = targets.find(name);
-            if (it == targets.end()) return;
-
-            PropertyVisibility vis = PropertyVisibility::PRIVATE;
-            std::vector<std::string> dirs;
-            for(size_t i = 1; i < args.size(); ++i) {
-                std::string val = interp.evaluate_argument(args[i]);
-                if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-                else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-                else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-                else dirs.push_back(val);
-            }
-            it->second->add_include_directories(dirs, vis);
-        });
-
-        add_builtin("target_link_libraries", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.size() < 2) return;
-            std::string name = interp.evaluate_argument(args[0]);
-            auto& targets = interp.get_root()->targets_;
-            auto it = targets.find(name);
-            if (it == targets.end()) return;
-
-            PropertyVisibility vis = PropertyVisibility::PRIVATE;
-            std::vector<std::string> libs;
-            for(size_t i = 1; i < args.size(); ++i) {
-                std::string val = interp.evaluate_argument(args[i]);
-                if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-                else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-                else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-                else libs.push_back(val);
-            }
-            it->second->add_linked_libraries(libs, vis);
-        });
-
-        add_builtin("set_target_properties", [](Interpreter& interp, const std::vector<Argument>& args) {
-            if (args.size() < 4) return;
-            std::string name = interp.evaluate_argument(args[0]);
-            auto& targets = interp.get_root()->targets_;
-            auto it = targets.find(name);
-            if (it == targets.end()) return;
-            if(interp.evaluate_argument(args[1]) != "PROPERTIES") return;
-            for(size_t i = 2; i < args.size() - 1; i+=2) {
-                if (interp.evaluate_argument(args[i]) == "OUTPUT_NAME")
-                    it->second->set_output_name(interp.evaluate_argument(args[i+1]));
-            }
-        });
-
-        add_builtin("cmake_minimum_required", [](Interpreter&, const std::vector<Argument>&) {});
-        add_builtin("project", [](Interpreter&, const std::vector<Argument>&) {});
-
+        // Internal builtins (interact with interpreter state/stack)
         add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<Argument>& args) {
             if (args.empty()) return;
             std::string subdir = interp.evaluate_argument(args[0]);

@@ -157,6 +157,13 @@ public:
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
 
+    // Friend registration functions
+    friend void register_message_builtins(Interpreter& interp);
+    friend void register_variable_builtins(Interpreter& interp);
+    friend void register_list_builtins(Interpreter& interp);
+    friend void register_target_builtins(Interpreter& interp);
+    friend void register_project_builtins(Interpreter& interp);
+
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
     std::expected<void, InterpreterError> execute_if_block(const IfBlock& if_block);
