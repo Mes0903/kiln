@@ -25,10 +25,10 @@ set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake
 )
 
-# enable_testing()
+enable_testing()
 
-# find_package(Catch2 3 REQUIRED)
-# add_executable(dmake_tests tests/main.cpp tests/interpreter_tests.cpp)
-# target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
+find_package(Catch2 3 REQUIRED)
+add_executable(dmake_tests tests/main.cpp tests/interpreter_tests.cpp tests/pch_tests.cpp)
+target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
-# add_test(NAME interpreter_tests COMMAND dmake_tests)
+add_test(NAME interpreter_tests COMMAND dmake_tests)

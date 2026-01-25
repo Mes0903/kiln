@@ -38,6 +38,9 @@ public:
     void add_compile_options(const std::vector<std::string>& opts, PropertyVisibility visibility);
     const std::vector<std::string>& get_compile_options(PropertyVisibility visibility) const;
 
+    void add_precompiled_headers(const std::vector<std::string>& headers, PropertyVisibility visibility);
+    const std::vector<std::string>& get_precompiled_headers(PropertyVisibility visibility) const;
+
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
     
@@ -57,6 +60,7 @@ protected:
     std::map<PropertyVisibility, std::vector<std::string>> include_directories_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_definitions_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_options_;
+    std::map<PropertyVisibility, std::vector<std::string>> precompiled_headers_;
 };
 
 class ExecutableArtifact : public Artifact {

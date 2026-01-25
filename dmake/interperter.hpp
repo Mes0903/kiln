@@ -111,6 +111,9 @@ public:
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
 
+    // Access to artifacts (for testing and build system)
+    std::map<std::string, std::shared_ptr<Artifact>>& get_artifacts() { return get_root()->artifacts_; }
+
     // Friend registration functions
     friend void register_message_builtins(Interpreter& interp);
     friend void register_variable_builtins(Interpreter& interp);

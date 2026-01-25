@@ -273,7 +273,7 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
     std::string source;
 
     while (ss >> word) {
-        if (word.starts_with("-I") || word.starts_with("-D")) {
+        if (word.starts_with("-I") || word.starts_with("-D") || word.starts_with("-std=")) {
             flags += " " + word;
         } else if (word.ends_with(".cpp") || word.ends_with(".c") || word.ends_with(".cc")) {
             source = word;

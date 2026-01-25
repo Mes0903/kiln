@@ -220,8 +220,10 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
 
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
     : out_(out), err_(err), parent_(parent) {
-    
-    std::filesystem::path abs_script_dir = std::filesystem::absolute(script_dir).lexically_normal();
+
+    std::filesystem::path abs_script_dir = script_dir.empty() ?
+        std::filesystem::current_path() :
+        std::filesystem::absolute(script_dir).lexically_normal();
     call_stack_.push({abs_script_dir.string(), {}});
 
     auto& vars = call_stack_.top().variables;

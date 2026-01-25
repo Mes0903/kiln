@@ -1,6 +1,7 @@
 #include "artifact.hpp"
 #include "build_system.hpp"
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
 namespace dmake {
@@ -55,6 +56,16 @@ const std::vector<std::string>& Artifact::get_compile_options(PropertyVisibility
     return (it != compile_options_.end()) ? it->second : empty;
 }
 
+void Artifact::add_precompiled_headers(const std::vector<std::string>& headers, PropertyVisibility visibility) {
+    precompiled_headers_[visibility].insert(precompiled_headers_[visibility].end(), headers.begin(), headers.end());
+}
+
+const std::vector<std::string>& Artifact::get_precompiled_headers(PropertyVisibility visibility) const {
+    static const std::vector<std::string> empty;
+    auto it = precompiled_headers_.find(visibility);
+    return (it != precompiled_headers_.end()) ? it->second : empty;
+}
+
 void Artifact::set_output_name(std::string output_name) {
     output_name_ = std::move(output_name);
 }
@@ -64,25 +75,96 @@ const std::string& Artifact::get_output_name() const {
 }
 
 std::string ExecutableArtifact::get_output_path() const {
-    return (std::filesystem::path(binary_dir_) / get_output_name()).string();
+    auto path = std::filesystem::path(binary_dir_) / get_output_name();
+    return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
 }
 
 std::string LibraryArtifact::get_output_path() const {
     bool is_shared = (type_ == ArtifactType::SHARED_LIBRARY);
     std::string lib_name = "lib" + get_output_name() + (is_shared ? ".so" : ".a");
-    return (std::filesystem::path(binary_dir_) / lib_name).string();
+    auto path = std::filesystem::path(binary_dir_) / lib_name;
+    return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
 }
 
 static std::string get_obj_path(const std::string& binary_dir, const std::string& source_file) {
     std::filesystem::path src(source_file);
     std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / (src.filename().string() + ".o");
-    return obj.string();
+    return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
+}
+
+// Returns (pch_gch_path, pch_include_arg). Both empty if no PCH needed.
+static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, const Artifact* artifact, bool is_shared) {
+    auto private_pchs = artifact->get_precompiled_headers(PropertyVisibility::PRIVATE);
+    auto public_pchs = artifact->get_precompiled_headers(PropertyVisibility::PUBLIC);
+
+    if (private_pchs.empty() && public_pchs.empty()) {
+        return {"", ""};
+    }
+
+    // Create PCH wrapper header
+    auto pch_path = std::filesystem::path(artifact->get_binary_dir()) / "objs" / (artifact->get_name() + "_pch.hpp");
+    std::string pch_wrapper = artifact->get_binary_dir().empty() ? pch_path.string() : pch_path.lexically_normal().string();
+    std::string pch_gch_path = pch_wrapper + ".gch";
+    std::string pch_include_arg = " -include " + pch_wrapper;
+
+    // Write wrapper header content
+    std::ostringstream wrapper_content;
+    for (const auto& hdr : private_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
+    for (const auto& hdr : public_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
+
+    std::filesystem::create_directories(std::filesystem::path(pch_wrapper).parent_path());
+    std::ofstream wrapper_file(pch_wrapper);
+    if (!wrapper_file) {
+        throw std::runtime_error("Failed to create PCH wrapper file: " + pch_wrapper);
+    }
+    wrapper_file << wrapper_content.str();
+    wrapper_file.close();
+
+    // Create PCH compile task
+    BuildTask pch_task;
+    pch_task.id = pch_gch_path;
+    pch_task.parent_artifact = const_cast<Artifact*>(artifact);
+
+    std::ostringstream cmd;
+    cmd << "g++ -std=c++23";
+    if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
+
+    // Add compile options
+    for (const auto& opt : artifact->get_compile_options(PropertyVisibility::PRIVATE)) cmd << " " << opt;
+    for (const auto& opt : artifact->get_compile_options(PropertyVisibility::PUBLIC)) cmd << " " << opt;
+
+    // Add compile definitions
+    for (const auto& def : artifact->get_compile_definitions(PropertyVisibility::PRIVATE)) cmd << " -D" << def;
+    for (const auto& def : artifact->get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
+
+    // Add source directory as include path (for header resolution)
+    cmd << " -I" << artifact->get_source_dir();
+
+    // Add include directories
+    for (const auto& dir : artifact->get_include_directories(PropertyVisibility::PRIVATE))
+        cmd << " -I" << (std::filesystem::path(artifact->get_source_dir()) / dir).string();
+    for (const auto& dir : artifact->get_include_directories(PropertyVisibility::PUBLIC))
+        cmd << " -I" << (std::filesystem::path(artifact->get_source_dir()) / dir).string();
+
+    if (is_shared) cmd << " -fPIC";
+    cmd << " -x c++-header -o " << pch_gch_path << " " << pch_wrapper;
+
+    pch_task.command = cmd.str();
+    pch_task.inputs.push_back(pch_wrapper);
+    pch_task.outputs.push_back(pch_gch_path);
+
+    graph.add_task(std::move(pch_task));
+
+    return {pch_gch_path, pch_include_arg};
 }
 
 void ExecutableArtifact::generate_tasks(BuildGraph& graph) {
     std::vector<std::string> obj_files;
-    
-    // 1. Create Compile Tasks
+
+    // 1. Generate PCH task if needed
+    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, this, false);
+
+    // 2. Create Compile Tasks
     for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
         std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
         std::string obj = get_obj_path(binary_dir_, src_abs.string());
@@ -105,23 +187,31 @@ void ExecutableArtifact::generate_tasks(BuildGraph& graph) {
         for (const auto& def : get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
         
         cmd << " -MMD -MF " << obj << ".d -c -o " << obj;
-        
+
         for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
             cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
         for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
             cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-            
+
+        // Add PCH include if present
+        if (!pch_include_arg.empty()) cmd << pch_include_arg;
+
         cmd << " " << src_abs.string();
-        
+
         task.command = cmd.str();
         task.inputs.push_back(src_abs.string());
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
-        
+
+        // Add PCH dependency if present
+        if (!pch_gch_path.empty()) {
+            task.dependencies.insert(pch_gch_path);
+        }
+
         graph.add_task(std::move(task));
     }
-    
-    // 2. Create Link Task
+
+    // 3. Create Link Task
     std::string output_path = get_output_path();
     BuildTask link;
     link.id = output_path;
@@ -151,7 +241,11 @@ void ExecutableArtifact::generate_tasks(BuildGraph& graph) {
 void LibraryArtifact::generate_tasks(BuildGraph& graph) {
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == ArtifactType::SHARED_LIBRARY);
-    
+
+    // 1. Generate PCH task if needed
+    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, this, is_shared);
+
+    // 2. Create Compile Tasks
     for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
         std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
         std::string obj = get_obj_path(binary_dir_, src_abs.string());
@@ -181,17 +275,25 @@ void LibraryArtifact::generate_tasks(BuildGraph& graph) {
             cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
         for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
             cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-            
+
+        // Add PCH include if present
+        if (!pch_include_arg.empty()) cmd << pch_include_arg;
+
         cmd << " " << src_abs.string();
-        
+
         task.command = cmd.str();
         task.inputs.push_back(src_abs.string());
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
-        
+
+        // Add PCH dependency if present
+        if (!pch_gch_path.empty()) {
+            task.dependencies.insert(pch_gch_path);
+        }
+
         graph.add_task(std::move(task));
     }
-    
+
     std::string output_path = get_output_path();
     
     BuildTask link;

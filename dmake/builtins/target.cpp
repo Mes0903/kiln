@@ -10,7 +10,7 @@ void register_target_builtins(Interpreter& interp) {
         std::string name = interp.evaluate_argument(args[0]);
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
-        
+
         auto artifact = std::make_shared<ExecutableArtifact>(name, src_dir, bin_dir);
         std::vector<std::string> sources;
         for(size_t i = 1; i < args.size(); ++i) sources.push_back(interp.evaluate_argument(args[i]));
@@ -123,6 +123,38 @@ void register_target_builtins(Interpreter& interp) {
             if (interp.evaluate_argument(args[i]) == "OUTPUT_NAME")
                 it->second->set_output_name(interp.evaluate_argument(args[i+1]));
         }
+    });
+
+    interp.add_builtin("target_precompile_headers", [](Interpreter& interp, const std::vector<Argument>& args) {
+        if (args.size() < 2) {
+            interp.set_fatal_error("target_precompile_headers() requires at least 2 arguments: target_name and header(s)");
+            return;
+        }
+
+        std::string name = interp.evaluate_argument(args[0]);
+        auto& artifacts = interp.get_root()->artifacts_;
+        auto it = artifacts.find(name);
+        if (it == artifacts.end()) {
+            interp.set_fatal_error("target_precompile_headers() called on unknown target '" + name + "'");
+            return;
+        }
+
+        PropertyVisibility vis = PropertyVisibility::PRIVATE;
+        std::vector<std::string> headers;
+        for(size_t i = 1; i < args.size(); ++i) {
+            std::string val = interp.evaluate_argument(args[i]);
+            if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
+            else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
+            else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
+            else headers.push_back(val);
+        }
+
+        if (headers.empty()) {
+            interp.set_fatal_error("target_precompile_headers() requires at least one header file");
+            return;
+        }
+
+        it->second->add_precompiled_headers(headers, vis);
     });
 }
 
