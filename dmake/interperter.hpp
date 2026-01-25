@@ -89,7 +89,7 @@ public:
     using BuiltinFunction = std::function<void(Interpreter&, const std::vector<Argument>&)>;
     enum class LoopControl { NONE, BREAK, CONTINUE };
 
-    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr);
+    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr, std::optional<std::string> build_dir = std::nullopt);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
     std::expected<void, InterpreterError> run_build(int jobs = 0);

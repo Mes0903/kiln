@@ -219,7 +219,7 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
     return {};
 }
 
-Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
+Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent, std::optional<std::string> build_dir)
     : out_(out), err_(err), parent_(parent) {
 
     std::filesystem::path abs_script_dir = script_dir.empty() ?
@@ -231,12 +231,22 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     vars["CMAKE_CURRENT_SOURCE_DIR"] = abs_script_dir.string();
 
     if (parent_ == nullptr) {
-        build_dir_ = "build";
-        std::filesystem::path abs_binary_dir = abs_script_dir / build_dir_;
+        std::filesystem::path abs_binary_dir;
+        if (build_dir.has_value()) {
+            build_dir_ = *build_dir;
+            abs_binary_dir = std::filesystem::absolute(build_dir_).lexically_normal();
+        } else {
+            build_dir_ = "build";
+            abs_binary_dir = abs_script_dir / build_dir_;
+        }
 
         vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
         vars["CMAKE_BINARY_DIR"] = abs_binary_dir.string();
         vars["CMAKE_CURRENT_BINARY_DIR"] = abs_binary_dir.string();
+
+        if (abs_binary_dir == abs_script_dir) {
+            set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
+        }
 
         vars["CMAKE_VERSION"] = "3.20.0";
         vars["CMAKE_MAJOR_VERSION"] = "3";

@@ -17,6 +17,9 @@ int main(int argc, char* argv[]) {
     int jobs = 0;
     app.add_option("-j,--parallel", jobs, "Number of parallel jobs to run (default: 0, which uses all available cores)");
 
+    std::string build_directory_str;
+    app.add_option("-B", build_directory_str, "Path to the build directory (default: <directory>/build)");
+
     std::vector<std::string> definitions;
     app.add_option("-D", definitions, "Define a variable in the format VAR=VALUE or VAR");
 
@@ -34,6 +37,18 @@ int main(int argc, char* argv[]) {
 
     if (!std::filesystem::exists(cmake_lists_path)) {
         std::cerr << "Error: CMakeLists.txt not found in " << directory_path.string() << std::endl;
+        return 1;
+    }
+
+    std::filesystem::path build_path;
+    if (build_directory_str.empty()) {
+        build_path = directory_path / "build";
+    } else {
+        build_path = std::filesystem::absolute(build_directory_str).lexically_normal();
+    }
+
+    if (build_path == directory_path) {
+        std::cerr << "Error: Build directory cannot be the same as the source directory: " << directory_path.string() << std::endl;
         return 1;
     }
 
@@ -97,7 +112,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    dmake::Interpreter interpreter(directory_path.string(), &std::cout, &std::cerr);
+    dmake::Interpreter interpreter(directory_path.string(), &std::cout, &std::cerr, nullptr, build_path.string());
     interpreter.set_current_file(cmake_lists_path.string());
 
     // Apply CLI definitions
