@@ -17,6 +17,9 @@ int main(int argc, char* argv[]) {
     int jobs = 0;
     app.add_option("-j,--parallel", jobs, "Number of parallel jobs to run (default: 0, which uses all available cores)");
 
+    std::vector<std::string> definitions;
+    app.add_option("-D", definitions, "Define a variable in the format VAR=VALUE or VAR");
+
     CLI11_PARSE(app, argc, argv);
 
     std::filesystem::path directory_path(directory_path_str);
@@ -89,6 +92,16 @@ int main(int argc, char* argv[]) {
 
     dmake::Interpreter interpreter(directory_path.string(), &std::cout, &std::cerr);
     interpreter.set_current_file(cmake_lists_path.string());
+
+    // Apply CLI definitions
+    for (const auto& def : definitions) {
+        size_t eq = def.find('=');
+        if (eq != std::string::npos) {
+            interpreter.set_variable(def.substr(0, eq), def.substr(eq + 1));
+        } else {
+            interpreter.set_variable(def, "ON");
+        }
+    }
 
     auto interpret_result = interpreter.interpret(ast_or_error.value());
     interpreter.print_message("STATUS", "Finished collecting build information");

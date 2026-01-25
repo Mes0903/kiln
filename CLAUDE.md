@@ -25,7 +25,7 @@ mkdir -p build && cd build && cmake .. && make
 
 **Run dmake CLI:**
 ```bash
-./build/dmake <path-to-project>  # e.g., ./build/dmake test_project
+./build/dmake <path-to-project> [-j N] [-DVAR=VAL]
 ```
 
 **Dependencies:**
@@ -37,55 +37,20 @@ mkdir -p build && cd build && cmake .. && make
 ## Architecture
 
 ### Three-Layer Design
+...
+## Incremental & Parallel Build System
 
-1. **Parser Layer** (`dmake/cmake-language.{hpp,cpp}`)
-   - Parses CMake syntax into an Abstract Syntax Tree (AST)
-   - Returns `std::expected<std::vector<AstNode>, ParseError>`
-   - Tracks location (row/col) for error reporting
-   - AST nodes: `CommandInvocation`, `IfBlock`
-   - Handles CMake features: variable references `${VAR}`, quoted/unquoted arguments, comments (line and bracket)
+**Concurrency**:
+- Parallel task execution using a thread-per-task model with concurrency limits.
+- **CLI Flags**: 
+    - `-j` or `--parallel` to set the number of concurrent jobs (defaults to hardware thread count).
+    - `-D` to define variables (e.g., `-DDEBUG=ON` or `-DENABLE_FEATURE`).
+- **Thread Safety**: Global mutexes protect output and internal caches (`stat_cache_`, `compiler_version_cache_`).
 
-2. **Interpreter Layer** (`dmake/interperter.{hpp,cpp}`)
-   - Executes the AST using a builtin function system
-   - Returns `std::expected<void, InterpreterError>` for error propagation
-   - Manages variables, targets, and call stack for subdirectories
-   - Built-in commands: `message`, `set`, `add_executable`, `add_library`, `target_include_directories`, `target_link_libraries`, `set_target_properties`, `add_subdirectory`, `include`
-   - Target types: `ExecutableTarget`, `LibraryTarget` (shared/static)
-
-3. **CLI Layer** (`dmake-cli/main.cpp`)
-   - Entry point using CLI11 for argument parsing
-   - Orchestrates parsing → interpretation → building
-   - Pretty-prints errors with file location and context (Rust-style error formatting)
-
-### Error Handling Pattern
-
-All errors use `std::expected` for proper propagation:
-
-- **Parse errors**: `ParseError{row, col, reason}` from parser
-- **Interpreter errors**: `InterpreterError{file, row, col, message}` from interpreter
-- **Fatal errors**: Builtins call `set_fatal_error()` instead of throwing or exiting
-- The CLI uses a lambda `print_error_context()` to display errors with colored output and source line context
-
-### Key Design Decisions
-
-**Parent-child interpreter hierarchy**: `add_subdirectory()` creates a new `Interpreter` with a parent pointer to share builtins and propagate errors while maintaining separate variable scopes.
-
-**Loop Control Mechanics**:
-- `loop_depth_` and `loop_control_` are local to each `Interpreter` and function scope.
-- `break()` and `continue()` trigger a fatal error if `loop_depth_` is 0.
-- Functions reset loop state and restore it upon return; macros share the caller's loop scope.
-
-**include() vs add_subdirectory()**:
-- `include()` executes in the current scope (shares variables).
-- `add_subdirectory()` creates a new `Interpreter` (new scope) and configures the subdirectory.
-
-**Builtin function signature**: `std::function<void(Interpreter&, const std::vector<Argument>&)>`.
-- Builtins receive the active `Interpreter` instance to correctly access local scope.
-- Fatal errors are signaled via `interp.set_fatal_error()`, which propagates to the root and is caught by the command executor.
-
-**Target build ordering**: Libraries are built before executables to ensure dependencies are available.
-
-## Incremental Build System
+**Captured Output**:
+- Compiler output is captured and buffered to prevent interleaving.
+- Colors are preserved using `-fdiagnostics-color=always` (when stdout is a TTY).
+- Detailed logs are only printed on failure or for warnings.
 
 **Cache Location**:
 - `<build_dir>/.dmake_cache` stores task signatures.

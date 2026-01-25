@@ -46,13 +46,19 @@ Each task generates a **Signature** to determine if it needs to be re-run.
 - Format: `TaskID=Signature` (one per line).
 - Automatic directory management: `dmake` ensures the build directory and output subdirectories (like `objs/`) exist before execution.
 
-### Phase 4: Execution & UI
-A single-threaded `Executor` currently processes the DAG using a topological sort logic:
-- **Progress tracking**: Tasks are executed in dependency order.
+### Phase 4: Parallel Execution & UI
+A multi-threaded `Executor` processes the DAG using a topological sort logic with a thread-per-task model:
+- **Concurrency Control**: Limits active threads based on the `-j` flag or hardware concurrency.
+- **Thread Safety**: 
+    - A global `output_mutex_` ensures that Cargo-style progress lines and captured command outputs do not interleave at the character level.
+    - A `state_mutex_` protects internal caches (`stat_cache_`, `compiler_version_cache_`).
+- **Output Management**: 
+    - Task output (stdout/stderr) is captured and buffered.
+    - Output is only displayed to the user if a command fails or emits warnings, keeping the UI clean for successful parallel builds.
+    - `-fdiagnostics-color=always` is automatically injected into `g++` commands when running in a TTY to preserve compiler coloring.
+- **Total Duration**: The system tracks and reports the total build time upon completion.
 - **Error Handling**: 
-    - **Command Failures**: If any command returns a non-zero exit code, the build stops immediately.
-    - **System Failures**: Failures to run the compiler for version checks or header scanning are treated as fatal errors.
-    - **Stall Detection**: If the graph cannot progress due to unresolved dependencies, a detailed diagnostic report is printed showing remaining tasks and their missing dependencies.
+...
 
 ## Benefits
 - **Maximized Parallelism**: Compiles from different libraries run simultaneously.
