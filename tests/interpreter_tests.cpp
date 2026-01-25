@@ -949,4 +949,22 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
         endif()
     )");
     REQUIRE(output == "pass\n");
+
+    output = run_script(R"(
+        get_filename_component(DIR "/path/to/file.tar.gz" DIRECTORY)
+        get_filename_component(NAME "/path/to/file.tar.gz" NAME)
+        get_filename_component(EXT "/path/to/file.tar.gz" EXT)
+        get_filename_component(NAME_WE "/path/to/file.tar.gz" NAME_WE)
+        get_filename_component(LAST_EXT "/path/to/file.tar.gz" LAST_EXT)
+        get_filename_component(NAME_WLE "/path/to/file.tar.gz" NAME_WLE)
+        message("${DIR}|${NAME}|${EXT}|${NAME_WE}|${LAST_EXT}|${NAME_WLE}")
+    )");
+    REQUIRE(output == "/path/to|file.tar.gz|.tar.gz|file|.gz|file.tar\n");
+
+    output = run_script(R"(
+        get_filename_component(EXT ".bashrc" EXT)
+        get_filename_component(NAME_WE ".bashrc" NAME_WE)
+        message("${EXT}|${NAME_WE}")
+    )");
+    REQUIRE(output == "|.bashrc\n");
 }
