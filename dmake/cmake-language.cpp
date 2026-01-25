@@ -70,6 +70,12 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
                 return std::unexpected(macro_block_or_error.error());
             }
             ast.emplace_back(std::move(macro_block_or_error.value()));
+        } else if (identifier_lower == "foreach") {
+            auto foreach_block_or_error = parse_foreach_block(command_or_error.value());
+            if(!foreach_block_or_error) {
+                return std::unexpected(foreach_block_or_error.error());
+            }
+            ast.emplace_back(std::move(foreach_block_or_error.value()));
         } else {
             ast.emplace_back(std::move(command_or_error.value()));
         }
@@ -206,6 +212,144 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
     }
 
     return macro_block;
+}
+
+std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const CommandInvocation& foreach_command) {
+    ForeachBlock foreach_block;
+    foreach_block.row = foreach_command.row;
+    foreach_block.col = foreach_command.col;
+
+    if (foreach_command.arguments.empty()) {
+        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach() requires a loop variable"});
+    }
+
+    // Extract loop variable (must be simple identifier)
+    if (!foreach_command.arguments[0].parts.empty() &&
+        std::holds_alternative<std::string>(foreach_command.arguments[0].parts[0])) {
+        foreach_block.loop_var = std::get<std::string>(foreach_command.arguments[0].parts[0]);
+    } else {
+        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach() loop variable must be a simple identifier"});
+    }
+
+    if (foreach_command.arguments.size() == 1) {
+        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach() requires items to iterate over"});
+    }
+
+    // Determine mode by checking second argument
+    std::string mode_keyword;
+    if (!foreach_command.arguments[1].quoted &&
+        foreach_command.arguments[1].parts.size() == 1 &&
+        std::holds_alternative<std::string>(foreach_command.arguments[1].parts[0])) {
+        mode_keyword = std::get<std::string>(foreach_command.arguments[1].parts[0]);
+        std::transform(mode_keyword.begin(), mode_keyword.end(), mode_keyword.begin(), ::toupper);
+    }
+
+    if (mode_keyword == "RANGE") {
+        // RANGE mode: foreach(i RANGE <stop>) or foreach(i RANGE <start> <stop> [<step>])
+        if (foreach_command.arguments.size() < 3) {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(RANGE) requires at least a stop value"});
+        }
+        if (foreach_command.arguments.size() > 5) {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(RANGE) accepts at most 3 range values (start, stop, step)"});
+        }
+
+        ForeachRange range;
+        if (foreach_command.arguments.size() == 3) {
+            // RANGE <stop>
+            range.stop = foreach_command.arguments[2];
+        } else if (foreach_command.arguments.size() == 4) {
+            // RANGE <start> <stop>
+            range.start = foreach_command.arguments[2];
+            range.stop = foreach_command.arguments[3];
+        } else { // size == 5
+            // RANGE <start> <stop> <step>
+            range.start = foreach_command.arguments[2];
+            range.stop = foreach_command.arguments[3];
+            range.step = foreach_command.arguments[4];
+        }
+        foreach_block.params = range;
+
+    } else if (mode_keyword == "IN") {
+        // IN mode: foreach(i IN [LISTS [<lists>]] [ITEMS [<items>]])
+        ForeachIn in_params;
+
+        size_t idx = 2;  // Start after "IN"
+        while (idx < foreach_command.arguments.size()) {
+            std::string keyword;
+            if (!foreach_command.arguments[idx].quoted &&
+                foreach_command.arguments[idx].parts.size() == 1 &&
+                std::holds_alternative<std::string>(foreach_command.arguments[idx].parts[0])) {
+                keyword = std::get<std::string>(foreach_command.arguments[idx].parts[0]);
+                std::transform(keyword.begin(), keyword.end(), keyword.begin(), ::toupper);
+            }
+
+            if (keyword == "LISTS") {
+                // Collect list variable names until we hit ITEMS or end
+                idx++;
+                while (idx < foreach_command.arguments.size()) {
+                    // Check if this is the ITEMS keyword
+                    std::string next_keyword;
+                    if (!foreach_command.arguments[idx].quoted &&
+                        foreach_command.arguments[idx].parts.size() == 1 &&
+                        std::holds_alternative<std::string>(foreach_command.arguments[idx].parts[0])) {
+                        next_keyword = std::get<std::string>(foreach_command.arguments[idx].parts[0]);
+                        std::transform(next_keyword.begin(), next_keyword.end(), next_keyword.begin(), ::toupper);
+                    }
+                    if (next_keyword == "ITEMS") {
+                        break;  // Stop collecting, let the outer loop handle ITEMS
+                    }
+                    in_params.lists.push_back(foreach_command.arguments[idx]);
+                    idx++;
+                }
+            } else if (keyword == "ITEMS") {
+                // Collect item values until end
+                idx++;
+                while (idx < foreach_command.arguments.size()) {
+                    in_params.items.push_back(foreach_command.arguments[idx]);
+                    idx++;
+                }
+            } else {
+                return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(IN) expected LISTS or ITEMS keyword"});
+            }
+        }
+
+        if (in_params.lists.empty() && in_params.items.empty()) {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(IN) requires at least one LISTS or ITEMS argument"});
+        }
+
+        foreach_block.params = in_params;
+
+    } else {
+        // Simple mode: foreach(i item1 item2 ...)
+        // All arguments from index 1 onwards are items
+        ForeachSimple simple;
+        simple.items.insert(simple.items.end(),
+                           foreach_command.arguments.begin() + 1,
+                           foreach_command.arguments.end());
+        foreach_block.params = simple;
+    }
+
+    // Parse the body
+    auto body_or_error = parse_block({"endforeach"});
+    if (!body_or_error) {
+        return std::unexpected(body_or_error.error());
+    }
+    foreach_block.body = std::move(body_or_error.value());
+
+    // Consume endforeach
+    auto endforeach_command_or_error = parse_command_invocation();
+    if (!endforeach_command_or_error) {
+        return std::unexpected(endforeach_command_or_error.error());
+    }
+
+    std::string identifier_lower = endforeach_command_or_error.value().identifier;
+    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (identifier_lower != "endforeach") {
+        return std::unexpected(ParseError{row_, col_, "Expected 'endforeach'"});
+    }
+
+    return foreach_block;
 }
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse() {

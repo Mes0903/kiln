@@ -5,6 +5,7 @@
 #include <string_view>
 #include <variant>
 #include <expected>
+#include <optional>
 
 namespace dmake {
 
@@ -29,8 +30,9 @@ struct CommandInvocation;
 struct IfBlock;
 struct FunctionBlock;
 struct MacroBlock;
+struct ForeachBlock;
 
-using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock>;
+using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock, ForeachBlock>;
 
 struct IfBlock {
     std::vector<Argument> condition;
@@ -48,6 +50,30 @@ struct MacroBlock {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
+};
+
+// Foreach loop parameter types
+struct ForeachSimple {
+    std::vector<Argument> items;  // Items to iterate over
+};
+
+struct ForeachRange {
+    std::optional<Argument> start;  // If not provided, defaults to 0
+    Argument stop;                   // Required
+    std::optional<Argument> step;    // If not provided, defaults to 1
+};
+
+struct ForeachIn {
+    std::vector<Argument> lists;  // Variable names to expand as lists
+    std::vector<Argument> items;  // Literal items
+};
+
+struct ForeachBlock {
+    std::string loop_var;  // The loop variable name
+    std::variant<ForeachSimple, ForeachRange, ForeachIn> params;
+    std::vector<AstNode> body;
+    size_t row = 0;
+    size_t col = 0;
 };
 
 struct CommandInvocation {
@@ -74,6 +100,7 @@ private:
     std::expected<IfBlock, ParseError> parse_if_block(const CommandInvocation& if_command);
     std::expected<FunctionBlock, ParseError> parse_function_block(const CommandInvocation& function_command);
     std::expected<MacroBlock, ParseError> parse_macro_block(const CommandInvocation& macro_command);
+    std::expected<ForeachBlock, ParseError> parse_foreach_block(const CommandInvocation& foreach_command);
     void consume_whitespace();
     std::expected<CommandInvocation, ParseError> parse_command_invocation();
     std::expected<Argument, ParseError> parse_argument();

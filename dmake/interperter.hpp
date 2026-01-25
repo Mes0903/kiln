@@ -164,6 +164,7 @@ private:
     std::expected<void, InterpreterError> execute_if_block(const IfBlock& if_block);
     std::expected<void, InterpreterError> execute_function_block(const FunctionBlock& function_block);
     std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
+    std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
     std::expected<void, InterpreterError> invoke_user_function(const std::string& name, const std::vector<Argument>& args);
     std::expected<void, InterpreterError> invoke_user_macro(const std::string& name, const std::vector<Argument>& args);
     bool evaluate_condition(const std::vector<Argument>& condition);
@@ -172,6 +173,12 @@ private:
     std::string get_variable(const std::string& var_name) const;
     void set_variable(const std::string& var_name, const std::string& value);
 
+    // Loop control helpers
+    enum class LoopControl { NONE, BREAK, CONTINUE };
+    void set_loop_control(LoopControl control);
+    LoopControl get_loop_control() const;
+    void clear_loop_control();
+    int get_loop_depth() const;
 
     std::string build_dir_;
     std::ostream* out_;
@@ -186,6 +193,10 @@ private:
     std::optional<InterpreterError> fatal_error_;
     size_t current_cmd_row_ = 0;
     size_t current_cmd_col_ = 0;
+
+    // Loop control state
+    int loop_depth_ = 0;
+    LoopControl loop_control_ = LoopControl::NONE;
 };
 
 } // namespace dmake

@@ -641,6 +641,22 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 set_fatal_error(result.error());
             }
         });
+
+        add_builtin("break", [this](const std::vector<Argument>&) {
+            if (loop_depth_ == 0) {
+                set_fatal_error("break() can only be called inside a loop");
+                return;
+            }
+            set_loop_control(LoopControl::BREAK);
+        });
+
+        add_builtin("continue", [this](const std::vector<Argument>&) {
+            if (loop_depth_ == 0) {
+                set_fatal_error("continue() can only be called inside a loop");
+                return;
+            }
+            set_loop_control(LoopControl::CONTINUE);
+        });
     }
 }
 
@@ -666,6 +682,18 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
             if (!result) {
                 return result;
             }
+        } else if (std::holds_alternative<ForeachBlock>(node)) {
+            auto result = execute_foreach_block(std::get<ForeachBlock>(node));
+            if (!result) {
+                return result;
+            }
+        }
+
+        // Check for loop control after each statement
+        // If break() or continue() was called, stop executing further statements
+        auto control = get_loop_control();
+        if (control == LoopControl::BREAK || control == LoopControl::CONTINUE) {
+            return {};  // Exit interpret() early, preserving the control flag
         }
     }
     return {};
@@ -809,6 +837,156 @@ std::expected<void, InterpreterError> Interpreter::execute_macro_block(const Mac
         UserMacro macro{macro_block.parameters, macro_block.body};
         user_macros_[macro_block.name] = macro;
     }
+    return {};
+}
+
+std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const ForeachBlock& foreach_block) {
+    // Increment loop depth
+    if (parent_) {
+        parent_->loop_depth_++;
+    } else {
+        loop_depth_++;
+    }
+
+    // Build list of items to iterate over based on the foreach mode
+    CMakeList items_to_iterate;
+
+    if (std::holds_alternative<ForeachSimple>(foreach_block.params)) {
+        // Simple mode: iterate over literal items
+        const auto& simple = std::get<ForeachSimple>(foreach_block.params);
+        items_to_iterate = CMakeList::from_arguments(simple.items, this);
+
+    } else if (std::holds_alternative<ForeachRange>(foreach_block.params)) {
+        // RANGE mode: iterate over numeric range
+        const auto& range = std::get<ForeachRange>(foreach_block.params);
+
+        // Evaluate range bounds
+        long start = 0;
+        if (range.start.has_value()) {
+            std::string start_str = evaluate_argument(range.start.value());
+            try {
+                start = std::stol(start_str);
+            } catch (...) {
+                // Decrement loop depth before returning error
+                if (parent_) {
+                    parent_->loop_depth_--;
+                } else {
+                    loop_depth_--;
+                }
+                return std::unexpected(InterpreterError{
+                    current_file_, foreach_block.row, foreach_block.col,
+                    "foreach(RANGE) start value must be an integer: " + start_str
+                });
+            }
+        }
+
+        std::string stop_str = evaluate_argument(range.stop);
+        long stop;
+        try {
+            stop = std::stol(stop_str);
+        } catch (...) {
+            // Decrement loop depth before returning error
+            if (parent_) {
+                parent_->loop_depth_--;
+            } else {
+                loop_depth_--;
+            }
+            return std::unexpected(InterpreterError{
+                current_file_, foreach_block.row, foreach_block.col,
+                "foreach(RANGE) stop value must be an integer: " + stop_str
+            });
+        }
+
+        long step = 1;
+        if (range.step.has_value()) {
+            std::string step_str = evaluate_argument(range.step.value());
+            try {
+                step = std::stol(step_str);
+            } catch (...) {
+                // Decrement loop depth before returning error
+                if (parent_) {
+                    parent_->loop_depth_--;
+                } else {
+                    loop_depth_--;
+                }
+                return std::unexpected(InterpreterError{
+                    current_file_, foreach_block.row, foreach_block.col,
+                    "foreach(RANGE) step value must be an integer: " + step_str
+                });
+            }
+        }
+
+        // Validate step
+        if (step == 0) {
+            // Decrement loop depth before returning error
+            if (parent_) {
+                parent_->loop_depth_--;
+            } else {
+                loop_depth_--;
+            }
+            return std::unexpected(InterpreterError{
+                current_file_, foreach_block.row, foreach_block.col,
+                "foreach(RANGE) step cannot be zero"
+            });
+        }
+
+        // Generate range values (inclusive on both ends, like CMake)
+        if ((step > 0 && start <= stop) || (step < 0 && start >= stop)) {
+            for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) {
+                items_to_iterate.append(std::to_string(i));
+            }
+        }
+        // else: empty range (start > stop with positive step, or start < stop with negative step)
+
+    } else if (std::holds_alternative<ForeachIn>(foreach_block.params)) {
+        // IN mode: iterate over lists and/or items
+        const auto& in_params = std::get<ForeachIn>(foreach_block.params);
+
+        // Expand LISTS (variable names whose values are lists)
+        for (const auto& list_arg : in_params.lists) {
+            std::string list_var_name = evaluate_argument(list_arg);
+            std::string list_value = get_variable(list_var_name);
+            CMakeList list(list_value);
+            items_to_iterate.append(list);
+        }
+
+        // Add ITEMS (literal values)
+        CMakeList literal_items = CMakeList::from_arguments(in_params.items, this);
+        items_to_iterate.append(literal_items);
+    }
+
+    // Execute the loop body for each item
+    for (const auto& item : items_to_iterate) {
+        set_variable(foreach_block.loop_var, item);
+        auto result = interpret(foreach_block.body);
+        if (!result) {
+            // Decrement loop depth before returning error
+            if (parent_) {
+                parent_->loop_depth_--;
+            } else {
+                loop_depth_--;
+            }
+            return result;
+        }
+
+        // Check for loop control signals
+        auto control = get_loop_control();
+        if (control == LoopControl::BREAK) {
+            clear_loop_control();
+            break;  // Exit the loop
+        } else if (control == LoopControl::CONTINUE) {
+            clear_loop_control();
+            continue;  // Skip to next iteration
+        }
+    }
+
+    // Decrement loop depth
+    if (parent_) {
+        parent_->loop_depth_--;
+    } else {
+        loop_depth_--;
+    }
+
     return {};
 }
 
@@ -1070,6 +1248,36 @@ void Interpreter::print_message(const std::string& mode, const std::string& mess
     } else {
         os << prefix << " " << message << std::endl;
     }
+}
+
+void Interpreter::set_loop_control(LoopControl control) {
+    if (parent_) {
+        parent_->set_loop_control(control);
+    } else {
+        loop_control_ = control;
+    }
+}
+
+Interpreter::LoopControl Interpreter::get_loop_control() const {
+    if (parent_) {
+        return parent_->get_loop_control();
+    }
+    return loop_control_;
+}
+
+void Interpreter::clear_loop_control() {
+    if (parent_) {
+        parent_->clear_loop_control();
+    } else {
+        loop_control_ = LoopControl::NONE;
+    }
+}
+
+int Interpreter::get_loop_depth() const {
+    if (parent_) {
+        return parent_->get_loop_depth();
+    }
+    return loop_depth_;
 }
 
 } // namespace dmake
