@@ -20,7 +20,8 @@ std::string run_script(std::string src) {
     dmake::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
-        throw std::runtime_error("Failed to parse script");
+        const auto error = ast_or_error.error();
+        throw std::runtime_error("Failed to parse script - " + error.reason + " on line " + std::to_string(error.row));
     }
 
     auto result = interpreter.interpret(ast_or_error.value());
@@ -73,6 +74,15 @@ TEST_CASE("Interpreter variable substitution", "[interpreter]") {
         "${MY_VAR2} World")
     )");
     REQUIRE(output == "Goodbye World\n");
+}
+
+TEST_CASE("Interpreter unset", "[interpreter]") {
+    auto output = run_script(R"(
+        set(MY_VAR "Hello")
+        unset(MY_VAR)
+        message("${MY_VAR} World")
+    )");
+    REQUIRE(output == " World\n");
 }
 
 TEST_CASE("Interpreter if/else/endif", "[interpreter]") {

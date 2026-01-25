@@ -4,10 +4,10 @@
 #include <map>
 #include <functional>
 #include <iostream>
-#include <unistd.h> 
+#include <unistd.h>
 #include <vector>
-#include <memory> 
-#include <stack>
+#include <memory>
+#include <deque>
 #include <expected>
 #include <optional>
 
@@ -101,12 +101,13 @@ public:
     // Public API for builtins and internal use
     void set_fatal_error(const std::string& message);
     void set_fatal_error(const InterpreterError& error);
-    
+
     std::string get_variable(const std::string& var_name) const;
     void set_variable(const std::string& var_name, const std::string& value);
-    
+    bool unset_variable(const std::string& var_name);
+
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
-    
+
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
@@ -133,23 +134,23 @@ private:
 
     std::optional<InterpreterError> get_fatal_error() const;
     void clear_fatal_error();
-    
+
     Interpreter* get_root();
 
     std::string build_dir_;
     std::ostream* out_;
     std::ostream* err_;
-    
+
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Artifact>> artifacts_;
-    
+
     // Scope-local state
     std::map<std::string, UserFunction> user_functions_;
     std::map<std::string, UserMacro> user_macros_;
-    
+
     Interpreter* parent_ = nullptr;
-    std::stack<CallFrame> call_stack_;
+    std::deque<CallFrame> call_stack_;
     std::string current_file_;
     std::optional<InterpreterError> fatal_error_;
     size_t current_cmd_row_ = 0;

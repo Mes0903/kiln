@@ -14,6 +14,15 @@ void register_variable_builtins(Interpreter& interp) {
         CMakeList value_list = CMakeList::from_arguments(value_args, &interp);
         interp.set_variable(var_name, value_list.to_string());
     });
+
+    interp.add_builtin("unset", [](Interpreter& interp, const std::vector<Argument>& args) {
+        if (args.size() < 1) {
+            interp.print_message("ERROR", "unset() requires at least 1 argument", true);
+            return;
+        }
+        std::string var_name = interp.evaluate_argument(args[0]);
+        interp.unset_variable(var_name);
+    });
 }
 
 } // namespace dmake

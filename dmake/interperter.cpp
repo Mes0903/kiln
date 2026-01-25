@@ -1,5 +1,6 @@
 #include "interperter.hpp"
 #include "builtins/registry.hpp"
+#include <deque>
 #include <stack>
 #include <set>
 
@@ -148,10 +149,10 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
             // Propagate includes, defs, and opts from dep to artifact
             artifact->add_include_directories(dep->get_include_directories(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
             artifact->add_include_directories(dep->get_include_directories(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
-            
+
             artifact->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
             artifact->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
-            
+
             artifact->add_compile_options(dep->get_compile_options(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
             artifact->add_compile_options(dep->get_compile_options(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
 
@@ -175,7 +176,7 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
                 }
             }
         };
-        
+
         add_lib_deps(PropertyVisibility::PRIVATE);
         add_lib_deps(PropertyVisibility::PUBLIC);
     }
@@ -190,7 +191,7 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
         std::string out_path = artifact->get_output_path();
         if (graph.has_task(out_path)) {
             auto& link_task = graph.get_task(out_path);
-            
+
             auto add_lib_inputs = [&](PropertyVisibility vis) {
                 for (const auto& lib_name : artifact->get_linked_libraries(vis)) {
                     if (artifacts_.count(lib_name)) {
@@ -224,15 +225,15 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     std::filesystem::path abs_script_dir = script_dir.empty() ?
         std::filesystem::current_path() :
         std::filesystem::absolute(script_dir).lexically_normal();
-    call_stack_.push({abs_script_dir.string(), {}});
+    call_stack_.push_front({abs_script_dir.string(), {}});
 
-    auto& vars = call_stack_.top().variables;
+    auto& vars = call_stack_.front().variables;
     vars["CMAKE_CURRENT_SOURCE_DIR"] = abs_script_dir.string();
 
     if (parent_ == nullptr) {
         build_dir_ = "build";
         std::filesystem::path abs_binary_dir = abs_script_dir / build_dir_;
-        
+
         vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
         vars["CMAKE_BINARY_DIR"] = abs_binary_dir.string();
         vars["CMAKE_CURRENT_BINARY_DIR"] = abs_binary_dir.string();
@@ -460,7 +461,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
 }
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_function(const UserFunction& func, const std::vector<Argument>& args) {
-    CallFrame frame{call_stack_.top().script_dir, {}};
+    CallFrame frame{call_stack_.front().script_dir, {}};
     CMakeList all = CMakeList::from_arguments(args, this);
     frame.variables["ARGC"] = std::to_string(all.size());
     frame.variables["ARGV"] = all.to_string();
@@ -473,9 +474,9 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
     loop_depth_ = 0;
     loop_control_ = LoopControl::NONE;
 
-    call_stack_.push(frame);
+    call_stack_.push_front(frame);
     auto res = interpret(func.body);
-    call_stack_.pop();
+    call_stack_.pop_front();
 
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
@@ -485,7 +486,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
 std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args) {
     std::map<std::string, std::string> saved;
     CMakeList all = CMakeList::from_arguments(args, this);
-    auto save = [&](const std::string& k) { if (call_stack_.top().variables.count(k)) saved[k] = call_stack_.top().variables[k]; };
+    auto save = [&](const std::string& k) { if (call_stack_.front().variables.count(k)) saved[k] = call_stack_.front().variables[k]; };
     save("ARGC"); save("ARGV"); save("ARGN");
     for (size_t i = 0; i < all.size(); ++i) save("ARGV" + std::to_string(i));
     for (const auto& p : macro.parameters) save(p);
@@ -499,7 +500,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     auto res = interpret(macro.body);
 
     for (const auto& [k, v] : saved) set_variable(k, v);
-    auto& vars = call_stack_.top().variables;
+    auto& vars = call_stack_.front().variables;
     if (!saved.count("ARGC")) vars.erase("ARGC");
     if (!saved.count("ARGV")) vars.erase("ARGV");
     if (!saved.count("ARGN")) vars.erase("ARGN");
@@ -542,18 +543,33 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
 
 std::string Interpreter::get_variable(const std::string& name) const {
     if (!call_stack_.empty()) {
-        std::stack<CallFrame> temp = call_stack_;
+        std::deque<CallFrame> temp = call_stack_;
         while (!temp.empty()) {
-            auto it = temp.top().variables.find(name);
-            if (it != temp.top().variables.end()) return it->second;
-            temp.pop();
+            auto it = temp.front().variables.find(name);
+            if (it != temp.front().variables.end()) return it->second;
+            temp.pop_front();
         }
     }
     return parent_ ? parent_->get_variable(name) : "";
 }
 
 void Interpreter::set_variable(const std::string& name, const std::string& val) {
-    if (!call_stack_.empty()) call_stack_.top().variables[name] = val;
+    if (!call_stack_.empty()) call_stack_.front().variables[name] = val;
+}
+
+bool Interpreter::unset_variable(const std::string& name) {
+    if (call_stack_.empty())
+        return false;
+    auto it = call_stack_.begin();
+    while(it != call_stack_.end()) {
+        auto it2 = it->variables.find(name);
+        if (it2 != it->variables.end()) {
+            it->variables.erase(it2);
+            return true;
+        }
+        it++;
+    }
+    return false;
 }
 
 void Interpreter::print_message(const std::string& mode, const std::string& msg, bool is_err) {
