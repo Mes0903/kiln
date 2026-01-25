@@ -1,6 +1,7 @@
 #include "interperter.hpp"
 #include "builtins/registry.hpp"
 #include "dmake/CMakeList.hpp"
+#include "dmake/cmake-language.hpp"
 #include <deque>
 #include <stack>
 #include <set>
@@ -197,6 +198,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             build_dir_ = "build";
             abs_binary_dir = abs_script_dir / build_dir_;
         }
+
+        vars["DMAKE_VERSION"] = "0.1.0";
 
         vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
         vars["CMAKE_BINARY_DIR"] = abs_binary_dir.string();
@@ -480,24 +483,104 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
 bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
     if (condition.empty()) return false;
 
-    const auto& arg = condition[0];
-    std::string val;
-
-    if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
-        std::string name = std::get<std::string>(arg.parts[0]);
-        // If it's a variable name, use its value. Otherwise use the string itself.
-        std::string var_val = get_variable(name);
-        if (!var_val.empty() || name == "0" || name == "FALSE" || name == "OFF") {
-            val = var_val;
+    auto evaluate_single_condition = [&](const Argument& arg) -> std::string {
+        if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
+            std::string name = std::get<std::string>(arg.parts[0]);
+            std::string var_val = get_variable(name);
+            if (!var_val.empty() || name == "0" || name == "FALSE" || name == "OFF") {
+                return var_val;
+            } else {
+                return name;
+            }
         } else {
-            val = name;
+            return evaluate_argument(arg);
         }
-    } else {
-        val = evaluate_argument(arg);
+    };
+
+    auto is_truthy = [&](const std::string& val) -> bool {
+        std::string upper_val = val;
+        std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
+        return !(upper_val == "FALSE" || upper_val == "OFF" || upper_val == "0" || upper_val.empty() || upper_val == "NOTFOUND" || upper_val == "IGNORE");
+    };
+
+    if (condition.size() == 1) {
+        std::string val = evaluate_single_condition(condition[0]);
+        return is_truthy(val);
     }
 
-    std::transform(val.begin(), val.end(), val.begin(), ::toupper);
-    return !(val == "FALSE" || val == "OFF" || val == "0" || val.empty() || val == "NOTFOUND" || val == "IGNORE");
+    if(condition.size() == 2) {
+        std::string op = evaluate_single_condition(condition[0]);
+        std::string right = evaluate_argument(condition[1]);
+
+        if (op == "NOT") {
+            return !is_truthy(right);
+        }
+        if(op == "TARGET") {
+            return artifacts_.contains(right);
+        }
+        if(op == "DEFINED") {
+            auto it = call_stack_.begin();
+            while (it != call_stack_.end()) {
+                if (it->variables.contains(right)) {
+                    return true;
+                }
+                ++it;
+            }
+            return false;
+        }
+    }
+
+    if (condition.size() == 3) {
+        std::string left = evaluate_single_condition(condition[0]);
+        std::string op = evaluate_argument(condition[1]);
+        std::string right = evaluate_single_condition(condition[2]);
+
+        if (op == "EQUAL") {
+            return left == right;
+        } else if (op == "NOT_EQUAL") {
+            return left != right;
+        } else if (op == "LESS") {
+            return std::stod(left) < std::stod(right);
+        } else if (op == "GREATER") {
+            return std::stod(left) > std::stod(right);
+        } else if (op == "LESS_EQUAL") {
+            return std::stod(left) <= std::stod(right);
+        } else if (op == "GREATER_EQUAL") {
+            return std::stod(left) >= std::stod(right);
+        } else if (op == "STREQUAL") {
+            return left == right;
+        } else if (op == "STRLESS") {
+            return left < right;
+        } else if (op == "STRGREATER") {
+            return left > right;
+        } else if (op == "VERSION_EQUAL") {
+            return left == right;
+        } else if (op == "VERSION_LESS") {
+            return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end());
+        } else if (op == "VERSION_GREATER") {
+            return std::lexicographical_compare(right.begin(), right.end(), left.begin(), left.end());
+        } else if (op == "VERSION_LESS_EQUAL") {
+            return left == right || std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end());
+        } else if (op == "VERSION_GREATER_EQUAL") {
+            return left == right || std::lexicographical_compare(right.begin(), right.end(), left.begin(), left.end());
+        } else if (op == "NOT") {
+            return !evaluate_condition({condition.begin() + 2, condition.end()});
+        }
+    }
+
+    if (condition.size() > 3) {
+        std::string logic_op = evaluate_argument(condition[1]);
+        if (logic_op == "AND") {
+            return evaluate_condition({condition[0]}) && evaluate_condition({condition.begin() + 2, condition.end()});
+        } else if (logic_op == "OR") {
+            return evaluate_condition({condition[0]}) || evaluate_condition({condition.begin() + 2, condition.end()});
+        } else if (logic_op == "NOT") {
+            return !evaluate_condition({condition.begin() + 2, condition.end()});
+        }
+    }
+
+    // TODO: This should error
+    return false;
 }
 
 std::string Interpreter::evaluate_argument(const Argument& arg) {

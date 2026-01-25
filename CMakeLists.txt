@@ -26,6 +26,9 @@ set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake
 )
 
+# Does not support testing in dmake yet
+if(NOT DEFINED DMAKE_VERSION)
+
 enable_testing()
 
 find_package(Catch2 3 REQUIRED)
@@ -33,3 +36,4 @@ add_executable(dmake_tests tests/main.cpp tests/interpreter_tests.cpp tests/pch_
 target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
 add_test(NAME interpreter_tests COMMAND dmake_tests)
+endif()
