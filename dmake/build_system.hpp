@@ -9,6 +9,7 @@
 #include <expected>
 #include <optional>
 #include <filesystem>
+#include <mutex>
 
 namespace dmake {
 
@@ -42,6 +43,7 @@ public:
 
 private:
     std::map<std::string, BuildTask> tasks_;
+    mutable std::mutex output_mutex_;
     
     // Incremental build logic
     std::expected<std::string, std::string> calculate_signature(const BuildTask& task);
@@ -57,6 +59,13 @@ private:
     
     // Parsers for .d files (header dependencies)
     std::vector<std::string> parse_deps_file(const std::string& path);
+
+    // Subprocess execution with output capture
+    struct CommandResult {
+        int exit_code;
+        std::string output;
+    };
+    CommandResult run_command(const std::string& command);
 };
 
 } // namespace dmake

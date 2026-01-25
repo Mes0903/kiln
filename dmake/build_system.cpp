@@ -89,6 +89,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         return true;
     };
 
+    auto start_time = std::chrono::steady_clock::now();
     size_t total_tasks = tasks_.size();
     while (completed.size() < tasks_.size()) {
         bool progress = false;
@@ -113,12 +114,20 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     continue;
                 } else {
                     // Execute
-                    size_t current_step = completed.size() + 1;
                     std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
+                    std::string verb = "Compiling";
+                    std::string target_display = std::filesystem::path(id).filename().string();
                     
-                    // ANSI coloring for better visibility
-                    std::cout << "\033[1;32m[" << current_step << "/" << total_tasks << "]\033[0m "
-                              << "Building [" << artifact_name << "] " << id << std::endl;
+                    if (id == (task.parent_artifact ? task.parent_artifact->get_output_path(build_dir, "") : "")) {
+                        verb = "  Linking";
+                    }
+
+                    // Cargo style: Green Bold Verb, followed by artifact and file
+                    {
+                        std::lock_guard<std::mutex> lock(output_mutex_);
+                        std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m [" 
+                                  << artifact_name << "] " << target_display << std::endl;
+                    }
 
                     // Ensure output directories exist
                     for (const auto& out : task.outputs) {
@@ -127,8 +136,16 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         if (ec) return std::unexpected("Failed to create directory for " + out + ": " + ec.message());
                     }
                     
-                    int res = std::system(task.command.c_str());
-                    if (res != 0) return std::unexpected("Command failed: " + task.command);
+                    auto result = run_command(task.command);
+                    if (result.exit_code != 0) {
+                        std::lock_guard<std::mutex> lock(output_mutex_);
+                        if (!result.output.empty()) std::cerr << result.output << std::endl;
+                        return std::unexpected("Command failed: " + task.command);
+                    } else if (!result.output.empty()) {
+                        // Success but has output (likely warnings)
+                        std::lock_guard<std::mutex> lock(output_mutex_);
+                        std::cout << result.output << std::endl;
+                    }
                 }
 
                 new_cache[id] = sig;
@@ -150,7 +167,31 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         }
     }
 
+    auto end_time = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        std::cout << "\033[1;32m" << std::setw(12) << "Finished" << "\033[0m build in " 
+                << std::fixed << std::setprecision(2) << duration.count() / 1000.0 << "s" << std::endl;
+    }
+
     return save_cache(build_dir, new_cache);
+}
+
+BuildGraph::CommandResult BuildGraph::run_command(const std::string& command) {
+    std::string full_command = command + " 2>&1";
+    FILE* pipe = popen(full_command.c_str(), "r");
+    if (!pipe) return {-1, "Failed to execute command"};
+
+    std::string output;
+    std::array<char, 4096> buffer;
+    while (fgets(buffer.data(), buffer.size(), pipe)) {
+        output += buffer.data();
+    }
+
+    int status = pclose(pipe);
+    return {WEXITSTATUS(status), output};
 }
 
 std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {

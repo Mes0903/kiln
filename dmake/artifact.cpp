@@ -72,7 +72,9 @@ void ExecutableArtifact::generate_tasks(BuildGraph& graph, const std::string& bu
         task.parent_artifact = this;
         
         std::ostringstream cmd;
-        cmd << "g++ -std=c++23 -MMD -MF " << obj << ".d -c -o " << obj;
+        cmd << "g++ -std=c++23";
+        if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
+        cmd << " -MMD -MF " << obj << ".d -c -o " << obj;
         
         for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
             cmd << " -I" << (std::filesystem::path(script_dir) / dir).string();
@@ -96,7 +98,9 @@ void ExecutableArtifact::generate_tasks(BuildGraph& graph, const std::string& bu
     link.parent_artifact = this;
     
     std::ostringstream cmd;
-    cmd << "g++ -std=c++23 -o " << link.id;
+    cmd << "g++ -std=c++23";
+    if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
+    cmd << " -o " << link.id;
     for (const auto& obj : obj_files) {
         cmd << " " << obj;
         link.inputs.push_back(obj);
@@ -126,7 +130,9 @@ void LibraryArtifact::generate_tasks(BuildGraph& graph, const std::string& build
         task.parent_artifact = this;
         
         std::ostringstream cmd;
-        cmd << "g++ -std=c++23 -MMD -MF " << obj << ".d";
+        cmd << "g++ -std=c++23";
+        if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
+        cmd << " -MMD -MF " << obj << ".d";
         if (is_shared) cmd << " -fPIC";
         cmd << " -c -o " << obj;
         
@@ -153,7 +159,9 @@ void LibraryArtifact::generate_tasks(BuildGraph& graph, const std::string& build
     
     std::ostringstream cmd;
     if (is_shared) {
-        cmd << "g++ -std=c++23 -shared -o " << link.id;
+        cmd << "g++ -std=c++23";
+        if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
+        cmd << " -shared -o " << link.id;
     } else {
         cmd << "ar rcs " << link.id;
     }
