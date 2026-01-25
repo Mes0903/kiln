@@ -373,7 +373,9 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     current_cmd_col_ = cmd.col;
 
     Interpreter* root = get_root();
-    auto bit = root->builtins_.find(cmd.identifier);
+    auto lower_identifier = cmd.identifier;
+    std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
+    auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
         bit->second(*this, cmd.arguments);
         if (auto err = get_fatal_error()) {
