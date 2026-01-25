@@ -86,6 +86,8 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
 std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocation& if_command) {
     IfBlock if_block;
     if_block.condition = if_command.arguments;
+    if_block.row = if_command.row;
+    if_block.col = if_command.col;
 
     auto then_branch_or_error = parse_block({"else", "endif"});
     if (!then_branch_or_error) {

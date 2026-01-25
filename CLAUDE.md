@@ -25,7 +25,22 @@ mkdir -p build && cd build && cmake .. && make
 
 **Run dmake CLI:**
 ```bash
-./build/dmake <path-to-project> [-j N] [-DVAR=VAL]
+./build/dmake <path-to-project> [-j N] [-DVAR=VAL] [--config CONFIG] [-B BUILD_DIR]
+```
+
+Examples:
+```bash
+# Default: build/debug
+./build/dmake .
+
+# Release build: build/release
+./build/dmake . --config release
+
+# Custom build root: out/debug
+./build/dmake . -B out
+
+# Custom root + config: out/release
+./build/dmake . -B out --config release
 ```
 
 **Dependencies:**
@@ -38,6 +53,116 @@ mkdir -p build && cd build && cmake .. && make
 
 ### Three-Layer Design
 ...
+
+## CMake Language Support
+
+dmake implements a subset of CMake language features. The interpreter follows CMake semantics for variable handling and control flow.
+
+### If Conditions
+
+The `if()` command uses a recursive descent parser with proper operator precedence matching CMake's behavior. Reference: https://cmake.org/cmake/help/latest/command/if.html
+
+**Operator Precedence** (highest to lowest):
+1. Unary tests (`DEFINED`, `TARGET`, etc.)
+2. Binary comparisons (`EQUAL`, `LESS`, `STREQUAL`, etc.)
+3. `NOT` (prefix operator)
+4. `AND` (no short-circuit evaluation)
+5. `OR` (no short-circuit evaluation)
+
+**Variable Dereferencing**:
+- Unquoted arguments that are NOT keywords or numeric constants are automatically dereferenced as variables
+- Undefined variables evaluate to empty string
+- Quoted arguments are never dereferenced
+- Keywords: `NOT`, `AND`, `OR`, `DEFINED`, `TARGET`, `EQUAL`, `LESS`, `GREATER`, `STREQUAL`, `STRLESS`, `STRGREATER`, `VERSION_*`, etc.
+
+**Truthiness** (case-insensitive):
+- Falsy: Empty string, `0`, `OFF`, `NO`, `FALSE`, `N`, `IGNORE`, `NOTFOUND`, `*-NOTFOUND`
+- Everything else is truthy (including `ON`, `YES`, `TRUE`, `Y`, non-zero numbers, non-empty strings)
+
+**Supported Operators**:
+- Logical: `AND`, `OR`, `NOT`
+- Numeric: `EQUAL`, `LESS`, `GREATER`, `LESS_EQUAL`, `GREATER_EQUAL`, `NOT_EQUAL`
+- String: `STREQUAL`, `STRLESS`, `STRGREATER`, `STRLESS_EQUAL`, `STRGREATER_EQUAL`
+- Version: `VERSION_EQUAL`, `VERSION_LESS`, `VERSION_GREATER`, `VERSION_LESS_EQUAL`, `VERSION_GREATER_EQUAL`
+- Unary: `DEFINED` (checks if variable exists), `TARGET` (checks if target exists)
+- File tests: `EXISTS`, `IS_DIRECTORY`, `IS_SYMLINK`, `IS_ABSOLUTE`
+- Other: `MATCHES` (regex), `IN_LIST`
+
+**Implementation**: The `evaluate_condition` method in `interperter.cpp:483-584` implements the full parser with proper precedence handling.
+
+## Multi-Configuration Build Support
+
+dmake supports Cargo-style multiple build configurations with separate output directories.
+
+### Build Directory Structure
+
+```
+project/
+  build/
+    debug/         # Default configuration
+      .dmake_cache
+      *.o, executables, etc.
+    release/
+      .dmake_cache
+      *.o, executables, etc.
+    relwithdebinfo/
+      .dmake_cache
+      *.o, executables, etc.
+```
+
+### Configuration Logic
+
+**Build directory determination:**
+```
+build_root = -B value OR <project_dir>/build (default)
+config = --config value OR "debug" (default)
+final_build_dir = build_root / config
+```
+
+**CMAKE_BUILD_TYPE variable:**
+- Set automatically based on `--config` flag
+- Normalized to proper case: "debug" → "Debug", "release" → "Release"
+- Available to CMakeLists.txt scripts for conditional logic
+- Can be overridden with `-DCMAKE_BUILD_TYPE=Custom`
+
+### Standard Configurations
+
+| Config | CMAKE_BUILD_TYPE | Typical Flags |
+|--------|------------------|---------------|
+| debug (default) | Debug | -g -O0 |
+| release | Release | -O3 -DNDEBUG |
+| relwithdebinfo | RelWithDebInfo | -g -O2 -DNDEBUG |
+| minsizerel | MinSizeRel | -Os -DNDEBUG |
+
+**Note**: Compiler flags must be set via `target_compile_options()` in CMakeLists.txt. dmake does not automatically apply flags based on CMAKE_BUILD_TYPE.
+
+### Cache Isolation
+
+Each configuration maintains its own `.dmake_cache` in its build directory:
+- Prevents false cache hits between configurations
+- Allows switching between debug/release without full rebuilds
+- Signatures include all relevant flags and definitions
+
+### Examples
+
+```bash
+# Build debug (default)
+dmake .
+# Output: ./build/debug/myapp
+
+# Build release
+dmake . --config release
+# Output: ./build/release/myapp
+
+# Build to custom location
+dmake . -B out --config debug
+# Output: out/debug/myapp
+
+# Override build type
+dmake . --config release -DCMAKE_BUILD_TYPE=Custom
+# Build dir: ./build/release, but CMAKE_BUILD_TYPE="Custom"
+```
+
 ## Incremental & Parallel Build System
 
 **Concurrency**:
@@ -88,13 +213,15 @@ To add tests:
 
 **Adding new builtins**: In `Interpreter` constructor (interperter.cpp:121-354), add to the `if (parent_ == nullptr)` block to register only in root interpreter.
 
+**If condition evaluation**: The `evaluate_condition` method (interperter.cpp:483-584) implements recursive descent parsing with proper CMake operator precedence. Modify this to add new operators or change evaluation semantics.
+
 **Modifying error output**: Update the `print_error_context` lambda in dmake-cli/main.cpp:45-71.
 
 **Adding target properties**: Extend the `Target` class hierarchy (interperter.hpp:26-67) and update `set_target_properties` builtin.
 
 **Parser grammar changes**: Modify `parse_*` methods in cmake-language.cpp. The parser is a recursive descent parser with manual position tracking.
 
-## Some food for your own through
+## Some food for your own thought
 * (when writing code) Do not write code before stating assumptions.
 * (when writing code) Produce code you wouldn't want to debug at 3am
 * Do not claim correctness you haven't verified.

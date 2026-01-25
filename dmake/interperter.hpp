@@ -21,6 +21,11 @@ struct InterpreterError {
     std::string message;
 };
 
+struct BuildError {
+    std::string file;
+    std::string message;
+};
+
 // ANSI escape codes for colors
 namespace colors {
     const std::string RESET = "\033[0m";
@@ -56,7 +61,7 @@ public:
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr, std::optional<std::string> build_dir = std::nullopt);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
-    std::expected<void, InterpreterError> run_build(int jobs = 0);
+    std::expected<void, BuildError> run_build(int jobs = 0);
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
 
@@ -97,7 +102,7 @@ private:
     std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
     std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<Argument>& args);
     std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args);
-    bool evaluate_condition(const std::vector<Argument>& condition);
+    std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col);
 
     std::optional<InterpreterError> get_fatal_error() const;
     void clear_fatal_error();

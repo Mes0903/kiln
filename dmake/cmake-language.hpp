@@ -38,6 +38,8 @@ struct IfBlock {
     std::vector<Argument> condition;
     std::vector<AstNode> then_branch;
     std::vector<AstNode> else_branch;
+    size_t row = 0;
+    size_t col = 0;
 };
 
 struct FunctionBlock {

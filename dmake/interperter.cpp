@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 
 namespace dmake {
 
@@ -89,7 +90,7 @@ Interpreter* Interpreter::get_root() {
     return r;
 }
 
-std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
+std::expected<void, BuildError> Interpreter::run_build(int jobs) {
     if (parent_ != nullptr) return get_root()->run_build(jobs);
 
     std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
@@ -171,7 +172,7 @@ std::expected<void, InterpreterError> Interpreter::run_build(int jobs) {
 
 
     if (!result) {
-        return std::unexpected(InterpreterError{current_file_, 0, 0, result.error()});
+        return std::unexpected(BuildError{current_file_, result.error()});
     }
 
     print_message("STATUS", "Build finished.");
@@ -389,7 +390,11 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
-    return interpret(evaluate_condition(if_block.condition) ? if_block.then_branch : if_block.else_branch);
+    auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col);
+    if (!cond_result) {
+        return std::unexpected(cond_result.error());
+    }
+    return interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
@@ -480,7 +485,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     return res;
 }
 
-bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
+std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col) {
     if (condition.empty()) return false;
 
     // Set of keywords that should not be dereferenced as variables
@@ -577,6 +582,7 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
     // Recursive descent parser with proper CMake precedence
     // Precedence (high to low): unary tests > binary tests > NOT > AND/OR
     size_t pos = 0;
+    std::string error_msg;  // Track parsing errors
 
     std::function<bool()> parse_or;
     std::function<bool()> parse_and;
@@ -589,10 +595,14 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
     parse_or = [&]() -> bool {
         bool left = parse_and();
 
-        while (pos < condition.size()) {
+        while (pos < condition.size() && error_msg.empty()) {
             std::string token = get_token_string(condition[pos]);
             if (token == "OR") {
                 pos++;
+                if (pos >= condition.size()) {
+                    error_msg = "OR operator requires a right operand";
+                    return false;
+                }
                 bool right = parse_and();  // Always evaluate right side (no short-circuit)
                 left = left || right;
             } else {
@@ -605,10 +615,14 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
     parse_and = [&]() -> bool {
         bool left = parse_not();
 
-        while (pos < condition.size()) {
+        while (pos < condition.size() && error_msg.empty()) {
             std::string token = get_token_string(condition[pos]);
             if (token == "AND") {
                 pos++;
+                if (pos >= condition.size()) {
+                    error_msg = "AND operator requires a right operand";
+                    return false;
+                }
                 bool right = parse_not();  // Always evaluate right side (no short-circuit)
                 left = left && right;
             } else {
@@ -620,11 +634,18 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
 
     // NOT has higher precedence than AND/OR but lower than comparisons
     parse_not = [&]() -> bool {
-        if (pos >= condition.size()) return false;
+        if (pos >= condition.size()) {
+            error_msg = "Unexpected end of condition";
+            return false;
+        }
 
         std::string token = get_token_string(condition[pos]);
         if (token == "NOT") {
             pos++;
+            if (pos >= condition.size()) {
+                error_msg = "NOT operator requires an operand";
+                return false;
+            }
             return !parse_not();  // Right-associative
         }
         return parse_comparison();
@@ -651,7 +672,10 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
         if (op == "EQUAL" || op == "LESS" || op == "GREATER" ||
             op == "LESS_EQUAL" || op == "GREATER_EQUAL" || op == "NOT_EQUAL") {
             pos++;
-            if (pos >= condition.size()) return false;
+            if (pos >= condition.size()) {
+                error_msg = op + " operator requires a right operand";
+                return false;
+            }
 
             std::string left = evaluate_token(condition[start_pos]);
             std::string right = evaluate_token(condition[pos++]);
@@ -677,7 +701,10 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
         else if (op == "STREQUAL" || op == "STRLESS" || op == "STRGREATER" ||
                  op == "STRLESS_EQUAL" || op == "STRGREATER_EQUAL") {
             pos++;
-            if (pos >= condition.size()) return false;
+            if (pos >= condition.size()) {
+                error_msg = op + " operator requires a right operand";
+                return false;
+            }
 
             std::string left = evaluate_token(condition[start_pos]);
             std::string right = evaluate_token(condition[pos++]);
@@ -691,7 +718,10 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
         // Version comparisons (simplified - real CMake does component-wise comparison)
         else if (op.starts_with("VERSION_")) {
             pos++;
-            if (pos >= condition.size()) return false;
+            if (pos >= condition.size()) {
+                error_msg = op + " operator requires a right operand";
+                return false;
+            }
 
             std::string left = evaluate_token(condition[start_pos]);
             std::string right = evaluate_token(condition[pos++]);
@@ -708,6 +738,15 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
             if (op == "VERSION_LESS_EQUAL") return less || left == right;
             if (op == "VERSION_GREATER_EQUAL") return !less || left == right;
         }
+        // regex
+        else if(op == "MATCHES") {
+            std::string pattern = evaluate_token(condition[pos++]);
+            std::regex regex(pattern);
+            std::smatch match;
+            std::string left = evaluate_token(condition[start_pos]);
+            std::regex_match(left, match, regex);
+            return match.size() > 0;
+        }
 
         // Not a comparison operator - return the unary/primary result
         return unary_result;
@@ -720,10 +759,9 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
         std::string token = get_token_string(condition[pos]);
 
         // Unary operators that take one argument
-        if (token == "DEFINED") {
+        // If there's no next token, treat the keyword as a primary value instead
+        if (token == "DEFINED" && pos + 1 < condition.size()) {
             pos++;
-            if (pos >= condition.size()) return false;
-
             // DEFINED takes a variable name (don't dereference it)
             std::string var_name = get_token_string(condition[pos++]);
 
@@ -734,26 +772,51 @@ bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
                 }
             }
             return false;
-        } else if (token == "TARGET") {
+        } else if (token == "TARGET" && pos + 1 < condition.size()) {
             pos++;
-            if (pos >= condition.size()) return false;
-
             std::string target_name = get_token_string(condition[pos++]);
             return artifacts_.contains(target_name);
         }
         // Add other unary operators here (EXISTS, COMMAND, etc.) as needed
 
         // Primary value - evaluate and check truthiness
-        std::string val = evaluate_token(condition[pos++]);
+        // For keywords that aren't being used as operators (like standalone DEFINED, TARGET, etc.),
+        // we need to dereference them as variables, not treat them as keywords
+        const Argument& arg = condition[pos++];
+        std::string token_str = get_token_string(arg);
+
+        // If it's quoted or a numeric constant, use it as-is
+        if (arg.quoted || is_numeric_constant(token_str)) {
+            return is_truthy(token_str);
+        }
+
+        // Otherwise dereference as a variable (even if it's a keyword name)
+        std::string val = get_variable(token_str);
         return is_truthy(val);
     };
 
     // Start parsing at the lowest precedence level (OR)
     bool result = parse_or();
 
-    // Warn if we didn't consume all tokens (indicates malformed condition)
+    // Check if there was an error during parsing
+    if (!error_msg.empty()) {
+        return std::unexpected(InterpreterError{
+            current_file_, row, col,
+            error_msg
+        });
+    }
+
+    // Error if we didn't consume all tokens (indicates malformed condition)
     if (pos < condition.size()) {
-        // Could set an error here, but for now just use the result we got
+        std::string remaining;
+        for (size_t i = pos; i < condition.size(); ++i) {
+            if (!remaining.empty()) remaining += " ";
+            remaining += get_token_string(condition[i]);
+        }
+        return std::unexpected(InterpreterError{
+            current_file_, row, col,
+            "Unexpected tokens in if() condition: " + remaining
+        });
     }
 
     return result;

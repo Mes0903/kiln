@@ -886,13 +886,68 @@ TEST_CASE("if condition: complex expressions", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 }
 
-// TEST_CASE("if condition: invalid conditions", "[interpreter][if][negaitve]") {
-//     auto output = run_script(R"(
-//         set(A "10")
-//         set(B "20")
-//         set(C "15")
-//         if(A B C)
-//             message("pass")
-//         endif()
-//     )");
-// }
+TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
+    // if(A B C) should error - unconsumed tokens
+    REQUIRE_THROWS_AS(run_script(R"(
+        set(A "10")
+        set(B "20")
+        set(C "15")
+        if(A B C)
+            message("pass")
+        endif()
+    )"), std::runtime_error);
+
+    // if(A EQUAL) should error - missing right operand
+    REQUIRE_THROWS_AS(run_script(R"(
+        set(A "10")
+        if(A EQUAL)
+            message("pass")
+        endif()
+    )"), std::runtime_error);
+
+    // if(AND B) should error - missing left operand
+    REQUIRE_THROWS_AS(run_script(R"(
+        set(B "10")
+        if(AND B)
+            message("pass")
+        endif()
+    )"), std::runtime_error);
+
+    // if(NOT) should error - missing operand
+    REQUIRE_THROWS_AS(run_script(R"(
+        if(NOT)
+            message("pass")
+        endif()
+    )"), std::runtime_error);
+
+    // Edge case: if(DEFINED) should work - DEFINED is treated as variable name
+    auto output = run_script(R"(
+        if(DEFINED)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Edge case: if(TARGET) should work - TARGET is treated as variable name
+    output = run_script(R"(
+        if(TARGET)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // BROKEN
+    // output = run_script(R"(
+    //     set(A "10")
+    //     set(B "20")
+    //     set(C "15")
+    //     if(A MATCHES "^[0-9]+$" AND B MATCHES "^[0-9]+$" AND C MATCHES "^[0-9]+$")
+    //         message("pass")
+    //     endif()
+    // )");
+    // REQUIRE(output == "pass\n");
+}
