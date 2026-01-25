@@ -68,15 +68,22 @@ All errors use `std::expected` for proper propagation:
 
 ### Key Design Decisions
 
-**Parent-child interpreter hierarchy**: `add_subdirectory()` creates a new `Interpreter` with a parent pointer to share builtins and propagate errors while maintaining separate variable scopes via a call stack.
+**Parent-child interpreter hierarchy**: `add_subdirectory()` creates a new `Interpreter` with a parent pointer to share builtins and propagate errors while maintaining separate variable scopes.
+
+**Loop Control Mechanics**:
+- `loop_depth_` and `loop_control_` are local to each `Interpreter` and function scope.
+- `break()` and `continue()` trigger a fatal error if `loop_depth_` is 0.
+- Functions reset loop state and restore it upon return; macros share the caller's loop scope.
 
 **include() vs add_subdirectory()**:
-- `include()` executes in the current scope (shares variables)
-- `add_subdirectory()` creates a new scope with parent access
+- `include()` executes in the current scope (shares variables).
+- `add_subdirectory()` creates a new `Interpreter` (new scope) and configures the subdirectory.
 
-**Builtin function signature**: `std::function<void(const std::vector<Argument>&)>` - builtins signal fatal errors via `set_fatal_error()` rather than return values, checked after each builtin call in `execute_command()`.
+**Builtin function signature**: `std::function<void(Interpreter&, const std::vector<Argument>&)>`.
+- Builtins receive the active `Interpreter` instance to correctly access local scope.
+- Fatal errors are signaled via `interp.set_fatal_error()`, which propagates to the root and is caught by the command executor.
 
-**Target build ordering**: Libraries are built before executables (see `run_build()` in interperter.cpp:394-420) to ensure dependencies are available.
+**Target build ordering**: Libraries are built before executables to ensure dependencies are available.
 
 ## Testing
 
@@ -96,3 +103,12 @@ To add tests:
 **Adding target properties**: Extend the `Target` class hierarchy (interperter.hpp:26-67) and update `set_target_properties` builtin.
 
 **Parser grammar changes**: Modify `parse_*` methods in cmake-language.cpp. The parser is a recursive descent parser with manual position tracking.
+
+## Some food for your own through
+* (when writing code) Do not write code before stating assumptions.
+* (when writing code) Produce code you wouldn't want to debug at 3am
+* Do not claim correctness you haven't verified.
+* Do not handle only the happy path.
+* Under what conditions does this work?
+* Solve problems you weren't asked to solve unless instrumental
+* Import complexity you don't need

@@ -79,40 +79,32 @@ public:
 class Interpreter;
 
 // Helper class for CMake list operations
-// In CMake, lists are semicolon-separated strings
 class CMakeList {
 public:
-    // Constructors
     CMakeList() = default;
     explicit CMakeList(const std::string& semicolon_separated);
     explicit CMakeList(const std::vector<std::string>& items);
     CMakeList(std::initializer_list<std::string> items);
 
-    // Factory methods
     static CMakeList from_arguments(const std::vector<Argument>& args, Interpreter* interp);
 
-    // Conversion
     std::string to_string() const;
     std::vector<std::string> to_vector() const;
 
-    // Access
     size_t size() const { return items_.size(); }
     bool empty() const { return items_.empty(); }
     const std::string& operator[](size_t idx) const { return items_[idx]; }
     const std::string& at(size_t idx) const { return items_.at(idx); }
 
-    // Iteration
     auto begin() const { return items_.begin(); }
     auto end() const { return items_.end(); }
     auto begin() { return items_.begin(); }
     auto end() { return items_.end(); }
 
-    // Modification
     void append(const std::string& item);
     void append(const CMakeList& other);
     void push_back(const std::string& item) { append(item); }
 
-    // List operations (like CMake's list command)
     void reverse();
     void sort();
     void remove_duplicates();
@@ -120,8 +112,6 @@ public:
 
 private:
     std::vector<std::string> items_;
-
-    // Helper to split semicolon-separated string
     static std::vector<std::string> split_by_semicolon(const std::string& str);
 };
 
@@ -142,7 +132,8 @@ struct UserMacro {
 
 class Interpreter {
 public:
-    using BuiltinFunction = std::function<void(const std::vector<Argument>&)>;
+    using BuiltinFunction = std::function<void(Interpreter&, const std::vector<Argument>&)>;
+    enum class LoopControl { NONE, BREAK, CONTINUE };
 
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr);
 
@@ -153,11 +144,18 @@ public:
 
     void set_current_file(const std::string& file) { current_file_ = file; }
 
-protected:
+    // Public API for builtins and internal use
     void set_fatal_error(const std::string& message);
     void set_fatal_error(const InterpreterError& error);
-    std::optional<InterpreterError> get_fatal_error() const;
-    void clear_fatal_error();
+    
+    std::string get_variable(const std::string& var_name) const;
+    void set_variable(const std::string& var_name, const std::string& value);
+    
+    void print_message(const std::string& mode, const std::string& message, bool is_error = false);
+    
+    int get_loop_depth() const { return loop_depth_; }
+    void set_loop_control(LoopControl control) { loop_control_ = control; }
+    void clear_loop_control() { loop_control_ = LoopControl::NONE; }
 
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
@@ -165,28 +163,27 @@ private:
     std::expected<void, InterpreterError> execute_function_block(const FunctionBlock& function_block);
     std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
     std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
-    std::expected<void, InterpreterError> invoke_user_function(const std::string& name, const std::vector<Argument>& args);
-    std::expected<void, InterpreterError> invoke_user_macro(const std::string& name, const std::vector<Argument>& args);
+    std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<Argument>& args);
+    std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args);
     bool evaluate_condition(const std::vector<Argument>& condition);
-    void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
-    std::string get_variable(const std::string& var_name) const;
-    void set_variable(const std::string& var_name, const std::string& value);
-
-    // Loop control helpers
-    enum class LoopControl { NONE, BREAK, CONTINUE };
-    void set_loop_control(LoopControl control);
-    LoopControl get_loop_control() const;
-    void clear_loop_control();
-    int get_loop_depth() const;
+    std::optional<InterpreterError> get_fatal_error() const;
+    void clear_fatal_error();
+    
+    Interpreter* get_root();
 
     std::string build_dir_;
     std::ostream* out_;
     std::ostream* err_;
+    
+    // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
+    
+    // Scope-local state
     std::map<std::string, UserFunction> user_functions_;
     std::map<std::string, UserMacro> user_macros_;
+    
     Interpreter* parent_ = nullptr;
     std::stack<CallFrame> call_stack_;
     std::string current_file_;
@@ -194,7 +191,7 @@ private:
     size_t current_cmd_row_ = 0;
     size_t current_cmd_col_ = 0;
 
-    // Loop control state
+    // Loop control state (local to current script/function scope)
     int loop_depth_ = 0;
     LoopControl loop_control_ = LoopControl::NONE;
 };

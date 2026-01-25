@@ -19,7 +19,7 @@ namespace dmake {
 
 std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
     if (str.empty()) {
-        return {}; // Empty string = empty list
+        return {}; 
     }
 
     std::vector<std::string> result;
@@ -34,7 +34,6 @@ std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
         }
     }
 
-    // Add the last element
     result.push_back(current);
 
     return result;
@@ -97,7 +96,6 @@ void CMakeList::sort() {
 }
 
 void CMakeList::remove_duplicates() {
-    // Preserve order while removing duplicates
     std::vector<std::string> unique_items;
     std::vector<std::string> seen;
 
@@ -168,7 +166,6 @@ std::string ExecutableTarget::get_build_command(const std::string& build_dir, co
     std::filesystem::path output_path = std::filesystem::path(script_dir) / build_dir / get_output_name();
     cmd << "g++ -std=c++23 -o " << output_path.string();
 
-    // Add include directories
     for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE)) {
         std::filesystem::path include_path = std::filesystem::path(script_dir) / dir;
         cmd << " -I" << include_path.string();
@@ -178,13 +175,11 @@ std::string ExecutableTarget::get_build_command(const std::string& build_dir, co
         cmd << " -I" << include_path.string();
     }
 
-    // Add sources
     for (const auto& source : get_sources(PropertyVisibility::PRIVATE)) {
         std::filesystem::path source_path = std::filesystem::path(script_dir) / source;
         cmd << " " << source_path.string();
     }
 
-    // Add linker search paths and libraries
     std::filesystem::path build_path = std::filesystem::path(script_dir) / build_dir;
     cmd << " -L" << build_path.string();
     for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) {
@@ -201,7 +196,6 @@ std::string LibraryTarget::get_build_command(const std::string& build_dir, const
     std::filesystem::path output_path = std::filesystem::path(script_dir) / build_dir / lib_name;
     cmd << "g++ -std=c++23 -shared -fPIC -o " << output_path.string();
 
-    // Add include directories
     for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE)) {
         cmd << " -I" << (std::filesystem::path(script_dir) / dir).string();
     }
@@ -209,7 +203,6 @@ std::string LibraryTarget::get_build_command(const std::string& build_dir, const
         cmd << " -I" << (std::filesystem::path(script_dir) / dir).string();
     }
 
-    // Add sources
     for (const auto& source : get_sources(PropertyVisibility::PRIVATE)) {
         cmd << " " << (std::filesystem::path(script_dir) / source).string();
     }
@@ -219,545 +212,315 @@ std::string LibraryTarget::get_build_command(const std::string& build_dir, const
 
 // --- Interpreter Method Implementations ---
 
+Interpreter* Interpreter::get_root() {
+    Interpreter* r = this;
+    while (r->parent_) r = r->parent_;
+    return r;
+}
+
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent)
     : build_dir_("build"), out_(out), err_(err), parent_(parent) {
     call_stack_.push({std::move(script_dir), {}});
     call_stack_.top().variables["CMAKE_CURRENT_SOURCE_DIR"] = call_stack_.top().script_dir;
 
     if (parent_ == nullptr) {
-        add_builtin("message", [this](const std::vector<Argument>& args) {
-            if (args.empty()) {
-                return;
-            }
+        add_builtin("message", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.empty()) return;
 
             size_t arg_idx = 0;
-            std::string mode = "INFO"; // Default mode
+            std::string mode = "INFO";
 
             if (!args[0].quoted) {
-                std::string first_arg = evaluate_argument(args[0]);
+                std::string first_arg = interp.evaluate_argument(args[0]);
                 std::transform(first_arg.begin(), first_arg.end(), first_arg.begin(), ::toupper);
 
-                if (first_arg == "STATUS") {
-                    mode = "STATUS";
-                    arg_idx = 1;
-                } else if (first_arg == "WARNING") {
-                    mode = "WARN";
-                    arg_idx = 1;
-                } else if (first_arg == "FATAL_ERROR") {
-                    mode = "FATAL";
-                    arg_idx = 1;
-                } else if (first_arg == "ERROR") {
-                    mode = "ERROR";
-                    arg_idx = 1;
-                }
+                if (first_arg == "STATUS") { mode = "STATUS"; arg_idx = 1; }
+                else if (first_arg == "WARNING") { mode = "WARN"; arg_idx = 1; }
+                else if (first_arg == "FATAL_ERROR") { mode = "FATAL"; arg_idx = 1; }
+                else if (first_arg == "ERROR") { mode = "ERROR"; arg_idx = 1; }
             }
 
             std::ostringstream oss;
             for (size_t i = arg_idx; i < args.size(); ++i) {
-                oss << evaluate_argument(args[i]);
-                if (i < args.size() - 1) {
-                    oss << " ";
-                }
+                oss << interp.evaluate_argument(args[i]);
+                if (i < args.size() - 1) oss << " ";
             }
-            std::string message_content = oss.str();
+            std::string content = oss.str();
 
-            if (mode == "STATUS") {
-                print_message("STATUS", message_content, false);
-            } else if (mode == "WARN") {
-                print_message("WARN", message_content, true);
-            } else if (mode == "ERROR") {
-                print_message("ERROR", message_content, true);
-            } else if (mode == "FATAL") {
-                set_fatal_error(message_content);
-            } else { // INFO
-                print_message("INFO", message_content, false);
-            }
+            if (mode == "FATAL") interp.set_fatal_error(content);
+            else interp.print_message(mode, content, mode == "WARN" || mode == "ERROR");
         });
 
-        add_builtin("set", [this](const std::vector<Argument>& args) {
+        add_builtin("set", [](Interpreter& interp, const std::vector<Argument>& args) {
             if (args.size() < 2) {
-                print_message("ERROR", "set() requires at least 2 arguments", true);
+                interp.print_message("ERROR", "set() requires at least 2 arguments", true);
                 return;
             }
-            std::string var_name = evaluate_argument(args[0]);
-
-            // Build the value as a list if multiple arguments provided
+            std::string var_name = interp.evaluate_argument(args[0]);
             std::vector<Argument> value_args(args.begin() + 1, args.end());
-            CMakeList value_list = CMakeList::from_arguments(value_args, this);
-            std::string value = value_list.to_string();
-
-            set_variable(var_name, value);
+            CMakeList value_list = CMakeList::from_arguments(value_args, &interp);
+            interp.set_variable(var_name, value_list.to_string());
         });
 
-        add_builtin("list", [this](const std::vector<Argument>& args) {
+        add_builtin("list", [](Interpreter& interp, const std::vector<Argument>& args) {
             if (args.size() < 2) {
-                print_message("ERROR", "list() requires at least 2 arguments", true);
+                interp.print_message("ERROR", "list() requires at least 2 arguments", true);
                 return;
             }
 
-            std::string operation = evaluate_argument(args[0]);
+            std::string operation = interp.evaluate_argument(args[0]);
             std::transform(operation.begin(), operation.end(), operation.begin(), ::toupper);
 
             if (operation == "LENGTH") {
-                // list(LENGTH <list_var> <output_var>)
-                if (args.size() != 3) {
-                    print_message("ERROR", "list(LENGTH) requires exactly 3 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                std::string output_var = evaluate_argument(args[2]);
-
-                CMakeList list(get_variable(list_var));
-                set_variable(output_var, std::to_string(list.size()));
-            }
-            else if (operation == "GET") {
-                // list(GET <list_var> <index> [<index> ...] <output_var>)
-                if (args.size() < 4) {
-                    print_message("ERROR", "list(GET) requires at least 4 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                CMakeList list(get_variable(list_var));
-
-                CMakeList result_list;
+                if (args.size() != 3) { interp.print_message("ERROR", "list(LENGTH) requires 3 args", true); return; }
+                CMakeList list(interp.get_variable(interp.evaluate_argument(args[1])));
+                interp.set_variable(interp.evaluate_argument(args[2]), std::to_string(list.size()));
+            } else if (operation == "GET") {
+                if (args.size() < 4) { interp.print_message("ERROR", "list(GET) requires 4+ args", true); return; }
+                CMakeList list(interp.get_variable(interp.evaluate_argument(args[1])));
+                CMakeList result;
                 for (size_t i = 2; i < args.size() - 1; ++i) {
-                    std::string index_str = evaluate_argument(args[i]);
-                    size_t index = std::stoul(index_str);
-                    if (index < list.size()) {
-                        result_list.append(list[index]);
-                    }
+                    size_t idx = std::stoul(interp.evaluate_argument(args[i]));
+                    if (idx < list.size()) result.append(list[idx]);
                 }
-
-                std::string output_var = evaluate_argument(args[args.size() - 1]);
-                set_variable(output_var, result_list.to_string());
-            }
-            else if (operation == "APPEND") {
-                // list(APPEND <list_var> [<element> ...])
-                if (args.size() < 2) {
-                    print_message("ERROR", "list(APPEND) requires at least 2 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                CMakeList list(get_variable(list_var));
-
-                for (size_t i = 2; i < args.size(); ++i) {
-                    list.append(evaluate_argument(args[i]));
-                }
-
-                set_variable(list_var, list.to_string());
-            }
-            else if (operation == "REVERSE") {
-                // list(REVERSE <list_var>)
-                if (args.size() != 2) {
-                    print_message("ERROR", "list(REVERSE) requires exactly 2 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                CMakeList list(get_variable(list_var));
+                interp.set_variable(interp.evaluate_argument(args[args.size() - 1]), result.to_string());
+            } else if (operation == "APPEND") {
+                std::string var = interp.evaluate_argument(args[1]);
+                CMakeList list(interp.get_variable(var));
+                for (size_t i = 2; i < args.size(); ++i) list.append(interp.evaluate_argument(args[i]));
+                interp.set_variable(var, list.to_string());
+            } else if (operation == "REVERSE") {
+                std::string var = interp.evaluate_argument(args[1]);
+                CMakeList list(interp.get_variable(var));
                 list.reverse();
-                set_variable(list_var, list.to_string());
-            }
-            else if (operation == "SORT") {
-                // list(SORT <list_var>)
-                if (args.size() != 2) {
-                    print_message("ERROR", "list(SORT) requires exactly 2 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                CMakeList list(get_variable(list_var));
+                interp.set_variable(var, list.to_string());
+            } else if (operation == "SORT") {
+                std::string var = interp.evaluate_argument(args[1]);
+                CMakeList list(interp.get_variable(var));
                 list.sort();
-                set_variable(list_var, list.to_string());
-            }
-            else if (operation == "REMOVE_DUPLICATES") {
-                // list(REMOVE_DUPLICATES <list_var>)
-                if (args.size() != 2) {
-                    print_message("ERROR", "list(REMOVE_DUPLICATES) requires exactly 2 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                CMakeList list(get_variable(list_var));
+                interp.set_variable(var, list.to_string());
+            } else if (operation == "REMOVE_DUPLICATES") {
+                std::string var = interp.evaluate_argument(args[1]);
+                CMakeList list(interp.get_variable(var));
                 list.remove_duplicates();
-                set_variable(list_var, list.to_string());
-            }
-            else if (operation == "SUBLIST") {
-                // list(SUBLIST <list_var> <begin> <length> <output_var>)
-                if (args.size() != 5) {
-                    print_message("ERROR", "list(SUBLIST) requires exactly 5 arguments", true);
-                    return;
-                }
-                std::string list_var = evaluate_argument(args[1]);
-                size_t begin_idx = std::stoul(evaluate_argument(args[2]));
-                size_t length = std::stoul(evaluate_argument(args[3]));
-                std::string output_var = evaluate_argument(args[4]);
-
-                CMakeList list(get_variable(list_var));
-                CMakeList sublist = list.sublist(begin_idx, length);
-                set_variable(output_var, sublist.to_string());
-            }
-            else {
-                print_message("ERROR", "list() unknown operation: " + operation, true);
+                interp.set_variable(var, list.to_string());
+            } else if (operation == "SUBLIST") {
+                if (args.size() != 5) { interp.print_message("ERROR", "list(SUBLIST) requires 5 args", true); return; }
+                CMakeList list(interp.get_variable(interp.evaluate_argument(args[1])));
+                size_t start = std::stoul(interp.evaluate_argument(args[2]));
+                size_t len = std::stoul(interp.evaluate_argument(args[3]));
+                interp.set_variable(interp.evaluate_argument(args[4]), list.sublist(start, len).to_string());
             }
         });
 
-        add_builtin("add_executable", [this](const std::vector<Argument>& args) {
-            if (args.empty()) {
-                print_message("ERROR", "add_executable() requires a target name", true);
-                return;
-            }
-            std::string name = evaluate_argument(args[0]);
+        add_builtin("add_executable", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.empty()) return;
+            std::string name = interp.evaluate_argument(args[0]);
             auto target = std::make_shared<ExecutableTarget>(name);
             std::vector<std::string> sources;
-            for(size_t i = 1; i < args.size(); ++i) {
-                sources.push_back(evaluate_argument(args[i]));
-            }
+            for(size_t i = 1; i < args.size(); ++i) sources.push_back(interp.evaluate_argument(args[i]));
             target->add_sources(sources, PropertyVisibility::PRIVATE);
-            targets_[name] = target;
+            interp.get_root()->targets_[name] = target;
         });
 
-        add_builtin("add_library", [this](const std::vector<Argument>& args) {
-             if (args.size() < 2) {
-                print_message("ERROR", "add_library() requires a name and sources", true);
-                return;
-            }
-            std::string name = evaluate_argument(args[0]);
+        add_builtin("add_library", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.size() < 2) return;
+            std::string name = interp.evaluate_argument(args[0]);
             std::vector<std::string> sources;
             bool is_shared = false;
             for(size_t i = 1; i < args.size(); ++i) {
-                std::string arg_val = evaluate_argument(args[i]);
-                if(arg_val == "SHARED") {
-                    is_shared = true;
-                } else if (arg_val != "STATIC") { // Ignore STATIC
-                    sources.push_back(arg_val);
-                }
+                std::string val = interp.evaluate_argument(args[i]);
+                if(val == "SHARED") is_shared = true;
+                else if (val != "STATIC") sources.push_back(val);
             }
-
-            TargetType type = is_shared ? TargetType::SHARED_LIBRARY : TargetType::STATIC_LIBRARY;
-            auto target = std::make_shared<LibraryTarget>(name, type);
+            auto target = std::make_shared<LibraryTarget>(name, is_shared ? TargetType::SHARED_LIBRARY : TargetType::STATIC_LIBRARY);
             target->add_sources(sources, PropertyVisibility::PRIVATE);
-            targets_[name] = target;
+            interp.get_root()->targets_[name] = target;
         });
 
-        add_builtin("target_include_directories", [this](const std::vector<Argument>& args) {
-            if (args.size() < 2) {
-                print_message("ERROR", "target_include_directories() requires a target and directories", true);
-                return;
-            }
-            std::string target_name = evaluate_argument(args[0]);
-            auto it = targets_.find(target_name);
-            if (it == targets_.end()) {
-                print_message("ERROR", "target_include_directories() given unknown target: " + target_name, true);
-                return;
-            }
+        add_builtin("target_include_directories", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.size() < 2) return;
+            std::string name = interp.evaluate_argument(args[0]);
+            auto& targets = interp.get_root()->targets_;
+            auto it = targets.find(name);
+            if (it == targets.end()) return;
 
-            PropertyVisibility visibility = PropertyVisibility::PRIVATE;
+            PropertyVisibility vis = PropertyVisibility::PRIVATE;
             std::vector<std::string> dirs;
             for(size_t i = 1; i < args.size(); ++i) {
-                 std::string arg_val = evaluate_argument(args[i]);
-                if (arg_val == "PUBLIC") {
-                    visibility = PropertyVisibility::PUBLIC;
-                } else if (arg_val == "PRIVATE") {
-                    visibility = PropertyVisibility::PRIVATE;
-                } else if (arg_val == "INTERFACE") {
-                    visibility = PropertyVisibility::INTERFACE;
-                } else {
-                    dirs.push_back(arg_val);
-                }
+                std::string val = interp.evaluate_argument(args[i]);
+                if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
+                else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
+                else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
+                else dirs.push_back(val);
             }
-            it->second->add_include_directories(dirs, visibility);
+            it->second->add_include_directories(dirs, vis);
         });
 
-        add_builtin("target_link_libraries", [this](const std::vector<Argument>& args) {
-            if (args.size() < 2) {
-                print_message("ERROR", "target_link_libraries() requires a target and libraries", true);
-                return;
-            }
-            std::string target_name = evaluate_argument(args[0]);
-            auto it = targets_.find(target_name);
-            if (it == targets_.end()) {
-                print_message("ERROR", "target_link_libraries() given unknown target: " + target_name, true);
-                return;
-            }
+        add_builtin("target_link_libraries", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.size() < 2) return;
+            std::string name = interp.evaluate_argument(args[0]);
+            auto& targets = interp.get_root()->targets_;
+            auto it = targets.find(name);
+            if (it == targets.end()) return;
 
-            PropertyVisibility visibility = PropertyVisibility::PRIVATE;
+            PropertyVisibility vis = PropertyVisibility::PRIVATE;
             std::vector<std::string> libs;
             for(size_t i = 1; i < args.size(); ++i) {
-                std::string arg_val = evaluate_argument(args[i]);
-                if (arg_val == "PUBLIC") {
-                    visibility = PropertyVisibility::PUBLIC;
-                } else if (arg_val == "PRIVATE") {
-                    visibility = PropertyVisibility::PRIVATE;
-                } else if (arg_val == "INTERFACE") {
-                    visibility = PropertyVisibility::INTERFACE;
-                } else {
-                    libs.push_back(arg_val);
-                }
+                std::string val = interp.evaluate_argument(args[i]);
+                if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
+                else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
+                else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
+                else libs.push_back(val);
             }
-            it->second->add_linked_libraries(libs, visibility);
+            it->second->add_linked_libraries(libs, vis);
         });
 
-        add_builtin("set_target_properties", [this](const std::vector<Argument>& args) {
-            if (args.size() < 4) {
-                 print_message("ERROR", "set_target_properties() has incorrect format", true);
-                 return;
-            }
-            std::string target_name = evaluate_argument(args[0]);
-            auto it = targets_.find(target_name);
-            if (it == targets_.end()) {
-                print_message("ERROR", "set_target_properties() given unknown target: " + target_name, true);
-                return;
-            }
-
-            if(evaluate_argument(args[1]) != "PROPERTIES") {
-                print_message("ERROR", "set_target_properties() expected PROPERTIES keyword", true);
-                return;
-            }
-
+        add_builtin("set_target_properties", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.size() < 4) return;
+            std::string name = interp.evaluate_argument(args[0]);
+            auto& targets = interp.get_root()->targets_;
+            auto it = targets.find(name);
+            if (it == targets.end()) return;
+            if(interp.evaluate_argument(args[1]) != "PROPERTIES") return;
             for(size_t i = 2; i < args.size() - 1; i+=2) {
-                std::string key = evaluate_argument(args[i]);
-                std::string value = evaluate_argument(args[i+1]);
-                if (key == "OUTPUT_NAME") {
-                    it->second->set_output_name(value);
-                }
+                if (interp.evaluate_argument(args[i]) == "OUTPUT_NAME")
+                    it->second->set_output_name(interp.evaluate_argument(args[i+1]));
             }
         });
 
-        add_builtin("cmake_minimum_required", [this](const std::vector<Argument>&) {
-            print_message("INFO", "Ignoring cmake_minimum_required command.", false);
-        });
+        add_builtin("cmake_minimum_required", [](Interpreter&, const std::vector<Argument>&) {});
+        add_builtin("project", [](Interpreter&, const std::vector<Argument>&) {});
 
-        add_builtin("project", [this](const std::vector<Argument>&) {
-            print_message("INFO", "Ignoring project command.", false);
-        });
+        add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.empty()) return;
+            std::string subdir = interp.evaluate_argument(args[0]);
+            std::filesystem::path path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / subdir;
+            std::filesystem::path cmake_file = path / "CMakeLists.txt";
 
-        add_builtin("add_subdirectory", [this](const std::vector<Argument>& args) {
-            if (args.empty()) {
-                print_message("ERROR", "add_subdirectory() requires a directory argument", true);
-                return;
-            }
-            std::string subdir_name = evaluate_argument(args[0]);
-            std::filesystem::path subdir_path = std::filesystem::path(call_stack_.top().script_dir) / subdir_name;
-            std::filesystem::path cmake_lists_path = subdir_path / "CMakeLists.txt";
-
-            if (!std::filesystem::exists(cmake_lists_path)) {
-                set_fatal_error("CMakeLists.txt not found in " + subdir_path.string());
+            if (!std::filesystem::exists(cmake_file)) {
+                interp.set_fatal_error("CMakeLists.txt not found in " + path.string());
                 return;
             }
 
-            std::string content;
-            std::ifstream file(cmake_lists_path);
-            if(file) {
-                std::ostringstream ss;
-                ss << file.rdbuf();
-                content = ss.str();
-            } else {
-                set_fatal_error("Could not read " + cmake_lists_path.string());
-                return;
-            }
+            std::ifstream file(cmake_file);
+            if(!file) { interp.set_fatal_error("Could not read " + cmake_file.string()); return; }
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-            Interpreter sub_interpreter(subdir_path.string(), out_, err_, this);
-            sub_interpreter.set_current_file(cmake_lists_path.string());
-            Parser sub_parser(content);
-            auto ast_or_error = sub_parser.parse();
-            if (ast_or_error) {
-                auto result = sub_interpreter.interpret(ast_or_error.value());
-                if (!result) {
-                    // Propagate the error - it already has the correct file/line info
-                    set_fatal_error(result.error());
-                }
-            } else {
-                const auto& parse_error = ast_or_error.error();
-                set_fatal_error(InterpreterError{cmake_lists_path.string(), parse_error.row, parse_error.col, parse_error.reason});
-            }
-        });
-
-        add_builtin("include", [this](const std::vector<Argument>& args) {
-            if (args.empty()) {
-                set_fatal_error("include() requires a file argument");
-                return;
-            }
-
-            std::string file_arg = evaluate_argument(args[0]);
-
-            // Check for OPTIONAL keyword
-            bool optional = false;
-            for (size_t i = 1; i < args.size(); ++i) {
-                std::string arg_val = evaluate_argument(args[i]);
-                if (arg_val == "OPTIONAL") {
-                    optional = true;
-                }
-            }
-
-            // Resolve file path (absolute or relative to current source dir)
-            std::filesystem::path include_path;
-            if (std::filesystem::path(file_arg).is_absolute()) {
-                include_path = file_arg;
-            } else {
-                include_path = std::filesystem::path(call_stack_.top().script_dir) / file_arg;
-            }
-
-            // Add .cmake extension if no extension present
-            if (!include_path.has_extension()) {
-                include_path.replace_extension(".cmake");
-            }
-
-            if (!std::filesystem::exists(include_path)) {
-                if (optional) {
-                    return; // Silently ignore missing optional files
-                }
-                set_fatal_error("include() could not find file: " + include_path.string());
-                return;
-            }
-
-            // Read the file
-            std::string content;
-            std::ifstream file(include_path);
-            if (file) {
-                std::ostringstream ss;
-                ss << file.rdbuf();
-                content = ss.str();
-            } else {
-                set_fatal_error("include() could not read file: " + include_path.string());
-                return;
-            }
-
-            // Parse the file
+            Interpreter sub_interp(path.string(), interp.out_, interp.err_, &interp);
+            sub_interp.set_current_file(cmake_file.string());
             Parser parser(content);
-            auto ast_or_error = parser.parse();
-            if (!ast_or_error) {
-                const auto& parse_error = ast_or_error.error();
-                set_fatal_error(InterpreterError{include_path.string(), parse_error.row, parse_error.col, parse_error.reason});
-                return;
-            }
-
-            // Execute in current scope - save and restore current file
-            std::string saved_file = current_file_;
-            current_file_ = include_path.string();
-
-            auto result = interpret(ast_or_error.value());
-
-            current_file_ = saved_file;
-
-            if (!result) {
-                set_fatal_error(result.error());
+            auto ast = parser.parse();
+            if (ast) {
+                auto res = sub_interp.interpret(ast.value());
+                if (!res) interp.set_fatal_error(res.error());
+            } else {
+                interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().reason});
             }
         });
 
-        add_builtin("break", [this](const std::vector<Argument>&) {
-            if (loop_depth_ == 0) {
-                set_fatal_error("break() can only be called inside a loop");
+        add_builtin("include", [](Interpreter& interp, const std::vector<Argument>& args) {
+            if (args.empty()) { interp.set_fatal_error("include() requires an argument"); return; }
+            std::string file_arg = interp.evaluate_argument(args[0]);
+            bool optional = false;
+            for (size_t i = 1; i < args.size(); ++i) if (interp.evaluate_argument(args[i]) == "OPTIONAL") optional = true;
+
+            std::filesystem::path path = std::filesystem::path(file_arg).is_absolute() ? 
+                std::filesystem::path(file_arg) : 
+                std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_arg;
+            if (!path.has_extension()) path.replace_extension(".cmake");
+
+            if (!std::filesystem::exists(path)) {
+                if (optional) return;
+                interp.set_fatal_error("include() could not find: " + path.string());
                 return;
             }
-            set_loop_control(LoopControl::BREAK);
+
+            std::ifstream file(path);
+            if (!file) { interp.set_fatal_error("include() could not read: " + path.string()); return; }
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+            Parser parser(content);
+            auto ast = parser.parse();
+            if (!ast) {
+                interp.set_fatal_error(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().reason});
+                return;
+            }
+
+            auto res = interp.interpret(ast.value());
+            if (!res) interp.set_fatal_error(res.error());
         });
 
-        add_builtin("continue", [this](const std::vector<Argument>&) {
-            if (loop_depth_ == 0) {
-                set_fatal_error("continue() can only be called inside a loop");
+        add_builtin("break", [](Interpreter& interp, const std::vector<Argument>&) {
+            if (interp.get_loop_depth() == 0) {
+                interp.set_fatal_error("break() can only be called inside a loop");
                 return;
             }
-            set_loop_control(LoopControl::CONTINUE);
+            interp.set_loop_control(Interpreter::LoopControl::BREAK);
+        });
+
+        add_builtin("continue", [](Interpreter& interp, const std::vector<Argument>&) {
+            if (interp.get_loop_depth() == 0) {
+                interp.set_fatal_error("continue() can only be called inside a loop");
+                return;
+            }
+            interp.set_loop_control(Interpreter::LoopControl::CONTINUE);
         });
     }
 }
 
 std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<AstNode>& ast) {
     for (const auto& node : ast) {
-        if (std::holds_alternative<CommandInvocation>(node)) {
-            auto result = execute_command(std::get<CommandInvocation>(node));
-            if (!result) {
-                return result;
-            }
-        } else if (std::holds_alternative<IfBlock>(node)) {
-            auto result = execute_if_block(std::get<IfBlock>(node));
-            if (!result) {
-                return result;
-            }
-        } else if (std::holds_alternative<FunctionBlock>(node)) {
-            auto result = execute_function_block(std::get<FunctionBlock>(node));
-            if (!result) {
-                return result;
-            }
-        } else if (std::holds_alternative<MacroBlock>(node)) {
-            auto result = execute_macro_block(std::get<MacroBlock>(node));
-            if (!result) {
-                return result;
-            }
-        } else if (std::holds_alternative<ForeachBlock>(node)) {
-            auto result = execute_foreach_block(std::get<ForeachBlock>(node));
-            if (!result) {
-                return result;
-            }
-        }
+        std::expected<void, InterpreterError> res;
+        if (std::holds_alternative<CommandInvocation>(node)) res = execute_command(std::get<CommandInvocation>(node));
+        else if (std::holds_alternative<IfBlock>(node)) res = execute_if_block(std::get<IfBlock>(node));
+        else if (std::holds_alternative<FunctionBlock>(node)) res = execute_function_block(std::get<FunctionBlock>(node));
+        else if (std::holds_alternative<MacroBlock>(node)) res = execute_macro_block(std::get<MacroBlock>(node));
+        else if (std::holds_alternative<ForeachBlock>(node)) res = execute_foreach_block(std::get<ForeachBlock>(node));
 
-        // Check for loop control after each statement
-        // If break() or continue() was called, stop executing further statements
-        auto control = get_loop_control();
-        if (control == LoopControl::BREAK || control == LoopControl::CONTINUE) {
-            return {};  // Exit interpret() early, preserving the control flag
-        }
+        if (!res) return res;
+        if (loop_control_ != LoopControl::NONE) return {};
     }
     return {};
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {
-    if (parent_) {
-        parent_->set_fatal_error(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, message});
-    } else {
-        fatal_error_ = InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, message};
-    }
+    set_fatal_error(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, message});
 }
 
 void Interpreter::set_fatal_error(const InterpreterError& error) {
-    if (parent_) {
-        parent_->set_fatal_error(error);
-    } else {
-        fatal_error_ = error;
-    }
+    Interpreter* root = get_root();
+    if (!root->fatal_error_) root->fatal_error_ = error;
 }
 
 std::optional<InterpreterError> Interpreter::get_fatal_error() const {
-    if (parent_) {
-        return parent_->get_fatal_error();
-    }
-    return fatal_error_;
+    return const_cast<Interpreter*>(this)->get_root()->fatal_error_;
 }
 
 void Interpreter::clear_fatal_error() {
-    if (parent_) {
-        parent_->clear_fatal_error();
-    } else {
-        fatal_error_ = std::nullopt;
-    }
+    get_root()->fatal_error_ = std::nullopt;
 }
 
 std::expected<void, InterpreterError> Interpreter::run_build() {
     print_message("STATUS", "Starting build...", false);
+    auto& targets = get_root()->targets_;
 
-    for (const auto& [name, target] : targets_) {
-        if(target->get_type() != TargetType::EXECUTABLE) {
-             std::string command = target->get_build_command(build_dir_, call_stack_.top().script_dir);
-            print_message("INFO", "Building target: " + name, false);
-            print_message("INFO", "Command: " + command, false);
-            int result = system(command.c_str());
-            if (result != 0) {
-                print_message("ERROR", "Failed to build target: " + name, true);
-            } else {
-                print_message("INFO", "Successfully built target: " + name, false);
-            }
+    auto build_target = [&](const std::string& name, const std::shared_ptr<Target>& target) {
+        std::string cmd = target->get_build_command(build_dir_, get_root()->call_stack_.top().script_dir);
+        print_message("INFO", "Building target: " + name, false);
+        print_message("INFO", "Command: " + cmd, false);
+        if (system(cmd.c_str()) != 0) {
+            print_message("ERROR", "Failed to build target: " + name, true);
+        } else {
+            print_message("INFO", "Successfully built target: " + name, false);
         }
+    };
+
+    for (const auto& [name, target] : targets) {
+        if (target->get_type() != TargetType::EXECUTABLE) build_target(name, target);
     }
-     for (const auto& [name, target] : targets_) {
-        if(target->get_type() == TargetType::EXECUTABLE) {
-             std::string command = target->get_build_command(build_dir_, call_stack_.top().script_dir);
-            print_message("INFO", "Building target: " + name, false);
-            print_message("INFO", "Command: " + command, false);
-            int result = system(command.c_str());
-            if (result != 0) {
-                print_message("ERROR", "Failed to build target: " + name, true);
-            } else {
-                print_message("INFO", "Successfully built target: " + name, false);
-            }
-        }
+    for (const auto& [name, target] : targets) {
+        if (target->get_type() == TargetType::EXECUTABLE) build_target(name, target);
     }
 
     print_message("STATUS", "Build finished.", false);
@@ -765,519 +528,188 @@ std::expected<void, InterpreterError> Interpreter::run_build() {
 }
 
 void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
-    if (parent_) {
-        parent_->add_builtin(name, func);
-    } else {
-        builtins_[name] = func;
-    }
+    get_root()->builtins_[name] = func;
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_command(const CommandInvocation& cmd) {
-    if (parent_) {
-        return parent_->execute_command(cmd);
-    }
-
     current_cmd_row_ = cmd.row;
     current_cmd_col_ = cmd.col;
 
-    // Check for builtins
-    auto it = builtins_.find(cmd.identifier);
-    if (it != builtins_.end()) {
-        it->second(cmd.arguments);
-        if (auto error = get_fatal_error()) {
+    Interpreter* root = get_root();
+    auto bit = root->builtins_.find(cmd.identifier);
+    if (bit != root->builtins_.end()) {
+        bit->second(*this, cmd.arguments);
+        if (auto err = get_fatal_error()) {
+            InterpreterError e = *err;
             clear_fatal_error();
-            return std::unexpected(*error);
+            return std::unexpected(e);
         }
         return {};
     }
 
-    // Check for user-defined functions
-    auto func_it = user_functions_.find(cmd.identifier);
-    if (func_it != user_functions_.end()) {
-        return invoke_user_function(cmd.identifier, cmd.arguments);
-    }
-
-    // Check for user-defined macros
-    auto macro_it = user_macros_.find(cmd.identifier);
-    if (macro_it != user_macros_.end()) {
-        return invoke_user_macro(cmd.identifier, cmd.arguments);
+    Interpreter* curr = this;
+    while (curr) {
+        auto fit = curr->user_functions_.find(cmd.identifier);
+        if (fit != curr->user_functions_.end()) return invoke_user_function(fit->second, cmd.arguments);
+        auto mit = curr->user_macros_.find(cmd.identifier);
+        if (mit != curr->user_macros_.end()) return invoke_user_macro(mit->second, cmd.arguments);
+        curr = curr->parent_;
     }
 
     return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, "Unknown command: " + cmd.identifier});
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
-    if (evaluate_condition(if_block.condition)) {
-        return interpret(if_block.then_branch);
-    } else {
-        return interpret(if_block.else_branch);
-    }
+    return interpret(evaluate_condition(if_block.condition) ? if_block.then_branch : if_block.else_branch);
 }
 
-std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& function_block) {
-    // Register the function definition (store in root interpreter)
-    if (parent_) {
-        // Delegate to parent
-        UserFunction func{function_block.parameters, function_block.body};
-        parent_->user_functions_[function_block.name] = func;
-    } else {
-        UserFunction func{function_block.parameters, function_block.body};
-        user_functions_[function_block.name] = func;
-    }
+std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
+    user_functions_[block.name] = {block.parameters, block.body};
     return {};
 }
 
-std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& macro_block) {
-    // Register the macro definition (store in root interpreter)
-    if (parent_) {
-        // Delegate to parent
-        UserMacro macro{macro_block.parameters, macro_block.body};
-        parent_->user_macros_[macro_block.name] = macro;
-    } else {
-        UserMacro macro{macro_block.parameters, macro_block.body};
-        user_macros_[macro_block.name] = macro;
-    }
+std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
+    user_macros_[block.name] = {block.parameters, block.body};
     return {};
 }
 
-std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const ForeachBlock& foreach_block) {
-    // Increment loop depth
-    if (parent_) {
-        parent_->loop_depth_++;
-    } else {
-        loop_depth_++;
+std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const ForeachBlock& block) {
+    loop_depth_++;
+    CMakeList items;
+    if (std::holds_alternative<ForeachSimple>(block.params)) {
+        items = CMakeList::from_arguments(std::get<ForeachSimple>(block.params).items, this);
+    } else if (std::holds_alternative<ForeachRange>(block.params)) {
+        const auto& r = std::get<ForeachRange>(block.params);
+        long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
+        long stop = std::stol(evaluate_argument(r.stop));
+        long step = r.step ? std::stol(evaluate_argument(*r.step)) : 1;
+        if (step == 0) { loop_depth_--; return std::unexpected(InterpreterError{current_file_, block.row, block.col, "Step cannot be zero"}); }
+        for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
+    } else if (std::holds_alternative<ForeachIn>(block.params)) {
+        const auto& in = std::get<ForeachIn>(block.params);
+        for (const auto& l : in.lists) items.append(CMakeList(get_variable(evaluate_argument(l))));
+        items.append(CMakeList::from_arguments(in.items, this));
     }
 
-    // Build list of items to iterate over based on the foreach mode
-    CMakeList items_to_iterate;
-
-    if (std::holds_alternative<ForeachSimple>(foreach_block.params)) {
-        // Simple mode: iterate over literal items
-        const auto& simple = std::get<ForeachSimple>(foreach_block.params);
-        items_to_iterate = CMakeList::from_arguments(simple.items, this);
-
-    } else if (std::holds_alternative<ForeachRange>(foreach_block.params)) {
-        // RANGE mode: iterate over numeric range
-        const auto& range = std::get<ForeachRange>(foreach_block.params);
-
-        // Evaluate range bounds
-        long start = 0;
-        if (range.start.has_value()) {
-            std::string start_str = evaluate_argument(range.start.value());
-            try {
-                start = std::stol(start_str);
-            } catch (...) {
-                // Decrement loop depth before returning error
-                if (parent_) {
-                    parent_->loop_depth_--;
-                } else {
-                    loop_depth_--;
-                }
-                return std::unexpected(InterpreterError{
-                    current_file_, foreach_block.row, foreach_block.col,
-                    "foreach(RANGE) start value must be an integer: " + start_str
-                });
-            }
-        }
-
-        std::string stop_str = evaluate_argument(range.stop);
-        long stop;
-        try {
-            stop = std::stol(stop_str);
-        } catch (...) {
-            // Decrement loop depth before returning error
-            if (parent_) {
-                parent_->loop_depth_--;
-            } else {
-                loop_depth_--;
-            }
-            return std::unexpected(InterpreterError{
-                current_file_, foreach_block.row, foreach_block.col,
-                "foreach(RANGE) stop value must be an integer: " + stop_str
-            });
-        }
-
-        long step = 1;
-        if (range.step.has_value()) {
-            std::string step_str = evaluate_argument(range.step.value());
-            try {
-                step = std::stol(step_str);
-            } catch (...) {
-                // Decrement loop depth before returning error
-                if (parent_) {
-                    parent_->loop_depth_--;
-                } else {
-                    loop_depth_--;
-                }
-                return std::unexpected(InterpreterError{
-                    current_file_, foreach_block.row, foreach_block.col,
-                    "foreach(RANGE) step value must be an integer: " + step_str
-                });
-            }
-        }
-
-        // Validate step
-        if (step == 0) {
-            // Decrement loop depth before returning error
-            if (parent_) {
-                parent_->loop_depth_--;
-            } else {
-                loop_depth_--;
-            }
-            return std::unexpected(InterpreterError{
-                current_file_, foreach_block.row, foreach_block.col,
-                "foreach(RANGE) step cannot be zero"
-            });
-        }
-
-        // Generate range values (inclusive on both ends, like CMake)
-        if ((step > 0 && start <= stop) || (step < 0 && start >= stop)) {
-            for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) {
-                items_to_iterate.append(std::to_string(i));
-            }
-        }
-        // else: empty range (start > stop with positive step, or start < stop with negative step)
-
-    } else if (std::holds_alternative<ForeachIn>(foreach_block.params)) {
-        // IN mode: iterate over lists and/or items
-        const auto& in_params = std::get<ForeachIn>(foreach_block.params);
-
-        // Expand LISTS (variable names whose values are lists)
-        for (const auto& list_arg : in_params.lists) {
-            std::string list_var_name = evaluate_argument(list_arg);
-            std::string list_value = get_variable(list_var_name);
-            CMakeList list(list_value);
-            items_to_iterate.append(list);
-        }
-
-        // Add ITEMS (literal values)
-        CMakeList literal_items = CMakeList::from_arguments(in_params.items, this);
-        items_to_iterate.append(literal_items);
+    for (const auto& item : items) {
+        set_variable(block.loop_var, item);
+        auto res = interpret(block.body);
+        if (!res) { loop_depth_--; return res; }
+        if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+        if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
     }
-
-    // Execute the loop body for each item
-    for (const auto& item : items_to_iterate) {
-        set_variable(foreach_block.loop_var, item);
-        auto result = interpret(foreach_block.body);
-        if (!result) {
-            // Decrement loop depth before returning error
-            if (parent_) {
-                parent_->loop_depth_--;
-            } else {
-                loop_depth_--;
-            }
-            return result;
-        }
-
-        // Check for loop control signals
-        auto control = get_loop_control();
-        if (control == LoopControl::BREAK) {
-            clear_loop_control();
-            break;  // Exit the loop
-        } else if (control == LoopControl::CONTINUE) {
-            clear_loop_control();
-            continue;  // Skip to next iteration
-        }
-    }
-
-    // Decrement loop depth
-    if (parent_) {
-        parent_->loop_depth_--;
-    } else {
-        loop_depth_--;
-    }
-
+    loop_depth_--;
     return {};
 }
 
-std::expected<void, InterpreterError> Interpreter::invoke_user_function(const std::string& name, const std::vector<Argument>& args) {
-    // Functions create a NEW scope (new call frame)
-    // Variables set inside the function do NOT affect the parent scope
+std::expected<void, InterpreterError> Interpreter::invoke_user_function(const UserFunction& func, const std::vector<Argument>& args) {
+    CallFrame frame{call_stack_.top().script_dir, {}};
+    CMakeList all = CMakeList::from_arguments(args, this);
+    frame.variables["ARGC"] = std::to_string(all.size());
+    frame.variables["ARGV"] = all.to_string();
+    frame.variables["ARGN"] = all.sublist(func.parameters.size(), all.size()).to_string();
+    for (size_t i = 0; i < all.size(); ++i) frame.variables["ARGV" + std::to_string(i)] = all[i];
+    for (size_t i = 0; i < func.parameters.size() && i < all.size(); ++i) frame.variables[func.parameters[i]] = all[i];
 
-    const UserFunction* func = nullptr;
-    if (parent_) {
-        // Look up in parent
-        auto it = parent_->user_functions_.find(name);
-        if (it != parent_->user_functions_.end()) {
-            func = &it->second;
-        }
-    } else {
-        auto it = user_functions_.find(name);
-        if (it != user_functions_.end()) {
-            func = &it->second;
-        }
-    }
+    int saved_depth = loop_depth_;
+    LoopControl saved_control = loop_control_;
+    loop_depth_ = 0;
+    loop_control_ = LoopControl::NONE;
 
-    if (!func) {
-        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_,
-            "Unknown function: " + name});
-    }
-
-    // Create a new call frame for the function
-    CallFrame new_frame{call_stack_.top().script_dir, {}};
-
-    // Build list of all evaluated arguments
-    CMakeList all_args = CMakeList::from_arguments(args, this);
-
-    // Set ARGC
-    new_frame.variables["ARGC"] = std::to_string(all_args.size());
-
-    // Set ARGV (all arguments as semicolon-separated list)
-    new_frame.variables["ARGV"] = all_args.to_string();
-
-    // Set ARGN (arguments beyond the declared parameters)
-    CMakeList extra_args = all_args.sublist(func->parameters.size(), all_args.size());
-    new_frame.variables["ARGN"] = extra_args.to_string();
-
-    // Set individual ARGV0, ARGV1, etc.
-    for (size_t i = 0; i < all_args.size(); ++i) {
-        new_frame.variables["ARGV" + std::to_string(i)] = all_args[i];
-    }
-
-    // Set named parameters
-    for (size_t i = 0; i < func->parameters.size() && i < all_args.size(); ++i) {
-        new_frame.variables[func->parameters[i]] = all_args[i];
-    }
-
-    // Push the new frame and execute the function body
-    call_stack_.push(new_frame);
-    auto result = interpret(func->body);
+    call_stack_.push(frame);
+    auto res = interpret(func.body);
     call_stack_.pop();
 
-    return result;
+    loop_depth_ = saved_depth;
+    loop_control_ = saved_control;
+    return res;
 }
 
-std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const std::string& name, const std::vector<Argument>& args) {
-    // Macros do NOT create a new scope
-    // Variables set inside the macro affect the current scope
+std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args) {
+    std::map<std::string, std::string> saved;
+    CMakeList all = CMakeList::from_arguments(args, this);
+    auto save = [&](const std::string& k) { if (call_stack_.top().variables.count(k)) saved[k] = call_stack_.top().variables[k]; };
+    save("ARGC"); save("ARGV"); save("ARGN");
+    for (size_t i = 0; i < all.size(); ++i) save("ARGV" + std::to_string(i));
+    for (const auto& p : macro.parameters) save(p);
 
-    const UserMacro* macro = nullptr;
-    if (parent_) {
-        // Look up in parent
-        auto it = parent_->user_macros_.find(name);
-        if (it != parent_->user_macros_.end()) {
-            macro = &it->second;
-        }
-    } else {
-        auto it = user_macros_.find(name);
-        if (it != user_macros_.end()) {
-            macro = &it->second;
-        }
-    }
+    set_variable("ARGC", std::to_string(all.size()));
+    set_variable("ARGV", all.to_string());
+    set_variable("ARGN", all.sublist(macro.parameters.size(), all.size()).to_string());
+    for (size_t i = 0; i < all.size(); ++i) set_variable("ARGV" + std::to_string(i), all[i]);
+    for (size_t i = 0; i < macro.parameters.size() && i < all.size(); ++i) set_variable(macro.parameters[i], all[i]);
 
-    if (!macro) {
-        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_,
-            "Unknown macro: " + name});
-    }
+    auto res = interpret(macro.body);
 
-    // Save current variables that we'll override
-    std::map<std::string, std::string> saved_vars;
-    auto save_if_exists = [&](const std::string& var_name) {
-        if (!call_stack_.empty()) {
-            auto it = call_stack_.top().variables.find(var_name);
-            if (it != call_stack_.top().variables.end()) {
-                saved_vars[var_name] = it->second;
-            }
-        }
-    };
-
-    // Build list of all evaluated arguments
-    CMakeList all_args = CMakeList::from_arguments(args, this);
-
-    save_if_exists("ARGC");
-    save_if_exists("ARGV");
-    save_if_exists("ARGN");
-    for (size_t i = 0; i < all_args.size(); ++i) {
-        save_if_exists("ARGV" + std::to_string(i));
-    }
-    for (const auto& param : macro->parameters) {
-        save_if_exists(param);
-    }
-
-    // Set ARGC
-    set_variable("ARGC", std::to_string(all_args.size()));
-
-    // Set ARGV (all arguments as semicolon-separated list)
-    set_variable("ARGV", all_args.to_string());
-
-    // Set ARGN (arguments beyond the declared parameters)
-    CMakeList extra_args = all_args.sublist(macro->parameters.size(), all_args.size());
-    set_variable("ARGN", extra_args.to_string());
-
-    // Set individual ARGV0, ARGV1, etc.
-    for (size_t i = 0; i < all_args.size(); ++i) {
-        set_variable("ARGV" + std::to_string(i), all_args[i]);
-    }
-
-    // Set named parameters
-    for (size_t i = 0; i < macro->parameters.size() && i < all_args.size(); ++i) {
-        set_variable(macro->parameters[i], all_args[i]);
-    }
-
-    // Execute the macro body in the current scope
-    auto result = interpret(macro->body);
-
-    // Restore saved variables (but NOT other variables that may have been set in the macro)
-    for (const auto& [var_name, var_value] : saved_vars) {
-        set_variable(var_name, var_value);
-    }
-
-    // Remove ARGC, ARGV, etc. if they weren't saved
-    auto remove_if_not_saved = [&](const std::string& var_name) {
-        if (saved_vars.find(var_name) == saved_vars.end() && !call_stack_.empty()) {
-            call_stack_.top().variables.erase(var_name);
-        }
-    };
-
-    remove_if_not_saved("ARGC");
-    remove_if_not_saved("ARGV");
-    remove_if_not_saved("ARGN");
-    for (size_t i = 0; i < args.size(); ++i) {
-        remove_if_not_saved("ARGV" + std::to_string(i));
-    }
-    for (const auto& param : macro->parameters) {
-        remove_if_not_saved(param);
-    }
-
-    return result;
+    for (const auto& [k, v] : saved) set_variable(k, v);
+    auto& vars = call_stack_.top().variables;
+    if (!saved.count("ARGC")) vars.erase("ARGC");
+    if (!saved.count("ARGV")) vars.erase("ARGV");
+    if (!saved.count("ARGN")) vars.erase("ARGN");
+    for (size_t i = 0; i < all.size(); ++i) if (!saved.count("ARGV" + std::to_string(i))) vars.erase("ARGV" + std::to_string(i));
+    for (const auto& p : macro.parameters) if (!saved.count(p)) vars.erase(p);
+    return res;
 }
 
 bool Interpreter::evaluate_condition(const std::vector<Argument>& condition) {
-    if (condition.empty()) {
-        return false;
-    }
-
+    if (condition.empty()) return false;
+    
     const auto& arg = condition[0];
-    std::string value;
+    std::string val;
 
     if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
-        // This is a simple unquoted argument, like `MY_VAR` in `if(MY_VAR)`.
-        // It could be a variable name, or a literal.
-        const std::string& potential_var = std::get<std::string>(arg.parts[0]);
-
-        bool is_var = false;
-        if (!call_stack_.empty()) {
-            const auto& current_frame_vars = call_stack_.top().variables;
-            if(current_frame_vars.count(potential_var)) is_var = true;
-        }
-
-        if (is_var) {
-            value = get_variable(potential_var);
+        std::string name = std::get<std::string>(arg.parts[0]);
+        // If it's a variable name, use its value. Otherwise use the string itself.
+        std::string var_val = get_variable(name);
+        if (!var_val.empty() || name == "0" || name == "FALSE" || name == "OFF") {
+            val = var_val;
         } else {
-            value = potential_var;
+            val = name;
         }
-
     } else {
-        // Quoted argument or contains ${...}, so we just evaluate it.
-        value = evaluate_argument(arg);
+        val = evaluate_argument(arg);
     }
 
-    std::transform(value.begin(), value.end(), value.begin(), ::toupper);
-
-    if (value == "FALSE" || value == "OFF" || value == "0" || value.empty()) {
-        return false;
-    }
-
-    return true;
+    std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+    return !(val == "FALSE" || val == "OFF" || val == "0" || val.empty() || val == "NOTFOUND" || val == "IGNORE");
 }
 
 std::string Interpreter::evaluate_argument(const Argument& arg) {
-    std::string result;
-    for (const auto& part : arg.parts) {
-        if (std::holds_alternative<std::string>(part)) {
-            result += std::get<std::string>(part);
-        } else if (std::holds_alternative<VariableReference>(part)) {
-            const auto& var_ref = std::get<VariableReference>(part);
-            result += get_variable(var_ref.name);
+    std::string res;
+    for (const auto& p : arg.parts) {
+        if (std::holds_alternative<std::string>(p)) res += std::get<std::string>(p);
+        else res += get_variable(std::get<VariableReference>(p).name);
+    }
+    return res;
+}
+
+std::string Interpreter::get_variable(const std::string& name) const {
+    if (!call_stack_.empty()) {
+        std::stack<CallFrame> temp = call_stack_;
+        while (!temp.empty()) {
+            auto it = temp.top().variables.find(name);
+            if (it != temp.top().variables.end()) return it->second;
+            temp.pop();
         }
     }
-    return result;
+    return parent_ ? parent_->get_variable(name) : "";
 }
 
-std::string Interpreter::get_variable(const std::string& var_name) const {
-    // Search through all frames in the call stack (from top to bottom)
-    if (!call_stack_.empty()) {
-        std::stack<CallFrame> temp_stack = call_stack_;
-        while (!temp_stack.empty()) {
-            const auto& frame_vars = temp_stack.top().variables;
-            auto it = frame_vars.find(var_name);
-            if (it != frame_vars.end()) {
-                return it->second;
-            }
-            temp_stack.pop();
-        }
-    }
-    if (parent_) {
-        return parent_->get_variable(var_name);
-    }
-    return "";
+void Interpreter::set_variable(const std::string& name, const std::string& val) {
+    if (!call_stack_.empty()) call_stack_.top().variables[name] = val;
 }
 
-void Interpreter::set_variable(const std::string& var_name, const std::string& value) {
-    if (!call_stack_.empty()) {
-        call_stack_.top().variables[var_name] = value;
-    }
+void Interpreter::print_message(const std::string& mode, const std::string& msg, bool is_err) {
+    std::ostream& os = is_err ? *err_ : *out_;
+    bool color = isatty(is_err ? STDERR_FILENO : STDOUT_FILENO);
+    std::string p, c = colors::RESET;
+    if (mode == "STATUS") { p = "[STATUS]"; c = colors::CYAN; }
+    else if (mode == "INFO") { p = "[INFO]"; }
+    else if (mode == "WARN") { p = "[WARN]"; c = colors::YELLOW; }
+    else if (mode == "ERROR") { p = "[ERROR]"; c = colors::RED; }
+    else if (mode == "FATAL") { p = "[FATAL]"; c = colors::MAGENTA; }
+    if (color) os << c << p << " " << msg << colors::RESET << std::endl;
+    else os << p << " " << msg << std::endl;
 }
 
-void Interpreter::print_message(const std::string& mode, const std::string& message, bool is_error) {
-    std::ostream& os = is_error ? *err_ : *out_;
-    bool use_color = isatty(is_error ? STDERR_FILENO : STDOUT_FILENO);
-
-    std::string prefix;
-    std::string color = colors::RESET;
-
-    if (mode == "STATUS") {
-        prefix = "[STATUS]";
-        color = colors::CYAN;
-    } else if (mode == "INFO") {
-        prefix = "[INFO]";
-        color = colors::RESET;
-    } else if (mode == "WARN") {
-        prefix = "[WARN]";
-        color = colors::YELLOW;
-    } else if (mode == "ERROR") {
-        prefix = "[ERROR]";
-        color = colors::RED;
-    } else if (mode == "FATAL") {
-        prefix = "[FATAL]";
-        color = colors::MAGENTA;
-    }
-
-    if (use_color) {
-        os << color << prefix << " " << message << colors::RESET << std::endl;
-    } else {
-        os << prefix << " " << message << std::endl;
-    }
 }
-
-void Interpreter::set_loop_control(LoopControl control) {
-    if (parent_) {
-        parent_->set_loop_control(control);
-    } else {
-        loop_control_ = control;
-    }
-}
-
-Interpreter::LoopControl Interpreter::get_loop_control() const {
-    if (parent_) {
-        return parent_->get_loop_control();
-    }
-    return loop_control_;
-}
-
-void Interpreter::clear_loop_control() {
-    if (parent_) {
-        parent_->clear_loop_control();
-    } else {
-        loop_control_ = LoopControl::NONE;
-    }
-}
-
-int Interpreter::get_loop_depth() const {
-    if (parent_) {
-        return parent_->get_loop_depth();
-    }
-    return loop_depth_;
-}
-
-} // namespace dmake

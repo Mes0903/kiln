@@ -7,10 +7,10 @@ std::string run_script(std::string src) {
     std::stringstream output;
     dmake::Interpreter interpreter("", &output);
 
-    interpreter.add_builtin("message", [&](const std::vector<dmake::Argument>& args) {
+    interpreter.add_builtin("message", [&](dmake::Interpreter& interp, const std::vector<dmake::Argument>& args) {
         // A simple implementation for testing purposes
         for (const auto& arg : args) {
-            output << interpreter.evaluate_argument(arg);
+            output << interp.evaluate_argument(arg);
         }
         output << std::endl;
     });
@@ -23,7 +23,10 @@ std::string run_script(std::string src) {
         throw std::runtime_error("Failed to parse script");
     }
 
-    interpreter.interpret(ast_or_error.value());
+    auto result = interpreter.interpret(ast_or_error.value());
+    if (!result) {
+        throw std::runtime_error(result.error().message);
+    }
 
     return output.str();
 }
@@ -570,26 +573,39 @@ TEST_CASE("foreach break in nested loops only affects inner loop", "[interpreter
 }
 
 TEST_CASE("break outside loop is fatal error", "[interpreter][foreach][break]") {
-    // This should produce an error, but run_script doesn't capture errors well
-    // We'll just verify it doesn't crash
-    try {
-        auto output = run_script(R"(
-            break()
-        )");
-        // If we get here, the test framework didn't catch the error
-        // That's actually okay for this test - just checking it doesn't crash
-    } catch (...) {
-        // Expected to potentially throw
-    }
+    CHECK_THROWS(run_script(R"(
+        break()
+    )"));
 }
 
 TEST_CASE("continue outside loop is fatal error", "[interpreter][foreach][continue]") {
-    // Similar to break test
-    try {
-        auto output = run_script(R"(
+    CHECK_THROWS(run_script(R"(
+        continue()
+    )"));
+}
+
+TEST_CASE("continue in function loop", "[interpreter][foreach][continue]") {
+    CHECK_THROWS(run_script(R"(
+        function(foo)
             continue()
-        )");
-    } catch (...) {
-        // Expected to potentially throw
-    }
+        endfunction()
+        foreach(i RANGE 2)
+            foo()
+        endforeach()
+    )"));
+}
+
+TEST_CASE("break in macro affects caller loop", "[interpreter][foreach][macro]") {
+    auto output = run_script(R"(
+        macro(my_break)
+            break()
+        endmacro()
+
+        foreach(i RANGE 1 5)
+            message("${i}")
+            my_break()
+        endforeach()
+        message("done")
+    )");
+    REQUIRE(output == "1\ndone\n");
 }
