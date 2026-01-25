@@ -41,6 +41,35 @@ TEST_CASE("Interpreter variable substitution", "[interpreter]") {
         )
     )");
     REQUIRE(output == "Goodbye World\n");
+
+    output = run_script(R"(
+        set(
+        MY_VAR "Goodbye"
+        )
+        message(
+        "${MY_VAR} World")
+    )");
+    REQUIRE(output == "Goodbye World\n");
+
+    output = run_script(R"(
+        set(
+        MY_VAR "Goodbye"
+        )
+        set(MY_VAR2 "${MY_VAR}")
+        message(
+        "${MY_VAR2} World")
+    )");
+    REQUIRE(output == "Goodbye World\n");
+
+    output = run_script(R"(
+        set(
+        MY_VAR "Goodbye"
+        )
+        set(MY_VAR2 "${MY_VAR}")
+        message(
+        "${MY_VAR2} World")
+    )");
+    REQUIRE(output == "Goodbye World\n");
 }
 
 TEST_CASE("Interpreter if/else/endif", "[interpreter]") {
@@ -65,9 +94,18 @@ TEST_CASE("Interpreter if/else/endif", "[interpreter]") {
     REQUIRE(output == "Inside else\n");
 }
 
-TEST_CASE("Interpreter add_subdirectory", "[interpreter]") {
+TEST_CASE("Comment", "[interpreter]") {
     auto output = run_script(R"(
-        add_subdirectory(tests/subdir)
+        # This is a comment
+        message("Hello")
     )");
-    REQUIRE(output == "Hello from subdir\n");
+    REQUIRE(output == "Hello\n");
+
+    output = run_script(R"(
+        #[[
+            This is a multi-line comment
+        ]]
+        message("World")
+    )");
+    REQUIRE(output == "World\n");
 }
