@@ -1,13 +1,19 @@
 # dmake
 
-Better C/C++ builds that just work with CMake as an input language.
+Better C/C++ builds that just works with CMake as an input language.
 
 > ![NOTE]
-> Experimental project, G++ only
+> Experimental project, GCC/G++ only for now
 
 ## Building and using
 
-The project can be built with CMake.
+The project has very little dependency:
+
+* CLI11 (https://github.com/CLIUtils/CLI11)
+* Catch2 3.x (https://github.com/catchorg/Catch2)
+* C++23 capable compiler
+
+The project can be built with CMake like almost any other C++ project.
 
 ```bash
 mkdir build
@@ -18,7 +24,7 @@ make -j$(nproc)
 
 ### Self hosting
 
-The project can be self-hosted by building it with itself once you build it (or has a binary from elsewhere).
+Of course, being a build system that consumes CMake. You can also self-host by building it with itself once you build it (or has a binary from elsewhere).
 
 ```bash
 build/dmake . --config Release

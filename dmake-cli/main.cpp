@@ -7,7 +7,7 @@
 #include <CLI/CLI.hpp> // Include CLI11 header
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"dmake - A CMake-like but a build system"};
+    CLI::App app{"dmake - Better C/C++ builds that just works with CMake as an input language."};
 
     std::string directory_path_str;
     app.add_option("directory", directory_path_str, "Path to the project directory containing CMakeLists.txt")

@@ -198,6 +198,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         std::lock_guard<std::mutex> lock(output_mutex_);
                         std::cout << result.output << std::endl;
                     }
+
+                    // Recalculate signature to capture discovered dependencies (like .d files)
+                    auto new_sig_res = calculate_signature(task);
+                    if (new_sig_res) {
+                        sig = *new_sig_res;
+                    }
                 }
 
                 {

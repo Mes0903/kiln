@@ -175,7 +175,7 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
     }
 
     // 3. Execute the build graph
-    print_message("STATUS", "Starting build...");
+    print_message("STATUS", "Starting " + build_type + " build...");
     auto result = graph.execute(root_binary_dir, jobs);
 
 
