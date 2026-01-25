@@ -1,5 +1,5 @@
 #include "build_system.hpp"
-#include "artifact.hpp"
+#include "target.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -59,7 +59,7 @@ std::optional<std::string> BuildGraph::check_for_cycles() {
 }
 
 std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir, int jobs) {
-    // 1. Resolve cross-artifact dependencies
+    // 1. Resolve cross-target dependencies
     std::map<std::string, std::string> file_to_task;
     for (const auto& [id, task] : tasks_) {
         for (const auto& out : task.outputs) file_to_task[out] = id;
@@ -161,11 +161,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 if (outputs_exist && cache.count(id) && cache[id] == sig) {
                     // Skip
                 } else {
-                    std::string artifact_name = task.parent_artifact ? task.parent_artifact->get_name() : "unknown";
+                    std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
                     std::string verb = "Compiling";
                     std::string target_display = std::filesystem::path(id).filename().string();
 
-                    if (id == (task.parent_artifact ? task.parent_artifact->get_output_path() : "")) {
+                    if (task.parent_target && id == task.parent_target->get_output_path()) {
                         verb = "  Linking";
                     }
                     {

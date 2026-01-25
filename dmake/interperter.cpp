@@ -1,4 +1,5 @@
 #include "interperter.hpp"
+#include "target.hpp"
 #include "builtins/registry.hpp"
 #include "dmake/CMakeList.hpp"
 #include "dmake/cmake-language.hpp"
@@ -105,29 +106,29 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
     print_message("STATUS", "Generating build graph...");
     BuildGraph graph;
 
-    // 1. Resolve cross-artifact library dependencies and propagate properties
-    for (const auto& [name, artifact] : artifacts_) {
+    // 1. Resolve cross-target library dependencies and propagate properties
+    for (const auto& [name, target] : targets_) {
         // Helper to recursively collect interface properties
         std::set<std::string> visited;
-        std::function<void(const std::shared_ptr<Artifact>&)> propagate = [&](const std::shared_ptr<Artifact>& dep) {
+        std::function<void(const std::shared_ptr<Target>&)> propagate = [&](const std::shared_ptr<Target>& dep) {
             if (visited.count(dep->get_name())) return;
             visited.insert(dep->get_name());
 
-            // Propagate includes, defs, and opts from dep to artifact
-            artifact->add_include_directories(dep->get_include_directories(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
-            artifact->add_include_directories(dep->get_include_directories(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
+            // Propagate includes, defs, and opts from dep to target
+            target->add_include_directories(dep->get_include_directories(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
+            target->add_include_directories(dep->get_include_directories(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
 
-            artifact->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
-            artifact->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
+            target->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
+            target->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
 
-            artifact->add_compile_options(dep->get_compile_options(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
-            artifact->add_compile_options(dep->get_compile_options(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
+            target->add_compile_options(dep->get_compile_options(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
+            target->add_compile_options(dep->get_compile_options(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
 
             // Recurse into dep's dependencies
             auto collect_deps = [&](PropertyVisibility vis) {
                 for (const auto& lib_name : dep->get_linked_libraries(vis)) {
-                    if (artifacts_.count(lib_name)) {
-                        propagate(artifacts_[lib_name]);
+                    if (targets_.count(lib_name)) {
+                        propagate(targets_[lib_name]);
                     }
                 }
             };
@@ -136,9 +137,9 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
         };
 
         auto add_lib_deps = [&](PropertyVisibility vis) {
-            for (const auto& lib_name : artifact->get_linked_libraries(vis)) {
-                if (artifacts_.count(lib_name)) {
-                    auto dep = artifacts_[lib_name];
+            for (const auto& lib_name : target->get_linked_libraries(vis)) {
+                if (targets_.count(lib_name)) {
+                    auto dep = targets_[lib_name];
                     propagate(dep);
                 }
             }
@@ -148,21 +149,21 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
         add_lib_deps(PropertyVisibility::PUBLIC);
     }
 
-    // 2. Generate tasks for all artifacts
-    for (const auto& [name, artifact] : artifacts_) {
-        artifact->generate_tasks(graph);
+    // 2. Generate tasks for all target
+    for (const auto& [name, target] : targets_) {
+        target->generate_tasks(graph);
     }
 
     // Link dependency resolution (adding inputs to link tasks)
-    for (const auto& [name, artifact] : artifacts_) {
-        std::string out_path = artifact->get_output_path();
+    for (const auto& [name, target] : targets_) {
+        std::string out_path = target->get_output_path();
         if (graph.has_task(out_path)) {
             auto& link_task = graph.get_task(out_path);
 
             auto add_lib_inputs = [&](PropertyVisibility vis) {
-                for (const auto& lib_name : artifact->get_linked_libraries(vis)) {
-                    if (artifacts_.count(lib_name)) {
-                        auto dep = artifacts_[lib_name];
+                for (const auto& lib_name : target->get_linked_libraries(vis)) {
+                    if (targets_.count(lib_name)) {
+                        auto dep = targets_[lib_name];
                         std::string lib_out = dep->get_output_path();
                         link_task.inputs.push_back(lib_out);
                     }
@@ -788,7 +789,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         } else if (token == "TARGET" && pos + 1 < condition.size()) {
             pos++;
             std::string target_name = get_token_string(condition[pos++]);
-            return artifacts_.contains(target_name);
+            return targets_.contains(target_name);
         }
         // Add other unary operators here (EXISTS, COMMAND, etc.) as needed
 

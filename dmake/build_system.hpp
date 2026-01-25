@@ -11,14 +11,14 @@
 
 namespace dmake {
 
-class Artifact;
+class Target;
 
 struct BuildTask {
     std::string id;              // Unique identifier (usually the primary output file)
     std::string command;
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
-    Artifact* parent_artifact = nullptr;
+    Target* parent_target = nullptr;
 
     // For graph execution
     std::set<std::string> dependencies; // Task IDs we depend on
@@ -35,7 +35,7 @@ public:
     // Executes the graph.
     std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
 
-    // Helpers for artifact task generation
+    // Helpers for target task generation
     bool has_task(const std::string& id) const { return tasks_.count(id); }
     BuildTask& get_task(const std::string& id) { return tasks_.at(id); }
 

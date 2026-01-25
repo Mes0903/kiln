@@ -7,19 +7,19 @@
 
 namespace dmake {
 
-enum class ArtifactType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY };
+enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY };
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
 
 class BuildGraph;
 
-class Artifact {
+class Target {
 public:
-    Artifact(std::string name, ArtifactType type, std::string source_dir, std::string binary_dir) 
+    Target(std::string name, TargetType type, std::string source_dir, std::string binary_dir) 
         : name_(std::move(name)), type_(type), source_dir_(std::move(source_dir)), binary_dir_(std::move(binary_dir)) {}
-    virtual ~Artifact() = default;
+    virtual ~Target() = default;
 
     const std::string& get_name() const { return name_; }
-    ArtifactType get_type() const { return type_; }
+    TargetType get_type() const { return type_; }
     const std::string& get_source_dir() const { return source_dir_; }
     const std::string& get_binary_dir() const { return binary_dir_; }
 
@@ -50,10 +50,10 @@ public:
     void set_cxx_standard(std::string standard);
     const std::string& get_cxx_standard() const;
 
-    virtual std::string get_output_path() const = 0;
+    std::string get_output_path() const;
 
     // The core task generation logic
-    virtual void generate_tasks(BuildGraph& graph) = 0;
+    void generate_tasks(BuildGraph& graph);
 
 protected:
     // Helper methods for task generation
@@ -65,7 +65,7 @@ protected:
 
     std::string name_;
     std::string output_name_;
-    ArtifactType type_;
+    TargetType type_;
     std::string source_dir_;
     std::string binary_dir_;
     std::string cxx_standard_;
@@ -76,22 +76,6 @@ protected:
     std::map<PropertyVisibility, std::vector<std::string>> compile_definitions_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_options_;
     std::map<PropertyVisibility, std::vector<std::string>> precompiled_headers_;
-};
-
-class ExecutableArtifact : public Artifact {
-public:
-    explicit ExecutableArtifact(std::string name, std::string source_dir, std::string binary_dir) 
-        : Artifact(std::move(name), ArtifactType::EXECUTABLE, std::move(source_dir), std::move(binary_dir)) {}
-    std::string get_output_path() const override;
-    void generate_tasks(BuildGraph& graph) override;
-};
-
-class LibraryArtifact : public Artifact {
-public:
-    LibraryArtifact(std::string name, ArtifactType type, std::string source_dir, std::string binary_dir) 
-        : Artifact(std::move(name), type, std::move(source_dir), std::move(binary_dir)) {}
-    std::string get_output_path() const override;
-    void generate_tasks(BuildGraph& graph) override;
 };
 
 } // namespace dmake

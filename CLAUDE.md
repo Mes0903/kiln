@@ -66,8 +66,12 @@ Examples:
 
 ## Architecture
 
-### Three-Layer Design
-...
+### Target System
+- **Unified Target Class**: All C++ build units (executables, shared/static/object/interface libraries) are represented by a single `Target` class.
+- **Target Types**: `EXECUTABLE`, `SHARED_LIBRARY`, `STATIC_LIBRARY`, `OBJECT_LIBRARY`, `INTERFACE_LIBRARY`.
+- **Property Model**: Supports `PUBLIC`, `PRIVATE`, and `INTERFACE` visibility for properties (includes, definitions, options, libraries).
+- **Task Generation**: `Target::generate_tasks()` produces the granular `BuildTask`s for the build graph based on the target type.
+- **Custom Targets**: (Future) `CustomArtifact` for `add_custom_command`/`target`.
 
 ## CMake Language Support
 

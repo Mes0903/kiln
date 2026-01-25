@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(dmake SHARED
     dmake/cmake-language.cpp
     dmake/interperter.cpp
-    dmake/artifact.cpp
+    dmake/target.cpp
     dmake/build_system.cpp
     dmake/builtins/message.cpp
     dmake/builtins/variable.cpp

@@ -1,5 +1,7 @@
+#pragma once
+
 #include "cmake-language.hpp"
-#include "artifact.hpp"
+#include "target.hpp"
 #include "build_system.hpp"
 #include <map>
 #include <functional>
@@ -82,8 +84,8 @@ public:
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
 
-    // Access to artifacts (for testing and build system)
-    std::map<std::string, std::shared_ptr<Artifact>>& get_artifacts() { return get_root()->artifacts_; }
+    // Access to targets (for testing and build system)
+    std::map<std::string, std::shared_ptr<Target>>& get_targets() { return get_root()->targets_; }
 
     // Friend registration functions
     friend void register_message_builtins(Interpreter& interp);
@@ -116,7 +118,7 @@ private:
 
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
-    std::map<std::string, std::shared_ptr<Artifact>> artifacts_;
+    std::map<std::string, std::shared_ptr<Target>> targets_;
 
     // Directory-scoped accumulated directories (inherited by targets)
     std::vector<std::string> accumulated_include_directories_;
