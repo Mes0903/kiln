@@ -26,11 +26,14 @@ struct CallLocation {
     std::string command;
 };
 
-struct VariableReference {
-    std::string name;
-};
+struct VariableReference;
 
 using ArgumentPart = std::variant<std::string, VariableReference>;
+
+struct VariableReference {
+    std::string namespace_prefix;  // "", "ENV", "CACHE" (ENV and CACHE for future use)
+    std::vector<ArgumentPart> name_parts;  // Recursively contains strings and VariableReferences
+};
 
 struct Argument {
     std::vector<ArgumentPart> parts;
@@ -126,6 +129,7 @@ private:
     std::expected<std::vector<ArgumentPart>, ParseError> parse_unquoted_argument_value();
     std::expected<std::vector<ArgumentPart>, ParseError> parse_quoted_argument_value();
     std::expected<std::string, ParseError> parse_bracket_argument();
+    std::expected<VariableReference, ParseError> parse_variable_reference(bool inside_quotes);
 };
 
 } // namespace dmake

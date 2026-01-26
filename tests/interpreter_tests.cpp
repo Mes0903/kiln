@@ -1076,3 +1076,28 @@ TEST_CASE("Multi-line if condition", "[interpreter][if]") {
     )");
     REQUIRE(output == "Success\n");
 }
+
+TEST_CASE("multiple dereference", "[interpreter][dereference]") {
+    auto output = run_script(R"(
+        set(VAR1 "A")
+        set(VAR2 "VAR1")
+        message("${${VAR2}}")
+    )");
+    CHECK(output == "A\n");
+
+    output = run_script(R"(
+        set(VAR1 "A")
+        set(VAR2 "VAR1")
+        set(VAR3 "VAR")
+        message("${${${VAR3}2}}")
+    )");
+    CHECK(output == "A\n");
+
+    output = run_script(R"(
+        set(VAR1 "A")
+        set(VAR2 "VAR1")
+        set(VAR3 "VAR")
+        message("${${${VAR3}2}}")
+    )");
+    CHECK(output == "A\n");
+}

@@ -529,27 +529,22 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
         return parts;
     }
 
-    while (pos_ < content_.length() && !std::isspace(content_[pos_]) && 
-           content_[pos_] != '(' && content_[pos_] != ')' && 
+    while (pos_ < content_.length() && !std::isspace(content_[pos_]) &&
+           content_[pos_] != '(' && content_[pos_] != ')' &&
            content_[pos_] != '#' && content_[pos_] != '"' && content_[pos_] != '[') {
         if (content_[pos_] == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '{') {
             if (start_pos < pos_) {
                 parts.emplace_back(std::string(content_.substr(start_pos, pos_ - start_pos)));
             }
 
-            pos_ += 2; // Consume ${
-            col_ += 2;
-            size_t var_start = pos_;
-            while (pos_ < content_.length() && content_[pos_] != '}') {
-                pos_++;
-                col_++;
-            }
-            if (pos_ >= content_.length()) {
-                return std::unexpected(ParseError{row_, col_, pos_, 0, "Unterminated variable reference"});
-            }
-            parts.emplace_back(VariableReference{std::string(content_.substr(var_start, pos_ - var_start))});
-            pos_++; // Consume }
+            pos_++; // Move past '$'
             col_++;
+
+            auto var_ref = parse_variable_reference(false);
+            if (!var_ref) {
+                return std::unexpected(var_ref.error());
+            }
+            parts.emplace_back(std::move(var_ref.value()));
             start_pos = pos_;
             continue;
         }
@@ -606,19 +601,14 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
                 current_literal.clear();
             }
 
-            pos_ += 2; // Consume ${
-            col_ += 2;
-            size_t var_start = pos_;
-            while (pos_ < content_.length() && content_[pos_] != '}') {
-                pos_++;
-                col_++;
-            }
-            if (pos_ >= content_.length()) {
-                return std::unexpected(ParseError{row_, col_, pos_, 0, "Unterminated variable reference"});
-            }
-            parts.emplace_back(VariableReference{std::string(content_.substr(var_start, pos_ - var_start))});
-            pos_++; // Consume }
+            pos_++; // Move past '$'
             col_++;
+
+            auto var_ref = parse_variable_reference(true);
+            if (!var_ref) {
+                return std::unexpected(var_ref.error());
+            }
+            parts.emplace_back(std::move(var_ref.value()));
             continue;
         }
         
@@ -671,6 +661,84 @@ std::expected<std::string, ParseError> Parser::parse_bracket_argument() {
     }
 
     return std::unexpected(ParseError{row_, col_, start_pos_outer, pos_ - start_pos_outer, "Unterminated bracket argument"});
+}
+
+std::expected<VariableReference, ParseError> Parser::parse_variable_reference(bool inside_quotes) {
+    // We're positioned right after '$'
+    // For now, we only support ${...}, not $ENV{...} or $CACHE{...}
+
+    std::string namespace_prefix;
+
+    // Check what comes after '$'
+    if (pos_ >= content_.length()) {
+        return std::unexpected(ParseError{row_, col_, pos_, 0, "Unexpected end after '$'"});
+    }
+
+    // For now, only support ${...}
+    if (content_[pos_] != '{') {
+        return std::unexpected(ParseError{row_, col_, pos_, 1, "Expected '{' after '$'"});
+    }
+
+    size_t ref_start_pos = pos_;
+    pos_++; // Consume '{'
+    col_++;
+
+    // Parse the content inside ${...} as argument parts
+    std::vector<ArgumentPart> name_parts;
+    std::string current_literal;
+
+    while (pos_ < content_.length()) {
+        char c = content_[pos_];
+
+        // Check for closing brace
+        if (c == '}') {
+            // Save any accumulated literal
+            if (!current_literal.empty()) {
+                name_parts.emplace_back(std::move(current_literal));
+                current_literal.clear();
+            }
+            pos_++; // Consume '}'
+            col_++;
+            return VariableReference{namespace_prefix, std::move(name_parts)};
+        }
+
+        // Check for nested variable reference
+        if (c == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '{') {
+            // Save any accumulated literal
+            if (!current_literal.empty()) {
+                name_parts.emplace_back(std::move(current_literal));
+                current_literal.clear();
+            }
+
+            pos_++; // Move past '$'
+            col_++;
+
+            // Recursively parse nested variable reference
+            auto nested_ref = parse_variable_reference(inside_quotes);
+            if (!nested_ref) {
+                return std::unexpected(nested_ref.error());
+            }
+            name_parts.emplace_back(std::move(nested_ref.value()));
+            continue;
+        }
+
+        // Handle quotes inside variable references (for quoted argument context)
+        if (inside_quotes && c == '"') {
+            return std::unexpected(ParseError{row_, col_, pos_, 1, "Unexpected '\"' inside variable reference"});
+        }
+
+        // Regular character - add to literal
+        current_literal += c;
+        pos_++;
+        if (c == '\n') {
+            row_++;
+            col_ = 1;
+        } else {
+            col_++;
+        }
+    }
+
+    return std::unexpected(ParseError{row_, col_, ref_start_pos, pos_ - ref_start_pos, "Unterminated variable reference"});
 }
 
 } // namespace dmake

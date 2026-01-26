@@ -130,6 +130,7 @@ private:
     std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<std::string>& args);
     std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args);
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);
+    std::string evaluate_variable_reference(const VariableReference& ref);
 
     std::optional<InterpreterError> get_fatal_error() const;
     void clear_fatal_error();

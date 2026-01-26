@@ -458,7 +458,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     path = *found_path;
 
     std::string abs_path = std::filesystem::absolute(path).string();
-    
+
     // Check include guards
     if (get_root()->global_guarded_files_.contains(abs_path)) return {};
     if (directory_guarded_files_.contains(abs_path)) return {};
@@ -1083,11 +1083,40 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     return result;
 }
 
+std::string Interpreter::evaluate_variable_reference(const VariableReference& ref) {
+    // Step 1: Recursively evaluate name_parts to build the final variable name
+    std::string name;
+    for (const auto& part : ref.name_parts) {
+        if (std::holds_alternative<std::string>(part)) {
+            name += std::get<std::string>(part);
+        } else {
+            name += evaluate_variable_reference(std::get<VariableReference>(part));
+        }
+    }
+
+    // Step 2: Lookup based on namespace
+    if (ref.namespace_prefix.empty()) {
+        // Regular variable lookup
+        return get_variable(name);
+    } else if (ref.namespace_prefix == "ENV") {
+        const char* env_var = getenv(name.c_str());
+        return env_var ? env_var : "";
+    } else if (ref.namespace_prefix == "CACHE") {
+        // Future: Cache namespace lookup
+        // return get_cache_variable(name);
+        return "";
+    }
+    return "";
+}
+
 std::string Interpreter::evaluate_argument(const Argument& arg) {
     std::string res;
     for (const auto& p : arg.parts) {
-        if (std::holds_alternative<std::string>(p)) res += std::get<std::string>(p);
-        else res += get_variable(std::get<VariableReference>(p).name);
+        if (std::holds_alternative<std::string>(p)) {
+            res += std::get<std::string>(p);
+        } else {
+            res += evaluate_variable_reference(std::get<VariableReference>(p));
+        }
     }
     return res;
 }
