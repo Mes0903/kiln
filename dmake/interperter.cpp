@@ -665,7 +665,7 @@ bool Interpreter::is_falsy(const std::string& val) {
 std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length) {
     // Set of keywords that should not be dereferenced as variables
     static const std::set<std::string> keywords = {
-        "NOT", "AND", "OR",
+        "NOT", "AND", "OR", "(", ")",
         "DEFINED", "TARGET", "EXISTS", "COMMAND", "POLICY", "TEST",
         "IS_DIRECTORY", "IS_SYMLINK", "IS_ABSOLUTE",
         "EQUAL", "LESS", "GREATER", "LESS_EQUAL", "GREATER_EQUAL", "NOT_EQUAL",
@@ -718,7 +718,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     auto evaluate_token = [&](const Argument& arg) -> std::string {
         std::string token = get_token_string(arg);
 
-        // Don't dereference keywords or quoted strings
+        // Don't dereference keywords (including boolean constants like TRUE, OFF, etc.) or quoted strings
         if (arg.quoted || keywords.contains(token)) {
             return token;
         }
@@ -919,6 +919,18 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         if (pos >= condition.size()) return false;
 
         std::string token = get_token_string(condition[pos]);
+
+        // Parentheses for grouping
+        if (token == "(") {
+            pos++;
+            bool result = parse_or();
+            if (pos >= condition.size() || get_token_string(condition[pos]) != ")") {
+                error_msg = "Expected ')' to close group";
+                return false;
+            }
+            pos++;
+            return result;
+        }
 
         // Unary operators that take one argument
         // If there's no next token, treat the keyword as a primary value instead

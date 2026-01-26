@@ -426,6 +426,8 @@ void Parser::consume_whitespace() {
 }
 
 std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() {
+    consume_whitespace();
+
     // Save location at start of command
     size_t cmd_row = row_;
     size_t cmd_col = col_;
@@ -455,14 +457,21 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     CommandInvocation cmd_inv{std::move(identifier), {}, cmd_row, cmd_col, cmd_offset, 0};
 
     // Parse arguments
+    int nesting = 0;
     while (pos_ < content_.length()) {
         consume_whitespace();
-        if (pos_ < content_.length() && content_[pos_] == ')') {
+        if (pos_ < content_.length() && content_[pos_] == ')' && nesting == 0) {
             break;
         }
 
         auto arg_or_error = parse_argument();
         if (arg_or_error) {
+            const auto& arg = arg_or_error.value();
+            if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
+                std::string s = std::get<std::string>(arg.parts[0]);
+                if (s == "(") nesting++;
+                else if (s == ")") nesting--;
+            }
             cmd_inv.arguments.push_back(std::move(arg_or_error.value()));
         } else {
             return std::unexpected(arg_or_error.error());
@@ -511,7 +520,18 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     std::vector<ArgumentPart> parts;
     size_t start_pos = pos_;
 
-    while (pos_ < content_.length() && !std::isspace(content_[pos_]) && content_[pos_] != ')') {
+    // Handle '(' or ')' as single-character unquoted arguments.
+    // In CMake, these are separate tokens in if() conditions.
+    if (pos_ < content_.length() && (content_[pos_] == '(' || content_[pos_] == ')')) {
+        parts.emplace_back(std::string(1, content_[pos_]));
+        pos_++;
+        col_++;
+        return parts;
+    }
+
+    while (pos_ < content_.length() && !std::isspace(content_[pos_]) && 
+           content_[pos_] != '(' && content_[pos_] != ')' && 
+           content_[pos_] != '#' && content_[pos_] != '"' && content_[pos_] != '[') {
         if (content_[pos_] == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '{') {
             if (start_pos < pos_) {
                 parts.emplace_back(std::string(content_.substr(start_pos, pos_ - start_pos)));

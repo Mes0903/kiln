@@ -1066,4 +1066,13 @@ TEST_CASE("Multi-line if condition", "[interpreter][if]") {
         endif()
     )");
     REQUIRE(output == "Success NOT DEFINED\n");
+
+    output = run_script(R"(
+        set(VAR1 "A")
+        set(VAR2 "B")
+        if((VAR1 STREQUAL "A") AND (VAR2 STREQUAL "B"))
+            message("Success")
+        endif()
+    )");
+    REQUIRE(output == "Success\n");
 }
