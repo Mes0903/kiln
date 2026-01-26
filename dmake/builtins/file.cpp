@@ -243,6 +243,27 @@ void register_file_builtins(Interpreter& interp) {
             } catch (...) {
                 interp.set_variable(out_var, p.lexically_normal().string());
             }
+        } else if(operation == "REMOVE") {
+            if (sub_args.empty()) {
+                interp.set_fatal_error("file(REMOVE) requires at least one file path");
+                return;
+            }
+
+            for (const auto& file : sub_args) {
+                std::filesystem::path path = file;
+                if (!path.is_absolute()) {
+                    path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
+                }
+
+                try {
+                    if (std::filesystem::exists(path) && !std::filesystem::remove(path)) {
+                        interp.set_fatal_error("file(REMOVE) could not remove file: " + path.string());
+                    }
+                } catch (const std::filesystem::filesystem_error& e) {
+                    interp.set_fatal_error("file(REMOVE) encountered an error: " + std::string(e.what()));
+                    return;
+                }
+            }
         } else {
             interp.set_fatal_error("file() sub-command not implemented: " + operation);
         }
