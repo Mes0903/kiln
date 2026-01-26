@@ -994,3 +994,24 @@ TEST_CASE("stringly typing", "[interpreter][stringly]") {
         message(${THIS_DOES_NOT_EXIST})
     )"));
 }
+
+TEST_CASE("option", "[interpreter][option]") {
+    auto output = run_script(R"(
+        option(FOO "Foo option" ON)
+        message("${FOO}")
+    )");
+    REQUIRE(output == "ON\n");
+
+    output = run_script(R"(
+        option(FOO "Foo option" OFF)
+        message("${FOO}")
+    )");
+    REQUIRE(output == "OFF\n");
+
+    output = run_script(R"(
+        set(FOO ON)
+        option(FOO "Foo option" OFF)
+        message("${FOO}")
+    )");
+    REQUIRE(output == "ON\n");
+}
