@@ -83,6 +83,78 @@ TEST_CASE("Interpreter variable substitution", "[interpreter]") {
     REQUIRE(output == "Goodbye World\n");
 }
 
+TEST_CASE("Interpreter math command", "[interpreter][math]") {
+    SECTION("Basic arithmetic") {
+        auto output = run_script(R"(
+            math(EXPR res "1 + 2 * 3")
+            message("${res}")
+        )");
+        REQUIRE(output == "7\n");
+    }
+
+    SECTION("Parentheses and precedence") {
+        auto output = run_script(R"(
+            math(EXPR res "(1 + 2) * 3")
+            message("${res}")
+        )");
+        REQUIRE(output == "9\n");
+    }
+
+    SECTION("Bitwise operators") {
+        auto output = run_script(R"(
+            math(EXPR res "1 << 4")
+            message("${res}")
+            math(EXPR res "${res} | 1")
+            message("${res}")
+            math(EXPR res "${res} & 15")
+            message("${res}")
+        )");
+        REQUIRE(output == "16\n17\n1\n");
+    }
+
+    SECTION("Hexadecimal") {
+        auto output = run_script(R"(
+            math(EXPR res "0x10 + 5")
+            message("${res}")
+            math(EXPR res "077 + 1")
+            message("${res}")
+            math(EXPR res "0xA * 2" OUTPUT_FORMAT HEXADECIMAL)
+            message("${res}")
+        )");
+        REQUIRE(output == "21\n78\n0x14\n");
+    }
+
+    SECTION("Division and modulo") {
+        auto output = run_script(R"(
+            math(EXPR res "10 / 3")
+            message("${res}")
+            math(EXPR res "10 % 3")
+            message("${res}")
+        )");
+        REQUIRE(output == "3\n1\n");
+    }
+
+    SECTION("Unary operators") {
+        auto output = run_script(R"(
+            math(EXPR res "-5 + 10")
+            message("${res}")
+            math(EXPR res "~0" OUTPUT_FORMAT HEXADECIMAL)
+            message("${res}")
+        )");
+        // ~0 in 64-bit is 0xffffffffffffffff
+        REQUIRE(output == "5\n0xffffffffffffffff\n");
+    }
+
+    SECTION("Variable expansion in expression") {
+        auto output = run_script(R"(
+            set(X 10)
+            math(EXPR res "${X} * 2")
+            message("${res}")
+        )");
+        REQUIRE(output == "20\n");
+    }
+}
+
 TEST_CASE("Interpreter unset", "[interpreter]") {
     auto output = run_script(R"(
         set(MY_VAR "Hello")
