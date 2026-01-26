@@ -19,6 +19,7 @@ add_library(dmake SHARED
     dmake/builtins/list.cpp
     dmake/builtins/target.cpp
     dmake/builtins/project.cpp
+    dmake/builtins/file.cpp
     dmake/CMakeList.cpp
 )
 

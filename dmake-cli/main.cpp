@@ -141,7 +141,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            dmake::Interpreter interpreter(std::filesystem::current_path().string(), &std::cout, &std::cerr);
+            dmake::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr);
             interpreter.set_current_file(script_abs.string());
             apply_definitions(interpreter, definitions);
 
