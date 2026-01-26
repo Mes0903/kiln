@@ -116,8 +116,42 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     }
 
     // 2. Generate tasks for selected targets
+    // Build linker flags from CMAKE variables
+    std::vector<std::string> exe_linker_flags;
+    std::vector<std::string> shared_linker_flags;
+
+    // Handle CMAKE_LINKER_TYPE (convert to -fuse-ld=<type>)
+    std::string linker_type = get_variable("CMAKE_LINKER_TYPE");
+    if (!linker_type.empty()) {
+        std::string linker_type_upper = linker_type;
+        std::transform(linker_type_upper.begin(), linker_type_upper.end(), linker_type_upper.begin(), ::toupper);
+
+        if (linker_type_upper == "BFD" || linker_type_upper == "GOLD" ||
+            linker_type_upper == "MOLD" || linker_type_upper == "LLD") {
+            std::string linker_type_lower = linker_type;
+            std::transform(linker_type_lower.begin(), linker_type_lower.end(), linker_type_lower.begin(), ::tolower);
+            std::string flag = "-fuse-ld=" + linker_type_lower;
+            exe_linker_flags.push_back(flag);
+            shared_linker_flags.push_back(flag);
+        } else {
+            return std::unexpected(BuildError{current_file_, "Invalid CMAKE_LINKER_TYPE: " + linker_type + ". Must be one of: BFD, GOLD, MOLD, LLD"});
+        }
+    }
+
+    // Handle CMAKE_EXE_LINKER_FLAGS
+    CMakeList exe_flags_list(get_variable("CMAKE_EXE_LINKER_FLAGS"));
+    for (const auto& flag : exe_flags_list) {
+        if (!flag.empty()) exe_linker_flags.push_back(flag);
+    }
+
+    // Handle CMAKE_SHARED_LINKER_FLAGS
+    CMakeList shared_flags_list(get_variable("CMAKE_SHARED_LINKER_FLAGS"));
+    for (const auto& flag : shared_flags_list) {
+        if (!flag.empty()) shared_linker_flags.push_back(flag);
+    }
+
     for (const auto& name : targets_to_build) {
-        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_);
+        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, exe_linker_flags, shared_linker_flags);
     }
 
     // Link dependency resolution (adding inputs to link tasks)

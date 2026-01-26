@@ -22,6 +22,7 @@ struct LinkContext {
     std::vector<std::string> objects;
     std::vector<std::string> lib_dirs;
     std::vector<std::string> libs;
+    std::vector<std::string> linker_flags;
     bool is_shared = false;
     std::string standard;
     bool color_diagnostics = false;

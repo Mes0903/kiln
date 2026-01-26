@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include <filesystem>
+#include <algorithm>
 
 namespace dmake {
 
@@ -20,6 +21,19 @@ void register_variable_builtins(Interpreter& interp) {
                 "Modifying CMAKE_BUILD_TYPE in CMakeLists.txt is NOT RECOMMENDED. "
                 "Use --config flag to set the build configuration.",
                 false);
+        }
+
+        // Validate CMAKE_LINKER_TYPE
+        if (var_name == "CMAKE_LINKER_TYPE" && args.size() > 1) {
+            std::string linker_type = args[1];
+            std::string linker_type_upper = linker_type;
+            std::transform(linker_type_upper.begin(), linker_type_upper.end(), linker_type_upper.begin(), ::toupper);
+
+            if (linker_type_upper != "BFD" && linker_type_upper != "GOLD" &&
+                linker_type_upper != "MOLD" && linker_type_upper != "LLD") {
+                interp.set_fatal_error("Invalid CMAKE_LINKER_TYPE: " + linker_type + ". Must be one of: BFD, GOLD, MOLD, LLD");
+                return;
+            }
         }
 
         // Combine remaining arguments into a list

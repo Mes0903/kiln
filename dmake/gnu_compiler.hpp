@@ -56,12 +56,14 @@ public:
             cmd << " -fdiagnostics-color=always";
         }
 
+        for (const auto& flag : ctx.linker_flags) cmd << " " << flag;
+
         cmd << " -Wl,-rpath,'$ORIGIN'";
         if (ctx.is_shared) cmd << " -shared";
         cmd << " -o " << ctx.output;
 
         for (const auto& obj : ctx.objects) cmd << " " << obj;
-        
+
         for (const auto& dir : ctx.lib_dirs) cmd << " -L" << dir;
         for (const auto& lib : ctx.libs) cmd << " -l" << lib;
 

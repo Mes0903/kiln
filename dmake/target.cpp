@@ -318,7 +318,7 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     return {pch_gch_path, pch_include_arg};
 }
 
-void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
+void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
     if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
 
     std::vector<std::string> obj_files;
@@ -357,6 +357,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.is_shared = is_shared;
         ctx.standard = get_language_standard(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
+        ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
 
         // Helper to recursively resolve libraries, including INTERFACE dependencies
         std::function<void(const std::string&, std::set<std::string>&)> resolve_lib =
