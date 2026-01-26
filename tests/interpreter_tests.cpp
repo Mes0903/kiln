@@ -38,6 +38,7 @@ std::string run_script(std::string src) {
     return output.str();
 }
 
+
 TEST_CASE("Interpreter variable substitution", "[interpreter]") {
     auto output = run_script(R"(
         set(MY_VAR "Hello")
@@ -1100,4 +1101,269 @@ TEST_CASE("multiple dereference", "[interpreter][dereference]") {
         message("${${${VAR3}2}}")
     )");
     CHECK(output == "A\n");
+
+    output = run_script(R"(
+        set(MY_VAR "Cache Value" CACHE STRING "")
+        set(MY_VAR "Local Value")
+        message("Standard: ${MY_VAR}")
+        message("Explicit: $CACHE{MY_VAR}")
+    )");
+    CHECK(output == "Standard: Local Value\nExplicit: Cache Value\n");
+}
+
+TEST_CASE("ENV namespace", "[interpreter][env]") {
+    // Test reading environment variables
+    auto output = run_script(R"(
+        set(ENV{DMAKE_TEST_VAR} "test_value")
+        message("$ENV{DMAKE_TEST_VAR}")
+    )");
+    CHECK(output == "test_value\n");
+
+    // Test case insensitivity
+    output = run_script(R"(
+        set(ENV{DMAKE_TEST_VAR2} "test123")
+        message("$env{DMAKE_TEST_VAR2}")
+        message("$Env{DMAKE_TEST_VAR2}")
+    )");
+    CHECK(output == "test123\ntest123\n");
+
+    // Test unset
+    output = run_script(R"(
+        set(ENV{DMAKE_TEST_VAR3} "value")
+        message("Before: $ENV{DMAKE_TEST_VAR3}")
+        unset(ENV{DMAKE_TEST_VAR3})
+        message("After: $ENV{DMAKE_TEST_VAR3}")
+    )");
+    CHECK(output == "Before: value\nAfter: \n");
+
+    // Test with nested variable in name
+    output = run_script(R"(
+        set(VAR_NAME "DMAKE_TEST_VAR4")
+        set(ENV{DMAKE_TEST_VAR4} "nested")
+        message("$ENV{${VAR_NAME}}")
+    )");
+    CHECK(output == "nested\n");
+}
+
+TEST_CASE("CACHE namespace", "[interpreter][cache]") {
+    // Test basic cache
+    auto output = run_script(R"(
+        set(MY_VAR "value" CACHE STRING "doc")
+        message("$CACHE{MY_VAR}")
+    )");
+    CHECK(output == "value\n");
+
+    // Test case insensitivity
+    output = run_script(R"(
+        set(MY_VAR "value" CACHE STRING "doc")
+        message("$cache{MY_VAR}")
+        message("$Cache{MY_VAR}")
+    )");
+    CHECK(output == "value\nvalue\n");
+
+    // Test that cache sets both cache and regular variable
+    output = run_script(R"(
+        set(MY_VAR "cached" CACHE STRING "doc")
+        message("Regular: ${MY_VAR}")
+        message("Cache: $CACHE{MY_VAR}")
+    )");
+    CHECK(output == "Regular: cached\nCache: cached\n");
+
+    // Test that local set overrides regular but not cache
+    output = run_script(R"(
+        set(MY_VAR "cached" CACHE STRING "doc")
+        set(MY_VAR "local")
+        message("Regular: ${MY_VAR}")
+        message("Cache: $CACHE{MY_VAR}")
+    )");
+    CHECK(output == "Regular: local\nCache: cached\n");
+
+    // Test unset cache
+    output = run_script(R"(
+        set(MY_VAR "value" CACHE STRING "doc")
+        message("Before: $CACHE{MY_VAR}")
+        unset(MY_VAR CACHE)
+        message("After: $CACHE{MY_VAR}")
+    )");
+    CHECK(output == "Before: value\nAfter: \n");
+
+    // Test with nested variable in name
+    output = run_script(R"(
+        set(VAR_NAME "MY_CACHED_VAR")
+        set(MY_CACHED_VAR "42" CACHE STRING "doc")
+        message("$CACHE{${VAR_NAME}}")
+    )");
+    CHECK(output == "42\n");
+
+    // Test CACHE keyword is case-insensitive
+    output = run_script(R"(
+        set(VAR "value" cache STRING "doc")
+        message("$CACHE{VAR}")
+    )");
+    CHECK(output == "value\n");
+}
+
+TEST_CASE("PARENT_SCOPE", "[interpreter][parent_scope]") {
+    // Test basic PARENT_SCOPE
+    auto output = run_script(R"(
+        function(set_parent)
+            set(OUTER_VAR "from function" PARENT_SCOPE)
+        endfunction()
+
+        message("Before: ${OUTER_VAR}")
+        set_parent()
+        message("After: ${OUTER_VAR}")
+    )");
+    CHECK(output == "Before: \nAfter: from function\n");
+
+    // Test unset PARENT_SCOPE
+    output = run_script(R"(
+        function(unset_parent)
+            unset(OUTER_VAR PARENT_SCOPE)
+        endfunction()
+
+        set(OUTER_VAR "initial")
+        message("Before: ${OUTER_VAR}")
+        unset_parent()
+        message("After: ${OUTER_VAR}")
+    )");
+    CHECK(output == "Before: initial\nAfter: \n");
+
+    // Test PARENT_SCOPE is case-insensitive
+    output = run_script(R"(
+        function(test_case)
+            set(VAR "value" parent_scope)
+        endfunction()
+
+        test_case()
+        message("${VAR}")
+    )");
+    CHECK(output == "value\n");
+
+    // Test nested variable name with PARENT_SCOPE
+    output = run_script(R"(
+        function(test_nested)
+            set(VAR_NAME "RESULT")
+            set(${VAR_NAME} "success" PARENT_SCOPE)
+        endfunction()
+
+        test_nested()
+        message("${RESULT}")
+    )");
+    CHECK(output == "success\n");
+}
+
+TEST_CASE("namespace error cases", "[interpreter][namespace][errors]") {
+    // Test invalid set(CACHE{...}) syntax
+    CHECK_THROWS_WITH(
+        run_script(R"(
+            set(CACHE{MY_VAR} "value")
+        )"),
+        Catch::Matchers::ContainsSubstring("set(CACHE{...} ...) is invalid")
+    );
+
+    // Test invalid unset(CACHE{...}) syntax
+    CHECK_THROWS_WITH(
+        run_script(R"(
+            unset(CACHE{MY_VAR})
+        )"),
+        Catch::Matchers::ContainsSubstring("unset(CACHE{...}) is invalid")
+    );
+
+    // Test cannot mix CACHE and PARENT_SCOPE in set
+    CHECK_THROWS_WITH(
+        run_script(R"(
+            function(test_func)
+                set(VAR "value" CACHE STRING "doc" PARENT_SCOPE)
+            endfunction()
+            test_func()
+        )"),
+        Catch::Matchers::ContainsSubstring("cannot use both CACHE and PARENT_SCOPE")
+    );
+
+    // Test cannot mix in unset
+    CHECK_THROWS_WITH(
+        run_script(R"(
+            function(test_func)
+                unset(VAR CACHE PARENT_SCOPE)
+            endfunction()
+            test_func()
+        )"),
+        Catch::Matchers::ContainsSubstring("cannot use both CACHE and PARENT_SCOPE")
+    );
+
+    // Test PARENT_SCOPE outside function
+    CHECK_THROWS_WITH(
+        run_script(R"(
+            set(VAR "value" PARENT_SCOPE)
+        )"),
+        Catch::Matchers::ContainsSubstring("requires a parent scope")
+    );
+}
+
+TEST_CASE("nested variables with namespaces", "[interpreter][nested][namespaces]") {
+    // Test nested with ENV
+    auto output = run_script(R"(
+        set(ENV{DMAKE_PATH_TEST} "/usr/bin")
+        set(VAR_NAME "DMAKE_PATH_TEST")
+        message("$ENV{${VAR_NAME}}")
+    )");
+    CHECK(output == "/usr/bin\n");
+
+    // Test nested with CACHE
+    output = run_script(R"(
+        set(BUILD_TYPE "Debug" CACHE STRING "doc")
+        set(TYPE_VAR "BUILD_TYPE")
+        message("$CACHE{${TYPE_VAR}}")
+    )");
+    CHECK(output == "Debug\n");
+
+    // Test complex nesting
+    output = run_script(R"(
+        set(A "B")
+        set(B "MY_VAR")
+        set(MY_VAR "value" CACHE STRING "doc")
+        message("$CACHE{${${A}}}")
+    )");
+    CHECK(output == "value\n");
+
+    // Test partial expansion with ENV
+    output = run_script(R"(
+        set(ENV{DMAKE_PREFIX_TEST} "prefix_value")
+        set(PREFIX "DMAKE_")
+        set(SUFFIX "_TEST")
+        message("$ENV{${PREFIX}PREFIX${SUFFIX}}")
+    )");
+    CHECK(output == "prefix_value\n");
+}
+
+TEST_CASE("namespace case insensitivity comprehensive", "[interpreter][case]") {
+    // Test all variations of ENV
+    auto output = run_script(R"(
+        set(ENV{TEST_VAR} "value")
+        message("$ENV{TEST_VAR}")
+        message("$env{TEST_VAR}")
+        message("$Env{TEST_VAR}")
+        message("$eNv{TEST_VAR}")
+    )");
+    CHECK(output == "value\nvalue\nvalue\nvalue\n");
+
+    // Test all variations of CACHE
+    output = run_script(R"(
+        set(VAR "cached" CACHE STRING "doc")
+        message("$CACHE{VAR}")
+        message("$cache{VAR}")
+        message("$Cache{VAR}")
+        message("$cAcHe{VAR}")
+    )");
+    CHECK(output == "cached\ncached\ncached\ncached\n");
+
+    // Test set keywords are case insensitive
+    output = run_script(R"(
+        set(ENV{VAR1} "v1")
+        set(env{VAR2} "v2")
+        set(Env{VAR3} "v3")
+        message("$ENV{VAR1} $ENV{VAR2} $ENV{VAR3}")
+    )");
+    CHECK(output == "v1 v2 v3\n");
 }

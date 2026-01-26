@@ -532,7 +532,8 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     while (pos_ < content_.length() && !std::isspace(content_[pos_]) &&
            content_[pos_] != '(' && content_[pos_] != ')' &&
            content_[pos_] != '#' && content_[pos_] != '"' && content_[pos_] != '[') {
-        if (content_[pos_] == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '{') {
+        if (content_[pos_] == '$' && pos_ + 1 < content_.length() &&
+            (content_[pos_ + 1] == '{' || std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_')) {
             if (start_pos < pos_) {
                 parts.emplace_back(std::string(content_.substr(start_pos, pos_ - start_pos)));
             }
@@ -595,7 +596,8 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
             }
             return parts;
         }
-        if (current == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '{') {
+        if (current == '$' && pos_ + 1 < content_.length() &&
+            (content_[pos_ + 1] == '{' || std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_')) {
             if (!current_literal.empty()) {
                 parts.emplace_back(current_literal);
                 current_literal.clear();
@@ -668,19 +670,46 @@ std::expected<VariableReference, ParseError> Parser::parse_variable_reference(bo
     // For now, we only support ${...}, not $ENV{...} or $CACHE{...}
 
     std::string namespace_prefix;
+    size_t ref_start_pos = pos_ - 1; // Position of '$'
 
     // Check what comes after '$'
     if (pos_ >= content_.length()) {
         return std::unexpected(ParseError{row_, col_, pos_, 0, "Unexpected end after '$'"});
     }
 
-    // For now, only support ${...}
-    if (content_[pos_] != '{') {
-        return std::unexpected(ParseError{row_, col_, pos_, 1, "Expected '{' after '$'"});
+    // Detect namespace prefix: $ENV{...}, $CACHE{...}, or ${...}
+    if (content_[pos_] == '{') {
+        // Regular variable: ${...}
+        namespace_prefix = "";
+    } else if (std::isalpha(content_[pos_]) || content_[pos_] == '_') {
+        // Parse identifier (namespace prefix)
+        size_t prefix_start = pos_;
+        while (pos_ < content_.length() &&
+               (std::isalnum(content_[pos_]) || content_[pos_] == '_')) {
+            pos_++;
+            col_++;
+        }
+
+        std::string prefix(content_.substr(prefix_start, pos_ - prefix_start));
+
+        // Normalize to uppercase (CMake is case-insensitive)
+        std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                      [](unsigned char c){ return std::toupper(c); });
+
+        // Expect '{'
+        if (pos_ >= content_.length() || content_[pos_] != '{') {
+            return std::unexpected(ParseError{row_, col_, pos_, 1,
+                "Expected '{' after '$" + prefix + "'"});
+        }
+
+        namespace_prefix = prefix;
+    } else {
+        return std::unexpected(ParseError{row_, col_, pos_, 1,
+            "Expected '{' or identifier after '$'"});
     }
 
-    size_t ref_start_pos = pos_;
-    pos_++; // Consume '{'
+    // Consume '{'
+    pos_++;
     col_++;
 
     // Parse the content inside ${...} as argument parts

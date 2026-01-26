@@ -15,6 +15,86 @@ void register_variable_builtins(Interpreter& interp) {
 
         std::string var_name = args[0];
 
+        // INVALID: set(CACHE{VAR} value) - reject this (case-insensitive)
+        std::string var_name_upper = var_name;
+        std::transform(var_name_upper.begin(), var_name_upper.end(), var_name_upper.begin(), ::toupper);
+        if (var_name_upper.find("CACHE{") == 0 && var_name_upper.back() == '}') {
+            interp.set_fatal_error("set(CACHE{...} ...) is invalid. Use: set(VAR value CACHE TYPE \"doc\")");
+            return;
+        }
+
+        // VALID: set(ENV{VAR} value) - case insensitive
+        if (var_name_upper.find("ENV{") == 0 && var_name_upper.back() == '}') {
+            // Extract variable name (preserve original case from inside {})
+            std::string env_var_name = var_name.substr(4, var_name.size() - 5);
+
+            if (args.size() == 1) {
+                // set(ENV{VAR}) with no value = unset
+                unsetenv(env_var_name.c_str());
+            } else {
+                // Combine remaining arguments into value
+                std::vector<std::string> value_args(args.begin() + 1, args.end());
+                CMakeList value_list(value_args);
+                setenv(env_var_name.c_str(), value_list.to_string().c_str(), 1);
+            }
+            return;
+        }
+
+        // Check for CACHE keyword (case-insensitive)
+        auto cache_it = std::find_if(args.begin() + 1, args.end(),
+            [](const std::string& s) {
+                std::string upper = s;
+                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+                return upper == "CACHE";
+            });
+
+        // Check for PARENT_SCOPE keyword (case-insensitive)
+        auto parent_it = std::find_if(args.begin() + 1, args.end(),
+            [](const std::string& s) {
+                std::string upper = s;
+                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+                return upper == "PARENT_SCOPE";
+            });
+
+        // Cannot use both CACHE and PARENT_SCOPE
+        if (cache_it != args.end() && parent_it != args.end()) {
+            interp.set_fatal_error("set() cannot use both CACHE and PARENT_SCOPE");
+            return;
+        }
+
+        // Handle: set(VAR value CACHE TYPE "doc")
+        if (cache_it != args.end()) {
+            // Value is everything between var_name and CACHE keyword
+            std::vector<std::string> value_args(args.begin() + 1, cache_it);
+            CMakeList value_list(value_args);
+            std::string value = value_list.to_string();
+
+            // Set in cache namespace
+            auto* root = interp.get_root();
+            root->cache_variables_[var_name] = value;
+
+            // Also set as regular variable (CMake behavior)
+            interp.set_variable(var_name, value);
+            return;
+        }
+
+        // Handle: set(VAR value PARENT_SCOPE)
+        if (parent_it != args.end()) {
+            // Value is everything between var_name and PARENT_SCOPE keyword
+            std::vector<std::string> value_args(args.begin() + 1, parent_it);
+            CMakeList value_list(value_args);
+            std::string value = value_list.to_string();
+
+            // Set in parent scope
+            if (interp.call_stack_.size() < 2) {
+                interp.set_fatal_error("set() PARENT_SCOPE requires a parent scope (must be called from a function)");
+                return;
+            }
+
+            interp.call_stack_[1].variables[var_name] = value;
+            return;
+        }
+
         // Warn if trying to modify CMAKE_BUILD_TYPE during script execution
         if (var_name == "CMAKE_BUILD_TYPE") {
             interp.print_message("WARN",
@@ -36,18 +116,75 @@ void register_variable_builtins(Interpreter& interp) {
             }
         }
 
-        // Combine remaining arguments into a list
+        // Regular: set(VAR value)
         std::vector<std::string> value_args(args.begin() + 1, args.end());
         CMakeList value_list(value_args);
         interp.set_variable(var_name, value_list.to_string());
     });
 
     interp.add_builtin("unset", [](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("unset");
-        std::string var_name;
-        parser.add_positional(var_name, "variable name");
-        PARSE_OR_RETURN(parser, interp, args);
+        if (args.empty()) {
+            interp.set_fatal_error("unset() requires at least one argument");
+            return;
+        }
 
+        std::string var_name = args[0];
+
+        // INVALID: unset(CACHE{VAR}) - reject this (case-insensitive)
+        std::string var_name_upper = var_name;
+        std::transform(var_name_upper.begin(), var_name_upper.end(), var_name_upper.begin(), ::toupper);
+        if (var_name_upper.find("CACHE{") == 0 && var_name_upper.back() == '}') {
+            interp.set_fatal_error("unset(CACHE{...}) is invalid. Use: unset(VAR CACHE)");
+            return;
+        }
+
+        // VALID: unset(ENV{VAR}) - case insensitive
+        if (var_name_upper.find("ENV{") == 0 && var_name_upper.back() == '}') {
+            // Extract variable name (preserve original case from inside {})
+            std::string env_var_name = var_name.substr(4, var_name.size() - 5);
+            unsetenv(env_var_name.c_str());
+            return;
+        }
+
+        // Check for CACHE keyword (case-insensitive)
+        auto cache_it = std::find_if(args.begin() + 1, args.end(),
+            [](const std::string& s) {
+                std::string upper = s;
+                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+                return upper == "CACHE";
+            });
+
+        // Check for PARENT_SCOPE keyword (case-insensitive)
+        auto parent_it = std::find_if(args.begin() + 1, args.end(),
+            [](const std::string& s) {
+                std::string upper = s;
+                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+                return upper == "PARENT_SCOPE";
+            });
+
+        // Cannot use both CACHE and PARENT_SCOPE
+        if (cache_it != args.end() && parent_it != args.end()) {
+            interp.set_fatal_error("unset() cannot use both CACHE and PARENT_SCOPE");
+            return;
+        }
+
+        // Handle: unset(VAR CACHE)
+        if (cache_it != args.end()) {
+            interp.get_root()->cache_variables_.erase(var_name);
+            return;
+        }
+
+        // Handle: unset(VAR PARENT_SCOPE)
+        if (parent_it != args.end()) {
+            if (interp.call_stack_.size() < 2) {
+                interp.set_fatal_error("unset() PARENT_SCOPE requires a parent scope (must be called from a function)");
+                return;
+            }
+            interp.call_stack_[1].variables.erase(var_name);
+            return;
+        }
+
+        // Regular: unset(VAR)
         interp.unset_variable(var_name);
     });
 

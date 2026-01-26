@@ -149,6 +149,7 @@ private:
     bool testing_enabled_ = false;
     Toolchain toolchain_;
     std::set<std::string> global_guarded_files_;
+    std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
 
     // Directory-scoped accumulated directories (inherited by targets)
     std::vector<std::string> accumulated_include_directories_;

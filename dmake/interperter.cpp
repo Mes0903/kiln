@@ -1102,9 +1102,9 @@ std::string Interpreter::evaluate_variable_reference(const VariableReference& re
         const char* env_var = getenv(name.c_str());
         return env_var ? env_var : "";
     } else if (ref.namespace_prefix == "CACHE") {
-        // Future: Cache namespace lookup
-        // return get_cache_variable(name);
-        return "";
+        auto* root = get_root();
+        auto it = root->cache_variables_.find(name);
+        return (it != root->cache_variables_.end()) ? it->second : "";
     }
     return "";
 }
