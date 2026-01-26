@@ -35,7 +35,7 @@ void register_find_package_builtins(Interpreter& interp) {
         PARSE_OR_RETURN(parser, interp, args);
 
         if (!version.empty()) {
-            interp.print_message("WARNING", "Version checking is not implemented for find_package, ignoring: " + version);
+            interp.print_message("WARN", "Version checking is not implemented for find_package, ignoring: " + version);
         }
 
         std::string found_var = package_name + "_FOUND";
@@ -109,7 +109,7 @@ void register_find_package_builtins(Interpreter& interp) {
         if (!found_path.empty()) {
             interp.set_variable(found_var, "ON");
             interp.set_variable(dir_var, found_path.parent_path().string());
-            
+
             auto res = interp.include_file(found_path.string());
             if (!res) {
                 interp.set_fatal_error(res.error());

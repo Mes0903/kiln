@@ -48,7 +48,7 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
         std::cerr << "   " << padding << " \033[1;34m|\033[0m" << std::endl;
         std::cerr << "   \033[1;34m" << row << " |\033[0m " << line << std::endl;
         std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(col > 0 ? col - 1 : 0, ' ');
-        
+
         size_t caret_len = (length > 0) ? length : 1;
         if (col + caret_len - 1 > line.length()) {
             caret_len = line.length() - col + 1;
@@ -64,6 +64,10 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
             std::cerr << "  " << it->file << ":" << it->row << " (" << it->command << ")" << std::endl;
         }
     }
+}
+
+void print_error_context(const dmake::InterpreterError& error) {
+    print_error_context(error.file, error.row, error.col, error.offset, error.length, error.message, error.backtrace);
 }
 
 std::string to_cmake_case(const std::string& config) {
@@ -99,22 +103,20 @@ void set_default_flags(dmake::Interpreter& interpreter, const std::vector<std::s
     }
 }
 
-std::expected<dmake::Interpreter*, int> run_build_action(const GlobalOptions& opt, const std::string& project_dir, const std::vector<std::string>& targets) {
+std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action(const GlobalOptions& opt, const std::string& project_dir, const std::vector<std::string>& targets, bool is_test_mode = false) {
     try {
         std::filesystem::path project_path = std::filesystem::canonical(project_dir);
         std::filesystem::path cmake_lists = project_path / "CMakeLists.txt";
 
         if (!std::filesystem::exists(cmake_lists)) {
-            std::cerr << "Error: CMakeLists.txt not found in " << project_path.string() << std::endl;
-            return std::unexpected(1);
+            return std::unexpected("CMakeLists.txt not found in " + project_path.string());
         }
 
         std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
         std::filesystem::path build_path = build_root / opt.config;
 
         if (build_path == project_path) {
-            std::cerr << "Error: Build directory cannot be source directory." << std::endl;
-            return std::unexpected(1);
+            return std::unexpected("Build directory cannot be source directory");
         }
 
         std::ifstream file(cmake_lists);
@@ -123,12 +125,16 @@ std::expected<dmake::Interpreter*, int> run_build_action(const GlobalOptions& op
         dmake::Parser parser(content);
         auto ast_or_error = parser.parse();
         if (!ast_or_error) {
-            print_error_context(cmake_lists.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
-            return std::unexpected(1);
+            const auto& error = ast_or_error.error();
+            print_error_context(cmake_lists.string(), error.row, error.col, error.offset, error.length, error.reason);
+            return std::unexpected("Parse error");
         }
 
         auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, nullptr, build_path.string());
         interpreter->set_current_file(cmake_lists.string());
+
+        // Set BUILD_TESTING before user definitions (user can override with -D)
+        interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
         apply_definitions(*interpreter, opt.definitions);
 
         if (interpreter->get_variable("CMAKE_BUILD_TYPE").empty()) {
@@ -142,23 +148,23 @@ std::expected<dmake::Interpreter*, int> run_build_action(const GlobalOptions& op
 
         auto interpret_result = interpreter->interpret(ast_or_error.value());
         if (!interpret_result) {
-            print_error_context(interpret_result.error().file, interpret_result.error().row, interpret_result.error().col, interpret_result.error().offset, interpret_result.error().length, interpret_result.error().message, interpret_result.error().backtrace);
-            return std::unexpected(1);
+            print_error_context(interpret_result.error());
+            return std::unexpected("Interpretation error");
         }
 
         auto build_result = interpreter->run_build(opt.jobs, targets);
         if (!build_result) {
             std::cerr << "\033[1;31merror:\033[0m " << build_result.error().message << std::endl;
-            return std::unexpected(1);
+            return std::unexpected("Build failed");
         }
-        
-        return interpreter.release();
+
+        return interpreter;
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return std::unexpected(1);
+        return std::unexpected(std::string("Exception: ") + e.what());
     }
 }
 
+// Must insure build is up to date before running tests
 int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, const std::string& pattern) {
     auto& tests = interpreter->get_tests();
     auto& targets_map = interpreter->get_targets();
@@ -193,8 +199,6 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     }
 
     std::vector<std::string> target_list(targets_to_build.begin(), targets_to_build.end());
-    auto build_res = interpreter->run_build(opt.jobs, target_list);
-    if (!build_res) return build_res.error().message.empty() ? 1 : 1; // Simplify error handling for now
 
     std::cout << "\033[1;34mRunning " << selected_tests.size() << " tests...\033[0m" << std::endl;
 
@@ -209,50 +213,48 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     auto start_all = std::chrono::high_resolution_clock::now();
 
     for (auto* test : selected_tests) {
-        futures.push_back(std::async(std::launch::async, [test, &targets_map]() {
-            TestResult res;
-            res.name = test->name;
-            
-            auto start = std::chrono::high_resolution_clock::now();
-            
-            std::string cmd = test->command;
-            if (targets_map.count(cmd)) {
-                cmd = targets_map[cmd]->get_output_path();
-            }
+        TestResult res;
+        res.name = test->name;
 
-            std::string full_cmd = cmd;
-            for (const auto& arg : test->args) {
-                full_cmd += " \"" + arg + "\"";
-            }
-            full_cmd += " 2>&1";
+        auto start = std::chrono::high_resolution_clock::now();
 
-            if (!test->working_dir.empty()) {
-                full_cmd = "cd \"" + test->working_dir + "\" && " + full_cmd;
-            }
+        std::string cmd = test->command;
+        if (targets_map.count(cmd)) {
+            cmd = targets_map[cmd]->get_output_path();
+        }
 
-            FILE* pipe = popen(full_cmd.c_str(), "r");
-            if (!pipe) {
-                res.passed = false;
-                res.output = "Failed to launch test command";
-            } else {
-                char buffer[1024];
-                while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-                    res.output += buffer;
-                }
-                int status = pclose(pipe);
-                res.passed = (status == 0);
-            }
+        std::string full_cmd = cmd;
+        for (const auto& arg : test->args) {
+            full_cmd += " \"" + arg + "\"";
+        }
+        full_cmd += " 2>&1";
 
-            auto end = std::chrono::high_resolution_clock::now();
-            res.duration = std::chrono::duration<double>(end - start).count();
-            return res;
-        }));
+        if (!test->working_dir.empty()) {
+            full_cmd = "cd \"" + test->working_dir + "\" && " + full_cmd;
+        }
+
+        FILE* pipe = popen(full_cmd.c_str(), "r");
+        if (!pipe) {
+            res.passed = false;
+            res.output = "Failed to launch test command";
+        } else {
+            char buffer[1024];
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                res.output += buffer;
+            }
+            int status = pclose(pipe);
+            res.passed = (status == 0);
+        }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        res.duration = std::chrono::duration<double>(end - start).count();
+        futures.push_back(std::async(std::launch::deferred, [res]() { return res; }));
     }
 
     int passed_count = 0;
     for (size_t i = 0; i < futures.size(); ++i) {
         auto res = futures[i].get();
-        std::cout << "[" << (i + 1) << "/" << selected_tests.size() << "] " 
+        std::cout << "[" << (i + 1) << "/" << selected_tests.size() << "] "
                   << std::left << std::setw(40) << res.name << " ";
         if (res.passed) {
             std::cout << "\033[1;32mPASSED\033[0m";
@@ -261,7 +263,7 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
             std::cout << "\033[1;31mFAILED\033[0m";
         }
         std::cout << " (" << std::fixed << std::setprecision(2) << res.duration << "s)" << std::endl;
-        
+
         if (!res.passed) {
             std::cout << "--- Output ---" << std::endl;
             std::cout << res.output;
@@ -272,7 +274,7 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     auto end_all = std::chrono::high_resolution_clock::now();
     double total_duration = std::chrono::duration<double>(end_all - start_all).count();
 
-    std::cout << "\nTest Summary: " << passed_count << "/" << selected_tests.size() << " passed (" 
+    std::cout << "\nTest Summary: " << passed_count << "/" << selected_tests.size() << " passed ("
               << std::fixed << std::setprecision(2) << total_duration << "s)" << std::endl;
 
     return (passed_count == selected_tests.size()) ? 0 : 1;
@@ -282,7 +284,7 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 
 int main(int argc, char* argv[]) {
     CLI::App app{"dmake - A modern C++ build system with CMake compatibility."};
-    
+
     GlobalOptions opt;
     app.add_option("-P", opt.script_path, "Run dmake in script mode");
     app.add_option("-j,--parallel", opt.jobs, "Parallel jobs (default: 0 for all cores)");
@@ -381,9 +383,12 @@ int main(int argc, char* argv[]) {
             }
         }
         auto build_res = run_build_action(opt, run_project_dir, {run_target});
-        if (!build_res) return build_res.error();
-        
-        dmake::Interpreter* interpreter = build_res.value();
+        if (!build_res) {
+            std::cerr << "Error: " << build_res.error() << std::endl;
+            return 1;
+        }
+
+        auto& interpreter = build_res.value();
         auto& targets_map = interpreter->get_targets();
         if (!targets_map.count(run_target)) {
             std::cerr << "Error: Target '" << run_target << "' not found after build." << std::endl;
@@ -411,95 +416,52 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\033[1;32mRunning\033[0m " << exec_path << "..." << std::endl;
         execvp(argv_exec[0], argv_exec.data());
-        
+
         std::cerr << "Error: Failed to execute " << exec_path << ": " << strerror(errno) << std::endl;
         return 1;
     }
 
-        if (test_cmd->parsed()) {
-
-            if (!std::filesystem::exists(std::filesystem::path(test_project_dir) / "CMakeLists.txt")) {
-
-                if (std::filesystem::exists("CMakeLists.txt")) {
-
-                    test_pattern = test_project_dir;
-
-                    test_project_dir = ".";
-
-                }
-
-            }
-
-            auto build_res = run_build_action(opt, test_project_dir, {});
-
-            if (!build_res) return build_res.error();
-
-            
-
-            int res = run_test_action(opt, build_res.value(), test_pattern);
-
-            delete build_res.value();
-
-            return res;
-
-        }
-
-    
-
-        std::string project_dir = build_project_dir;
-
-        std::vector<std::string> targets = build_targets;
-
-        
-
-        if (!build_cmd->parsed() && !test_cmd->parsed() && !run_cmd->parsed() && !clean_cmd->parsed()) {
-
-            auto remaining = app.remaining();
-
-            if (!remaining.empty()) {
-
-                project_dir = remaining[0];
-
-                for (size_t i = 1; i < remaining.size(); ++i) {
-
-                    targets.push_back(remaining[i]);
-
-                }
-
-            }
-
-        }
-
-    
-
-        if (!std::filesystem::exists(std::filesystem::path(project_dir) / "CMakeLists.txt")) {
-
+    if (test_cmd->parsed()) {
+        if (!std::filesystem::exists(std::filesystem::path(test_project_dir) / "CMakeLists.txt")) {
             if (std::filesystem::exists("CMakeLists.txt")) {
-
-                targets.insert(targets.begin(), project_dir);
-
-                project_dir = ".";
-
+                test_pattern = test_project_dir;
+                test_project_dir = ".";
             }
-
         }
 
-    
-
-        auto build_res = run_build_action(opt, project_dir, targets);
-
-        if (build_res) {
-
-            delete build_res.value();
-
-            return 0;
-
-        } else {
-
-            return build_res.error();
-
+        auto build_res = run_build_action(opt, test_project_dir, {}, true);
+        if (!build_res) {
+            std::cerr << "Error: " << build_res.error() << std::endl;
+            return 1;
         }
 
+        return run_test_action(opt, build_res.value().get(), test_pattern);
     }
 
-    
+    std::string project_dir = build_project_dir;
+    std::vector<std::string> targets = build_targets;
+
+    if (!build_cmd->parsed() && !test_cmd->parsed() && !run_cmd->parsed() && !clean_cmd->parsed()) {
+        auto remaining = app.remaining();
+        if (!remaining.empty()) {
+            project_dir = remaining[0];
+            for (size_t i = 1; i < remaining.size(); ++i) {
+                targets.push_back(remaining[i]);
+            }
+        }
+    }
+
+    if (!std::filesystem::exists(std::filesystem::path(project_dir) / "CMakeLists.txt")) {
+        if (std::filesystem::exists("CMakeLists.txt")) {
+            targets.insert(targets.begin(), project_dir);
+            project_dir = ".";
+        }
+    }
+
+    auto build_res = run_build_action(opt, project_dir, targets);
+    if (!build_res) {
+        std::cerr << "Error: " << build_res.error() << std::endl;
+        return 1;
+    }
+    return 0;
+}

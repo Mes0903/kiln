@@ -243,6 +243,12 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 return;
             }
 
+            // Warn if BUILD_TESTING is OFF but add_test is being called
+            auto build_testing = interp.get_variable("BUILD_TESTING");
+            if (Interpreter::is_falsy(build_testing)) {
+                interp.print_message("WARN", "add_test() called but BUILD_TESTING is OFF. Tests may not have been built. Use -DBUILD_TESTING=ON");
+            }
+
             CommandParser parser("add_test");
             std::string name;
             std::string command;
