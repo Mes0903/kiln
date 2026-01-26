@@ -40,26 +40,32 @@ mkdir -p build && cd build && cmake .. && make
 
 **Run dmake CLI:**
 ```bash
-# Build mode (default)
-./build/dmake [path-to-project] [-j N] [-DVAR=VAL] [--config CONFIG] [-B BUILD_DIR]
+# Default: build current directory
+dmake [targets...] [-j N] [-DVAR=VAL] [--config CONFIG]
+
+# Subcommands
+dmake build [project] [targets...]   # Build specific project/targets
+dmake run <target> [-- args...]      # Build and run a target
+dmake test [pattern]                 # Build and run tests (parallel)
+dmake clean                          # Clean build directory
 
 # Script mode
-./build/dmake -P <script.cmake> [-DVAR=VAL]
+dmake -P <script.cmake> [-DVAR=VAL]
 ```
 
 Examples:
 ```bash
-# Default: build current directory in build/debug
+# Build current directory in build/debug
 ./build/dmake
 
-# Build specific project
-./build/dmake test_project
+# Build specific target
+./build/dmake my_lib
 
-# Release build: build/release
-./build/dmake . --config release
+# Build and run with arguments
+./build/dmake run my_app -- --verbose
 
-# Run a script
-./build/dmake -P my_script.cmake -DDEBUG=ON
+# Run tests matching "parser"
+./build/dmake test parser
 ```
 
 **Dependencies:**
@@ -77,7 +83,11 @@ Examples:
 - **Task Generation**: `Target::generate_tasks()` produces the granular `BuildTask`s for the build graph based on the target type.
 - **Custom Targets**: (Future) `CustomArtifact` for `add_custom_command`/`target`.
 
-### Command Argument Parsing
+### Test Runner
+- **Parallel Execution**: `dmake test` runs tests in parallel using `std::async`.
+- **Output Buffering**: Captures `stdout`/`stderr` from test processes to prevent interleaving.
+- **Filtering**: Supports regex filtering of test names.
+- **Integration**: Requires `enable_testing()` in `CMakeLists.txt` to register tests via `add_test()`.
 The `CommandParser` utility (`dmake/command_parser.hpp`) provides a builder-style API for parsing CMake command arguments consistently across builtins.
 
 **Capabilities:**
@@ -276,11 +286,13 @@ To add integration tests:
 
 ## Self hosting
 
-The project can self host. To self host, follow these steps:
+The project can self host. Once you have an initial `dmake` binary:
 
-* Build `dmake` with `cmake` if not already built
-* in `build/` run `path/to/dmake ..`
-* Default build is debug so binary in `build/debug/dmake`
+```bash
+# In the project root
+./build/dmake
+```
+The resulting binary will be in `build/debug/dmake`.
 
 ## Code Locations
 

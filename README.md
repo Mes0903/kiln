@@ -19,29 +19,71 @@ CMake’s generator model was designed for a different era. This project keeps C
 * generator-specific behavior
 * delayed or misleading errors
 
-## Building and using
+## Building
 
-The project has very little dependency:
+The project has very few dependencies:
 
 * CLI11 (https://github.com/CLIUtils/CLI11)
 * Catch2 3.x (https://github.com/catchorg/Catch2)
-* C++23 capable compiler
+* C++23 capable compiler (GCC 13+)
 
-The project can be built with CMake like almost any other C++ project.
+To build `dmake` for the first time using CMake:
 
 ```bash
-mkdir build
-cd build
+mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-### Self hosting
+## Usage
 
-Of course, being a build system that consumes CMake. You can also self-host by building it with itself once you build it (or has a binary from elsewhere).
+`dmake` provides a modern, verb-based CLI inspired by tools like `cargo` or `go`.
 
+### Basic Build
+Build the current project (all targets):
 ```bash
-build/dmake . --config Release
+dmake
 ```
 
-It will produce the same binary in `build/release/dmake`.
+Build specific targets:
+```bash
+dmake my_lib my_app
+```
+
+### Running Targets
+Build and execute an executable target in one step:
+```bash
+dmake run my_app -- --arg1 --arg2
+```
+
+### Testing
+Run tests defined with `add_test()`:
+```bash
+dmake test                # Run all tests
+dmake test "RegexPattern"  # Run matching tests
+```
+Tests run in parallel with buffered output to keep the terminal clean.
+
+### Cleaning
+Remove build artifacts:
+```bash
+dmake clean
+```
+
+### Options
+Common flags:
+- `-j N`: Set number of parallel jobs (defaults to CPU count)
+- `--config <debug|release|relwithdebinfo>`: Set build configuration
+- `-DVAR=VAL`: Define a CMake variable
+- `-B <dir>`: Set build root directory
+
+## Self Hosting
+
+Since `dmake` uses CMake as its input language, it can build itself!
+
+```bash
+# Assuming you have a dmake binary in build/
+./build/dmake --config release
+```
+
+This will produce a release binary at `build/release/dmake`.
