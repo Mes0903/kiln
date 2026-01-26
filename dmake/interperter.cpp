@@ -207,6 +207,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
     auto& vars = call_stack_.front().variables;
     vars["CMAKE_CURRENT_SOURCE_DIR"] = abs_script_dir.string();
+    vars["CMAKE_CURRENT_LIST_DIR"] = abs_script_dir.string();
+    vars["CMAKE_CURRENT_LIST_FILE"] = (abs_script_dir / "CMakeLists.txt").string(); // Default assumption
 
     if (parent_ == nullptr) {
         std::filesystem::path abs_binary_dir;
@@ -264,6 +266,20 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_file_builtins(*this);
         register_find_package_builtins(*this);
 
+        add_builtin("include_guard", [](Interpreter& interp, const std::vector<std::string>& args) {
+            std::string scope = "DIRECTORY";
+            if (!args.empty()) scope = args[0];
+
+            std::string current_file = interp.get_current_file();
+            if (current_file.empty()) return;
+
+            if (scope == "GLOBAL") {
+                interp.get_root()->global_guarded_files_.insert(current_file);
+            } else {
+                interp.directory_guarded_files_.insert(current_file);
+            }
+        });
+
         // Internal builtins (interact with interpreter state/stack)
 
         add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<std::string>& args) {
@@ -283,6 +299,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
             Interpreter sub_interp(path.string(), interp.out_, interp.err_, &interp);
             sub_interp.set_current_file(cmake_file.string());
+            sub_interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
+            sub_interp.set_variable("CMAKE_CURRENT_LIST_DIR", path.string());
+
             Parser parser(content);
             auto ast = parser.parse();
             if (ast) {
@@ -362,6 +381,12 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() could not find: " + path.string(), {}});
     }
 
+    std::string abs_path = std::filesystem::absolute(path).string();
+    
+    // Check include guards
+    if (get_root()->global_guarded_files_.contains(abs_path)) return {};
+    if (directory_guarded_files_.contains(abs_path)) return {};
+
     std::ifstream file(path);
     if (!file) {
         return std::unexpected(InterpreterError{path.string(), 0, 0, 0, 0, "include() could not read: " + path.string(), {}});
@@ -376,8 +401,19 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     }
 
     std::string old_file = get_current_file();
-    set_current_file(std::filesystem::absolute(path).string());
+    std::string abs_dir = std::filesystem::path(abs_path).parent_path().string();
+
+    std::string old_list_file = get_variable("CMAKE_CURRENT_LIST_FILE");
+    std::string old_list_dir = get_variable("CMAKE_CURRENT_LIST_DIR");
+
+    set_variable("CMAKE_CURRENT_LIST_FILE", abs_path);
+    set_variable("CMAKE_CURRENT_LIST_DIR", abs_dir);
+    set_current_file(abs_path);
+
     auto res = interpret(ast.value());
+
+    set_variable("CMAKE_CURRENT_LIST_FILE", old_list_file);
+    set_variable("CMAKE_CURRENT_LIST_DIR", old_list_dir);
     set_current_file(old_file);
 
     return res;
@@ -902,8 +938,23 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             pos++;
             std::string target_name = get_token_string(condition[pos++]);
             return targets_.contains(target_name);
+        } else if (token == "EXISTS" && pos + 1 < condition.size()) {
+            pos++;
+            std::string path = evaluate_token(condition[pos++]);
+            return std::filesystem::exists(path);
+        } else if (token == "IS_DIRECTORY" && pos + 1 < condition.size()) {
+            pos++;
+            std::string path = evaluate_token(condition[pos++]);
+            return std::filesystem::is_directory(path);
+        } else if (token == "IS_ABSOLUTE" && pos + 1 < condition.size()) {
+            pos++;
+            std::string path = evaluate_token(condition[pos++]);
+            return std::filesystem::path(path).is_absolute();
+        } else if (token == "IS_SYMLINK" && pos + 1 < condition.size()) {
+            pos++;
+            std::string path = evaluate_token(condition[pos++]);
+            return std::filesystem::is_symlink(path);
         }
-        // Add other unary operators here (EXISTS, COMMAND, etc.) as needed
 
         // Primary value - evaluate and check truthiness
         // For keywords that aren't being used as operators (like standalone DEFINED, TARGET, etc.),

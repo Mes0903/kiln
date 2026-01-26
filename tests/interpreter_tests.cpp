@@ -1018,3 +1018,52 @@ TEST_CASE("option", "[interpreter][option]") {
     )");
     REQUIRE(output == "ON\n");
 }
+
+TEST_CASE("Multi-line if condition", "[interpreter][if]") {
+    auto output = run_script(R"(
+        set(VAR1 "A")
+        set(VAR2 "B")
+        if(VAR1 STREQUAL "A"
+           AND VAR2 STREQUAL "B")
+            message("Success")
+        endif()
+    )");
+    REQUIRE(output == "Success\n");
+
+    output = run_script(R"(
+        set(TARGET_NAME "Catch2")
+        if(NOT DEFINED CHECK_${TARGET_NAME}
+           OR TRUE)
+            message("Success with var ref")
+        endif()
+    )");
+    REQUIRE(output == "Success with var ref\n");
+
+    output = run_script(R"(
+        set(targets "A;B")
+        foreach(t IN LISTS targets)
+          if(FALSE
+              OR NOT DEFINED _check_for_${t}
+              OR NOT IS_DIRECTORY "/nonexistent")
+            message("Inside for ${t}")
+          endif()
+        endforeach()
+    )");
+    REQUIRE(output == "Inside for A\nInside for B\n");
+
+    output = run_script(R"(
+        set(t "target")
+        set(_check_for_target "EXISTS")
+        if(DEFINED _check_for_${t})
+            message("Defined")
+        endif()
+    )");
+    REQUIRE(output == "Defined\n");
+
+    output = run_script(R"(
+        if(NOT DEFINED UNDEFINED_VAR)
+            message("Success NOT DEFINED")
+        endif()
+    )");
+    REQUIRE(output == "Success NOT DEFINED\n");
+}

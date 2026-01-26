@@ -295,6 +295,103 @@ void register_target_builtins(Interpreter& interp) {
             root_dirs.push_back(resolved.string());
         }
     });
+
+    interp.add_builtin("set_property", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() < 4) {
+            interp.set_fatal_error("set_property() requires at least 4 arguments: <GLOBAL|DIRECTORY|TARGET|...> <items> PROPERTY <name> <value...>");
+            return;
+        }
+
+        std::string type = args[0];
+        if (type != "TARGET") {
+            // Silently ignore non-target properties for now
+            return;
+        }
+
+        size_t property_idx = 0;
+        bool append = false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "APPEND") {
+                append = true;
+                continue;
+            }
+            if (args[i] == "APPEND_STRING") {
+                append = true; // For now, treat same as append (semicolon joined)
+                continue;
+            }
+            if (args[i] == "PROPERTY") {
+                property_idx = i;
+                break;
+            }
+        }
+
+        if (property_idx == 0 || property_idx + 1 >= args.size()) {
+            interp.set_fatal_error("set_property() missing PROPERTY keyword or property name");
+            return;
+        }
+
+        std::string property_name = args[property_idx + 1];
+        std::vector<std::string> property_values;
+        for (size_t i = property_idx + 2; i < args.size(); ++i) {
+            property_values.push_back(args[i]);
+        }
+
+        for (size_t i = 1; i < property_idx; ++i) {
+            if (args[i] == "APPEND" || args[i] == "APPEND_STRING") continue;
+
+            auto target = get_target_from_name(interp, args[i], "set_property");
+            if (!target) continue;
+
+            // Join values with semicolon for CMake property convention
+            std::string value;
+            for (const auto& v : property_values) {
+                if (!value.empty()) value += ";";
+                value += v;
+            }
+
+            if (append) {
+                std::string old_val = target->get_property(property_name);
+                if (!old_val.empty() && !value.empty()) {
+                    target->set_property(property_name, old_val + ";" + value);
+                } else if (!value.empty()) {
+                    target->set_property(property_name, value);
+                }
+            } else {
+                target->set_property(property_name, value);
+            }
+        }
+    });
+
+    interp.add_builtin("get_property", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() < 4) {
+            interp.set_fatal_error("get_property() requires at least 4 arguments: <variable> <GLOBAL|DIRECTORY|TARGET|...> <item> PROPERTY <name>");
+            return;
+        }
+
+        std::string var_name = args[0];
+        std::string type = args[1];
+        std::string item = args[2];
+        std::string property_kw = args[3];
+        
+        if (property_kw != "PROPERTY" || args.size() < 5) {
+            interp.set_fatal_error("get_property() missing PROPERTY keyword or property name");
+            return;
+        }
+
+        std::string property_name = args[4];
+
+        if (type == "TARGET") {
+            auto target = get_target_from_name(interp, item, "get_property");
+            if (target) {
+                interp.set_variable(var_name, target->get_property(property_name));
+            } else {
+                interp.set_variable(var_name, "");
+            }
+        } else {
+            // Other property types not implemented, return empty
+            interp.set_variable(var_name, "");
+        }
+    });
 }
 
 } // namespace dmake

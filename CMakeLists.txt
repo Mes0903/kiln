@@ -34,8 +34,6 @@ set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake
 )
 
-find_package(Catch2 3 REQUIRED)
-
 # Does not support testing in dmake yet (Plus no find_pakage)
 if(NOT DEFINED DMAKE_VERSION)
     enable_testing()

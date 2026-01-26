@@ -62,6 +62,9 @@ public:
     void add_language_flags(Language lang, const std::vector<std::string>& flags);
     const std::vector<std::string>& get_language_flags(Language lang) const;
 
+    void set_property(const std::string& name, std::string value);
+    std::string get_property(const std::string& name) const;
+
     // Deprecated helpers for C++
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
@@ -88,6 +91,8 @@ protected:
 
     std::map<Language, std::string> standards_;
     std::map<Language, std::vector<std::string>> language_flags_;
+
+    std::map<std::string, std::string> properties_;
 
     std::map<PropertyVisibility, std::vector<std::string>> sources_;
     std::map<PropertyVisibility, std::vector<std::string>> linked_libraries_;

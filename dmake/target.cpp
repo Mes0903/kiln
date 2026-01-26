@@ -96,6 +96,18 @@ const std::string& Target::get_language_standard(Language lang) const {
     static const std::string empty;
     auto it = standards_.find(lang);
     return (it != standards_.end()) ? it->second : empty;
+    return standards_.at(lang);
+}
+
+void Target::set_property(const std::string& name, std::string value) {
+    properties_[name] = std::move(value);
+}
+
+std::string Target::get_property(const std::string& name) const {
+    if (properties_.contains(name)) {
+        return properties_.at(name);
+    }
+    return "";
 }
 
 void Target::add_language_flags(Language lang, const std::vector<std::string>& flags) {

@@ -4,6 +4,7 @@
 #include "target.hpp"
 #include "build_system.hpp"
 #include <map>
+#include <set>
 #include <functional>
 #include <iostream>
 #include <unistd.h>
@@ -132,10 +133,12 @@ private:
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
     Toolchain toolchain_;
+    std::set<std::string> global_guarded_files_;
 
     // Directory-scoped accumulated directories (inherited by targets)
     std::vector<std::string> accumulated_include_directories_;
     std::vector<std::string> accumulated_link_directories_;
+    std::set<std::string> directory_guarded_files_;
 
     // Scope-local state
     std::map<std::string, UserFunction> user_functions_;
