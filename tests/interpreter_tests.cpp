@@ -1439,3 +1439,340 @@ TEST_CASE("namespace case insensitivity comprehensive", "[interpreter][case]") {
     )");
     CHECK(output == "v1 v2 v3\n");
 }
+
+TEST_CASE("string() FIND operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(FIND "Hello World" "World" pos)
+        message("${pos}")
+    )");
+    REQUIRE(output == "6\n");
+
+    output = run_script(R"(
+        string(FIND "Hello World" "xyz" pos)
+        message("${pos}")
+    )");
+    REQUIRE(output == "-1\n");
+
+    output = run_script(R"(
+        string(FIND "abcabc" "bc" pos REVERSE)
+        message("${pos}")
+    )");
+    REQUIRE(output == "4\n");
+}
+
+TEST_CASE("string() REPLACE operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(REPLACE ";" "," result "a;b;c;d")
+        message("${result}")
+    )");
+    REQUIRE(output == "a,b,c,d\n");
+
+    output = run_script(R"(
+        string(REPLACE "foo" "bar" result "foo foo foo")
+        message("${result}")
+    )");
+    REQUIRE(output == "bar bar bar\n");
+}
+
+TEST_CASE("string() REGEX MATCH operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(REGEX MATCH "[0-9]+" result "abc123def456")
+        message("${result}")
+    )");
+    REQUIRE(output == "123\n");
+
+    output = run_script(R"(
+        string(REGEX MATCH "[0-9]+" result "no numbers here")
+        message("${result}")
+    )");
+    REQUIRE(output == "\n");
+}
+
+TEST_CASE("string() REGEX MATCHALL operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(REGEX MATCHALL "[0-9]+" result "abc123def456ghi789")
+        message("${result}")
+    )");
+    REQUIRE(output == "123;456;789\n");
+}
+
+TEST_CASE("string() REGEX REPLACE operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(REGEX REPLACE "[0-9]+" "NUM" result "abc123def456")
+        message("${result}")
+    )");
+    REQUIRE(output == "abcNUMdefNUM\n");
+}
+
+TEST_CASE("string() REGEX QUOTE operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(REGEX QUOTE result "a.b*c?d[e]")
+        message("${result}")
+    )");
+    REQUIRE(output == "a\\.b\\*c\\?d\\[e\\]\n");
+}
+
+TEST_CASE("string() APPEND operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        set(str "Hello")
+        string(APPEND str " " "World")
+        message("${str}")
+    )");
+    REQUIRE(output == "Hello World\n");
+}
+
+TEST_CASE("string() PREPEND operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        set(str "World")
+        string(PREPEND str "Hello" " ")
+        message("${str}")
+    )");
+    REQUIRE(output == "Hello World\n");
+}
+
+TEST_CASE("string() CONCAT operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(CONCAT result "Hello" " " "World" "!")
+        message("${result}")
+    )");
+    REQUIRE(output == "Hello World!\n");
+}
+
+TEST_CASE("string() JOIN operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(JOIN "," result "a" "b" "c" "d")
+        message("${result}")
+    )");
+    REQUIRE(output == "a,b,c,d\n");
+
+    output = run_script(R"(
+        string(JOIN " - " result "one" "two" "three")
+        message("${result}")
+    )");
+    REQUIRE(output == "one - two - three\n");
+}
+
+TEST_CASE("string() TOLOWER operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(TOLOWER "HELLO WORLD" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "hello world\n");
+}
+
+TEST_CASE("string() TOUPPER operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(TOUPPER "hello world" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "HELLO WORLD\n");
+}
+
+TEST_CASE("string() LENGTH operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(LENGTH "Hello World" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "11\n");
+
+    output = run_script(R"(
+        string(LENGTH "" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "0\n");
+}
+
+TEST_CASE("string() SUBSTRING operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(SUBSTRING "Hello World" 0 5 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "Hello\n");
+
+    output = run_script(R"(
+        string(SUBSTRING "Hello World" 6 -1 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "World\n");
+}
+
+TEST_CASE("string() STRIP operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(STRIP "  Hello World  " result)
+        message("${result}")
+    )");
+    REQUIRE(output == "Hello World\n");
+
+    output = run_script(R"(
+        string(STRIP "	Tabs	" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "Tabs\n");
+}
+
+TEST_CASE("string() GENEX_STRIP operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(GENEX_STRIP "foo$<CONFIG>bar$<1:baz>qux" result)
+        message("${result}")
+    )");
+    // GENEX_STRIP removes generator expressions entirely
+    REQUIRE(output == "foobarqux\n");
+
+    output = run_script(R"(
+        string(GENEX_STRIP "plain text" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "plain text\n");
+
+    output = run_script(R"(
+        string(GENEX_STRIP "before$<TARGET_FILE:foo>after" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "beforeafter\n");
+}
+
+TEST_CASE("string() REPEAT operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(REPEAT "ab" 3 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "ababab\n");
+
+    output = run_script(R"(
+        string(REPEAT "x" 0 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "\n");
+}
+
+TEST_CASE("string() COMPARE operations", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(COMPARE EQUAL "abc" "abc" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "1\n");
+
+    output = run_script(R"(
+        string(COMPARE NOTEQUAL "abc" "xyz" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "1\n");
+
+    output = run_script(R"(
+        string(COMPARE LESS "abc" "xyz" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "1\n");
+
+    output = run_script(R"(
+        string(COMPARE GREATER "xyz" "abc" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "1\n");
+
+    output = run_script(R"(
+        string(COMPARE LESS_EQUAL "abc" "abc" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "1\n");
+
+    output = run_script(R"(
+        string(COMPARE GREATER_EQUAL "xyz" "abc" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "1\n");
+}
+
+TEST_CASE("string() ASCII operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(ASCII 72 101 108 108 111 result)
+        message("${result}")
+    )");
+    REQUIRE(output == "Hello\n");
+}
+
+TEST_CASE("string() HEX operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(HEX "Hello" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "48656c6c6f\n");
+}
+
+TEST_CASE("string() CONFIGURE operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        set(NAME "World")
+        string(CONFIGURE "Hello ${NAME}!" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "Hello World!\n");
+
+    output = run_script(R"(
+        set(VERSION "1.0")
+        string(CONFIGURE "Version @VERSION@" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "Version 1.0\n");
+
+    output = run_script(R"(
+        set(VERSION "1.0")
+        string(CONFIGURE "Version @VERSION@" result @ONLY)
+        message("${result}")
+    )");
+    REQUIRE(output == "Version 1.0\n");
+}
+
+TEST_CASE("string() MAKE_C_IDENTIFIER operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(MAKE_C_IDENTIFIER "hello-world.txt" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "hello_world_txt\n");
+
+    output = run_script(R"(
+        string(MAKE_C_IDENTIFIER "foo bar@123" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "foo_bar_123\n");
+}
+
+TEST_CASE("string() RANDOM operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(RANDOM result)
+        message("${result}")
+    )");
+    // Just check that it produced something
+    REQUIRE(output.length() == 6); // 5 chars + newline
+
+    output = run_script(R"(
+        string(RANDOM LENGTH 10 result)
+        message("${result}")
+    )");
+    REQUIRE(output.length() == 11); // 10 chars + newline
+
+    output = run_script(R"(
+        string(RANDOM LENGTH 8 ALPHABET "01" result)
+        message("${result}")
+    )");
+    REQUIRE(output.length() == 9); // 8 chars + newline
+    // Check it only contains 0 and 1
+    for (size_t i = 0; i < output.length() - 1; ++i) {
+        REQUIRE((output[i] == '0' || output[i] == '1'));
+    }
+}
+
+TEST_CASE("string() TIMESTAMP operation", "[interpreter][string]") {
+    auto output = run_script(R"(
+        string(TIMESTAMP result)
+        message("${result}")
+    )");
+    // Just check that it produced something
+    REQUIRE(!output.empty());
+
+    output = run_script(R"(
+        string(TIMESTAMP result "%Y")
+        message("${result}")
+    )");
+    // Should be a 4-digit year
+    REQUIRE(output.length() == 5); // 4 digits + newline
+}

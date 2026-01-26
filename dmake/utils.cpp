@@ -54,8 +54,8 @@ dmake::CommandResult dmake::run_command(const std::string& command, const std::s
 
     int status = pclose(pipe);
     if (!prev_dir.empty()) chdir(prev_dir.c_str());
-    
-    // WEXITSTATUS is only valid if WIFEXITED is true. 
+
+    // WEXITSTATUS is only valid if WIFEXITED is true.
     // On many systems pclose returns the raw status.
     int exit_code = (status == -1) ? -1 : (WIFEXITED(status) ? WEXITSTATUS(status) : status);
 
@@ -64,18 +64,20 @@ dmake::CommandResult dmake::run_command(const std::string& command, const std::s
 
 std::string dmake::escape_shell_arg(const std::string& arg) {
     if (arg.empty()) return "''";
-    
+
     bool needed = false;
     for (char c : arg) {
-        if (!std::isalnum(static_cast<unsigned char>(c)) && 
-            c != '-' && c != '_' && c != '.' && c != '/' && c != ',') {
+        if (std::isspace(static_cast<unsigned char>(c)) || c == '\'' || c == '"' || c == '\\' ||
+            c == '`' || c == '$' || c == '&' || c == '|' || c == ';' || c == '<' || c == '>' ||
+            c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || c == '*' ||
+            c == '?' || c == '~' || c == '#' || c == '!' || c == '^') {
             needed = true;
             break;
         }
     }
-    
+
     if (!needed) return arg;
-    
+
     std::string result = "'";
     for (char c : arg) {
         if (c == '\'') {

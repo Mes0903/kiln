@@ -22,6 +22,7 @@ add_library(dmake SHARED
     dmake/builtins/file.cpp
     dmake/builtins/find_package.cpp
     dmake/builtins/math.cpp
+    dmake/builtins/string.cpp
     dmake/CMakeList.cpp
 )
 

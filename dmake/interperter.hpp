@@ -117,6 +117,8 @@ public:
     friend void register_project_builtins(Interpreter& interp);
     friend void register_file_builtins(Interpreter& interp);
     friend void register_process_builtins(Interpreter& interp);
+    friend void register_math_builtins(Interpreter& interp);
+    friend void register_string_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 
