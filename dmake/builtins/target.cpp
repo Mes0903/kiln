@@ -236,8 +236,23 @@ void register_target_builtins(Interpreter& interp) {
                 target->set_output_name(prop_value);
             } else if (prop_name == "CXX_STANDARD") {
                 target->set_cxx_standard(prop_value);
-            } else if (prop_name == "IMPORTED_LOCATION") {
+            } else if (prop_name == "IMPORTED_LOCATION" ||
+                       prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
+                // Handle both IMPORTED_LOCATION and IMPORTED_LOCATION_<CONFIG>
                 target->set_imported_location(prop_value);
+            } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
+                // Parse semicolon-separated list of libraries
+                std::vector<std::string> libs;
+                std::string lib;
+                std::istringstream ss(prop_value);
+                while (std::getline(ss, lib, ';')) {
+                    if (!lib.empty()) {
+                        libs.push_back(lib);
+                    }
+                }
+                if (!libs.empty()) {
+                    target->add_linked_libraries(libs, PropertyVisibility::INTERFACE);
+                }
             }
         }
     });

@@ -7,6 +7,8 @@
 #include <sstream>
 #include <unistd.h>
 #include <algorithm>
+#include <functional>
+#include <set>
 
 namespace dmake {
 
@@ -356,16 +358,34 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.standard = get_language_standard(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
+        // Helper to recursively resolve libraries, including INTERFACE dependencies
+        std::function<void(const std::string&, std::set<std::string>&)> resolve_lib =
+            [&](const std::string& lib_name, std::set<std::string>& visited) {
+                if (visited.count(lib_name)) return; // Avoid cycles
+                visited.insert(lib_name);
+
+                auto it = all_targets.find(lib_name);
+                if (it != all_targets.end()) {
+                    auto& lib_target = it->second;
+                    // Add the library file itself first (if it has one)
+                    std::string lib_path = lib_target->get_output_path();
+                    if (!lib_path.empty()) {
+                        ctx.objects.push_back(lib_path);
+                    }
+                    // Then recursively add INTERFACE libraries (dependencies come after)
+                    for (const auto& iface_lib : lib_target->get_linked_libraries(PropertyVisibility::INTERFACE)) {
+                        resolve_lib(iface_lib, visited);
+                    }
+                } else {
+                    // It's a system library or explicit -l name
+                    ctx.libs.push_back(lib_name);
+                }
+            };
+
         // Resolve library names: if it's a known target, use direct path; otherwise use -l
+        std::set<std::string> visited;
         for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) {
-            auto it = all_targets.find(lib);
-            if (it != all_targets.end()) {
-                // It's a target - link directly to the library file
-                ctx.objects.push_back(it->second->get_output_path());
-            } else {
-                // It's a system library or explicit -l name
-                ctx.libs.push_back(lib);
-            }
+            resolve_lib(lib, visited);
         }
 
         // Add explicit link directories
