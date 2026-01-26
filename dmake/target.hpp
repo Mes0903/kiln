@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include "language.hpp"
 
 namespace dmake {
@@ -62,7 +63,7 @@ public:
     std::string get_output_path() const;
 
     // The core task generation logic
-    void generate_tasks(BuildGraph& graph, const Toolchain& toolchain);
+    void generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets);
 
 protected:
     // Helper methods for task generation

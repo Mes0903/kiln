@@ -152,7 +152,7 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
 
     // 2. Generate tasks for all target
     for (const auto& [name, target] : targets_) {
-        target->generate_tasks(graph, get_root()->toolchain_);
+        target->generate_tasks(graph, get_root()->toolchain_, targets_);
     }
 
     // Link dependency resolution (adding inputs to link tasks)

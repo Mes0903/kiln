@@ -171,6 +171,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         // Language-specific global flags (from CMAKE_<LANG>_FLAGS)
         for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
 
+        // Source directory must be in include path for PCH wrapper resolution
+        ctx.includes.push_back(source_dir_);
         for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
             ctx.includes.push_back((std::filesystem::path(source_dir_) / dir).string());
         for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
@@ -192,6 +194,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
 
         if (!pch_gch_path.empty()) {
             task.dependencies.insert(pch_gch_path);
+            // PCH must also be an input so changes to PCH trigger recompilation
+            task.inputs.push_back(pch_gch_path);
         }
 
         graph.add_task(std::move(task));
@@ -270,6 +274,21 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
 
     pch_task.command = compiler->get_compile_command(ctx);
     pch_task.inputs.push_back(pch_wrapper);
+
+    // Add the actual header files as inputs so PCH rebuilds when they change
+    for (const auto& hdr : private_pchs) {
+        auto hdr_abs = std::filesystem::path(hdr).is_absolute() ?
+            std::filesystem::path(hdr) :
+            std::filesystem::path(target->get_source_dir()) / hdr;
+        pch_task.inputs.push_back(hdr_abs.lexically_normal().string());
+    }
+    for (const auto& hdr : public_pchs) {
+        auto hdr_abs = std::filesystem::path(hdr).is_absolute() ?
+            std::filesystem::path(hdr) :
+            std::filesystem::path(target->get_source_dir()) / hdr;
+        pch_task.inputs.push_back(hdr_abs.lexically_normal().string());
+    }
+
     pch_task.outputs.push_back(pch_gch_path);
 
     graph.add_task(std::move(pch_task));
@@ -277,7 +296,7 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     return {pch_gch_path, pch_include_arg};
 }
 
-void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain) {
+void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
     if (type_ == TargetType::INTERFACE_LIBRARY) return;
 
     std::vector<std::string> obj_files;
@@ -316,10 +335,23 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain) {
         ctx.is_shared = is_shared;
         ctx.standard = get_language_standard(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
-        
-        ctx.lib_dirs.push_back(binary_dir_);
-        for (const auto& dir : get_link_directories(PropertyVisibility::PRIVATE)) ctx.lib_dirs.push_back(dir);
-        for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) ctx.libs.push_back(lib);
+
+        // Resolve library names: if it's a known target, use direct path; otherwise use -l
+        for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) {
+            auto it = all_targets.find(lib);
+            if (it != all_targets.end()) {
+                // It's a target - link directly to the library file
+                ctx.objects.push_back(it->second->get_output_path());
+            } else {
+                // It's a system library or explicit -l name
+                ctx.libs.push_back(lib);
+            }
+        }
+
+        // Add explicit link directories
+        for (const auto& dir : get_link_directories(PropertyVisibility::PRIVATE)) {
+            ctx.lib_dirs.push_back(dir);
+        }
 
         link.command = linker->get_link_command(ctx);
     }

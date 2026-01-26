@@ -21,30 +21,31 @@ trap cleanup EXIT
 TOTAL=0
 PASSED=0
 
-for d in "$TEST_ROOT"/*/; do
-    if [ -f "$d/test.sh" ]; then
-        test_name=$(basename "$d")
-        TOTAL=$((TOTAL + 1))
-        
-        echo -n "Running $test_name... "
-        
-        # Setup work dir
-        work_dir="$TEMP_DIR/$test_name"
-        mkdir -p "$work_dir"
-        cp -r "$d"/* "$work_dir/"
-        chmod +x "$work_dir/test.sh"
-        
-        # Run test
-        cd "$work_dir"
-        if ./test.sh "$DMAKE_BIN" > test.log 2>&1; then
-            echo "PASSED"
-            PASSED=$((PASSED + 1))
-        else
-            echo "FAILED"
-            sed 's/^/  /' test.log
-        fi
-        cd "$TEST_ROOT"
+for d in $(find "$TEST_ROOT" -maxdepth 1 -type d); do
+    if [ ! -f "$d/test.sh" ]; then
+        continue
     fi
+    test_name=$(basename "$d")
+    TOTAL=$((TOTAL + 1))
+
+    echo -n "Running $test_name... "
+
+    # Setup work dir
+    work_dir="$TEMP_DIR/$test_name"
+    mkdir -p "$work_dir"
+    cp -r "$d"/* "$work_dir/"
+    chmod +x "$work_dir/test.sh"
+
+    # Run test
+    cd "$work_dir"
+    if ./test.sh "$DMAKE_BIN" ; then
+        echo "PASSED"
+        PASSED=$((PASSED + 1))
+    else
+        echo "FAILED"
+        sed 's/^/  /' test.log
+    fi
+    cd "$TEST_ROOT"
 done
 
 echo ""
