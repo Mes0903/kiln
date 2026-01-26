@@ -278,7 +278,8 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     ctx.is_shared = is_shared;
     ctx.standard = target->get_language_standard(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
-    ctx.options.push_back("-x c++-header"); // Force header type
+    ctx.options.push_back("-x"); // Force header type
+    ctx.options.push_back("c++-header");
 
     // PCH should also get global CXX flags
     for (const auto& opt : target->get_language_flags(pch_lang)) ctx.options.push_back(opt);

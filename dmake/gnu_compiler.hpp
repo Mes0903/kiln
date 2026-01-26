@@ -10,71 +10,81 @@ public:
     explicit GnuCompiler(std::string binary, Language lang) 
         : binary_(std::move(binary)), lang_(lang) {}
 
-    std::string get_compile_command(const CompileContext& ctx) const override {
-        std::ostringstream cmd;
-        cmd << binary_;
+    std::vector<std::string> get_compile_command(const CompileContext& ctx) const override {
+        std::vector<std::string> cmd;
+        cmd.push_back(binary_);
 
         if (!ctx.standard.empty()) {
-            cmd << " -std=" << (lang_ == Language::C ? "c" : "c++") << ctx.standard;
+            cmd.push_back("-std=" + std::string(lang_ == Language::C ? "c" : "c++") + ctx.standard);
         }
 
         if (ctx.color_diagnostics) {
-            cmd << " -fdiagnostics-color=always";
+            cmd.push_back("-fdiagnostics-color=always");
         }
 
-        for (const auto& opt : ctx.options) cmd << " " << opt;
-        for (const auto& def : ctx.definitions) cmd << " -D" << def;
+        for (const auto& opt : ctx.options) cmd.push_back(opt);
+        for (const auto& def : ctx.definitions) cmd.push_back("-D" + def);
 
-        cmd << " -MMD -MF " << ctx.output << ".d";
+        cmd.push_back("-MMD");
+        cmd.push_back("-MF");
+        cmd.push_back(ctx.output + ".d");
 
-        if (ctx.is_shared) cmd << " -fPIC";
+        if (ctx.is_shared) cmd.push_back("-fPIC");
 
-        cmd << " -c -o " << ctx.output;
+        cmd.push_back("-c");
+        cmd.push_back("-o");
+        cmd.push_back(ctx.output);
 
         for (const auto& dir : ctx.includes) {
-            cmd << " -I" << dir;
+            cmd.push_back("-I" + dir);
         }
 
         if (!ctx.pch_include.empty()) {
-            cmd << " " << ctx.pch_include;
+            // Split pch_include if it contains multiple arguments (e.g., "-include wrapper.hpp")
+            std::stringstream ss(ctx.pch_include);
+            std::string arg;
+            while (ss >> arg) cmd.push_back(arg);
         }
 
-        cmd << " " << ctx.source;
+        cmd.push_back(ctx.source);
 
-        return cmd.str();
+        return cmd;
     }
 
-    std::string get_link_command(const LinkContext& ctx) const override {
-        std::ostringstream cmd;
-        cmd << binary_;
+    std::vector<std::string> get_link_command(const LinkContext& ctx) const override {
+        std::vector<std::string> cmd;
+        cmd.push_back(binary_);
 
         if (!ctx.standard.empty()) {
-            cmd << " -std=" << (lang_ == Language::C ? "c" : "c++") << ctx.standard;
+            cmd.push_back("-std=" + std::string(lang_ == Language::C ? "c" : "c++") + ctx.standard);
         }
 
         if (ctx.color_diagnostics) {
-            cmd << " -fdiagnostics-color=always";
+            cmd.push_back("-fdiagnostics-color=always");
         }
 
-        for (const auto& flag : ctx.linker_flags) cmd << " " << flag;
+        for (const auto& flag : ctx.linker_flags) cmd.push_back(flag);
 
-        cmd << " -Wl,-rpath,'$ORIGIN'";
-        if (ctx.is_shared) cmd << " -shared";
-        cmd << " -o " << ctx.output;
+        cmd.push_back("-Wl,-rpath,'$ORIGIN'");
+        if (ctx.is_shared) cmd.push_back("-shared");
+        cmd.push_back("-o");
+        cmd.push_back(ctx.output);
 
-        for (const auto& obj : ctx.objects) cmd << " " << obj;
+        for (const auto& obj : ctx.objects) cmd.push_back(obj);
 
-        for (const auto& dir : ctx.lib_dirs) cmd << " -L" << dir;
-        for (const auto& lib : ctx.libs) cmd << " -l" << lib;
+        for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
+        for (const auto& lib : ctx.libs) cmd.push_back("-l" + lib);
 
-        return cmd.str();
+        return cmd;
     }
 
-    std::string get_archive_command(const std::string& output, const std::vector<std::string>& objs) const override {
-        std::ostringstream cmd;
-        cmd << "ar rcs " << output;
-        for (const auto& obj : objs) cmd << " " << obj;
-        return cmd.str();
+    std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const override {
+        std::vector<std::string> cmd;
+        cmd.push_back("ar");
+        cmd.push_back("rcs");
+        cmd.push_back(output);
+        for (const auto& obj : objs) cmd.push_back(obj);
+        return cmd;
     }
 
 private:

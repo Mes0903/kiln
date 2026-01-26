@@ -1,6 +1,8 @@
 #include "utils.hpp"
 #include "inner/blake2b.h"
 #include <type_traits>
+#include <vector>
+#include <cctype>
 
 dmake::Hash256 dmake::blake2b(const void *data, size_t len, const void* key, size_t keylen)
 {
@@ -58,4 +60,43 @@ dmake::CommandResult dmake::run_command(const std::string& command, const std::s
     int exit_code = (status == -1) ? -1 : (WIFEXITED(status) ? WEXITSTATUS(status) : status);
 
     return {exit_code, output};
+}
+
+std::string dmake::escape_shell_arg(const std::string& arg) {
+    if (arg.empty()) return "''";
+    
+    bool needed = false;
+    for (char c : arg) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && 
+            c != '-' && c != '_' && c != '.' && c != '/' && c != ',') {
+            needed = true;
+            break;
+        }
+    }
+    
+    if (!needed) return arg;
+    
+    std::string result = "'";
+    for (char c : arg) {
+        if (c == '\'') {
+            result += "'\\''";
+        } else {
+            result += c;
+        }
+    }
+    result += "'";
+    return result;
+}
+
+std::string dmake::join_command(const std::vector<std::string>& args) {
+    std::string result;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) result += " ";
+        result += escape_shell_arg(args[i]);
+    }
+    return result;
+}
+
+dmake::CommandResult dmake::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
+    return run_command(join_command(command), working_dir);
 }

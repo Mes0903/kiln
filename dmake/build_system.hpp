@@ -8,6 +8,7 @@
 #include <optional>
 #include <filesystem>
 #include <mutex>
+#include "utils.hpp"
 
 namespace dmake {
 
@@ -15,7 +16,7 @@ class Target;
 
 struct BuildTask {
     std::string id;              // Unique identifier (usually the primary output file)
-    std::string command;
+    std::vector<std::string> command;
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     Target* parent_target = nullptr;
@@ -66,11 +67,7 @@ private:
     std::vector<std::string> parse_deps_file(const std::string& path);
 
     // Subprocess execution with output capture
-    struct CommandResult {
-        int exit_code;
-        std::string output;
-    };
-    CommandResult run_command(const std::string& command);
+    CommandResult run_command(const std::vector<std::string>& command);
 };
 
 } // namespace dmake

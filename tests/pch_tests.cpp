@@ -1,11 +1,17 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/interperter.hpp"
-#include "dmake/target.hpp"
 #include "dmake/build_system.hpp"
-#include "dmake/cmake-language.hpp"
+#include "dmake/target.hpp"
+#include "dmake/toolchain.hpp"
+#include "dmake/gnu_compiler.hpp"
+#include "dmake/language.hpp"
+#include "dmake/interperter.hpp" // For Interpreter
+#include "dmake/cmake-language.hpp" // For Parser
+#include "dmake/builtins/registry.hpp" // For register_target_builtins
 #include <filesystem>
-#include <fstream>
+#include <string>
+#include <algorithm>
 #include <iostream>
+#include <fstream> // For std::ofstream
 
 using namespace dmake;
 
@@ -78,7 +84,8 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     auto& obj_task = graph.get_task(obj_file);
     
     REQUIRE(obj_task.dependencies.count(pch_gch_expected) > 0);
-    REQUIRE(obj_task.command.find("-include " + pch_wrapper_expected) != std::string::npos);
+    REQUIRE(std::find(obj_task.command.begin(), obj_task.command.end(), "-include") != obj_task.command.end());
+    REQUIRE(std::find(obj_task.command.begin(), obj_task.command.end(), pch_wrapper_expected) != obj_task.command.end());
 
     // Cleanup
     std::filesystem::remove_all(temp_dir);

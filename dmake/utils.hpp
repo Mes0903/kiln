@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <unistd.h>
 #include <string>
+#include <vector>
 
 namespace dmake {
 struct Hash256
@@ -30,11 +31,26 @@ struct CommandResult {
 };
 
 /**
+ * @brief Escapes a string for use as a shell argument.
+ */
+std::string escape_shell_arg(const std::string& arg);
+
+/**
+ * @brief Joins a command vector into a single string, escaping each argument.
+ */
+std::string join_command(const std::vector<std::string>& args);
+
+/**
  * @brief Execute a shell command and capture its output.
  * @param command The command to execute.
  * @param working_dir The directory to run the command in (empty for current dir).
  * @return CommandResult containing exit code and combined stdout/stderr.
  */
 CommandResult run_command(const std::string& command, const std::string& working_dir = "");
+
+/**
+ * @brief Execute a command (vector of args) and capture its output.
+ */
+CommandResult run_command(const std::vector<std::string>& command, const std::string& working_dir = "");
 
 }

@@ -1,5 +1,6 @@
 #include "build_system.hpp"
 #include "target.hpp"
+#include "utils.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -30,7 +31,7 @@ std::expected<void, std::string> BuildGraph::generate_compile_commands(const std
         if (task.is_compilation) {
             commands.push_back({
                 .directory = current_dir,
-                .command = task.command,
+                .command = join_command(task.command),
                 .file = task.source_file,
                 .output = task.outputs.empty() ? "" : task.outputs[0]
             });
@@ -246,7 +247,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         if (!result.output.empty()) std::cerr << result.output << std::endl;
 
                         std::lock_guard<std::mutex> lock_loop(loop_mutex);
-                        fatal_error = "Command failed: " + task.command;
+                        fatal_error = "Command failed: " + join_command(task.command);
                         cv.notify_all();
                         return;
                     } else if (!result.output.empty()) {
@@ -293,19 +294,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     return save_cache(build_dir, new_cache);
 }
 
-BuildGraph::CommandResult BuildGraph::run_command(const std::string& command) {
-    std::string full_command = command + " 2>&1";
-    FILE* pipe = popen(full_command.c_str(), "r");
-    if (!pipe) return {-1, "Failed to execute command"};
-
-    std::string output;
-    std::array<char, 4096> buffer;
-    while (fgets(buffer.data(), buffer.size(), pipe)) {
-        output += buffer.data();
-    }
-
-    int status = pclose(pipe);
-    return {WEXITSTATUS(status), output};
+dmake::CommandResult BuildGraph::run_command(const std::vector<std::string>& command) {
+    return dmake::run_command(command);
 }
 
 std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
@@ -330,33 +320,36 @@ std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
     return deps;
 }
 
-static std::expected<std::vector<std::string>, std::string> get_headers_via_h_flag(const std::string& command) {
-    // Extract include flags and the source file from the command
-    std::stringstream ss(command);
-    std::string word;
-    std::string flags;
-    std::string source;
+static std::expected<std::vector<std::string>, std::string> get_headers_via_h_flag(const std::vector<std::string>& command) {
+    std::vector<std::string> scan_cmd;
+    scan_cmd.push_back("g++");
+    scan_cmd.push_back("-H");
+    scan_cmd.push_back("-E");
 
-    while (ss >> word) {
-        if (word.starts_with("-I") || word.starts_with("-D") || word.starts_with("-std=") ||
-            word.starts_with("-f") || word == "-include") {
-            flags += " " + word;
-            // Handle -include which takes a separate argument
-            if (word == "-include" && ss >> word) {
-                flags += " " + word;
+    std::string source;
+    for (size_t i = 0; i < command.size(); ++i) {
+        const auto& arg = command[i];
+        if (arg.starts_with("-I") || arg.starts_with("-D") || arg.starts_with("-std=") ||
+            arg.starts_with("-f") || arg == "-include") {
+            scan_cmd.push_back(arg);
+            if (arg == "-include" && i + 1 < command.size()) {
+                scan_cmd.push_back(command[++i]);
             }
-        } else if (word.ends_with(".cpp") || word.ends_with(".c") || word.ends_with(".cc")) {
-            source = word;
+        } else if (arg.ends_with(".cpp") || arg.ends_with(".c") || arg.ends_with(".cc")) {
+            source = arg;
         }
     }
 
     if (source.empty()) return std::vector<std::string>{};
+    scan_cmd.push_back(source);
 
-    std::string scan_cmd = "g++ -H -E " + flags + " " + source + " 2>&1 > /dev/null";
+    // Redirect stdout to /dev/null for the scan command
+    std::string full_cmd = join_command(scan_cmd) + " 2>&1 > /dev/null";
+    
     std::array<char, 256> buffer;
     std::vector<std::string> headers;
 
-    FILE* pipe = popen(scan_cmd.c_str(), "r");
+    FILE* pipe = popen(full_cmd.c_str(), "r");
     if (!pipe) return std::unexpected("Failed to execute g++ for header scanning");
 
         std::string full_output;
@@ -400,7 +393,7 @@ std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& pat
 
 std::expected<std::string, std::string> BuildGraph::calculate_signature(const BuildTask& task) {
     std::ostringstream oss;
-    oss << "cmd:" << task.command << "|";
+    oss << "cmd:" << join_command(task.command) << "|";
 
     auto version_res = get_compiler_version();
     if (!version_res) return std::unexpected(version_res.error());
@@ -430,7 +423,8 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
     }
 
     // 3. If no .d file exists but it's a compile task, use g++ -H (slow but accurate path)
-    if (!found_deps && (task.command.find(" -c ") != std::string::npos)) {
+    auto is_compile_task = std::find(task.command.begin(), task.command.end(), "-c") != task.command.end();
+    if (!found_deps && is_compile_task) {
         auto headers_res = get_headers_via_h_flag(task.command);
         if (!headers_res) return std::unexpected(headers_res.error());
         for (const auto& header : *headers_res) {

@@ -1,5 +1,6 @@
 #include "dmake/cmake-language.hpp"
 #include "dmake/interperter.hpp"
+#include "dmake/utils.hpp"
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -223,28 +224,15 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
             cmd = targets_map[cmd]->get_output_path();
         }
 
-        std::string full_cmd = cmd;
+        std::vector<std::string> command_vec;
+        command_vec.push_back(cmd);
         for (const auto& arg : test->args) {
-            full_cmd += " \"" + arg + "\"";
-        }
-        full_cmd += " 2>&1";
-
-        if (!test->working_dir.empty()) {
-            full_cmd = "cd \"" + test->working_dir + "\" && " + full_cmd;
+            command_vec.push_back(arg);
         }
 
-        FILE* pipe = popen(full_cmd.c_str(), "r");
-        if (!pipe) {
-            res.passed = false;
-            res.output = "Failed to launch test command";
-        } else {
-            char buffer[1024];
-            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-                res.output += buffer;
-            }
-            int status = pclose(pipe);
-            res.passed = (status == 0);
-        }
+        auto result = dmake::run_command(command_vec, test->working_dir);
+        res.passed = (result.exit_code == 0);
+        res.output = result.output;
 
         auto end = std::chrono::high_resolution_clock::now();
         res.duration = std::chrono::duration<double>(end - start).count();

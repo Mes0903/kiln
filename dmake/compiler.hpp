@@ -31,9 +31,9 @@ struct LinkContext {
 class Compiler {
 public:
     virtual ~Compiler() = default;
-    virtual std::string get_compile_command(const CompileContext& ctx) const = 0;
-    virtual std::string get_link_command(const LinkContext& ctx) const = 0;
-    virtual std::string get_archive_command(const std::string& output, const std::vector<std::string>& objs) const = 0;
+    virtual std::vector<std::string> get_compile_command(const CompileContext& ctx) const = 0;
+    virtual std::vector<std::string> get_link_command(const LinkContext& ctx) const = 0;
+    virtual std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const = 0;
 };
 
 } // namespace dmake
