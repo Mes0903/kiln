@@ -4,12 +4,12 @@
 namespace dmake {
 
 void register_variable_builtins(Interpreter& interp) {
-    interp.add_builtin("set", [](Interpreter& interp, const std::vector<Argument>& args) {
+    interp.add_builtin("set", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 2) {
             interp.print_message("ERROR", "set() requires at least 2 arguments", true);
             return;
         }
-        std::string var_name = interp.evaluate_argument(args[0]);
+        std::string var_name = args[0];
 
         // Warn if trying to modify CMAKE_BUILD_TYPE during script execution
         if (var_name == "CMAKE_BUILD_TYPE") {
@@ -19,56 +19,57 @@ void register_variable_builtins(Interpreter& interp) {
                 false);
         }
 
-        std::vector<Argument> value_args(args.begin() + 1, args.end());
-        CMakeList value_list = interp.from_arguments(value_args);
+        // Combine remaining arguments into a list
+        std::vector<std::string> value_args(args.begin() + 1, args.end());
+        CMakeList value_list(value_args);
         interp.set_variable(var_name, value_list.to_string());
     });
 
-    interp.add_builtin("unset", [](Interpreter& interp, const std::vector<Argument>& args) {
+    interp.add_builtin("unset", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 1) {
             interp.print_message("ERROR", "unset() requires at least 1 argument", true);
             return;
         }
-        std::string var_name = interp.evaluate_argument(args[0]);
+        std::string var_name = args[0];
         interp.unset_variable(var_name);
     });
 
-    interp.add_builtin("option", [](Interpreter& interp, const std::vector<Argument>& args) {
+    interp.add_builtin("option", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 2) {
             interp.print_message("ERROR", "option() requires at least 2 arguments", true);
             return;
         }
-        std::string option_name = interp.evaluate_argument(args[0]);
-        std::string help_message = interp.evaluate_argument(args[1]);
+        std::string option_name = args[0];
+        std::string help_message = args[1];
         (void)help_message; // Ignore the help message
         std::string value = "ON";
         if(args.size() > 2) {
-            value = interp.evaluate_argument(args[2]);
+            value = args[2];
         }
         if(!interp.is_variable_set(option_name)) {
             interp.set_variable(option_name, value);
         }
     });
 
-    interp.add_builtin("get_filename_component", [](Interpreter& interp, const std::vector<Argument>& args) {
+    interp.add_builtin("get_filename_component", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 3) {
             interp.set_fatal_error("get_filename_component() requires at least 3 arguments");
             return;
         }
 
-        std::string var_name = interp.evaluate_argument(args[0]);
-        std::string filename = interp.evaluate_argument(args[1]);
-        std::string mode = interp.evaluate_argument(args[2]);
+        std::string var_name = args[0];
+        std::string filename = args[1];
+        std::string mode = args[2];
 
         std::string base_dir;
         bool has_base_dir = false;
 
         for (size_t i = 3; i < args.size(); ++i) {
-            std::string arg = interp.evaluate_argument(args[i]);
+            std::string arg = args[i];
             if (arg == "CACHE") {
                 // Ignore CACHE for now
             } else if (arg == "BASE_DIR" && i + 1 < args.size()) {
-                base_dir = interp.evaluate_argument(args[++i]);
+                base_dir = args[++i];
                 has_base_dir = true;
             }
         }

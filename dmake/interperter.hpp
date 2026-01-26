@@ -57,7 +57,7 @@ struct UserMacro {
 
 class Interpreter {
 public:
-    using BuiltinFunction = std::function<void(Interpreter&, const std::vector<Argument>&)>;
+    using BuiltinFunction = std::function<void(Interpreter&, const std::vector<std::string>&)>;
     enum class LoopControl { NONE, BREAK, CONTINUE };
 
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr, std::optional<std::string> build_dir = std::nullopt);
@@ -66,6 +66,7 @@ public:
     std::expected<void, BuildError> run_build(int jobs = 0);
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
+    std::vector<std::string> expand_arguments(const std::vector<Argument>& args);
 
     void set_current_file(const std::string& file) { current_file_ = file; }
 
@@ -94,7 +95,7 @@ public:
     friend void register_target_builtins(Interpreter& interp);
     friend void register_project_builtins(Interpreter& interp);
 
-    CMakeList from_arguments(const std::vector<Argument>& args);
+    CMakeList from_arguments(const std::vector<std::string>& args);
 
 
 private:
@@ -103,8 +104,8 @@ private:
     std::expected<void, InterpreterError> execute_function_block(const FunctionBlock& function_block);
     std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
     std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
-    std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<Argument>& args);
-    std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args);
+    std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<std::string>& args);
+    std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args);
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col);
 
     std::optional<InterpreterError> get_fatal_error() const;

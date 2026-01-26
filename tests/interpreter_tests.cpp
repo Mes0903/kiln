@@ -7,10 +7,13 @@ std::string run_script(std::string src) {
     std::stringstream output;
     dmake::Interpreter interpreter("", &output);
 
-    interpreter.add_builtin("message", [&](dmake::Interpreter& interp, const std::vector<dmake::Argument>& args) {
+    interpreter.add_builtin("message", [&](dmake::Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            throw std::runtime_error("message called with incorrect number of arguments");
+        }
         // A simple implementation for testing purposes
         for (const auto& arg : args) {
-            output << interp.evaluate_argument(arg);
+            output << arg;
         }
         output << std::endl;
     });
@@ -967,4 +970,27 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
         message("${EXT}|${NAME_WE}")
     )");
     REQUIRE(output == "|.bashrc\n");
+}
+
+TEST_CASE("call case insensitive", "[interpreter][case]") {
+    std::string output;
+    output = run_script(R"(
+        MESSAGE("Hello World")
+    )");
+    REQUIRE(output == "Hello World\n");
+
+    output = run_script(R"(
+        function (hello)
+        message("Hello World")
+        endfunction()
+        hello()
+    )");
+    REQUIRE(output == "Hello World\n");
+}
+
+TEST_CASE("stringly typing", "[interpreter][stringly]") {
+    std::string output;
+    CHECK_THROWS(run_script(R"(
+        message(${THIS_DOES_NOT_EXIST})
+    )"));
 }

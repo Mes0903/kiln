@@ -248,9 +248,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_project_builtins(*this);
 
         // Internal builtins (interact with interpreter state/stack)
-        add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<Argument>& args) {
+        add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) return;
-            std::string subdir = interp.evaluate_argument(args[0]);
+            std::string subdir = args[0];
             std::filesystem::path path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / subdir;
             std::filesystem::path cmake_file = path / "CMakeLists.txt";
 
@@ -275,11 +275,11 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             }
         });
 
-        add_builtin("include", [](Interpreter& interp, const std::vector<Argument>& args) {
+        add_builtin("include", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) { interp.set_fatal_error("include() requires an argument"); return; }
-            std::string file_arg = interp.evaluate_argument(args[0]);
+            std::string file_arg = args[0];
             bool optional = false;
-            for (size_t i = 1; i < args.size(); ++i) if (interp.evaluate_argument(args[i]) == "OPTIONAL") optional = true;
+            for (size_t i = 1; i < args.size(); ++i) if (args[i] == "OPTIONAL") optional = true;
 
             std::filesystem::path path = std::filesystem::path(file_arg).is_absolute() ?
                 std::filesystem::path(file_arg) :
@@ -307,7 +307,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             if (!res) interp.set_fatal_error(res.error());
         });
 
-        add_builtin("break", [](Interpreter& interp, const std::vector<Argument>&) {
+        add_builtin("break", [](Interpreter& interp, const std::vector<std::string>&) {
             if (interp.get_loop_depth() == 0) {
                 interp.set_fatal_error("break() can only be called inside a loop");
                 return;
@@ -315,7 +315,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             interp.set_loop_control(Interpreter::LoopControl::BREAK);
         });
 
-        add_builtin("continue", [](Interpreter& interp, const std::vector<Argument>&) {
+        add_builtin("continue", [](Interpreter& interp, const std::vector<std::string>&) {
             if (interp.get_loop_depth() == 0) {
                 interp.set_fatal_error("continue() can only be called inside a loop");
                 return;
@@ -369,6 +369,27 @@ void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
     get_root()->builtins_[name] = func;
 }
 
+std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argument>& args) {
+    std::vector<std::string> result;
+    for (const auto& arg : args) {
+        std::string val = evaluate_argument(arg);
+        if (arg.quoted) {
+            result.push_back(val);
+        } else {
+            if (val.empty()) continue;
+            // Split by semicolon for unquoted arguments (list expansion)
+            size_t start = 0;
+            size_t pos;
+            while ((pos = val.find(';', start)) != std::string::npos) {
+                result.push_back(val.substr(start, pos - start));
+                start = pos + 1;
+            }
+            result.push_back(val.substr(start));
+        }
+    }
+    return result;
+}
+
 std::expected<void, InterpreterError> Interpreter::execute_command(const CommandInvocation& cmd) {
     current_cmd_row_ = cmd.row;
     current_cmd_col_ = cmd.col;
@@ -376,9 +397,13 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     Interpreter* root = get_root();
     auto lower_identifier = cmd.identifier;
     std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
+    
+    // Expand arguments once
+    std::vector<std::string> expanded_args = expand_arguments(cmd.arguments);
+
     auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
-        bit->second(*this, cmd.arguments);
+        bit->second(*this, expanded_args);
         if (auto err = get_fatal_error()) {
             InterpreterError e = *err;
             clear_fatal_error();
@@ -390,9 +415,9 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     Interpreter* curr = this;
     while (curr) {
         auto fit = curr->user_functions_.find(cmd.identifier);
-        if (fit != curr->user_functions_.end()) return invoke_user_function(fit->second, cmd.arguments);
+        if (fit != curr->user_functions_.end()) return invoke_user_function(fit->second, expanded_args);
         auto mit = curr->user_macros_.find(cmd.identifier);
-        if (mit != curr->user_macros_.end()) return invoke_user_macro(mit->second, cmd.arguments);
+        if (mit != curr->user_macros_.end()) return invoke_user_macro(mit->second, expanded_args);
         curr = curr->parent_;
     }
 
@@ -421,7 +446,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     loop_depth_++;
     CMakeList items;
     if (std::holds_alternative<ForeachSimple>(block.params)) {
-        items = from_arguments(std::get<ForeachSimple>(block.params).items);
+        items = from_arguments(expand_arguments(std::get<ForeachSimple>(block.params).items));
     } else if (std::holds_alternative<ForeachRange>(block.params)) {
         const auto& r = std::get<ForeachRange>(block.params);
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
@@ -432,7 +457,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     } else if (std::holds_alternative<ForeachIn>(block.params)) {
         const auto& in = std::get<ForeachIn>(block.params);
         for (const auto& l : in.lists) items.append(CMakeList(get_variable(evaluate_argument(l))));
-        items.append(from_arguments(in.items));
+        items.append(from_arguments(expand_arguments(in.items)));
     }
 
     for (const auto& item : items) {
@@ -446,9 +471,9 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     return {};
 }
 
-std::expected<void, InterpreterError> Interpreter::invoke_user_function(const UserFunction& func, const std::vector<Argument>& args) {
+std::expected<void, InterpreterError> Interpreter::invoke_user_function(const UserFunction& func, const std::vector<std::string>& args) {
     CallFrame frame{call_stack_.front().script_dir, {}};
-    CMakeList all = from_arguments(args);
+    CMakeList all(args);
     frame.variables["ARGC"] = std::to_string(all.size());
     frame.variables["ARGV"] = all.to_string();
     frame.variables["ARGN"] = all.sublist(func.parameters.size(), all.size()).to_string();
@@ -469,9 +494,9 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
     return res;
 }
 
-std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<Argument>& args) {
+std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args) {
     std::map<std::string, std::string> saved;
-    CMakeList all = from_arguments(args);
+    CMakeList all(args);
     auto save = [&](const std::string& k) { if (call_stack_.front().variables.count(k)) saved[k] = call_stack_.front().variables[k]; };
     save("ARGC"); save("ARGV"); save("ARGN");
     for (size_t i = 0; i < all.size(); ++i) save("ARGV" + std::to_string(i));
@@ -903,13 +928,8 @@ void Interpreter::print_message(const std::string& mode, const std::string& msg,
     else os << p << " " << msg << std::endl;
 }
 
-CMakeList Interpreter::from_arguments(const std::vector<Argument>& args) {
-    std::vector<std::string> items;
-    items.reserve(args.size());
-    for (const auto& arg : args) {
-        items.push_back(evaluate_argument(arg));
-    }
-    return CMakeList(items);
+CMakeList Interpreter::from_arguments(const std::vector<std::string>& args) {
+    return CMakeList(args);
 }
 
 }
