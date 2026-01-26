@@ -9,8 +9,43 @@
 #include <thread>
 #include <condition_variable>
 #include <functional>
+#include <glaze/glaze.hpp>
 
 namespace dmake {
+
+struct CompileCommand {
+    std::string directory;
+    std::string command;
+    std::string file;
+    std::string output;
+};
+
+void BuildGraph::generate_compile_commands(const std::string& build_dir) {
+    std::vector<CompileCommand> commands;
+    std::string current_dir = std::filesystem::current_path().string();
+
+    for (const auto& [id, task] : tasks_) {
+        if (task.is_compilation) {
+            commands.push_back({
+                .directory = current_dir,
+                .command = task.command,
+                .file = task.source_file,
+                .output = task.outputs.empty() ? "" : task.outputs[0]
+            });
+        }
+    }
+
+    std::string json;
+    if (auto ec = glz::write_json(commands, json)) {
+        return;
+    }
+
+    std::filesystem::path path = std::filesystem::path(build_dir) / "compile_commands.json";
+    std::ofstream file(path);
+    if (file) {
+        file << json;
+    }
+}
 
 void BuildGraph::add_task(BuildTask task) {
     std::string id = task.id;
@@ -175,7 +210,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 if (should_compile) {
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
                     std::string verb = "Compiling";
-                    std::string target_display = std::filesystem::path(id).filename().string();
+                    std::string target_display = task.source_file.empty() ?
+                        std::filesystem::path(id).filename().string() :
+                        std::filesystem::path(task.source_file).filename().string();
 
                     if (task.parent_target && id == task.parent_target->get_output_path()) {
                         verb = "  Linking";

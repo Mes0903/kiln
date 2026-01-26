@@ -195,6 +195,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         task.inputs.push_back(src_abs.string());
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
+        task.is_compilation = true;
+        task.source_file = src_abs.string();
 
         if (!pch_gch_path.empty()) {
             task.dependencies.insert(pch_gch_path);
@@ -278,6 +280,8 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
 
     pch_task.command = compiler->get_compile_command(ctx);
     pch_task.inputs.push_back(pch_wrapper);
+    pch_task.is_compilation = true;
+    pch_task.source_file = pch_wrapper;
 
     // Add the actual header files as inputs so PCH rebuilds when they change
     for (const auto& hdr : private_pchs) {

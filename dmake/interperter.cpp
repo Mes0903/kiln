@@ -175,7 +175,13 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
         }
     }
 
-    // 3. Execute the build graph
+    // 3. Generate compile_commands.json (on by default)
+    std::string export_cmds = get_variable("CMAKE_EXPORT_COMPILE_COMMANDS");
+    if (!is_falsy(export_cmds)) {
+        graph.generate_compile_commands(root_binary_dir);
+    }
+
+    // 4. Execute the build graph
     print_message("STATUS", "Starting " + build_type + " build...");
     auto result = graph.execute(root_binary_dir, jobs);
 
@@ -214,6 +220,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
         vars["CMAKE_BINARY_DIR"] = abs_binary_dir.string();
         vars["CMAKE_CURRENT_BINARY_DIR"] = abs_binary_dir.string();
+        vars["CMAKE_EXPORT_COMPILE_COMMANDS"] = "ON";
 
         if (abs_binary_dir == abs_script_dir) {
             set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
@@ -368,7 +375,7 @@ void Interpreter::set_fatal_error(const std::string& message) {
         for (size_t i = 0; i < root->trace_stack_.size() - 1; ++i) {
             backtrace.push_back(root->trace_stack_[i]);
         }
-        
+
         const auto& current = root->trace_stack_.back();
         set_fatal_error(InterpreterError{current.file, current.row, current.col, current.offset, current.length, message, backtrace});
     } else {
@@ -466,14 +473,14 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
-    
+
     auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
         set_fatal_error(cond_result.error());
         root->trace_stack_.pop_back();
         return std::unexpected(cond_result.error());
     }
-    
+
     auto res = interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
     if (!res) set_fatal_error(res.error());
     root->trace_stack_.pop_back();
@@ -503,8 +510,8 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
         long stop = std::stol(evaluate_argument(r.stop));
         long step = r.step ? std::stol(evaluate_argument(*r.step)) : 1;
-        if (step == 0) { 
-            loop_depth_--; 
+        if (step == 0) {
+            loop_depth_--;
             set_fatal_error("Step cannot be zero");
             auto err = get_fatal_error();
             clear_fatal_error();
@@ -521,11 +528,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     for (const auto& item : items) {
         set_variable(block.loop_var, item);
         auto res = interpret(block.body);
-        if (!res) { 
+        if (!res) {
             set_fatal_error(res.error());
-            loop_depth_--; 
+            loop_depth_--;
             root->trace_stack_.pop_back();
-            return res; 
+            return res;
         }
         if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
         if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
@@ -585,6 +592,22 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     for (size_t i = 0; i < all.size(); ++i) if (!saved.count("ARGV" + std::to_string(i))) vars.erase("ARGV" + std::to_string(i));
     for (const auto& p : macro.parameters) if (!saved.count(p)) vars.erase(p);
     return res;
+}
+
+bool Interpreter::is_falsy(const std::string& val) {
+    if (val.empty()) return true;
+
+    std::string upper_val = val;
+    std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
+
+    // False constants (case-insensitive)
+    if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
+        upper_val == "FALSE" || upper_val == "N" || upper_val == "IGNORE" ||
+        upper_val == "NOTFOUND" || upper_val.ends_with("-NOTFOUND")) {
+        return true;
+    }
+
+    return false;
 }
 
 std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length) {
@@ -660,23 +683,6 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         //       but named boolean constants like TRUE, FALSE, ON, OFF, YES, NO, Y, N
         //       are treated as variable names that dereference to empty if not defined
         return get_variable(token);
-    };
-
-    // Check if a value is truthy according to CMake rules (case-insensitive)
-    auto is_truthy = [&](const std::string& val) -> bool {
-        if (val.empty()) return false;
-
-        std::string upper_val = val;
-        std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
-
-        // False constants (case-insensitive)
-        if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
-            upper_val == "FALSE" || upper_val == "N" || upper_val == "IGNORE" ||
-            upper_val == "NOTFOUND" || upper_val.ends_with("-NOTFOUND")) {
-            return false;
-        }
-
-        return true;
     };
 
     // Recursive descent parser with proper CMake precedence
@@ -891,12 +897,12 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
         // If it's quoted or a numeric constant, use it as-is
         if (arg.quoted || is_numeric_constant(token_str)) {
-            return is_truthy(token_str);
+            return !is_falsy(token_str);
         }
 
         // Otherwise dereference as a variable (even if it's a keyword name)
         std::string val = get_variable(token_str);
-        return is_truthy(val);
+        return !is_falsy(val);
     };
 
     // Start parsing at the lowest precedence level (OR)

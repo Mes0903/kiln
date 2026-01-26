@@ -20,12 +20,11 @@ bool matches_glob(const std::string& text, const std::string& pattern) {
     for (char c : pattern) {
         if (c == '*') rx_str += ".*";
         else if (c == '?') rx_str += ".";
-                        else if (std::string(".+^$|()[]{}").find(c) != std::string::npos) {
-                            rx_str += "\\";
-                            rx_str += c;
-                        }
-
-         else {
+        else if (std::string(".+^$|()[]{}").find(c) != std::string::npos) {
+            rx_str += "\\";
+            rx_str += c;
+        }
+        else {
             rx_str += c;
         }
     }
@@ -41,7 +40,7 @@ bool matches_glob(const std::string& text, const std::string& pattern) {
 void perform_glob(Interpreter& interp, const std::string& var, const std::vector<std::string>& patterns, bool recurse, const std::string& relative) {
     CMakeList results;
     std::filesystem::path base_path = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-    
+
     for (const auto& pattern : patterns) {
         bool pattern_recurse = recurse;
         std::string search_pattern = pattern;
@@ -101,7 +100,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
             i++;
             first = false;
         }
-        
+
         // If no remaining pattern, we are just looking for the base itself (if it had a wildcard)
         if (remaining_pattern.empty()) {
             remaining_pattern = search_dir.filename().string();
@@ -111,7 +110,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         if (!std::filesystem::exists(search_dir)) continue;
 
         // Simplified: if it contains **, we match the filename against the part after the last **
-        // or if no ** we match filename. 
+        // or if no ** we match filename.
         // For a true CMake glob we'd need to match the whole relative path.
         std::string leaf_pattern = remaining_pattern;
         size_t last_slash = remaining_pattern.find_last_of("/\\");

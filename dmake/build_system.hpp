@@ -20,6 +20,10 @@ struct BuildTask {
     std::vector<std::string> outputs;
     Target* parent_target = nullptr;
 
+    // For compile_commands.json
+    bool is_compilation = false;
+    std::string source_file;
+
     // For graph execution
     std::set<std::string> dependencies; // Task IDs we depend on
     std::set<std::string> dependents;   // Task IDs that depend on us
@@ -34,6 +38,8 @@ public:
 
     // Executes the graph.
     std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
+
+    void generate_compile_commands(const std::string& build_dir);
 
     // Helpers for target task generation
     bool has_task(const std::string& id) const { return tasks_.count(id); }

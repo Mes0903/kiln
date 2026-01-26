@@ -83,6 +83,7 @@ public:
     void set_variable(const std::string& var_name, const std::string& value);
     bool unset_variable(const std::string& var_name);
     bool is_variable_set(const std::string& var_name) const;
+    static bool is_falsy(const std::string& val);
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
