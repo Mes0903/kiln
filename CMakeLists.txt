@@ -38,7 +38,12 @@ if(BUILD_TESTING)
     enable_testing()
 
     find_package(Catch2 3 REQUIRED)
-    add_executable(dmake_tests tests/main.cpp tests/interpreter_tests.cpp tests/pch_tests.cpp tests/command_parser.cpp tests/language_tests.cpp tests/compiler_tests.cpp)
+    add_executable(dmake_tests tests/main.cpp
+        tests/interpreter_tests.cpp
+        tests/pch_tests.cpp
+        tests/command_parser.cpp
+        tests/language_tests.cpp
+        tests/compiler_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

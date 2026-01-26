@@ -382,21 +382,46 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
 
 std::expected<void, InterpreterError> Interpreter::include_file(const std::string& file_path, bool optional) {
     std::filesystem::path path = std::filesystem::path(file_path);
-    if (!path.is_absolute())
-        path = std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_path;
 
-    if (!path.has_extension() && !std::filesystem::exists(path)) {
-        std::filesystem::path with_ext = path;
-        with_ext.replace_extension(".cmake");
-        if (std::filesystem::exists(with_ext)) {
-            path = with_ext;
+    // Helper to check if a path exists, trying with and without .cmake extension
+    auto try_path = [](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
+        if (std::filesystem::exists(p)) return p;
+        if (!p.has_extension()) {
+            std::filesystem::path with_ext = p;
+            with_ext.replace_extension(".cmake");
+            if (std::filesystem::exists(with_ext)) return with_ext;
+        }
+        return std::nullopt;
+    };
+
+    std::optional<std::filesystem::path> found_path;
+
+    if (path.is_absolute()) {
+        found_path = try_path(path);
+    } else {
+        // Try relative to CMAKE_CURRENT_SOURCE_DIR first
+        std::filesystem::path candidate = std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_path;
+        found_path = try_path(candidate);
+
+        // If not found, search CMAKE_MODULE_PATH
+        if (!found_path) {
+            CMakeList module_paths(get_variable("CMAKE_MODULE_PATH"));
+            for (const auto& dir : module_paths) {
+                if (!dir.empty()) {
+                    candidate = std::filesystem::path(dir) / file_path;
+                    found_path = try_path(candidate);
+                    if (found_path) break;
+                }
+            }
         }
     }
 
-    if (!std::filesystem::exists(path)) {
+    if (!found_path) {
         if (optional) return {};
-        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() could not find: " + path.string(), {}});
+        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() could not find: " + file_path, {}});
     }
+
+    path = *found_path;
 
     std::string abs_path = std::filesystem::absolute(path).string();
     

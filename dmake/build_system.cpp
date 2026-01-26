@@ -119,7 +119,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
     // 2. Incremental check
     auto cache = load_cache(build_dir);
-    std::map<std::string, std::string> new_cache;
+    std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time
 
     // 3. Parallel execution
     std::set<std::string> completed;
