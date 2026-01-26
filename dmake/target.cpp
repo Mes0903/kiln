@@ -111,9 +111,18 @@ std::string Target::get_output_path() const {
     return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
 }
 
-static std::string get_obj_path(const std::string& binary_dir, const std::string& source_file) {
-    std::filesystem::path src(source_file);
-    std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / (src.filename().string() + ".o");
+static std::string get_obj_path(const std::string& binary_dir, const std::string& source_path) {
+    std::filesystem::path src(source_path);
+    std::filesystem::path obj_suffix;
+
+    if (src.is_absolute()) {
+        obj_suffix = src.filename();
+    } else {
+        obj_suffix = src;
+    }
+
+    std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / obj_suffix;
+    obj += ".o";
     return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
 }
 
@@ -160,7 +169,7 @@ void Target::generate_object_tasks(BuildGraph& graph, std::vector<std::string>& 
                                       bool is_shared) {
     for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
         std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
-        std::string obj = get_obj_path(binary_dir_, src_abs.string());
+        std::string obj = get_obj_path(binary_dir_, src);
         obj_files.push_back(obj);
 
         BuildTask task;
