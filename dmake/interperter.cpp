@@ -378,13 +378,10 @@ std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argumen
         } else {
             if (val.empty()) continue;
             // Split by semicolon for unquoted arguments (list expansion)
-            size_t start = 0;
-            size_t pos;
-            while ((pos = val.find(';', start)) != std::string::npos) {
-                result.push_back(val.substr(start, pos - start));
-                start = pos + 1;
+            CMakeList lst(val);
+            for(const auto& item : lst) {
+                result.push_back(item);
             }
-            result.push_back(val.substr(start));
         }
     }
     return result;
@@ -397,7 +394,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     Interpreter* root = get_root();
     auto lower_identifier = cmd.identifier;
     std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
-    
+
     // Expand arguments once
     std::vector<std::string> expanded_args = expand_arguments(cmd.arguments);
 
