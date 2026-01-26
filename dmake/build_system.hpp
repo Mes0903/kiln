@@ -39,7 +39,7 @@ public:
     // Executes the graph.
     std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
 
-    void generate_compile_commands(const std::string& build_dir);
+    std::expected<void, std::string> generate_compile_commands(const std::string& build_dir);
 
     // Helpers for target task generation
     bool has_task(const std::string& id) const { return tasks_.count(id); }

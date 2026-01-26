@@ -178,7 +178,10 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
     // 3. Generate compile_commands.json (on by default)
     std::string export_cmds = get_variable("CMAKE_EXPORT_COMPILE_COMMANDS");
     if (!is_falsy(export_cmds)) {
-        graph.generate_compile_commands(root_binary_dir);
+        auto result = graph.generate_compile_commands(root_binary_dir);
+        if (!result) {
+            return std::unexpected(BuildError{current_file_, result.error()});
+        }
     }
 
     // 4. Execute the build graph

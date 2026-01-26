@@ -1,5 +1,6 @@
 #include "build_system.hpp"
 #include "target.hpp"
+#include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -10,6 +11,7 @@
 #include <condition_variable>
 #include <functional>
 #include <glaze/glaze.hpp>
+#include <type_traits>
 
 namespace dmake {
 
@@ -20,7 +22,7 @@ struct CompileCommand {
     std::string output;
 };
 
-void BuildGraph::generate_compile_commands(const std::string& build_dir) {
+std::expected<void, std::string> BuildGraph::generate_compile_commands(const std::string& build_dir) {
     std::vector<CompileCommand> commands;
     std::string current_dir = std::filesystem::current_path().string();
 
@@ -37,7 +39,7 @@ void BuildGraph::generate_compile_commands(const std::string& build_dir) {
 
     std::string json;
     if (auto ec = glz::write_json(commands, json)) {
-        return;
+        return std::unexpected<std::string>(glz::format_error(ec));
     }
 
     std::filesystem::path path = std::filesystem::path(build_dir) / "compile_commands.json";
@@ -45,6 +47,10 @@ void BuildGraph::generate_compile_commands(const std::string& build_dir) {
     if (file) {
         file << json;
     }
+    else {
+        return std::unexpected<std::string>("Failed to create compile_commands.json for writing");
+    }
+    return {};
 }
 
 void BuildGraph::add_task(BuildTask task) {
