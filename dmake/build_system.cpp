@@ -144,23 +144,35 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
             std::thread([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
                 const auto& task = tasks_.at(id);
 
-                auto sig_res = calculate_signature(task);
-                if (!sig_res) {
-                    std::lock_guard<std::mutex> lock(loop_mutex);
-                    fatal_error = sig_res.error();
-                    cv.notify_all();
-                    return;
-                }
-                std::string sig = *sig_res;
-
+                // Check if outputs exist first - no need to calculate signature if we must compile anyway
                 bool outputs_exist = true;
                 for (const auto& out : task.outputs) {
                     if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
                 }
 
-                if (outputs_exist && cache.count(id) && cache[id] == sig) {
-                    // Skip
-                } else {
+                std::string sig;
+                bool should_compile = !outputs_exist; // Must compile if outputs don't exist
+
+                if (outputs_exist) {
+                    // Only calculate signature if we might skip compilation
+                    auto sig_res = calculate_signature(task);
+                    if (!sig_res) {
+                        std::lock_guard<std::mutex> lock(loop_mutex);
+                        fatal_error = sig_res.error();
+                        cv.notify_all();
+                        return;
+                    }
+                    sig = *sig_res;
+
+                    // Check if we can skip based on signature match
+                    if (cache.count(id) && cache[id] == sig) {
+                        should_compile = false;
+                    } else {
+                        should_compile = true;
+                    }
+                }
+
+                if (should_compile) {
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
                     std::string verb = "Compiling";
                     std::string target_display = std::filesystem::path(id).filename().string();
@@ -199,11 +211,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         std::cout << result.output << std::endl;
                     }
 
-                    // Recalculate signature to capture discovered dependencies (like .d files)
+                    // Must calculate signature after compilation for cache (now .d files exist)
                     auto new_sig_res = calculate_signature(task);
-                    if (new_sig_res) {
-                        sig = *new_sig_res;
+                    if (!new_sig_res) {
+                        std::lock_guard<std::mutex> lock(loop_mutex);
+                        fatal_error = new_sig_res.error();
+                        cv.notify_all();
+                        return;
                     }
+                    sig = *new_sig_res;
                 }
 
                 {

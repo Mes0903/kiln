@@ -297,6 +297,7 @@ The project can self host. To self host, follow these steps:
 ## Some food for your own thought
 * (when writing code) Do not write code before stating assumptions.
 * (when writing code) Produce code you wouldn't want to debug at 3am
+* Always state assumptions before implementing.
 * Do not claim correctness you haven't verified.
 * Do not handle only the happy path.
 * Under what conditions does this work?
