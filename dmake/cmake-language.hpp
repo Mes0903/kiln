@@ -12,7 +12,18 @@ namespace dmake {
 struct ParseError {
     size_t row;
     size_t col;
+    size_t offset;
+    size_t length;
     std::string reason;
+};
+
+struct CallLocation {
+    std::string file;
+    size_t row;
+    size_t col;
+    size_t offset;
+    size_t length;
+    std::string command;
 };
 
 struct VariableReference {
@@ -40,6 +51,8 @@ struct IfBlock {
     std::vector<AstNode> else_branch;
     size_t row = 0;
     size_t col = 0;
+    size_t offset = 0;
+    size_t length = 0;
 };
 
 struct FunctionBlock {
@@ -76,6 +89,8 @@ struct ForeachBlock {
     std::vector<AstNode> body;
     size_t row = 0;
     size_t col = 0;
+    size_t offset = 0;
+    size_t length = 0;
 };
 
 struct CommandInvocation {
@@ -83,6 +98,8 @@ struct CommandInvocation {
     std::vector<Argument> arguments;
     size_t row = 0;
     size_t col = 0;
+    size_t offset = 0;
+    size_t length = 0;
 };
 
 class Parser {

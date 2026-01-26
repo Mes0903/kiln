@@ -40,5 +40,3 @@ if(NOT DEFINED DMAKE_VERSION)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)
 endif()
-
-include(/usr/share/cmake/CLI11/CLI11Config.cmake)

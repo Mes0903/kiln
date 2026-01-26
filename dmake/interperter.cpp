@@ -276,7 +276,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 auto res = sub_interp.interpret(ast.value());
                 if (!res) interp.set_fatal_error(res.error());
             } else {
-                interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().reason});
+                interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
             }
         });
 
@@ -287,7 +287,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             for (size_t i = 1; i < args.size(); ++i) if (args[i] == "OPTIONAL") optional = true;
 
             std::filesystem::path path = std::filesystem::path(file_arg);
-            std::cout << "Path: " << path.string() << std::endl;
             if(!path.is_absolute())
                 path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_arg;
             if (!path.has_extension()) path.replace_extension(".cmake");
@@ -305,12 +304,19 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             Parser parser(content);
             auto ast = parser.parse();
             if (!ast) {
-                interp.set_fatal_error(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().reason});
+                interp.set_fatal_error(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
                 return;
             }
 
+            std::string old_file = interp.get_current_file();
+            interp.set_current_file(std::filesystem::absolute(path).string());
             auto res = interp.interpret(ast.value());
-            if (!res) interp.set_fatal_error(res.error());
+            interp.set_current_file(old_file);
+
+            if (!res) {
+                // Error already set in root
+                return;
+            }
         });
 
         add_builtin("break", [](Interpreter& interp, const std::vector<std::string>&) {
@@ -355,12 +361,28 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {
-    set_fatal_error(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, message});
+    Interpreter* root = get_root();
+    std::vector<CallLocation> backtrace;
+    if (!root->trace_stack_.empty()) {
+        // The last element is the current command, we want everything BEFORE it as backtrace
+        for (size_t i = 0; i < root->trace_stack_.size() - 1; ++i) {
+            backtrace.push_back(root->trace_stack_[i]);
+        }
+        
+        const auto& current = root->trace_stack_.back();
+        set_fatal_error(InterpreterError{current.file, current.row, current.col, current.offset, current.length, message, backtrace});
+    } else {
+        set_fatal_error(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, message, {}});
+    }
 }
 
 void Interpreter::set_fatal_error(const InterpreterError& error) {
     Interpreter* root = get_root();
-    if (!root->fatal_error_) root->fatal_error_ = error;
+    if (!root->fatal_error_) {
+        root->fatal_error_ = error;
+        // If we were given an error without backtrace (e.g. from sub-interpret),
+        // we might want to fill it, but usually the caller handles it.
+    }
 }
 
 std::optional<InterpreterError> Interpreter::get_fatal_error() const {
@@ -397,7 +419,10 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     current_cmd_row_ = cmd.row;
     current_cmd_col_ = cmd.col;
 
+    // Push to backtrace stack
     Interpreter* root = get_root();
+    root->trace_stack_.push_back({current_file_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
+
     auto lower_identifier = cmd.identifier;
     std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
 
@@ -408,31 +433,47 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     if (bit != root->builtins_.end()) {
         bit->second(*this, expanded_args);
         if (auto err = get_fatal_error()) {
-            InterpreterError e = *err;
-            clear_fatal_error();
-            return std::unexpected(e);
+            root->trace_stack_.pop_back(); // Pop BEFORE returning error
+            return std::unexpected(*err);
         }
+        root->trace_stack_.pop_back();
         return {};
     }
 
     Interpreter* curr = this;
     while (curr) {
         auto fit = curr->user_functions_.find(cmd.identifier);
-        if (fit != curr->user_functions_.end()) return invoke_user_function(fit->second, expanded_args);
+        if (fit != curr->user_functions_.end()) {
+            auto res = invoke_user_function(fit->second, expanded_args);
+            root->trace_stack_.pop_back();
+            return res;
+        }
         auto mit = curr->user_macros_.find(cmd.identifier);
-        if (mit != curr->user_macros_.end()) return invoke_user_macro(mit->second, expanded_args);
+        if (mit != curr->user_macros_.end()) {
+            auto res = invoke_user_macro(mit->second, expanded_args);
+            root->trace_stack_.pop_back();
+            return res;
+        }
         curr = curr->parent_;
     }
 
-    return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, "Unknown command: " + cmd.identifier});
+    root->trace_stack_.pop_back();
+    return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, cmd.offset, cmd.length, "Unknown command: " + cmd.identifier, {}});
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
-    auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col);
+    Interpreter* root = get_root();
+    root->trace_stack_.push_back({current_file_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
+    
+    auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
+        root->trace_stack_.pop_back();
         return std::unexpected(cond_result.error());
     }
-    return interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
+    
+    auto res = interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
+    root->trace_stack_.pop_back();
+    return res;
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
@@ -446,6 +487,9 @@ std::expected<void, InterpreterError> Interpreter::execute_macro_block(const Mac
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const ForeachBlock& block) {
+    Interpreter* root = get_root();
+    root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "foreach"});
+
     loop_depth_++;
     CMakeList items;
     if (std::holds_alternative<ForeachSimple>(block.params)) {
@@ -455,7 +499,14 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
         long stop = std::stol(evaluate_argument(r.stop));
         long step = r.step ? std::stol(evaluate_argument(*r.step)) : 1;
-        if (step == 0) { loop_depth_--; return std::unexpected(InterpreterError{current_file_, block.row, block.col, "Step cannot be zero"}); }
+        if (step == 0) { 
+            loop_depth_--; 
+            set_fatal_error("Step cannot be zero");
+            auto err = get_fatal_error();
+            clear_fatal_error();
+            root->trace_stack_.pop_back();
+            return std::unexpected(*err);
+        }
         for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
     } else if (std::holds_alternative<ForeachIn>(block.params)) {
         const auto& in = std::get<ForeachIn>(block.params);
@@ -466,11 +517,16 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     for (const auto& item : items) {
         set_variable(block.loop_var, item);
         auto res = interpret(block.body);
-        if (!res) { loop_depth_--; return res; }
+        if (!res) { 
+            loop_depth_--; 
+            root->trace_stack_.pop_back();
+            return res; 
+        }
         if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
         if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
     }
     loop_depth_--;
+    root->trace_stack_.pop_back();
     return {};
 }
 
@@ -523,9 +579,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     return res;
 }
 
-std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col) {
-    if (condition.empty()) return false;
-
+std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length) {
     // Set of keywords that should not be dereferenced as variables
     static const std::set<std::string> keywords = {
         "NOT", "AND", "OR",
@@ -843,8 +897,9 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     // Check if there was an error during parsing
     if (!error_msg.empty()) {
         return std::unexpected(InterpreterError{
-            current_file_, row, col,
-            error_msg
+            current_file_, row, col, offset, length,
+            error_msg,
+            {}
         });
     }
 
@@ -856,8 +911,9 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             remaining += get_token_string(condition[i]);
         }
         return std::unexpected(InterpreterError{
-            current_file_, row, col,
-            "Unexpected tokens in if() condition: " + remaining
+            current_file_, row, col, offset, length,
+            "Unexpected tokens in if() condition: " + remaining,
+            {}
         });
     }
 

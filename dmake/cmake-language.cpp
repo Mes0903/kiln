@@ -88,6 +88,7 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
     if_block.condition = if_command.arguments;
     if_block.row = if_command.row;
     if_block.col = if_command.col;
+    if_block.offset = if_command.offset;
 
     auto then_branch_or_error = parse_block({"else", "endif"});
     if (!then_branch_or_error) {
@@ -114,9 +115,10 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
          return std::unexpected(endif_command_or_error.error());
     }
     if (endif_command_or_error.value().identifier != "endif") {
-        return std::unexpected(ParseError{row_, col_, "Expected 'endif'"});
+        return std::unexpected(ParseError{row_, col_, pos_, 5, "Expected 'endif'"});
     }
 
+    if_block.length = pos_ - if_block.offset;
     return if_block;
 }
 
@@ -124,7 +126,7 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
     FunctionBlock function_block;
 
     if (function_command.arguments.empty()) {
-        return std::unexpected(ParseError{function_command.row, function_command.col, "function() requires a name"});
+        return std::unexpected(ParseError{function_command.row, function_command.col, function_command.offset, function_command.length, "function() requires a name"});
     }
 
     // First argument is the function name
@@ -132,7 +134,7 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
         std::holds_alternative<std::string>(function_command.arguments[0].parts[0])) {
         function_block.name = std::get<std::string>(function_command.arguments[0].parts[0]);
     } else {
-        return std::unexpected(ParseError{function_command.row, function_command.col, "function() name must be a simple identifier"});
+        return std::unexpected(ParseError{function_command.row, function_command.col, function_command.offset, function_command.length, "function() name must be a simple identifier"});
     }
 
     // Remaining arguments are parameter names
@@ -141,7 +143,7 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
             std::holds_alternative<std::string>(function_command.arguments[i].parts[0])) {
             function_block.parameters.push_back(std::get<std::string>(function_command.arguments[i].parts[0]));
         } else {
-            return std::unexpected(ParseError{function_command.row, function_command.col, "function() parameters must be simple identifiers"});
+            return std::unexpected(ParseError{function_command.row, function_command.col, function_command.offset, function_command.length, "function() parameters must be simple identifiers"});
         }
     }
 
@@ -162,7 +164,7 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
     std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
                    [](unsigned char c){ return std::tolower(c); });
     if (identifier_lower != "endfunction") {
-        return std::unexpected(ParseError{row_, col_, "Expected 'endfunction'"});
+        return std::unexpected(ParseError{row_, col_, pos_, 11, "Expected 'endfunction'"});
     }
 
     return function_block;
@@ -172,7 +174,7 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
     MacroBlock macro_block;
 
     if (macro_command.arguments.empty()) {
-        return std::unexpected(ParseError{macro_command.row, macro_command.col, "macro() requires a name"});
+        return std::unexpected(ParseError{macro_command.row, macro_command.col, macro_command.offset, macro_command.length, "macro() requires a name"});
     }
 
     // First argument is the macro name
@@ -180,7 +182,7 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
         std::holds_alternative<std::string>(macro_command.arguments[0].parts[0])) {
         macro_block.name = std::get<std::string>(macro_command.arguments[0].parts[0]);
     } else {
-        return std::unexpected(ParseError{macro_command.row, macro_command.col, "macro() name must be a simple identifier"});
+        return std::unexpected(ParseError{macro_command.row, macro_command.col, macro_command.offset, macro_command.length, "macro() name must be a simple identifier"});
     }
 
     // Remaining arguments are parameter names
@@ -189,7 +191,7 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
             std::holds_alternative<std::string>(macro_command.arguments[i].parts[0])) {
             macro_block.parameters.push_back(std::get<std::string>(macro_command.arguments[i].parts[0]));
         } else {
-            return std::unexpected(ParseError{macro_command.row, macro_command.col, "macro() parameters must be simple identifiers"});
+            return std::unexpected(ParseError{macro_command.row, macro_command.col, macro_command.offset, macro_command.length, "macro() parameters must be simple identifiers"});
         }
     }
 
@@ -210,7 +212,7 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
     std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
                    [](unsigned char c){ return std::tolower(c); });
     if (identifier_lower != "endmacro") {
-        return std::unexpected(ParseError{row_, col_, "Expected 'endmacro'"});
+        return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endmacro'"});
     }
 
     return macro_block;
@@ -220,9 +222,10 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
     ForeachBlock foreach_block;
     foreach_block.row = foreach_command.row;
     foreach_block.col = foreach_command.col;
+    foreach_block.offset = foreach_command.offset;
 
     if (foreach_command.arguments.empty()) {
-        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach() requires a loop variable"});
+        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires a loop variable"});
     }
 
     // Extract loop variable (must be simple identifier)
@@ -230,11 +233,11 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         std::holds_alternative<std::string>(foreach_command.arguments[0].parts[0])) {
         foreach_block.loop_var = std::get<std::string>(foreach_command.arguments[0].parts[0]);
     } else {
-        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach() loop variable must be a simple identifier"});
+        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() loop variable must be a simple identifier"});
     }
 
     if (foreach_command.arguments.size() == 1) {
-        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach() requires items to iterate over"});
+        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires items to iterate over"});
     }
 
     // Determine mode by checking second argument
@@ -249,10 +252,10 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
     if (mode_keyword == "RANGE") {
         // RANGE mode: foreach(i RANGE <stop>) or foreach(i RANGE <start> <stop> [<step>])
         if (foreach_command.arguments.size() < 3) {
-            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(RANGE) requires at least a stop value"});
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(RANGE) requires at least a stop value"});
         }
         if (foreach_command.arguments.size() > 5) {
-            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(RANGE) accepts at most 3 range values (start, stop, step)"});
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(RANGE) accepts at most 3 range values (start, stop, step)"});
         }
 
         ForeachRange range;
@@ -311,12 +314,12 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
                     idx++;
                 }
             } else {
-                return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(IN) expected LISTS or ITEMS keyword"});
+                return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(IN) expected LISTS or ITEMS keyword"});
             }
         }
 
         if (in_params.lists.empty() && in_params.items.empty()) {
-            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, "foreach(IN) requires at least one LISTS or ITEMS argument"});
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(IN) requires at least one LISTS or ITEMS argument"});
         }
 
         foreach_block.params = in_params;
@@ -348,9 +351,10 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
     std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
                    [](unsigned char c){ return std::tolower(c); });
     if (identifier_lower != "endforeach") {
-        return std::unexpected(ParseError{row_, col_, "Expected 'endforeach'"});
+        return std::unexpected(ParseError{row_, col_, pos_, 10, "Expected 'endforeach'"});
     }
 
+    foreach_block.length = pos_ - foreach_block.offset;
     return foreach_block;
 }
 
@@ -425,6 +429,7 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     // Save location at start of command
     size_t cmd_row = row_;
     size_t cmd_col = col_;
+    size_t cmd_offset = pos_;
 
     // Parse identifier
     size_t start_pos = pos_;
@@ -435,19 +440,19 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     std::string identifier(content_.substr(start_pos, pos_ - start_pos));
 
     if (identifier.empty()) {
-        return std::unexpected(ParseError{row_, col_, "Expected an identifier"});
+        return std::unexpected(ParseError{row_, col_, pos_, 0, "Expected an identifier"});
     }
 
     consume_whitespace();
 
     // Parse opening parenthesis
     if (pos_ >= content_.length() || content_[pos_] != '(') {
-        return std::unexpected(ParseError{row_, col_, "Expected '(' after identifier"});
+        return std::unexpected(ParseError{row_, col_, pos_, 1, "Expected '(' after identifier"});
     }
     pos_++;
     col_++;
 
-    CommandInvocation cmd_inv{std::move(identifier), {}, cmd_row, cmd_col};
+    CommandInvocation cmd_inv{std::move(identifier), {}, cmd_row, cmd_col, cmd_offset, 0};
 
     // Parse arguments
     while (pos_ < content_.length()) {
@@ -466,17 +471,19 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
 
     // Parse closing parenthesis
     if (pos_ >= content_.length() || content_[pos_] != ')') {
-        return std::unexpected(ParseError{row_, col_, "Expected ')' to close argument list"});
+        return std::unexpected(ParseError{row_, col_, pos_, 1, "Expected ')' to close argument list"});
     }
     pos_++;
     col_++;
+
+    cmd_inv.length = pos_ - cmd_offset;
 
     return cmd_inv;
 }
 
 std::expected<Argument, ParseError> Parser::parse_argument() {
     if (pos_ >= content_.length()) {
-        return std::unexpected(ParseError{row_, col_, "Unexpected end of input"});
+        return std::unexpected(ParseError{row_, col_, pos_, 0, "Unexpected end of input"});
     }
 
     if (content_[pos_] == '"') {
@@ -518,7 +525,7 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
                 col_++;
             }
             if (pos_ >= content_.length()) {
-                return std::unexpected(ParseError{row_, col_, "Unterminated variable reference"});
+                return std::unexpected(ParseError{row_, col_, pos_, 0, "Unterminated variable reference"});
             }
             parts.emplace_back(VariableReference{std::string(content_.substr(var_start, pos_ - var_start))});
             pos_++; // Consume }
@@ -535,13 +542,14 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     }
 
     if (parts.empty()) {
-        return std::unexpected(ParseError{row_, col_, "Expected an unquoted argument"});
+        return std::unexpected(ParseError{row_, col_, pos_, 0, "Expected an unquoted argument"});
     }
 
     return parts;
 }
 
 std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argument_value() {
+    size_t quote_start = pos_;
     pos_++; // Consume opening quote
     col_++;
 
@@ -586,7 +594,7 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
                 col_++;
             }
             if (pos_ >= content_.length()) {
-                return std::unexpected(ParseError{row_, col_, "Unterminated variable reference"});
+                return std::unexpected(ParseError{row_, col_, pos_, 0, "Unterminated variable reference"});
             }
             parts.emplace_back(VariableReference{std::string(content_.substr(var_start, pos_ - var_start))});
             pos_++; // Consume }
@@ -604,10 +612,11 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
         }
     }
 
-    return std::unexpected(ParseError{row_, col_, "Unterminated quoted argument"});
+    return std::unexpected(ParseError{row_, col_, quote_start, pos_ - quote_start, "Unterminated quoted argument"});
 }
 
 std::expected<std::string, ParseError> Parser::parse_bracket_argument() {
+    size_t start_pos_outer = pos_;
     pos_++; // Consume opening bracket
     col_++;
 
@@ -619,7 +628,7 @@ std::expected<std::string, ParseError> Parser::parse_bracket_argument() {
     }
 
     if (pos_ >= content_.length() || content_[pos_] != '[') {
-        return std::unexpected(ParseError{row_, col_, "Invalid bracket argument"});
+        return std::unexpected(ParseError{row_, col_, start_pos_outer, pos_ - start_pos_outer, "Invalid bracket argument"});
     }
     pos_++; // Consume opening bracket
     col_++;
@@ -641,7 +650,7 @@ std::expected<std::string, ParseError> Parser::parse_bracket_argument() {
         pos_++;
     }
 
-    return std::unexpected(ParseError{row_, col_, "Unterminated bracket argument"});
+    return std::unexpected(ParseError{row_, col_, start_pos_outer, pos_ - start_pos_outer, "Unterminated bracket argument"});
 }
 
 } // namespace dmake

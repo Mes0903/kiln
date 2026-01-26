@@ -21,7 +21,10 @@ struct InterpreterError {
     std::string file;
     size_t row;
     size_t col;
+    size_t offset;
+    size_t length;
     std::string message;
+    std::vector<CallLocation> backtrace;
 };
 
 struct BuildError {
@@ -70,6 +73,7 @@ public:
     std::vector<std::string> expand_arguments(const std::vector<Argument>& args);
 
     void set_current_file(const std::string& file) { current_file_ = file; }
+    std::string get_current_file() const { return current_file_; }
 
     // Public API for builtins and internal use
     void set_fatal_error(const std::string& message);
@@ -109,7 +113,7 @@ private:
     std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
     std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<std::string>& args);
     std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args);
-    std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col);
+    std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);
 
     std::optional<InterpreterError> get_fatal_error() const;
     void clear_fatal_error();
@@ -134,7 +138,8 @@ private:
     std::map<std::string, UserMacro> user_macros_;
 
     Interpreter* parent_ = nullptr;
-    std::deque<CallFrame> call_stack_;
+    std::deque<CallFrame> call_stack_; // Variable scopes
+    std::vector<CallLocation> trace_stack_; // For backtraces
     std::string current_file_;
     std::optional<InterpreterError> fatal_error_;
     size_t current_cmd_row_ = 0;

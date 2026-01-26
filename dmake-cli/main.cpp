@@ -10,33 +10,50 @@
 
 namespace {
 
-void print_error_context(const std::string& file_path, size_t row, size_t col, const std::string& message) {
+void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<dmake::CallLocation>& backtrace = {}) {
     std::cerr << "\033[1;31merror:\033[0m " << message << std::endl;
     std::cerr << "  \033[1;34m-->\033[0m " << file_path << ":" << row << ":" << col << std::endl;
 
     std::ifstream error_file(file_path);
-    if (!error_file) return;
+    if (error_file) {
+        std::string file_content((std::istreambuf_iterator<char>(error_file)), std::istreambuf_iterator<char>());
 
-    std::string file_content((std::istreambuf_iterator<char>(error_file)), std::istreambuf_iterator<char>());
-
-    size_t line_start = 0;
-    size_t current_line = 1;
-    for (size_t i = 0; i < file_content.size() && current_line < row; ++i) {
-        if (file_content[i] == '\n') {
-            ++current_line;
-            line_start = i + 1;
+        size_t line_start = 0;
+        size_t current_line = 1;
+        for (size_t i = 0; i < file_content.size() && current_line < row; ++i) {
+            if (file_content[i] == '\n') {
+                ++current_line;
+                line_start = i + 1;
+            }
         }
+
+        size_t line_end = file_content.find('\n', line_start);
+        if (line_end == std::string::npos) line_end = file_content.size();
+
+        std::string line = file_content.substr(line_start, line_end - line_start);
+        std::string padding(std::to_string(row).length(), ' ');
+
+        std::cerr << "   " << padding << " \033[1;34m|\033[0m" << std::endl;
+        std::cerr << "   \033[1;34m" << row << " |\033[0m " << line << std::endl;
+        std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(col > 0 ? col - 1 : 0, ' ');
+        
+        // Use length if available, otherwise just ^
+        size_t caret_len = (length > 0) ? length : 1;
+        // If length spans multiple lines, we just highlight to the end of the current line
+        if (col + caret_len - 1 > line.length()) {
+            caret_len = line.length() - col + 1;
+        }
+        if (caret_len == 0) caret_len = 1;
+
+        std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m" << std::endl;
     }
 
-    size_t line_end = file_content.find('\n', line_start);
-    if (line_end == std::string::npos) line_end = file_content.size();
-
-    std::string line = file_content.substr(line_start, line_end - line_start);
-    std::string padding(std::to_string(row).length(), ' ');
-
-    std::cerr << "   " << padding << " \033[1;34m|\033[0m" << std::endl;
-    std::cerr << "   \033[1;34m" << row << " |\033[0m " << line << std::endl;
-    std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(col > 0 ? col - 1 : 0, ' ') << "\033[1;31m^\033[0m" << std::endl;
+    if (!backtrace.empty()) {
+        std::cerr << "Call Stack (most recent call first):" << std::endl;
+        for (auto it = backtrace.rbegin(); it != backtrace.rend(); ++it) {
+            std::cerr << "  " << it->file << ":" << it->row << " (" << it->command << ")" << std::endl;
+        }
+    }
 }
 
 std::string to_cmake_case(const std::string& config) {
@@ -120,7 +137,7 @@ int main(int argc, char* argv[]) {
             dmake::Parser parser(content);
             auto ast_or_error = parser.parse();
             if (!ast_or_error) {
-                print_error_context(script_abs.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().reason);
+                print_error_context(script_abs.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
                 return 1;
             }
 
@@ -130,7 +147,7 @@ int main(int argc, char* argv[]) {
 
             auto result = interpreter.interpret(ast_or_error.value());
             if (!result) {
-                print_error_context(result.error().file, result.error().row, result.error().col, result.error().message);
+                print_error_context(result.error().file, result.error().row, result.error().col, result.error().offset, result.error().length, result.error().message, result.error().backtrace);
                 return 1;
             }
             return 0;
@@ -158,7 +175,7 @@ int main(int argc, char* argv[]) {
             dmake::Parser parser(content);
             auto ast_or_error = parser.parse();
             if (!ast_or_error) {
-                print_error_context(cmake_lists.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().reason);
+                print_error_context(cmake_lists.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
                 return 1;
             }
 
@@ -178,7 +195,7 @@ int main(int argc, char* argv[]) {
 
             auto interpret_result = interpreter.interpret(ast_or_error.value());
             if (!interpret_result) {
-                print_error_context(interpret_result.error().file, interpret_result.error().row, interpret_result.error().col, interpret_result.error().message);
+                print_error_context(interpret_result.error().file, interpret_result.error().row, interpret_result.error().col, interpret_result.error().offset, interpret_result.error().length, interpret_result.error().message, interpret_result.error().backtrace);
                 return 1;
             }
 
