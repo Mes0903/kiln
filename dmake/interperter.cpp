@@ -251,8 +251,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_list_builtins(*this);
         register_target_builtins(*this);
         register_project_builtins(*this);
-
-        // Internal builtins (interact with interpreter state/stack)
+        register_file_builtins(*this);
+                // Internal builtins (interact with interpreter state/stack)
         add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) return;
             std::string subdir = args[0];
@@ -314,7 +314,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             interp.set_current_file(old_file);
 
             if (!res) {
-                // Error already set in root
+                interp.set_fatal_error(res.error());
                 return;
             }
         });
@@ -457,8 +457,10 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
         curr = curr->parent_;
     }
 
+    set_fatal_error("Unknown command: " + cmd.identifier);
+    auto err = get_fatal_error();
     root->trace_stack_.pop_back();
-    return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, cmd.offset, cmd.length, "Unknown command: " + cmd.identifier, {}});
+    return std::unexpected(*err);
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
@@ -467,11 +469,13 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     
     auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
+        set_fatal_error(cond_result.error());
         root->trace_stack_.pop_back();
         return std::unexpected(cond_result.error());
     }
     
     auto res = interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
+    if (!res) set_fatal_error(res.error());
     root->trace_stack_.pop_back();
     return res;
 }
@@ -518,6 +522,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         set_variable(block.loop_var, item);
         auto res = interpret(block.body);
         if (!res) { 
+            set_fatal_error(res.error());
             loop_depth_--; 
             root->trace_stack_.pop_back();
             return res; 
@@ -548,6 +553,8 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
     auto res = interpret(func.body);
     call_stack_.pop_front();
 
+    if (!res) set_fatal_error(res.error());
+
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
     return res;
@@ -568,6 +575,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     for (size_t i = 0; i < macro.parameters.size() && i < all.size(); ++i) set_variable(macro.parameters[i], all[i]);
 
     auto res = interpret(macro.body);
+    if (!res) set_fatal_error(res.error());
 
     for (const auto& [k, v] : saved) set_variable(k, v);
     auto& vars = call_stack_.front().variables;
@@ -896,11 +904,8 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
     // Check if there was an error during parsing
     if (!error_msg.empty()) {
-        return std::unexpected(InterpreterError{
-            current_file_, row, col, offset, length,
-            error_msg,
-            {}
-        });
+        set_fatal_error(error_msg);
+        return std::unexpected(*get_fatal_error());
     }
 
     // Error if we didn't consume all tokens (indicates malformed condition)
@@ -910,11 +915,8 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             if (!remaining.empty()) remaining += " ";
             remaining += get_token_string(condition[i]);
         }
-        return std::unexpected(InterpreterError{
-            current_file_, row, col, offset, length,
-            "Unexpected tokens in if() condition: " + remaining,
-            {}
-        });
+        set_fatal_error("Unexpected tokens in if() condition: " + remaining);
+        return std::unexpected(*get_fatal_error());
     }
 
     return result;

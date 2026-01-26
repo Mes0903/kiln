@@ -100,6 +100,7 @@ public:
     friend void register_list_builtins(Interpreter& interp);
     friend void register_target_builtins(Interpreter& interp);
     friend void register_project_builtins(Interpreter& interp);
+    friend void register_file_builtins(Interpreter& interp);
     friend void register_process_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
