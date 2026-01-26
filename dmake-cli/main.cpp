@@ -1,5 +1,6 @@
 #include "dmake/cmake-language.hpp"
 #include "dmake/interperter.hpp"
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -25,12 +26,14 @@ int main(int argc, char* argv[]) {
 
     std::string config = "debug";
     app.add_option("-c,--config", config, "Build configuration (debug, release, relwithdebinfo, minsizerel)")
-       ->transform(CLI::Transformer({
-           {"debug", "debug"},
-           {"release", "release"},
-           {"relwithdebinfo", "relwithdebinfo"},
-           {"minsizerel", "minsizerel"}
-       }, CLI::ignore_case));
+       ->transform([](const std::string& value) -> std::string {
+           auto copy = value;
+           std::transform(copy.begin(), copy.end(), copy.begin(), ::tolower);
+           if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
+               return copy;
+           }
+           throw CLI::ValidationError("Invalid configuration");
+       }, "convert to lower case", "lowercase");
 
     CLI11_PARSE(app, argc, argv);
 
