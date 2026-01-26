@@ -1,14 +1,17 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../command_parser.hpp"
+#include <filesystem>
 
 namespace dmake {
 
 void register_variable_builtins(Interpreter& interp) {
     interp.add_builtin("set", [](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.size() < 2) {
-            interp.print_message("ERROR", "set() requires at least 2 arguments", true);
+        if (args.empty()) {
+            interp.set_fatal_error("set() requires at least one argument");
             return;
         }
+
         std::string var_name = args[0];
 
         // Warn if trying to modify CMAKE_BUILD_TYPE during script execution
@@ -26,53 +29,45 @@ void register_variable_builtins(Interpreter& interp) {
     });
 
     interp.add_builtin("unset", [](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.size() < 1) {
-            interp.print_message("ERROR", "unset() requires at least 1 argument", true);
-            return;
-        }
-        std::string var_name = args[0];
+        CommandParser parser("unset");
+        std::string var_name;
+        parser.add_positional(var_name, "variable name");
+        PARSE_OR_RETURN(parser, interp, args);
+
         interp.unset_variable(var_name);
     });
 
     interp.add_builtin("option", [](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.size() < 2) {
-            interp.print_message("ERROR", "option() requires at least 2 arguments", true);
-            return;
-        }
-        std::string option_name = args[0];
-        std::string help_message = args[1];
-        (void)help_message; // Ignore the help message
-        std::string value = "ON";
-        if(args.size() > 2) {
-            value = args[2];
-        }
+        CommandParser parser("option");
+        std::string option_name;
+        std::string help_message;
+        std::string initial_value;
+        parser.add_positional(option_name, "option name");
+        parser.add_positional(help_message, "help message");
+        parser.add_positional(initial_value, "initial value", false);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        std::string value = initial_value.empty() ? "OFF" : initial_value;
         if(!interp.is_variable_set(option_name)) {
             interp.set_variable(option_name, value);
         }
     });
 
     interp.add_builtin("get_filename_component", [](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.size() < 3) {
-            interp.set_fatal_error("get_filename_component() requires at least 3 arguments");
-            return;
-        }
-
-        std::string var_name = args[0];
-        std::string filename = args[1];
-        std::string mode = args[2];
-
+        CommandParser parser("get_filename_component");
+        std::string var_name;
+        std::string filename;
+        std::string mode;
         std::string base_dir;
-        bool has_base_dir = false;
+        bool cache = false;
 
-        for (size_t i = 3; i < args.size(); ++i) {
-            std::string arg = args[i];
-            if (arg == "CACHE") {
-                // Ignore CACHE for now
-            } else if (arg == "BASE_DIR" && i + 1 < args.size()) {
-                base_dir = args[++i];
-                has_base_dir = true;
-            }
-        }
+        parser.add_positional(var_name, "variable name");
+        parser.add_positional(filename, "filename");
+        parser.add_positional(mode, "mode");
+        parser.add_value("BASE_DIR", base_dir);
+        parser.add_flag("CACHE", cache);
+
+        PARSE_OR_RETURN(parser, interp, args);
 
         std::filesystem::path path(filename);
         std::string result;
@@ -112,7 +107,7 @@ void register_variable_builtins(Interpreter& interp) {
         } else if (mode == "ABSOLUTE" || mode == "REALPATH") {
             std::filesystem::path abs_path = path;
             if (!path.is_absolute()) {
-                std::filesystem::path base = has_base_dir ?
+                std::filesystem::path base = !base_dir.empty() ?
                     std::filesystem::path(base_dir) :
                     std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
                 abs_path = base / path;

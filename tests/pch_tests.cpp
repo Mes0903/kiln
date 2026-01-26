@@ -41,6 +41,9 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     REQUIRE(ast_or_error.has_value());
 
     auto result = interp.interpret(ast_or_error.value());
+    if (!result) {
+        std::cerr << "Interpreter error: " << result.error().message << std::endl;
+    }
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();

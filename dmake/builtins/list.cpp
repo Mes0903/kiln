@@ -1,58 +1,119 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../command_parser.hpp"
 #include <algorithm>
 
 namespace dmake {
 
 void register_list_builtins(Interpreter& interp) {
     interp.add_builtin("list", [](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.size() < 2) {
-            interp.print_message("ERROR", "list() requires at least 2 arguments", true);
+        if (args.empty()) {
+            interp.set_fatal_error("list() requires at least one argument");
             return;
         }
 
         std::string operation = args[0];
         std::transform(operation.begin(), operation.end(), operation.begin(), ::toupper);
 
+        std::vector<std::string> sub_args(args.begin() + 1, args.end());
+
         if (operation == "LENGTH") {
-            if (args.size() != 3) { interp.print_message("ERROR", "list(LENGTH) requires 3 args", true); return; }
-            CMakeList list(interp.get_variable(args[1]));
-            interp.set_variable(args[2], std::to_string(list.size()));
+            CommandParser parser("list", "LENGTH");
+            std::string list_var, out_var;
+            parser.add_positional(list_var, "list variable");
+            parser.add_positional(out_var, "output variable");
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
+            interp.set_variable(out_var, std::to_string(list.size()));
         } else if (operation == "GET") {
-            if (args.size() < 4) { interp.print_message("ERROR", "list(GET) requires 4+ args", true); return; }
-            CMakeList list(interp.get_variable(args[1]));
-            CMakeList result;
-            for (size_t i = 2; i < args.size() - 1; ++i) {
-                size_t idx = std::stoul(args[i]);
-                if (idx < list.size()) result.append(list[idx]);
+            CommandParser parser("list", "GET");
+            std::string list_var, out_var;
+            std::vector<std::string> indices;
+            parser.add_positional(list_var, "list variable");
+            parser.add_default_list(indices); // Indices are everything until the last one
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            if (indices.empty()) {
+                interp.set_fatal_error("list(GET) requires at least one index");
+                return;
             }
-            interp.set_variable(args[args.size() - 1], result.to_string());
+            out_var = indices.back();
+            indices.pop_back();
+
+            CMakeList list(interp.get_variable(list_var));
+            CMakeList result;
+            for (const auto& idx_str : indices) {
+                try {
+                    size_t idx = std::stoul(idx_str);
+                    if (idx < list.size()) result.append(list[idx]);
+                    else {
+                        interp.set_fatal_error("list(GET) index out of range: " + idx_str);
+                        return;
+                    }
+                } catch (...) {
+                    interp.set_fatal_error("list(GET) invalid index: " + idx_str);
+                    return;
+                }
+            }
+            interp.set_variable(out_var, result.to_string());
         } else if (operation == "APPEND") {
-            std::string var = args[1];
-            CMakeList list(interp.get_variable(var));
-            for (size_t i = 2; i < args.size(); ++i) list.append(args[i]);
-            interp.set_variable(var, list.to_string());
+            CommandParser parser("list", "APPEND");
+            std::string list_var;
+            std::vector<std::string> items;
+            parser.add_positional(list_var, "list variable");
+            parser.add_default_list(items);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
+            for (const auto& item : items) list.append(item);
+            interp.set_variable(list_var, list.to_string());
         } else if (operation == "REVERSE") {
-            std::string var = args[1];
-            CMakeList list(interp.get_variable(var));
+            CommandParser parser("list", "REVERSE");
+            std::string list_var;
+            parser.add_positional(list_var, "list variable");
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
             list.reverse();
-            interp.set_variable(var, list.to_string());
+            interp.set_variable(list_var, list.to_string());
         } else if (operation == "SORT") {
-            std::string var = args[1];
-            CMakeList list(interp.get_variable(var));
+            CommandParser parser("list", "SORT");
+            std::string list_var;
+            parser.add_positional(list_var, "list variable");
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
             list.sort();
-            interp.set_variable(var, list.to_string());
+            interp.set_variable(list_var, list.to_string());
         } else if (operation == "REMOVE_DUPLICATES") {
-            std::string var = args[1];
-            CMakeList list(interp.get_variable(var));
+            CommandParser parser("list", "REMOVE_DUPLICATES");
+            std::string list_var;
+            parser.add_positional(list_var, "list variable");
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
             list.remove_duplicates();
-            interp.set_variable(var, list.to_string());
+            interp.set_variable(list_var, list.to_string());
         } else if (operation == "SUBLIST") {
-            if (args.size() != 5) { interp.print_message("ERROR", "list(SUBLIST) requires 5 args", true); return; }
-            CMakeList list(interp.get_variable(args[1]));
-            size_t start = std::stoul(args[2]);
-            size_t len = std::stoul(args[3]);
-            interp.set_variable(args[4], list.sublist(start, len).to_string());
+            CommandParser parser("list", "SUBLIST");
+            std::string list_var, out_var, start_str, length_str;
+            parser.add_positional(list_var, "list variable");
+            parser.add_positional(start_str, "start index");
+            parser.add_positional(length_str, "length");
+            parser.add_positional(out_var, "output variable");
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
+            try {
+                size_t start = std::stoul(start_str);
+                int length = std::stoi(length_str);
+                interp.set_variable(out_var, list.sublist(start, length).to_string());
+            } catch (...) {
+                interp.set_fatal_error("list(SUBLIST) invalid indices");
+            }
+        } else {
+            interp.set_fatal_error("Unknown list operation: " + operation);
         }
     });
 }

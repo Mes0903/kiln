@@ -1,7 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include "dmake/interperter.hpp"
 #include "dmake/cmake-language.hpp"
 #include <sstream>
+#include <fstream>
+#include <filesystem>
 
 std::string run_script(std::string src) {
     std::stringstream output;

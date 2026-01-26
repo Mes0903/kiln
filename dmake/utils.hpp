@@ -24,5 +24,17 @@ inline Hash256 blake2b(std::string_view str, std::string_view key="")
     return blake2b(str.data(), str.size(), key.data(), key.size());
 }
 
+struct CommandResult {
+    int exit_code;
+    std::string output;
+};
+
+/**
+ * @brief Execute a shell command and capture its output.
+ * @param command The command to execute.
+ * @param working_dir The directory to run the command in (empty for current dir).
+ * @return CommandResult containing exit code and combined stdout/stderr.
+ */
+CommandResult run_command(const std::string& command, const std::string& working_dir = "");
 
 }

@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../target.hpp"
+#include "../command_parser.hpp"
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
@@ -48,10 +49,8 @@ void register_target_builtins(Interpreter& interp) {
     };
 
     // Helper for adding sources to a target with validation
-    auto add_sources_to_target = [](Interpreter& interp, const std::shared_ptr<Target>& target, const std::string& src_dir, const std::string& val) -> bool {
-        CMakeList lst(val);
-        std::vector<std::string> sources;
-        for(const auto& file : lst) {
+    auto add_sources_to_target = [](Interpreter& interp, const std::shared_ptr<Target>& target, const std::string& src_dir, const std::vector<std::string>& sources) -> bool {
+        for(const auto& file : sources) {
             std::filesystem::path p(file);
             if (!p.is_absolute()) {
                 p = std::filesystem::path(src_dir) / p;
@@ -60,68 +59,65 @@ void register_target_builtins(Interpreter& interp) {
                 interp.set_fatal_error("Source file not found: " + p.string() + " (for target " + target->get_name() + ")");
                 return false;
             }
-            sources.push_back(file);
         }
         target->add_sources(sources, PropertyVisibility::PRIVATE);
         return true;
     };
 
     interp.add_builtin("add_executable", [&](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.empty()) return;
-        std::string name = args[0];
+        CommandParser parser("add_executable");
+        std::string name;
+        std::vector<std::string> sources;
+        parser.add_positional(name, "target name");
+        parser.add_default_list(sources);
+        PARSE_OR_RETURN(parser, interp, args);
+
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
 
         auto target = std::make_shared<Target>(name, TargetType::EXECUTABLE, src_dir, bin_dir);
         configure_target(interp, target);
 
-        for(size_t i = 1; i < args.size(); ++i) {
-            if (!add_sources_to_target(interp, target, src_dir, args[i])) return;
-        }
+        if (!add_sources_to_target(interp, target, src_dir, sources)) return;
         interp.get_root()->targets_[name] = target;
     });
 
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.empty()) return;
-        std::string name = args[0];
+        CommandParser parser("add_library");
+        std::string name;
+        bool shared = false, static_lib = false, object_lib = false, interface_lib = false;
+        std::vector<std::string> sources;
+
+        parser.add_positional(name, "target name");
+        parser.add_flag("SHARED", shared);
+        parser.add_flag("STATIC", static_lib);
+        parser.add_flag("OBJECT", object_lib);
+        parser.add_flag("INTERFACE", interface_lib);
+        parser.add_default_list(sources);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        int type_count = (shared ? 1 : 0) + (static_lib ? 1 : 0) + (object_lib ? 1 : 0) + (interface_lib ? 1 : 0);
+        if (type_count > 1) {
+            interp.set_fatal_error("add_library() called with multiple conflicting types");
+            return;
+        }
+
+        TargetType type = TargetType::STATIC_LIBRARY;
+        if (shared) type = TargetType::SHARED_LIBRARY;
+        else if (object_lib) type = TargetType::OBJECT_LIBRARY;
+        else if (interface_lib) type = TargetType::INTERFACE_LIBRARY;
+
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
-
-        TargetType type = TargetType::STATIC_LIBRARY; // Default
-        size_t start_idx = 1;
-        
-        if (args.size() > 1) {
-            std::string first_val = args[1];
-            if (first_val == "SHARED") {
-                type = TargetType::SHARED_LIBRARY;
-                start_idx = 2;
-            } else if (first_val == "STATIC") {
-                type = TargetType::STATIC_LIBRARY;
-                start_idx = 2;
-            } else if (first_val == "OBJECT") {
-                type = TargetType::OBJECT_LIBRARY;
-                start_idx = 2;
-            } else if (first_val == "INTERFACE") {
-                type = TargetType::INTERFACE_LIBRARY;
-                start_idx = 2;
-            }
-        }
 
         auto target = std::make_shared<Target>(name, type, src_dir, bin_dir);
         configure_target(interp, target);
 
-        for(size_t i = start_idx; i < args.size(); ++i) {
-            if (!add_sources_to_target(interp, target, src_dir, args[i])) return;
-        }
+        if (!add_sources_to_target(interp, target, src_dir, sources)) return;
         interp.get_root()->targets_[name] = target;
     });
 
-    auto get_target_or_error = [](Interpreter& interp, const std::vector<std::string>& args, const std::string& cmd_name) -> std::shared_ptr<Target> {
-        if (args.empty()) {
-            interp.set_fatal_error(cmd_name + "() requires a target name as first argument");
-            return nullptr;
-        }
-        std::string name = args[0];
+    auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> std::shared_ptr<Target> {
         auto& targets = interp.get_root()->targets_;
         auto it = targets.find(name);
         if (it == targets.end()) {
@@ -131,78 +127,99 @@ void register_target_builtins(Interpreter& interp) {
         return it->second;
     };
 
-    interp.add_builtin("target_include_directories", [get_target_or_error](Interpreter& interp, const std::vector<std::string>& args) {
-        auto target = get_target_or_error(interp, args, "target_include_directories");
+    interp.add_builtin("target_include_directories", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_include_directories");
+        std::string name;
+        std::vector<std::string> pub, priv, inter;
+        parser.add_positional(name, "target name");
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_include_directories");
         if (!target) return;
 
-        PropertyVisibility vis = PropertyVisibility::PRIVATE;
-        std::vector<std::string> dirs;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string val = args[i];
-            if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-            else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-            else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-            else dirs.push_back(val);
-        }
-        target->add_include_directories(dirs, vis);
+        if (!pub.empty()) target->add_include_directories(pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->add_include_directories(priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->add_include_directories(inter, PropertyVisibility::INTERFACE);
     });
 
-    interp.add_builtin("target_compile_definitions", [get_target_or_error](Interpreter& interp, const std::vector<std::string>& args) {
-        auto target = get_target_or_error(interp, args, "target_compile_definitions");
+    interp.add_builtin("target_compile_definitions", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_compile_definitions");
+        std::string name;
+        std::vector<std::string> pub, priv, inter;
+        parser.add_positional(name, "target name");
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_compile_definitions");
         if (!target) return;
 
-        PropertyVisibility vis = PropertyVisibility::PRIVATE;
-        std::vector<std::string> defs;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string val = args[i];
-            if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-            else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-            else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-            else defs.push_back(val);
-        }
-        target->add_compile_definitions(defs, vis);
+        if (!pub.empty()) target->add_compile_definitions(pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->add_compile_definitions(priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->add_compile_definitions(inter, PropertyVisibility::INTERFACE);
     });
 
-    interp.add_builtin("target_compile_options", [get_target_or_error](Interpreter& interp, const std::vector<std::string>& args) {
-        auto target = get_target_or_error(interp, args, "target_compile_options");
+    interp.add_builtin("target_compile_options", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_compile_options");
+        std::string name;
+        std::vector<std::string> pub, priv, inter;
+        parser.add_positional(name, "target name");
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_compile_options");
         if (!target) return;
 
-        PropertyVisibility vis = PropertyVisibility::PRIVATE;
-        std::vector<std::string> opts;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string val = args[i];
-            if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-            else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-            else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-            else opts.push_back(val);
-        }
-        target->add_compile_options(opts, vis);
+        if (!pub.empty()) target->add_compile_options(pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->add_compile_options(priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->add_compile_options(inter, PropertyVisibility::INTERFACE);
     });
 
-    interp.add_builtin("target_link_libraries", [get_target_or_error](Interpreter& interp, const std::vector<std::string>& args) {
-        auto target = get_target_or_error(interp, args, "target_link_libraries");
+    interp.add_builtin("target_link_libraries", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_link_libraries");
+        std::string name;
+        std::vector<std::string> pub, priv, inter, def;
+        parser.add_positional(name, "target name");
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        parser.add_default_list(def);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_link_libraries");
         if (!target) return;
 
-        PropertyVisibility vis = PropertyVisibility::PRIVATE;
-        std::vector<std::string> libs;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string val = args[i];
-            if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-            else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-            else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-            else libs.push_back(val);
-        }
-        target->add_linked_libraries(libs, vis);
+        if (!pub.empty()) target->add_linked_libraries(pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->add_linked_libraries(priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->add_linked_libraries(inter, PropertyVisibility::INTERFACE);
+        if (!def.empty()) target->add_linked_libraries(def, PropertyVisibility::PRIVATE);
     });
 
-    interp.add_builtin("set_target_properties", [get_target_or_error](Interpreter& interp, const std::vector<std::string>& args) {
-        auto target = get_target_or_error(interp, args, "set_target_properties");
+    interp.add_builtin("set_target_properties", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("set_target_properties");
+        std::string name;
+        std::vector<std::string> props;
+        parser.add_positional(name, "target name");
+        parser.add_list("PROPERTIES", props);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "set_target_properties");
         if (!target) return;
-        if (args.size() < 4 || args[1] != "PROPERTIES") return;
-        
-        for(size_t i = 2; i < args.size() - 1; i+=2) {
-            std::string prop_name = args[i];
-            std::string prop_value = args[i+1];
+
+        if (props.size() % 2 != 0) {
+            interp.set_fatal_error("set_target_properties() PROPERTIES must be key-value pairs");
+            return;
+        }
+
+        for(size_t i = 0; i < props.size(); i += 2) {
+            std::string prop_name = props[i];
+            std::string prop_value = props[i+1];
 
             if (prop_name == "OUTPUT_NAME") {
                 target->set_output_name(prop_value);
@@ -212,26 +229,22 @@ void register_target_builtins(Interpreter& interp) {
         }
     });
 
-    interp.add_builtin("target_precompile_headers", [get_target_or_error](Interpreter& interp, const std::vector<std::string>& args) {
-        auto target = get_target_or_error(interp, args, "target_precompile_headers");
+    interp.add_builtin("target_precompile_headers", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_precompile_headers");
+        std::string name;
+        std::vector<std::string> pub, priv, inter;
+        parser.add_positional(name, "target name");
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_precompile_headers");
         if (!target) return;
 
-        PropertyVisibility vis = PropertyVisibility::PRIVATE;
-        std::vector<std::string> headers;
-        for(size_t i = 1; i < args.size(); ++i) {
-            std::string val = args[i];
-            if (val == "PUBLIC") vis = PropertyVisibility::PUBLIC;
-            else if (val == "PRIVATE") vis = PropertyVisibility::PRIVATE;
-            else if (val == "INTERFACE") vis = PropertyVisibility::INTERFACE;
-            else headers.push_back(val);
-        }
-
-        if (headers.empty()) {
-            interp.set_fatal_error("target_precompile_headers() requires at least one header file");
-            return;
-        }
-
-        target->add_precompiled_headers(headers, vis);
+        if (!pub.empty()) target->add_precompiled_headers(pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->add_precompiled_headers(priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->add_precompiled_headers(inter, PropertyVisibility::INTERFACE);
     });
 
     interp.add_builtin("include_directories", [](Interpreter& interp, const std::vector<std::string>& args) {

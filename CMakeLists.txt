@@ -10,6 +10,9 @@ add_library(dmake SHARED
     dmake/interperter.cpp
     dmake/target.cpp
     dmake/build_system.cpp
+    dmake/utils.cpp
+    dmake/command_parser.cpp
+    dmake/inner/blake2b.c
     dmake/builtins/message.cpp
     dmake/builtins/variable.cpp
     dmake/builtins/list.cpp
@@ -31,7 +34,7 @@ if(NOT DEFINED DMAKE_VERSION)
     enable_testing()
 
     find_package(Catch2 3 REQUIRED)
-    add_executable(dmake_tests tests/main.cpp tests/interpreter_tests.cpp tests/pch_tests.cpp)
+    add_executable(dmake_tests tests/main.cpp tests/interpreter_tests.cpp tests/pch_tests.cpp tests/command_parser.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

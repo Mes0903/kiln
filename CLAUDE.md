@@ -73,6 +73,32 @@ Examples:
 - **Task Generation**: `Target::generate_tasks()` produces the granular `BuildTask`s for the build graph based on the target type.
 - **Custom Targets**: (Future) `CustomArtifact` for `add_custom_command`/`target`.
 
+### Command Argument Parsing
+The `CommandParser` utility (`dmake/command_parser.hpp`) provides a builder-style API for parsing CMake command arguments consistently across builtins.
+
+**Capabilities:**
+- `add_positional(var, label, required)`: Positional arguments (e.g., target name).
+- `add_flag(keyword, bool_var)`: Boolean flags (e.g., `SHARED`).
+- `add_value(keyword, string_var)`: Single value keywords (e.g., `WORKING_DIRECTORY <dir>`).
+- `add_list(keyword, vector_var)`: Multi-value keywords (e.g., `SOURCES <s1> <s2>`).
+- `add_multi_list(keyword, nested_vector_var)`: Repeated multi-value keywords (e.g., `COMMAND <c1> COMMAND <c2>`).
+- `add_default_list(vector_var)`: Arguments not associated with any keyword.
+
+**Standard Usage in Builtins:**
+```cpp
+CommandParser parser("my_command");
+std::string target;
+std::vector<std::string> sources;
+bool verbose = false;
+
+parser.add_positional(target, "target name");
+parser.add_list("SOURCES", sources);
+parser.add_flag("VERBOSE", verbose);
+
+// Validates and reports errors to the interpreter automatically
+PARSE_OR_RETURN(parser, interp, args);
+```
+
 ## CMake Language Support
 
 dmake implements a subset of CMake language features. The interpreter follows CMake semantics for variable handling and control flow.
