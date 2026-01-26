@@ -262,7 +262,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_target_builtins(*this);
         register_project_builtins(*this);
         register_file_builtins(*this);
-                // Internal builtins (interact with interpreter state/stack)
+        register_find_package_builtins(*this);
+
+        // Internal builtins (interact with interpreter state/stack)
+
         add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) return;
             std::string subdir = args[0];
@@ -292,42 +295,13 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
         add_builtin("include", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) { interp.set_fatal_error("include() requires an argument"); return; }
-            std::string file_arg = args[0];
             bool optional = false;
             for (size_t i = 1; i < args.size(); ++i) if (args[i] == "OPTIONAL") optional = true;
 
-            std::filesystem::path path = std::filesystem::path(file_arg);
-            if(!path.is_absolute())
-                path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_arg;
-            if (!path.has_extension()) path.replace_extension(".cmake");
-
-            if (!std::filesystem::exists(path)) {
-                if (optional) return;
-                interp.set_fatal_error("include() could not find: " + path.string());
-                return;
-            }
-
-            std::ifstream file(path);
-            if (!file) { interp.set_fatal_error("include() could not read: " + path.string()); return; }
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-            Parser parser(content);
-            auto ast = parser.parse();
-            if (!ast) {
-                interp.set_fatal_error(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
-                return;
-            }
-
-            std::string old_file = interp.get_current_file();
-            interp.set_current_file(std::filesystem::absolute(path).string());
-            auto res = interp.interpret(ast.value());
-            interp.set_current_file(old_file);
-
-            if (!res) {
-                interp.set_fatal_error(res.error());
-                return;
-            }
+            auto res = interp.include_file(args[0], optional);
+            if (!res) interp.set_fatal_error(res.error());
         });
+
 
         add_builtin("break", [](Interpreter& interp, const std::vector<std::string>&) {
             if (interp.get_loop_depth() == 0) {
@@ -368,6 +342,45 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
         if (loop_control_ != LoopControl::NONE) return {};
     }
     return {};
+}
+
+std::expected<void, InterpreterError> Interpreter::include_file(const std::string& file_path, bool optional) {
+    std::filesystem::path path = std::filesystem::path(file_path);
+    if (!path.is_absolute())
+        path = std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_path;
+
+    if (!path.has_extension() && !std::filesystem::exists(path)) {
+        std::filesystem::path with_ext = path;
+        with_ext.replace_extension(".cmake");
+        if (std::filesystem::exists(with_ext)) {
+            path = with_ext;
+        }
+    }
+
+    if (!std::filesystem::exists(path)) {
+        if (optional) return {};
+        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() could not find: " + path.string(), {}});
+    }
+
+    std::ifstream file(path);
+    if (!file) {
+        return std::unexpected(InterpreterError{path.string(), 0, 0, 0, 0, "include() could not read: " + path.string(), {}});
+    }
+
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    Parser parser(content);
+    auto ast = parser.parse();
+    if (!ast) {
+        return std::unexpected(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
+    }
+
+    std::string old_file = get_current_file();
+    set_current_file(std::filesystem::absolute(path).string());
+    auto res = interpret(ast.value());
+    set_current_file(old_file);
+
+    return res;
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {

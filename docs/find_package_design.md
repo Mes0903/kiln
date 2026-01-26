@@ -13,15 +13,22 @@ The `find_package` command in `CONFIG` mode looks for package configuration file
     - `REQUIRED` (Flag)
     - `QUIET` (Flag)
 2.  **Search Strategy**:
+    - Check `PackageName_DIR` variable first (as a hint/override).
     - Check `CMAKE_PREFIX_PATH` (both as a dmake variable and environment variable).
     - Check standard system paths:
         - `/usr/lib/cmake/<PackageName>`
-        - `/usr/local/lib/cmake/<PackageName>`
+        - `/usr/lib/<arch-triplet>/cmake/<PackageName>` (e.g., x86_64-linux-gnu)
         - `/usr/share/cmake/<PackageName>`
-        - (On macOS) `/opt/homebrew/lib/cmake/<PackageName>`
+        - `/usr/local/lib/cmake/<PackageName>`
+        - `/usr/local/share/cmake/<PackageName>`
+        - `/usr/lib/cmake` (some packages put configs directly here)
+        - `/usr/share/cmake`
     - In each directory, look for:
         - `<PackageName>Config.cmake`
         - `<lowercased-name>-config.cmake`
+
+## Module Mode Rejection
+If `CONFIG` is not explicitly requested, dmake will first look for `Find<PackageName>.cmake` in `/usr/share/cmake/Modules/`. If found, it will terminate with an error: "Module mode (Find<PackageName>.cmake) is not supported yet. Please use CONFIG mode or ensure the package provides a config file."
 3.  **Execution**:
     - If found, `include()` the file within the current interpreter scope.
     - Set `<PackageName>_FOUND` to `TRUE`.

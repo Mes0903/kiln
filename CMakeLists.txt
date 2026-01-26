@@ -20,16 +20,21 @@ add_library(dmake SHARED
     dmake/builtins/target.cpp
     dmake/builtins/project.cpp
     dmake/builtins/file.cpp
+    dmake/builtins/find_package.cpp
     dmake/CMakeList.cpp
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+find_package(CLI11 CONFIG REQUIRED)
 
 add_executable(dmake_cli dmake-cli/main.cpp)
-target_link_libraries(dmake_cli PRIVATE dmake)
+target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11)
+
 set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake
 )
+
+find_package(Catch2 3 REQUIRED)
 
 # Does not support testing in dmake yet (Plus no find_pakage)
 if(NOT DEFINED DMAKE_VERSION)

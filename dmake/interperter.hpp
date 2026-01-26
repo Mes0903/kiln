@@ -87,6 +87,8 @@ public:
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
+    std::expected<void, InterpreterError> include_file(const std::string& file_path, bool optional = false);
+
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
