@@ -18,7 +18,7 @@ class Toolchain;
 class Target {
 public:
     Target(std::string name, TargetType type, std::string source_dir, std::string binary_dir)
-        : name_(std::move(name)), type_(type), source_dir_(std::move(source_dir)), binary_dir_(std::move(binary_dir)) {}
+        : name_(std::move(name)), type_(type), source_dir_(std::move(source_dir)), binary_dir_(std::move(binary_dir)), is_imported_(false) {}
     virtual ~Target() = default;
 
     const std::string& get_name() const { return name_; }
@@ -50,6 +50,12 @@ public:
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
 
+    void set_imported(bool imported) { is_imported_ = imported; }
+    bool is_imported() const { return is_imported_; }
+
+    void set_imported_location(std::string location) { imported_location_ = std::move(location); }
+    const std::string& get_imported_location() const { return imported_location_; }
+
     void set_language_standard(Language lang, std::string standard);
     const std::string& get_language_standard(Language lang) const;
 
@@ -77,6 +83,9 @@ protected:
     std::string source_dir_;
     std::string binary_dir_;
     
+    bool is_imported_;
+    std::string imported_location_;
+
     std::map<Language, std::string> standards_;
     std::map<Language, std::vector<std::string>> language_flags_;
 

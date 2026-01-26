@@ -69,8 +69,10 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("add_executable", [&](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("add_executable");
         std::string name;
+        bool imported = false;
         std::vector<std::string> sources;
         parser.add_positional(name, "target name");
+        parser.add_flag("IMPORTED", imported);
         parser.add_default_list(sources);
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -78,16 +80,19 @@ void register_target_builtins(Interpreter& interp) {
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
 
         auto target = std::make_shared<Target>(name, TargetType::EXECUTABLE, src_dir, bin_dir);
-        configure_target(interp, target);
-
-        if (!add_sources_to_target(interp, target, src_dir, sources)) return;
+        if (imported) {
+            target->set_imported(true);
+        } else {
+            configure_target(interp, target);
+            if (!add_sources_to_target(interp, target, src_dir, sources)) return;
+        }
         interp.get_root()->targets_[name] = target;
     });
 
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("add_library");
         std::string name;
-        bool shared = false, static_lib = false, object_lib = false, interface_lib = false;
+        bool shared = false, static_lib = false, object_lib = false, interface_lib = false, imported = false;
         std::vector<std::string> sources;
 
         parser.add_positional(name, "target name");
@@ -95,6 +100,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.add_flag("STATIC", static_lib);
         parser.add_flag("OBJECT", object_lib);
         parser.add_flag("INTERFACE", interface_lib);
+        parser.add_flag("IMPORTED", imported);
         parser.add_default_list(sources);
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -113,9 +119,12 @@ void register_target_builtins(Interpreter& interp) {
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
 
         auto target = std::make_shared<Target>(name, type, src_dir, bin_dir);
-        configure_target(interp, target);
-
-        if (!add_sources_to_target(interp, target, src_dir, sources)) return;
+        if (imported) {
+            target->set_imported(true);
+        } else {
+            configure_target(interp, target);
+            if (!add_sources_to_target(interp, target, src_dir, sources)) return;
+        }
         interp.get_root()->targets_[name] = target;
     });
 
@@ -227,6 +236,8 @@ void register_target_builtins(Interpreter& interp) {
                 target->set_output_name(prop_value);
             } else if (prop_name == "CXX_STANDARD") {
                 target->set_cxx_standard(prop_value);
+            } else if (prop_name == "IMPORTED_LOCATION") {
+                target->set_imported_location(prop_value);
             }
         }
     });

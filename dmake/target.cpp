@@ -110,6 +110,10 @@ const std::vector<std::string>& Target::get_language_flags(Language lang) const 
 }
 
 std::string Target::get_output_path() const {
+    if (is_imported_ && !imported_location_.empty()) {
+        return imported_location_;
+    }
+
     std::string out_name = get_output_name();
     std::filesystem::path path;
 
@@ -297,7 +301,7 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
 }
 
 void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
-    if (type_ == TargetType::INTERFACE_LIBRARY) return;
+    if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
 
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
