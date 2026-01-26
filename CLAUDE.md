@@ -40,22 +40,26 @@ mkdir -p build && cd build && cmake .. && make
 
 **Run dmake CLI:**
 ```bash
-./build/dmake <path-to-project> [-j N] [-DVAR=VAL] [--config CONFIG] [-B BUILD_DIR]
+# Build mode (default)
+./build/dmake [path-to-project] [-j N] [-DVAR=VAL] [--config CONFIG] [-B BUILD_DIR]
+
+# Script mode
+./build/dmake -P <script.cmake> [-DVAR=VAL]
 ```
 
 Examples:
 ```bash
-# Default: build/debug
-./build/dmake .
+# Default: build current directory in build/debug
+./build/dmake
+
+# Build specific project
+./build/dmake test_project
 
 # Release build: build/release
 ./build/dmake . --config release
 
-# Custom build root: out/debug
-./build/dmake . -B out
-
-# Custom root + config: out/release
-./build/dmake . -B out --config release
+# Run a script
+./build/dmake -P my_script.cmake -DDEBUG=ON
 ```
 
 **Dependencies:**

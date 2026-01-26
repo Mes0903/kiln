@@ -286,9 +286,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             bool optional = false;
             for (size_t i = 1; i < args.size(); ++i) if (args[i] == "OPTIONAL") optional = true;
 
-            std::filesystem::path path = std::filesystem::path(file_arg).is_absolute() ?
-                std::filesystem::path(file_arg) :
-                std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_arg;
+            std::filesystem::path path = std::filesystem::path(file_arg);
+            std::cout << "Path: " << path.string() << std::endl;
+            if(!path.is_absolute())
+                path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_arg;
             if (!path.has_extension()) path.replace_extension(".cmake");
 
             if (!std::filesystem::exists(path)) {
