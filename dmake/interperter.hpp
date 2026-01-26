@@ -13,6 +13,7 @@
 #include <expected>
 #include <optional>
 #include "CMakeList.hpp"
+#include "toolchain.hpp"
 
 namespace dmake {
 
@@ -87,6 +88,7 @@ public:
 
     // Access to targets (for testing and build system)
     std::map<std::string, std::shared_ptr<Target>>& get_targets() { return get_root()->targets_; }
+    Toolchain& get_toolchain() { return get_root()->toolchain_; }
 
     // Friend registration functions
     friend void register_message_builtins(Interpreter& interp);
@@ -121,6 +123,7 @@ private:
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
+    Toolchain toolchain_;
 
     // Directory-scoped accumulated directories (inherited by targets)
     std::vector<std::string> accumulated_include_directories_;

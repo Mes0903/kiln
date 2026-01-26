@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <memory>
+#include "language.hpp"
 
 namespace dmake {
 
@@ -12,9 +12,11 @@ enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
 
 class BuildGraph;
 
+class Toolchain;
+
 class Target {
 public:
-    Target(std::string name, TargetType type, std::string source_dir, std::string binary_dir) 
+    Target(std::string name, TargetType type, std::string source_dir, std::string binary_dir)
         : name_(std::move(name)), type_(type), source_dir_(std::move(source_dir)), binary_dir_(std::move(binary_dir)) {}
     virtual ~Target() = default;
 
@@ -47,28 +49,36 @@ public:
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
 
-    void set_cxx_standard(std::string standard);
-    const std::string& get_cxx_standard() const;
+    void set_language_standard(Language lang, std::string standard);
+    const std::string& get_language_standard(Language lang) const;
+
+    void add_language_flags(Language lang, const std::vector<std::string>& flags);
+    const std::vector<std::string>& get_language_flags(Language lang) const;
+
+    // Deprecated helpers for C++
+    void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
+    const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
 
     std::string get_output_path() const;
 
     // The core task generation logic
-    void generate_tasks(BuildGraph& graph);
+    void generate_tasks(BuildGraph& graph, const Toolchain& toolchain);
 
 protected:
     // Helper methods for task generation
-    void generate_object_tasks(BuildGraph& graph, std::vector<std::string>& obj_files,
+    void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
                                bool is_shared);
-    std::string build_compile_command(const std::string& source, const std::string& output,
-                                      const std::string& pch_include_arg, bool is_shared) const;
 
     std::string name_;
     std::string output_name_;
     TargetType type_;
     std::string source_dir_;
     std::string binary_dir_;
-    std::string cxx_standard_;
+    
+    std::map<Language, std::string> standards_;
+    std::map<Language, std::vector<std::string>> language_flags_;
+
     std::map<PropertyVisibility, std::vector<std::string>> sources_;
     std::map<PropertyVisibility, std::vector<std::string>> linked_libraries_;
     std::map<PropertyVisibility, std::vector<std::string>> include_directories_;

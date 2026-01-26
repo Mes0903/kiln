@@ -1,5 +1,7 @@
 #include "target.hpp"
 #include "build_system.hpp"
+#include "language.hpp"
+#include "toolchain.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -86,12 +88,25 @@ const std::string& Target::get_output_name() const {
     return output_name_.empty() ? name_ : output_name_;
 }
 
-void Target::set_cxx_standard(std::string standard) {
-    cxx_standard_ = std::move(standard);
+void Target::set_language_standard(Language lang, std::string standard) {
+    standards_[lang] = std::move(standard);
 }
 
-const std::string& Target::get_cxx_standard() const {
-    return cxx_standard_;
+const std::string& Target::get_language_standard(Language lang) const {
+    static const std::string empty;
+    auto it = standards_.find(lang);
+    return (it != standards_.end()) ? it->second : empty;
+}
+
+void Target::add_language_flags(Language lang, const std::vector<std::string>& flags) {
+    auto& target_flags = language_flags_[lang];
+    target_flags.insert(target_flags.end(), flags.begin(), flags.end());
+}
+
+const std::vector<std::string>& Target::get_language_flags(Language lang) const {
+    static const std::vector<std::string> empty;
+    auto it = language_flags_.find(lang);
+    return (it != language_flags_.end()) ? it->second : empty;
 }
 
 std::string Target::get_output_path() const {
@@ -126,56 +141,51 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
     return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
 }
 
-std::string Target::build_compile_command(const std::string& source, const std::string& output,
-                                             const std::string& pch_include_arg, bool is_shared) const {
-    std::ostringstream cmd;
-    cmd << "g++";
-
-    if (!cxx_standard_.empty()) {
-        cmd << " -std=c++" << cxx_standard_;
-    }
-
-    if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
-
-    for (const auto& opt : get_compile_options(PropertyVisibility::PRIVATE)) cmd << " " << opt;
-    for (const auto& opt : get_compile_options(PropertyVisibility::PUBLIC)) cmd << " " << opt;
-
-    for (const auto& def : get_compile_definitions(PropertyVisibility::PRIVATE)) cmd << " -D" << def;
-    for (const auto& def : get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
-
-    cmd << " -MMD -MF " << output << ".d";
-
-    if (is_shared) cmd << " -fPIC";
-
-    cmd << " -c -o " << output;
-
-    for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
-        cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-    for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
-        cmd << " -I" << (std::filesystem::path(source_dir_) / dir).string();
-
-    if (!pch_include_arg.empty()) {
-        cmd << " -I" << source_dir_;
-        cmd << pch_include_arg;
-    }
-
-    cmd << " " << source;
-
-    return cmd.str();
-}
-
-void Target::generate_object_tasks(BuildGraph& graph, std::vector<std::string>& obj_files,
+void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
                                       bool is_shared) {
     for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
+        auto lang_info = LanguageClassifier::from_path(src);
+        if (lang_info.is_header) continue;
+        if (lang_info.lang == Language::UNKNOWN) {
+            throw std::runtime_error("No compiler registered for file '" + src + "' in target '" + name_ + "'");
+        }
+
+        const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
+        if (!compiler) {
+            throw std::runtime_error("No compiler available for language " + std::string(lang_info.name) + " in target '" + name_ + "'");
+        }
+
         std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
         std::string obj = get_obj_path(binary_dir_, src);
         obj_files.push_back(obj);
 
+        CompileContext ctx;
+        ctx.source = src_abs.string();
+        ctx.output = obj;
+        ctx.is_shared = is_shared;
+        ctx.pch_include = pch_include_arg;
+        ctx.standard = get_language_standard(lang_info.lang);
+        ctx.color_diagnostics = isatty(STDOUT_FILENO);
+
+        // Language-specific global flags (from CMAKE_<LANG>_FLAGS)
+        for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
+
+        for (const auto& dir : get_include_directories(PropertyVisibility::PRIVATE))
+            ctx.includes.push_back((std::filesystem::path(source_dir_) / dir).string());
+        for (const auto& dir : get_include_directories(PropertyVisibility::PUBLIC))
+            ctx.includes.push_back((std::filesystem::path(source_dir_) / dir).string());
+
+        for (const auto& def : get_compile_definitions(PropertyVisibility::PRIVATE)) ctx.definitions.push_back(def);
+        for (const auto& def : get_compile_definitions(PropertyVisibility::PUBLIC)) ctx.definitions.push_back(def);
+
+        for (const auto& opt : get_compile_options(PropertyVisibility::PRIVATE)) ctx.options.push_back(opt);
+        for (const auto& opt : get_compile_options(PropertyVisibility::PUBLIC)) ctx.options.push_back(opt);
+
         BuildTask task;
         task.id = obj;
         task.parent_target = this;
-        task.command = build_compile_command(src_abs.string(), obj, pch_include_arg, is_shared);
+        task.command = compiler->get_compile_command(ctx);
         task.inputs.push_back(src_abs.string());
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
@@ -189,12 +199,19 @@ void Target::generate_object_tasks(BuildGraph& graph, std::vector<std::string>& 
 }
 
 // Returns (pch_gch_path, pch_include_arg). Both empty if no PCH needed.
-static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, const Target* target, bool is_shared) {
+static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, const Toolchain& toolchain, const Target* target, bool is_shared) {
     auto private_pchs = target->get_precompiled_headers(PropertyVisibility::PRIVATE);
     auto public_pchs = target->get_precompiled_headers(PropertyVisibility::PUBLIC);
 
     if (private_pchs.empty() && public_pchs.empty()) {
         return {"", ""};
+    }
+
+    // PCH is usually C++ in dmake for now, but we should eventually detect language
+    Language pch_lang = Language::CXX; 
+    const Compiler* compiler = toolchain.get_compiler_ptr(pch_lang);
+    if (!compiler) {
+        throw std::runtime_error("No compiler available for PCH generation in target '" + target->get_name() + "'");
     }
 
     auto pch_path = std::filesystem::path(target->get_binary_dir()) / "objs" / (target->get_name() + "_pch.hpp");
@@ -231,31 +248,27 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     pch_task.id = pch_gch_path;
     pch_task.parent_target = const_cast<Target*>(target);
 
-    std::ostringstream cmd;
-    cmd << "g++";
+    CompileContext ctx;
+    ctx.source = pch_wrapper;
+    ctx.output = pch_gch_path;
+    ctx.is_shared = is_shared;
+    ctx.standard = target->get_language_standard(pch_lang);
+    ctx.color_diagnostics = isatty(STDOUT_FILENO);
+    ctx.options.push_back("-x c++-header"); // Force header type
 
-    if (!target->get_cxx_standard().empty()) {
-        cmd << " -std=c++" << target->get_cxx_standard();
-    }
+    // PCH should also get global CXX flags
+    for (const auto& opt : target->get_language_flags(pch_lang)) ctx.options.push_back(opt);
+    for (const auto& opt : target->get_compile_options(PropertyVisibility::PUBLIC)) ctx.options.push_back(opt);
+    for (const auto& def : target->get_compile_definitions(PropertyVisibility::PRIVATE)) ctx.definitions.push_back(def);
+    for (const auto& def : target->get_compile_definitions(PropertyVisibility::PUBLIC)) ctx.definitions.push_back(def);
 
-    if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
-
-    for (const auto& opt : target->get_compile_options(PropertyVisibility::PRIVATE)) cmd << " " << opt;
-    for (const auto& opt : target->get_compile_options(PropertyVisibility::PUBLIC)) cmd << " " << opt;
-    for (const auto& def : target->get_compile_definitions(PropertyVisibility::PRIVATE)) cmd << " -D" << def;
-    for (const auto& def : target->get_compile_definitions(PropertyVisibility::PUBLIC)) cmd << " -D" << def;
-
-    cmd << " -I" << target->get_source_dir();
-
+    ctx.includes.push_back(target->get_source_dir());
     for (const auto& dir : target->get_include_directories(PropertyVisibility::PRIVATE))
-        cmd << " -I" << (std::filesystem::path(target->get_source_dir()) / dir).string();
+        ctx.includes.push_back((std::filesystem::path(target->get_source_dir()) / dir).string());
     for (const auto& dir : target->get_include_directories(PropertyVisibility::PUBLIC))
-        cmd << " -I" << (std::filesystem::path(target->get_source_dir()) / dir).string();
+        ctx.includes.push_back((std::filesystem::path(target->get_source_dir()) / dir).string());
 
-    if (is_shared) cmd << " -fPIC";
-    cmd << " -x c++-header -o " << pch_gch_path << " " << pch_wrapper;
-
-    pch_task.command = cmd.str();
+    pch_task.command = compiler->get_compile_command(ctx);
     pch_task.inputs.push_back(pch_wrapper);
     pch_task.outputs.push_back(pch_gch_path);
 
@@ -264,47 +277,58 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     return {pch_gch_path, pch_include_arg};
 }
 
-void Target::generate_tasks(BuildGraph& graph) {
+void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain) {
     if (type_ == TargetType::INTERFACE_LIBRARY) return;
 
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
 
-    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, this, is_shared);
-    generate_object_tasks(graph, obj_files, pch_gch_path, pch_include_arg, is_shared);
+    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared);
+    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
+
+    // Determine linker language (CXX if any CXX sources, otherwise C)
+    Language linker_lang = Language::C;
+    for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
+        if (LanguageClassifier::from_path(src).lang == Language::CXX) {
+            linker_lang = Language::CXX;
+            break;
+        }
+    }
+
+    const Compiler* linker = toolchain.get_compiler_ptr(linker_lang);
+    if (!linker) {
+        throw std::runtime_error("No linker available for language in target '" + name_ + "'");
+    }
 
     std::string output_path = get_output_path();
     BuildTask link;
     link.id = output_path;
     link.parent_target = this;
 
-    std::ostringstream cmd;
     if (type_ == TargetType::STATIC_LIBRARY) {
-        cmd << "ar rcs " << output_path;
+        link.command = linker->get_archive_command(output_path, obj_files);
     } else {
-        cmd << "g++";
-        if (!cxx_standard_.empty()) cmd << " -std=c++" << cxx_standard_;
-        if (isatty(STDOUT_FILENO)) cmd << " -fdiagnostics-color=always";
-        cmd << " -Wl,-rpath,'$ORIGIN'";
-        if (is_shared) cmd << " -shared";
-        cmd << " -o " << output_path;
+        LinkContext ctx;
+        ctx.output = output_path;
+        ctx.objects = obj_files;
+        ctx.is_shared = is_shared;
+        ctx.standard = get_language_standard(linker_lang);
+        ctx.color_diagnostics = isatty(STDOUT_FILENO);
+        
+        ctx.lib_dirs.push_back(binary_dir_);
+        for (const auto& dir : get_link_directories(PropertyVisibility::PRIVATE)) ctx.lib_dirs.push_back(dir);
+        for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) ctx.libs.push_back(lib);
+
+        link.command = linker->get_link_command(ctx);
     }
 
     for (const auto& obj : obj_files) {
-        cmd << " " << obj;
         link.inputs.push_back(obj);
         link.dependencies.insert(obj);
     }
-    
-    if (type_ != TargetType::STATIC_LIBRARY) {
-        cmd << " -L" << binary_dir_;
-        for (const auto& dir : get_link_directories(PropertyVisibility::PRIVATE)) cmd << " -L" << dir;
-        for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) cmd << " -l" << lib;
-    }
-    
-    link.command = cmd.str();
+
     link.outputs.push_back(output_path);
     graph.add_task(std::move(link));
 }

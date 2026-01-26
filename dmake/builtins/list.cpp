@@ -13,9 +13,9 @@ void register_list_builtins(Interpreter& interp) {
         }
 
         std::string operation = args[0];
-        std::transform(operation.begin(), operation.end(), operation.begin(), ::toupper);
+        std::transform(operation.begin(), operation.end(), operation.begin(), [](unsigned char c){ return std::toupper(c); });
 
-        std::vector<std::string> sub_args(args.begin() + 1, args.end());
+        std::span<const std::string> sub_args(args.begin() + 1, args.end());
 
         if (operation == "LENGTH") {
             CommandParser parser("list", "LENGTH");

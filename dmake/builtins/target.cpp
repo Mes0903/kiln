@@ -9,38 +9,40 @@
 namespace dmake {
 
 void register_target_builtins(Interpreter& interp) {
-    // Helper to configure common target properties (C++ standard, flags, inherited directories)
+    // Helper to configure common target properties (C/C++ standards, flags, inherited directories)
     auto configure_target = [](Interpreter& interp, const std::shared_ptr<Target>& target) {
-        // Set C++ standard from CMAKE_CXX_STANDARD if available
-        std::string cxx_std = interp.get_variable("CMAKE_CXX_STANDARD");
-        if (!cxx_std.empty()) {
-            target->set_cxx_standard(cxx_std);
-        }
+        auto configure_lang = [&](Language lang, const std::string& lang_prefix) {
+            // Set standard from CMAKE_<LANG>_STANDARD
+            std::string std_var = "CMAKE_" + lang_prefix + "_STANDARD";
+            std::string lang_std = interp.get_variable(std_var);
+            if (!lang_std.empty()) {
+                target->set_language_standard(lang, lang_std);
+            }
 
-        // Apply CMAKE_CXX_FLAGS and CMAKE_CXX_FLAGS_<CONFIG>
-        auto apply_cxx_flags = [&](const std::string& flags_var) {
-            std::string flags = interp.get_variable(flags_var);
-            if (!flags.empty()) {
-                // Split flags by spaces and add individually
-                std::istringstream iss(flags);
+            // Apply CMAKE_<LANG>_FLAGS and CMAKE_<LANG>_FLAGS_<CONFIG>
+            auto get_flags = [&](const std::string& var_name) -> std::vector<std::string> {
+                std::string flags = interp.get_variable(var_name);
                 std::vector<std::string> flag_list;
-                std::string flag;
-                while (iss >> flag) {
-                    flag_list.push_back(flag);
+                if (!flags.empty()) {
+                    std::istringstream iss(flags);
+                    std::string flag;
+                    while (iss >> flag) flag_list.push_back(flag);
                 }
-                if (!flag_list.empty()) {
-                    target->add_compile_options(flag_list, PropertyVisibility::PRIVATE);
-                }
+                return flag_list;
+            };
+
+            target->add_language_flags(lang, get_flags("CMAKE_" + lang_prefix + "_FLAGS"));
+
+            std::string build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+            if (!build_type.empty()) {
+                std::string upper_type = build_type;
+                std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), [](unsigned char c){ return std::toupper(c); });
+                target->add_language_flags(lang, get_flags("CMAKE_" + lang_prefix + "_FLAGS_" + upper_type));
             }
         };
 
-        apply_cxx_flags("CMAKE_CXX_FLAGS");
-        std::string build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-        if (!build_type.empty()) {
-            std::string upper_type = build_type;
-            std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), ::toupper);
-            apply_cxx_flags("CMAKE_CXX_FLAGS_" + upper_type);
-        }
+        configure_lang(Language::CXX, "CXX");
+        configure_lang(Language::C, "C");
 
         // Inherit accumulated include and link directories
         auto* root = interp.get_root();

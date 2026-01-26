@@ -51,7 +51,7 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     auto lib = targets["my_lib"];
 
     BuildGraph graph;
-    lib->generate_tasks(graph);
+    lib->generate_tasks(graph, interp.get_toolchain());
 
     // Build directory as used by the interpreter
     std::string build_dir_abs = std::filesystem::absolute(temp_dir).lexically_normal().string();

@@ -3,6 +3,7 @@
 #include "builtins/registry.hpp"
 #include "dmake/CMakeList.hpp"
 #include "dmake/cmake-language.hpp"
+#include "dmake/gnu_compiler.hpp"
 #include <deque>
 #include <set>
 
@@ -151,7 +152,7 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
 
     // 2. Generate tasks for all target
     for (const auto& [name, target] : targets_) {
-        target->generate_tasks(graph);
+        target->generate_tasks(graph, get_root()->toolchain_);
     }
 
     // Link dependency resolution (adding inputs to link tasks)
@@ -239,6 +240,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         vars["CMAKE_EXECUTABLE_SUFFIX"] = "";
         vars["CMAKE_SHARED_LIBRARY_SUFFIX"] = ".so";
         vars["CMAKE_STATIC_LIBRARY_SUFFIX"] = ".a";
+
+        // Initialize default toolchain
+        toolchain_.set_compiler(Language::CXX, std::make_unique<GnuCompiler>("g++", Language::CXX));
+        toolchain_.set_compiler(Language::C, std::make_unique<GnuCompiler>("gcc", Language::C));
 
         // Register non-internal builtins
         register_message_builtins(*this);
