@@ -33,6 +33,13 @@ struct BuildError {
     std::string message;
 };
 
+struct TestDefinition {
+    std::string name;
+    std::string command; // Target name or path
+    std::vector<std::string> args;
+    std::string working_dir;
+};
+
 // ANSI escape codes for colors
 namespace colors {
     const std::string RESET = "\033[0m";
@@ -68,7 +75,7 @@ public:
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr, std::optional<std::string> build_dir = std::nullopt);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
-    std::expected<void, BuildError> run_build(int jobs = 0);
+    std::expected<Interpreter*, BuildError> run_build(int jobs = 0, const std::vector<std::string>& targets = {});
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
     std::vector<std::string> expand_arguments(const std::vector<Argument>& args);
@@ -98,6 +105,10 @@ public:
     std::map<std::string, std::shared_ptr<Target>>& get_targets() { return get_root()->targets_; }
     Toolchain& get_toolchain() { return get_root()->toolchain_; }
 
+    std::vector<TestDefinition>& get_tests() { return get_root()->tests_; }
+    void enable_testing_globally() { get_root()->testing_enabled_ = true; }
+    bool is_testing_enabled() const { return get_root()->get_root()->testing_enabled_; }
+
     // Friend registration functions
     friend void register_message_builtins(Interpreter& interp);
     friend void register_variable_builtins(Interpreter& interp);
@@ -124,6 +135,7 @@ private:
     void clear_fatal_error();
 
     Interpreter* get_root();
+    const Interpreter* get_root() const;
 
     std::string build_dir_;
     std::ostream* out_;
@@ -132,6 +144,8 @@ private:
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
+    std::vector<TestDefinition> tests_;
+    bool testing_enabled_ = false;
     Toolchain toolchain_;
     std::set<std::string> global_guarded_files_;
 

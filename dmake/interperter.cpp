@@ -1,97 +1,33 @@
 #include "interperter.hpp"
+#include "command_parser.hpp"
 #include "target.hpp"
-#include "builtins/registry.hpp"
-#include "dmake/CMakeList.hpp"
-#include "dmake/cmake-language.hpp"
-#include "dmake/gnu_compiler.hpp"
-#include <deque>
-#include <set>
-
+#include "build_system.hpp"
+#include "gnu_compiler.hpp"
 #include <iostream>
-#include <sstream>
-#include <unistd.h>
-#include <string>
-#include <vector>
-#include <map>
-#include <functional>
-#include <algorithm>
-#include <cstdlib>
-#include <filesystem>
 #include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <algorithm>
+#include <array>
 #include <regex>
+#include "builtins/registry.hpp"
 
 namespace dmake {
 
-
-
-std::string CMakeList::to_string() const {
-    if (items_.empty()) {
-        return "";
-    }
-
-    std::ostringstream oss;
-    for (size_t i = 0; i < items_.size(); ++i) {
-        oss << items_[i];
-        if (i < items_.size() - 1) {
-            oss << ";";
-        }
-    }
-    return oss.str();
-}
-
-std::vector<std::string> CMakeList::to_vector() const {
-    return items_;
-}
-
-void CMakeList::append(const std::string& item) {
-    items_.push_back(item);
-}
-
-void CMakeList::append(const CMakeList& other) {
-    items_.insert(items_.end(), other.items_.begin(), other.items_.end());
-}
-
-void CMakeList::reverse() {
-    std::reverse(items_.begin(), items_.end());
-}
-
-void CMakeList::sort() {
-    std::sort(items_.begin(), items_.end());
-}
-
-void CMakeList::remove_duplicates() {
-    std::vector<std::string> unique_items;
-    std::vector<std::string> seen;
-
-    for (const auto& item : items_) {
-        if (std::find(seen.begin(), seen.end(), item) == seen.end()) {
-            unique_items.push_back(item);
-            seen.push_back(item);
-        }
-    }
-
-    items_ = std::move(unique_items);
-}
-
-CMakeList CMakeList::sublist(size_t begin_idx, size_t length) const {
-    if (begin_idx >= items_.size()) {
-        return CMakeList();
-    }
-
-    size_t end_idx = std::min(begin_idx + length, items_.size());
-    std::vector<std::string> subvec(items_.begin() + begin_idx, items_.begin() + end_idx);
-    return CMakeList(subvec);
-}
-
-// --- Interpreter Method Implementations ---
-
 Interpreter* Interpreter::get_root() {
-    Interpreter* r = this;
-    while (r->parent_) r = r->parent_;
-    return r;
+    Interpreter* current = this;
+    while (current->parent_ != nullptr) current = current->parent_;
+    return current;
 }
 
-std::expected<void, BuildError> Interpreter::run_build(int jobs) {
+const Interpreter* Interpreter::get_root() const {
+    const Interpreter* current = this;
+    while (current->parent_ != nullptr) current = current->parent_;
+    return current;
+}
+
+
+std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_build(int jobs, const std::vector<std::string>& requested_targets) {
     // Sanity check CMAKE_BUILD_TYPE
     std::array<std::string, 4> stanard_build_types_lower = {"debug", "release", "minsize", "relwithdebinfo"};
     auto build_type = get_variable("CMAKE_BUILD_TYPE");
@@ -100,15 +36,44 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
         print_message("WARN", "Build type '" + build_type + "' is not a standard build type. Things MIGHT go wrong.");
     }
 
-    if (parent_ != nullptr) return get_root()->run_build(jobs);
+    if (parent_ != nullptr) return get_root()->run_build(jobs, requested_targets);
+
+    // Determine which targets to build
+    std::set<std::string> targets_to_build;
+    if (requested_targets.empty()) {
+        for (const auto& [name, _] : targets_) {
+            targets_to_build.insert(name);
+        }
+    } else {
+        std::function<void(const std::string&)> collect = [&](const std::string& name) {
+            if (targets_to_build.count(name)) return;
+            if (!targets_.count(name)) {
+                // Not a dmake target, might be a system lib or imported target
+                return;
+            }
+            targets_to_build.insert(name);
+            auto target = targets_[name];
+            for (const auto& lib : target->get_linked_libraries(PropertyVisibility::PRIVATE)) collect(lib);
+            for (const auto& lib : target->get_linked_libraries(PropertyVisibility::PUBLIC)) collect(lib);
+            for (const auto& lib : target->get_linked_libraries(PropertyVisibility::INTERFACE)) collect(lib);
+        };
+        for (const auto& t : requested_targets) {
+            if (!targets_.count(t)) {
+                return std::unexpected(BuildError{current_file_, "Unknown target: " + t});
+            }
+            collect(t);
+        }
+    }
 
     std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
+    std::filesystem::create_directories(root_binary_dir);
 
     print_message("STATUS", "Generating build graph...");
     BuildGraph graph;
 
     // 1. Resolve cross-target library dependencies and propagate properties
-    for (const auto& [name, target] : targets_) {
+    for (const auto& name : targets_to_build) {
+        auto target = targets_[name];
         // Helper to recursively collect interface properties
         std::set<std::string> visited;
         std::function<void(const std::shared_ptr<Target>&)> propagate = [&](const std::shared_ptr<Target>& dep) {
@@ -150,13 +115,14 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
         add_lib_deps(PropertyVisibility::PUBLIC);
     }
 
-    // 2. Generate tasks for all target
-    for (const auto& [name, target] : targets_) {
-        target->generate_tasks(graph, get_root()->toolchain_, targets_);
+    // 2. Generate tasks for selected targets
+    for (const auto& name : targets_to_build) {
+        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_);
     }
 
     // Link dependency resolution (adding inputs to link tasks)
-    for (const auto& [name, target] : targets_) {
+    for (const auto& name : targets_to_build) {
+        auto target = targets_[name];
         std::string out_path = target->get_output_path();
         if (graph.has_task(out_path)) {
             auto& link_task = graph.get_task(out_path);
@@ -194,7 +160,7 @@ std::expected<void, BuildError> Interpreter::run_build(int jobs) {
     }
 
     print_message("STATUS", "Build finished.");
-    return {};
+    return this;
 }
 
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent, std::optional<std::string> build_dir)
@@ -264,6 +230,51 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_target_builtins(*this);
         register_project_builtins(*this);
         register_file_builtins(*this);
+
+        add_builtin("enable_testing", [](Interpreter& interp, const std::vector<std::string>& args) {
+            if (!args.empty()) {
+                interp.print_message("WARN", "enable_testing() expects no arguments");
+            }
+            interp.enable_testing_globally();
+        });
+
+        add_builtin("add_test", [](Interpreter& interp, const std::vector<std::string>& args) {
+            if (!interp.is_testing_enabled()) {
+                return;
+            }
+
+            CommandParser parser("add_test");
+            std::string name;
+            std::string command;
+            std::vector<std::string> cmd_args;
+            std::string working_dir;
+            std::vector<std::string> raw_cmd;
+
+            parser.add_value("NAME", name);
+            parser.add_list("COMMAND", raw_cmd);
+            parser.add_value("WORKING_DIRECTORY", working_dir);
+
+            auto parse_res = parser.parse(args);
+            if (!parse_res) {
+                interp.set_fatal_error(parse_res.error());
+                return;
+            }
+
+            if (name.empty() || raw_cmd.empty()) {
+                interp.set_fatal_error("add_test requires NAME and COMMAND");
+                return;
+            }
+
+            TestDefinition test;
+            test.name = name;
+            test.command = raw_cmd[0];
+            for (size_t i = 1; i < raw_cmd.size(); ++i) {
+                test.args.push_back(raw_cmd[i]);
+            }
+            test.working_dir = working_dir.empty() ? interp.get_variable("CMAKE_CURRENT_SOURCE_DIR") : working_dir;
+
+            interp.get_tests().push_back(std::move(test));
+        });
         register_find_package_builtins(*this);
 
         add_builtin("include_guard", [](Interpreter& interp, const std::vector<std::string>& args) {
