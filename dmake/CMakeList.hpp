@@ -36,6 +36,7 @@ public:
     void sort();
     void remove_duplicates();
     CMakeList sublist(size_t begin_idx, size_t length) const;
+    bool contains(const std::string& item) const;
 
 private:
     std::vector<std::string> items_;

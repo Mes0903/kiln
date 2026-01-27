@@ -89,4 +89,8 @@ CMakeList CMakeList::sublist(size_t begin_idx, size_t length) const {
     return CMakeList(sub);
 }
 
+bool CMakeList::contains(const std::string& item) const {
+    return std::find(items_.begin(), items_.end(), item) != items_.end();
+}
+
 }

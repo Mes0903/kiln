@@ -2077,3 +2077,157 @@ TEST_CASE("cmake_language", "[interpreter][cmake_language]") {
         cmake_language(EVAL)
     )"), Catch::Matchers::ContainsSubstring("requires CODE"));
 }
+
+TEST_CASE("cmake_parse_arguments standard form", "[interpreter]") {
+    // Test basic parsing with all types
+    // Note: TARGETS is multi-value, so it consumes foo and bar until end
+    auto output = run_script(R"(
+        cmake_parse_arguments(MY "VERBOSE;DEBUG" "DESTINATION;CONFIG" "SOURCES;TARGETS"
+            VERBOSE SOURCES a.cpp b.cpp DESTINATION /usr/bin DEBUG TARGETS foo bar)
+        message("${MY_VERBOSE}")
+        message("${MY_DEBUG}")
+        message("${MY_DESTINATION}")
+        message("${MY_CONFIG}")
+        message("${MY_SOURCES}")
+        message("${MY_TARGETS}")
+        message("${MY_UNPARSED_ARGUMENTS}")
+    )");
+    REQUIRE(output == "TRUE\nTRUE\n/usr/bin\n\na.cpp;b.cpp\nfoo;bar\n\n");
+
+    // Test options default to FALSE
+    output = run_script(R"(
+        cmake_parse_arguments(MY "OPT1;OPT2" "" "" ARG1 ARG2)
+        message("${MY_OPT1}")
+        message("${MY_OPT2}")
+        message("${MY_UNPARSED_ARGUMENTS}")
+    )");
+    REQUIRE(output == "FALSE\nFALSE\nARG1;ARG2\n");
+
+    // Test one-value keywords are undefined when not provided
+    output = run_script(R"(
+        set(MY_CONFIG "default")
+        cmake_parse_arguments(MY "" "CONFIG;DEST" "" DEST /usr)
+        message("${MY_DEST}")
+        message("${MY_CONFIG}")
+    )");
+    REQUIRE(output == "/usr\n\n");
+
+    // Test multi-value keywords are undefined when not provided
+    output = run_script(R"(
+        set(MY_SOURCES "default.cpp")
+        cmake_parse_arguments(MY "" "" "SOURCES;TARGETS")
+        message("${MY_SOURCES}")
+        message("${MY_TARGETS}")
+    )");
+    REQUIRE(output == "\n\n");
+}
+
+TEST_CASE("cmake_parse_arguments PARSE_ARGV form", "[interpreter]") {
+    // Test PARSE_ARGV in a function
+    auto output = run_script(R"(
+        function(my_install)
+            set(options OPTIONAL FAST)
+            set(oneValueArgs DESTINATION RENAME)
+            set(multiValueArgs TARGETS CONFIGURATIONS)
+            cmake_parse_arguments(PARSE_ARGV 0 arg
+                "${options}" "${oneValueArgs}" "${multiValueArgs}"
+            )
+            message("${arg_OPTIONAL}")
+            message("${arg_FAST}")
+            message("${arg_DESTINATION}")
+            message("${arg_TARGETS}")
+            message("${arg_UNPARSED_ARGUMENTS}")
+        endfunction()
+
+        my_install(TARGETS foo bar DESTINATION /usr/bin OPTIONAL extra_arg)
+    )");
+    REQUIRE(output == "TRUE\nFALSE\n/usr/bin\nfoo;bar\nextra_arg\n");
+
+    // Test PARSE_ARGV with offset
+    output = run_script(R"(
+        function(my_func)
+            cmake_parse_arguments(PARSE_ARGV 1 arg "FLAG" "VALUE" "")
+            message("${arg_FLAG}")
+            message("${arg_VALUE}")
+        endfunction()
+
+        my_func(skip_this FLAG VALUE data)
+    )");
+    REQUIRE(output == "TRUE\ndata\n");
+}
+
+TEST_CASE("cmake_parse_arguments edge cases", "[interpreter]") {
+    // Test missing value for one-value keyword
+    auto output = run_script(R"(
+        cmake_parse_arguments(MY "" "REQUIRED" "" REQUIRED)
+        message("${MY_KEYWORDS_MISSING_VALUES}")
+    )");
+    REQUIRE(output == "REQUIRED\n");
+
+    // Test multi-value with no values (next token is keyword)
+    output = run_script(R"(
+        cmake_parse_arguments(MY "OPT" "" "ITEMS" ITEMS OPT)
+        message("${MY_ITEMS}")
+        message("${MY_OPT}")
+    )");
+    REQUIRE(output == "\nTRUE\n");
+
+    // Test multi-value with empty list
+    output = run_script(R"(
+        cmake_parse_arguments(MY "" "" "ITEMS" ITEMS)
+        message("${MY_ITEMS}")
+    )");
+    REQUIRE(output == "\n");
+
+    // Test empty unparsed and missing values lists
+    output = run_script(R"(
+        cmake_parse_arguments(MY "FLAG" "VAL" "" FLAG VAL data)
+        message("${MY_UNPARSED_ARGUMENTS}")
+        message("${MY_KEYWORDS_MISSING_VALUES}")
+    )");
+    REQUIRE(output == "\n\n");
+
+    // Test case sensitivity
+    output = run_script(R"(
+        cmake_parse_arguments(MY "VERBOSE" "" "" verbose VERBOSE)
+        message("${MY_VERBOSE}")
+        message("${MY_UNPARSED_ARGUMENTS}")
+    )");
+    REQUIRE(output == "TRUE\nverbose\n");
+}
+
+TEST_CASE("cmake_parse_arguments error handling", "[interpreter]") {
+    // Test too few arguments
+    CHECK_THROWS_WITH(run_script(R"(
+        cmake_parse_arguments()
+    )"), Catch::Matchers::ContainsSubstring("requires at least 1 argument"));
+
+    // Test standard form too few arguments
+    CHECK_THROWS_WITH(run_script(R"(
+        cmake_parse_arguments(MY "OPT" "VAL")
+    )"), Catch::Matchers::ContainsSubstring("requires at least 4 arguments"));
+
+    // Test PARSE_ARGV too few arguments
+    CHECK_THROWS_WITH(run_script(R"(
+        function(test)
+            cmake_parse_arguments(PARSE_ARGV 0 MY "OPT")
+        endfunction()
+        test()
+    )"), Catch::Matchers::ContainsSubstring("requires 6 arguments"));
+
+    // Test PARSE_ARGV with invalid index
+    CHECK_THROWS_WITH(run_script(R"(
+        function(test)
+            cmake_parse_arguments(PARSE_ARGV bad MY "OPT" "" "")
+        endfunction()
+        test()
+    )"), Catch::Matchers::ContainsSubstring("must be a number"));
+
+    // Test PARSE_ARGV with negative index
+    CHECK_THROWS_WITH(run_script(R"(
+        function(test)
+            cmake_parse_arguments(PARSE_ARGV -1 MY "OPT" "" "")
+        endfunction()
+        test()
+    )"), Catch::Matchers::ContainsSubstring("cannot be negative"));
+}

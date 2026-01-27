@@ -32,7 +32,7 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     }
 
     Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
-    
+
     // Register builtins
     register_target_builtins(interp);
 
@@ -41,7 +41,7 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
         add_library(my_lib my_lib.cpp)
         target_precompile_headers(my_lib PRIVATE my_pch.h)
     )";
-    
+
     Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -66,10 +66,10 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     std::string pch_wrapper_expected = std::filesystem::path(build_dir_abs) / "objs" / "my_lib_pch.hpp";
     pch_wrapper_expected = std::filesystem::path(pch_wrapper_expected).lexically_normal().string();
     std::string pch_gch_expected = pch_wrapper_expected + ".gch";
-    
+
     REQUIRE(graph.has_task(pch_gch_expected));
     auto& pch_task = graph.get_task(pch_gch_expected);
-    
+
     // PCH task should have the wrapper as input
     bool has_wrapper = false;
     for (const auto& in : pch_task.inputs) {
@@ -82,10 +82,14 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     obj_file = std::filesystem::path(obj_file).lexically_normal().string();
     REQUIRE(graph.has_task(obj_file));
     auto& obj_task = graph.get_task(obj_file);
-    
+
     REQUIRE(obj_task.dependencies.count(pch_gch_expected) > 0);
-    REQUIRE(std::find(obj_task.command.begin(), obj_task.command.end(), "-include") != obj_task.command.end());
-    REQUIRE(std::find(obj_task.command.begin(), obj_task.command.end(), pch_wrapper_expected) != obj_task.command.end());
+    REQUIRE(std::find_if(obj_task.commands.begin(), obj_task.commands.end(), [](const auto& command) {
+        return std::find(command.begin(), command.end(), "-include") != command.end();
+    }) != obj_task.commands.end());
+    REQUIRE(std::find_if(obj_task.commands.begin(), obj_task.commands.end(), [pch_wrapper_expected](const auto& command) {
+        return std::find(command.begin(), command.end(), pch_wrapper_expected) != command.end();
+    }) != obj_task.commands.end());
 
     // Cleanup
     std::filesystem::remove_all(temp_dir);

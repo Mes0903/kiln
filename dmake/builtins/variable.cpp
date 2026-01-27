@@ -281,6 +281,168 @@ void register_variable_builtins(Interpreter& interp) {
 
         interp.set_variable(var_name, result);
     });
+
+    interp.add_builtin("cmake_parse_arguments", [](Interpreter& interp, const std::vector<std::string>& args) {
+        // Parse two forms:
+        // 1. PARSE_ARGV <N> <prefix> <options> <one_value> <multi_value>
+        // 2. <prefix> <options> <one_value> <multi_value> <args>...
+
+        if (args.empty()) {
+            interp.set_fatal_error("cmake_parse_arguments() requires at least 1 argument");
+            return;
+        }
+
+        std::string prefix;
+        CMakeList options, one_value_keywords, multi_value_keywords;
+        std::vector<std::string> to_parse;
+
+        // Determine which form we're using
+        bool is_parse_argv = (args[0] == "PARSE_ARGV");
+
+        if (is_parse_argv) {
+            // PARSE_ARGV form: PARSE_ARGV <N> <prefix> <options> <one_value> <multi_value>
+            if (args.size() < 6) {
+                interp.set_fatal_error("cmake_parse_arguments(PARSE_ARGV ...) requires 6 arguments");
+                return;
+            }
+
+            // Parse N (starting index)
+            int start_idx = 0;
+            try {
+                start_idx = std::stoi(args[1]);
+            } catch (...) {
+                interp.set_fatal_error("cmake_parse_arguments(PARSE_ARGV): index must be a number");
+                return;
+            }
+
+            if (start_idx < 0) {
+                interp.set_fatal_error("cmake_parse_arguments(PARSE_ARGV): index cannot be negative");
+                return;
+            }
+
+            prefix = args[2];
+            options = CMakeList(args[3]);
+            one_value_keywords = CMakeList(args[4]);
+            multi_value_keywords = CMakeList(args[5]);
+
+            // Read arguments from ARGV variables
+            std::string argc_str = interp.get_variable("ARGC");
+            int argc = 0;
+            if (!argc_str.empty()) {
+                try {
+                    argc = std::stoi(argc_str);
+                } catch (...) {
+                    // If ARGC is not a number, treat as 0
+                    argc = 0;
+                }
+            }
+
+            // Collect arguments from ARGV{start_idx} to ARGV{argc-1}
+            for (int i = start_idx; i < argc; ++i) {
+                std::string argv_var = "ARGV" + std::to_string(i);
+                std::string value = interp.get_variable(argv_var);
+                // ARGV variables preserve semicolons, so we add them as-is
+                to_parse.push_back(value);
+            }
+        } else {
+            // Standard form: <prefix> <options> <one_value> <multi_value> <args>...
+            if (args.size() < 4) {
+                interp.set_fatal_error("cmake_parse_arguments() requires at least 4 arguments");
+                return;
+            }
+
+            prefix = args[0];
+            options = CMakeList(args[1]);
+            one_value_keywords = CMakeList(args[2]);
+            multi_value_keywords = CMakeList(args[3]);
+
+            // Remaining arguments are what we parse
+            to_parse.assign(args.begin() + 4, args.end());
+        }
+
+        // Initialize all option variables to FALSE
+        for (const auto& opt : options) {
+            if (!opt.empty()) {
+                interp.set_variable(prefix + "_" + opt, "FALSE");
+            }
+        }
+
+        // Unset all one-value keyword variables (undefined if not provided)
+        for (const auto& kw : one_value_keywords) {
+            if (!kw.empty()) {
+                interp.unset_variable(prefix + "_" + kw);
+            }
+        }
+
+        // Unset all multi-value keyword variables (undefined if not provided)
+        for (const auto& kw : multi_value_keywords) {
+            if (!kw.empty()) {
+                interp.unset_variable(prefix + "_" + kw);
+            }
+        }
+
+        // Track unparsed arguments and keywords missing values
+        std::vector<std::string> unparsed;
+        std::vector<std::string> keywords_missing_values;
+
+        // Parse the arguments
+        for (size_t i = 0; i < to_parse.size(); ) {
+            std::string arg = to_parse[i];
+
+            // Check if it's an option (boolean flag)
+            if (options.contains(arg)) {
+                interp.set_variable(prefix + "_" + arg, "TRUE");
+                i++;
+                continue;
+            }
+
+            // Check if it's a one-value keyword
+            if (one_value_keywords.contains(arg)) {
+                if (i + 1 < to_parse.size()) {
+                    // Next argument is the value
+                    interp.set_variable(prefix + "_" + arg, to_parse[i + 1]);
+                    i += 2;
+                } else {
+                    // Keyword at end with no value
+                    keywords_missing_values.push_back(arg);
+                    i++;
+                }
+                continue;
+            }
+
+            // Check if it's a multi-value keyword
+            if (multi_value_keywords.contains(arg)) {
+                std::string keyword = arg;
+                i++; // Move past the keyword
+
+                std::vector<std::string> values;
+                // Collect values until we hit another keyword or end
+                while (i < to_parse.size() &&
+                       !options.contains(to_parse[i]) &&
+                       !one_value_keywords.contains(to_parse[i]) &&
+                       !multi_value_keywords.contains(to_parse[i])) {
+                    values.push_back(to_parse[i]);
+                    i++;
+                }
+
+                // Set variable (even if empty list)
+                CMakeList value_list(values);
+                interp.set_variable(prefix + "_" + keyword, value_list.to_string());
+                continue;
+            }
+
+            // Not a keyword - add to unparsed
+            unparsed.push_back(arg);
+            i++;
+        }
+
+        // Set special output variables
+        CMakeList unparsed_list(unparsed);
+        interp.set_variable(prefix + "_UNPARSED_ARGUMENTS", unparsed_list.to_string());
+
+        CMakeList missing_list(keywords_missing_values);
+        interp.set_variable(prefix + "_KEYWORDS_MISSING_VALUES", missing_list.to_string());
+    });
 }
 
 } // namespace dmake
