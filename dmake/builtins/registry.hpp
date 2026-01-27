@@ -11,6 +11,7 @@ void register_target_builtins(Interpreter& interp);
 void register_project_builtins(Interpreter& interp);
 void register_file_builtins(Interpreter& interp);
 void register_find_package_builtins(Interpreter& interp);
+void register_find_commands_builtins(Interpreter& interp);
 void register_math_builtins(Interpreter& interp);
 void register_string_builtins(Interpreter& interp);
 

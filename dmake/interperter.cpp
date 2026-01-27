@@ -264,6 +264,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_target_builtins(*this);
         register_project_builtins(*this);
         register_file_builtins(*this);
+        register_find_commands_builtins(*this);
         register_math_builtins(*this);
         register_string_builtins(*this);
 
@@ -1139,6 +1140,10 @@ std::string Interpreter::get_variable(const std::string& name) const {
 
 void Interpreter::set_variable(const std::string& name, const std::string& val) {
     if (!call_stack_.empty()) call_stack_.front().variables[name] = val;
+}
+
+void Interpreter::set_cache_variable(const std::string& var_name, const std::string& value) {
+    get_root()->cache_variables_[var_name] = value;
 }
 
 bool Interpreter::unset_variable(const std::string& name) {

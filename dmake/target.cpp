@@ -379,8 +379,17 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
                         resolve_lib(iface_lib, visited);
                     }
                 } else {
-                    // It's a system library or explicit -l name
-                    ctx.libs.push_back(lib_name);
+                    // Check if it's a full path to a library file
+                    // CMake behavior: full paths are passed directly to linker, names get -l prefix
+                    if (lib_name.starts_with("/") || lib_name.starts_with("./") || lib_name.starts_with("../") ||
+                        lib_name.find(".so") != std::string::npos ||
+                        lib_name.find(".a") != std::string::npos) {
+                        // It's a full or relative path, pass directly to linker
+                        ctx.objects.push_back(lib_name);
+                    } else {
+                        // It's a system library name, add -l prefix
+                        ctx.libs.push_back(lib_name);
+                    }
                 }
             };
 

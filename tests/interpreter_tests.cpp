@@ -1788,3 +1788,213 @@ TEST_CASE("var and func colision", "[interperter][edgecase]") {
     )");
     CHECK(output == "Hello World!\n1\n");
 }
+
+TEST_CASE("find_program finds system commands", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(BASH_PATH bash)
+        if(BASH_PATH)
+            message("Found bash at ${BASH_PATH}")
+        else()
+            message("FAILED: bash not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found bash at") != std::string::npos);
+    REQUIRE(output.find("/bash") != std::string::npos);
+}
+
+TEST_CASE("find_program handles NOTFOUND", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(NONEXISTENT_PROG this_program_definitely_does_not_exist_12345)
+        if(NONEXISTENT_PROG)
+            message("FAILED: should not be found")
+        else()
+            message("Correctly not found: ${NONEXISTENT_PROG}")
+        endif()
+    )");
+    REQUIRE(output.find("Correctly not found") != std::string::npos);
+    REQUIRE(output.find("NOTFOUND") != std::string::npos);
+}
+
+TEST_CASE("find_program REQUIRED flag", "[interpreter][find]") {
+    REQUIRE_THROWS_AS(run_script(R"(
+        find_program(NONEXISTENT this_does_not_exist_12345 REQUIRED)
+    )"), std::runtime_error);
+}
+
+TEST_CASE("find_library finds system libraries", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_library(MATH_LIB m)
+        if(MATH_LIB)
+            message("Found libm at ${MATH_LIB}")
+        else()
+            message("FAILED: libm not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found libm at") != std::string::npos);
+}
+
+TEST_CASE("find_library handles lib prefix", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_library(PTHREAD_LIB pthread)
+        if(PTHREAD_LIB)
+            message("Found pthread at ${PTHREAD_LIB}")
+        else()
+            message("FAILED: pthread not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found pthread at") != std::string::npos);
+}
+
+TEST_CASE("find_file finds system headers", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_file(STDIO_H stdio.h PATHS /usr/include)
+        if(STDIO_H)
+            message("Found stdio.h at ${STDIO_H}")
+        else()
+            message("FAILED: stdio.h not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found stdio.h at") != std::string::npos);
+}
+
+TEST_CASE("find commands with NAMES", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(SHELL_PATH NAMES bash sh)
+        if(SHELL_PATH)
+            message("Found shell: ${SHELL_PATH}")
+        else()
+            message("FAILED: no shell found")
+        endif()
+    )");
+    REQUIRE(output.find("Found shell:") != std::string::npos);
+}
+
+TEST_CASE("find_program with NO_DEFAULT_PATH", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(BASH_NO_DEFAULT bash NO_DEFAULT_PATH)
+        if(BASH_NO_DEFAULT)
+            message("FAILED: Should not find bash without default paths")
+        else()
+            message("Correctly not found without default paths")
+        endif()
+    )");
+    REQUIRE(output.find("Correctly not found") != std::string::npos);
+}
+
+TEST_CASE("find_program with explicit PATHS", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(BASH_EXPLICIT bash PATHS /usr/bin /bin)
+        if(BASH_EXPLICIT)
+            message("Found bash with explicit path: ${BASH_EXPLICIT}")
+        else()
+            message("FAILED: bash not found with explicit paths")
+        endif()
+    )");
+    REQUIRE(output.find("Found bash with explicit path") != std::string::npos);
+}
+
+TEST_CASE("find commands skip search if variable already set", "[interpreter][find]") {
+    auto output = run_script(R"(
+        set(MY_PROG /usr/bin/bash)
+        find_program(MY_PROG nonexistent_program_12345)
+        message("MY_PROG is still: ${MY_PROG}")
+    )");
+    REQUIRE(output.find("MY_PROG is still: /usr/bin/bash") != std::string::npos);
+}
+
+TEST_CASE("find_program short-hand syntax", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(BASH_SHORT bash /usr/bin /bin)
+        if(BASH_SHORT)
+            message("Found bash with short syntax: ${BASH_SHORT}")
+        else()
+            message("FAILED: bash not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found bash with short syntax") != std::string::npos);
+}
+
+TEST_CASE("find_library with custom prefixes and suffixes", "[interpreter][find]") {
+    auto output = run_script(R"(
+        set(CMAKE_FIND_LIBRARY_PREFIXES "lib")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".so;.a")
+        find_library(MATH_CUSTOM m)
+        if(MATH_CUSTOM)
+            message("Found math library: ${MATH_CUSTOM}")
+        else()
+            message("FAILED: math library not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found math library") != std::string::npos);
+}
+
+TEST_CASE("find commands with PATH_SUFFIXES", "[interpreter][find]") {
+    // Create a temporary directory structure for testing
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "dmake_test_find";
+    std::filesystem::create_directories(temp_dir / "subdir");
+
+    // Create a test file
+    std::ofstream test_file(temp_dir / "subdir" / "test.txt");
+    test_file << "test content";
+    test_file.close();
+
+    std::string script = R"(
+        find_file(TEST_FILE test.txt PATHS ")" + temp_dir.string() + R"(" PATH_SUFFIXES subdir)
+        if(TEST_FILE)
+            message("Found test file: ${TEST_FILE}")
+        else()
+            message("FAILED: test file not found")
+        endif()
+    )";
+
+    auto output = run_script(script);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+
+    REQUIRE(output.find("Found test file") != std::string::npos);
+}
+
+TEST_CASE("find_program with NO_CACHE flag", "[interpreter][find]") {
+    // Create a temporary executable
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "dmake_test_nocache";
+    std::filesystem::create_directories(temp_dir);
+    std::filesystem::path test_prog = temp_dir / "test_prog";
+
+    std::ofstream prog_file(test_prog);
+    prog_file << "#!/bin/bash\necho test\n";
+    prog_file.close();
+    std::filesystem::permissions(test_prog,
+        std::filesystem::perms::owner_exec | std::filesystem::perms::owner_read,
+        std::filesystem::perm_options::add);
+
+    std::string script = R"(
+        find_program(TEST_PROG test_prog PATHS ")" + temp_dir.string() + R"(" NO_CACHE)
+        message("First find: ${TEST_PROG}")
+
+        # Without NO_CACHE, the result would be cached
+        # With NO_CACHE, it's stored only in the variable
+        find_program(TEST_PROG test_prog PATHS ")" + temp_dir.string() + R"(" NO_CACHE)
+        message("Second find: ${TEST_PROG}")
+    )";
+
+    auto output = run_script(script);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+
+    REQUIRE(output.find("First find:") != std::string::npos);
+    REQUIRE(output.find("Second find:") != std::string::npos);
+}
+
+TEST_CASE("find_program with NAMES_PER_DIR", "[interpreter][find]") {
+    auto output = run_script(R"(
+        find_program(SHELL_NAMES_PER_DIR NAMES bash sh NAMES_PER_DIR)
+        if(SHELL_NAMES_PER_DIR)
+            message("Found shell: ${SHELL_NAMES_PER_DIR}")
+        else()
+            message("FAILED: shell not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found shell:") != std::string::npos);
+}

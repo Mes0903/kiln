@@ -92,6 +92,7 @@ public:
     bool unset_variable(const std::string& var_name);
     bool is_variable_set(const std::string& var_name) const;
     static bool is_falsy(const std::string& val);
+    void set_cache_variable(const std::string& var_name, const std::string& value);
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
 
@@ -116,6 +117,7 @@ public:
     friend void register_target_builtins(Interpreter& interp);
     friend void register_project_builtins(Interpreter& interp);
     friend void register_file_builtins(Interpreter& interp);
+    friend void register_find_commands_builtins(Interpreter& interp);
     friend void register_process_builtins(Interpreter& interp);
     friend void register_math_builtins(Interpreter& interp);
     friend void register_string_builtins(Interpreter& interp);
