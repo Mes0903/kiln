@@ -23,14 +23,29 @@ struct GlobalOptions {
     std::string script_path;
 };
 
-void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<dmake::CallLocation>& backtrace = {}) {
+void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<dmake::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
     std::cerr << "\033[1;31merror:\033[0m " << message << std::endl;
     std::cerr << "  \033[1;34m-->\033[0m " << file_path << ":" << row << ":" << col << std::endl;
 
-    std::ifstream error_file(file_path);
-    if (error_file) {
-        std::string file_content((std::istreambuf_iterator<char>(error_file)), std::istreambuf_iterator<char>());
+    std::string file_content;
+    bool has_content = false;
 
+    if (source_content) {
+        file_content = *source_content;
+        has_content = true;
+    } else {
+        std::ifstream error_file(file_path);
+        if (error_file) {
+            file_content.assign((std::istreambuf_iterator<char>(error_file)), std::istreambuf_iterator<char>());
+            has_content = true;
+        }
+    }
+    
+    // DEBUG
+    // std::cerr << "DEBUG: has_content=" << has_content << " file=" << file_path << " content_size=" << file_content.size() << std::endl;
+    if (source_content) std::cerr << "DEBUG: source_content present" << std::endl;
+
+    if (has_content) {
         size_t line_start = 0;
         size_t current_line = 1;
         for (size_t i = 0; i < file_content.size() && current_line < row; ++i) {
@@ -51,12 +66,15 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
         std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(col > 0 ? col - 1 : 0, ' ');
 
         size_t caret_len = (length > 0) ? length : 1;
-        if (col + caret_len - 1 > line.length()) {
+        if (col > line.length()) {
+            caret_len = 0;
+        } else if (col + caret_len - 1 > line.length()) {
             caret_len = line.length() - col + 1;
         }
-        if (caret_len == 0) caret_len = 1;
-
-        std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m" << std::endl;
+        
+        if (caret_len > 0) {
+            std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m" << std::endl;
+        }
     }
 
     if (!backtrace.empty()) {
@@ -68,7 +86,7 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
 }
 
 void print_error_context(const dmake::InterpreterError& error) {
-    print_error_context(error.file, error.row, error.col, error.offset, error.length, error.message, error.backtrace);
+    print_error_context(error.file, error.row, error.col, error.offset, error.length, error.message, error.backtrace, error.source_content);
 }
 
 std::string to_cmake_case(const std::string& config) {

@@ -2031,3 +2031,49 @@ TEST_CASE("return with arguments", "[interpreter][return]") {
     )");
     CHECK(output == "");
 }
+
+TEST_CASE("cmake_language", "[interpreter][cmake_language]") {
+    // Test EVAL CODE
+    auto output = run_script(R"x(
+        set(VAR "Original")
+        cmake_language(EVAL CODE "set(VAR \"Modified\")")
+        message("${VAR}")
+    )x");
+    CHECK(output == "Modified\n");
+
+    // Test EVAL CODE with complex logic
+    output = run_script(R"(
+        cmake_language(EVAL CODE "
+            foreach(i RANGE 3)
+                message(\"\${i}\")
+            endforeach()
+        ")
+    )");
+    CHECK(output == "0\n1\n2\n3\n");
+
+    // Test CALL builtin
+    // NOTE: We use our own message function so the output is garbled
+    output = run_script(R"(
+        cmake_language(CALL message STATUS "Hello via CALL")
+    )");
+    CHECK(output == "STATUSHello via CALL\n");
+
+    // Test CALL user function
+    output = run_script(R"(
+        function(test_func arg)
+            message("Function called with ${arg}")
+        endfunction()
+        cmake_language(CALL test_func "dynamic arg")
+    )");
+    CHECK(output == "Function called with dynamic arg\n");
+
+    // Test error: unknown mode
+    CHECK_THROWS_WITH(run_script(R"(
+        cmake_language(UNKNOWN_MODE)
+    )"), Catch::Matchers::ContainsSubstring("Unknown cmake_language mode"));
+
+    // Test error: EVAL missing args
+    CHECK_THROWS_WITH(run_script(R"(
+        cmake_language(EVAL)
+    )"), Catch::Matchers::ContainsSubstring("requires CODE"));
+}

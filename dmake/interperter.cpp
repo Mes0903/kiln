@@ -397,6 +397,62 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             (void)args;
             interp.request_return();
         });
+
+        add_builtin("cmake_language", [](Interpreter& interp, const std::vector<std::string>& args) {
+            if (args.empty()) {
+                interp.set_fatal_error("cmake_language requires arguments");
+                return;
+            }
+
+            if (args[0] == "EVAL") {
+                 if (args.size() < 3 || args[1] != "CODE") {
+                     interp.set_fatal_error("cmake_language(EVAL) requires CODE keyword and code arguments");
+                     return;
+                 }
+                 std::string code;
+                 for (size_t i = 2; i < args.size(); ++i) {
+                     code += args[i];
+                 }
+                 
+                 Parser p(code);
+                 auto ast = p.parse();
+                 if (!ast) {
+                     InterpreterError err{"<EVAL>", ast.error().row, ast.error().col, ast.error().offset, ast.error().length, "cmake_language(EVAL) parse error: " + ast.error().reason, {}, code};
+                     interp.set_fatal_error(err);
+                     return;
+                 }
+                 
+                 std::string old_file = interp.get_current_file();
+                 interp.set_current_file("<EVAL>");
+                 auto res = interp.interpret(ast.value());
+                 interp.set_current_file(old_file);
+                 
+                 if (!res) {
+                     InterpreterError err = res.error();
+                     std::cerr << "DEBUG: err.file='" << err.file << "'" << std::endl;
+                     if (err.file == "<EVAL>") {
+                         err.source_content = code;
+                     }
+                     interp.set_fatal_error(err);
+                 }
+
+            } else if (args[0] == "CALL") {
+                 if (args.size() < 2) {
+                     interp.set_fatal_error("cmake_language(CALL) requires a command name");
+                     return;
+                 }
+                 std::string cmd = args[1];
+                 std::vector<std::string> cmd_args;
+                 if (args.size() > 2) {
+                     cmd_args.assign(args.begin() + 2, args.end());
+                 }
+                 
+                 auto res = interp.execute_command_with_args(cmd, cmd_args);
+                 if (!res) interp.set_fatal_error(res.error());
+            } else {
+                interp.set_fatal_error("Unknown cmake_language mode: " + args[0]);
+            }
+        });
     } else {
         vars["CMAKE_SOURCE_DIR"] = parent_->get_variable("CMAKE_SOURCE_DIR");
         vars["CMAKE_BINARY_DIR"] = parent_->get_variable("CMAKE_BINARY_DIR");
@@ -593,44 +649,52 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
 
-    auto lower_identifier = cmd.identifier;
-    std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
-
     // Expand arguments once
     std::vector<std::string> expanded_args = expand_arguments(cmd.arguments);
 
+    auto res = execute_command_with_args(cmd.identifier, expanded_args);
+    
+    if (!res) {
+        if (auto err = get_fatal_error()) {
+             // The error is already set, just clean up stack and return it
+             safe_pop_trace_stack("error in: " + cmd.identifier);
+             return std::unexpected(*err);
+        }
+    }
+    
+    safe_pop_trace_stack("command: " + cmd.identifier);
+    return res;
+}
+
+std::expected<void, InterpreterError> Interpreter::execute_command_with_args(const std::string& identifier, const std::vector<std::string>& args) {
+    Interpreter* root = get_root();
+    std::string lower_identifier = identifier;
+    std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
+
     auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
-        bit->second(*this, expanded_args);
+        bit->second(*this, args);
         if (auto err = get_fatal_error()) {
-            safe_pop_trace_stack("builtin error: " + lower_identifier);
             return std::unexpected(*err);
         }
-        safe_pop_trace_stack("builtin: " + lower_identifier);
         return {};
     }
 
     Interpreter* curr = this;
     while (curr) {
-        auto fit = curr->user_functions_.find(cmd.identifier);
+        auto fit = curr->user_functions_.find(identifier);
         if (fit != curr->user_functions_.end()) {
-            auto res = invoke_user_function(fit->second, expanded_args);
-            safe_pop_trace_stack("user function: " + cmd.identifier);
-            return res;
+            return invoke_user_function(fit->second, args);
         }
-        auto mit = curr->user_macros_.find(cmd.identifier);
+        auto mit = curr->user_macros_.find(identifier);
         if (mit != curr->user_macros_.end()) {
-            auto res = invoke_user_macro(mit->second, expanded_args);
-            safe_pop_trace_stack("user macro: " + cmd.identifier);
-            return res;
+            return invoke_user_macro(mit->second, args);
         }
         curr = curr->parent_;
     }
 
-    set_fatal_error("Unknown command: " + cmd.identifier);
-    auto err = get_fatal_error();
-    safe_pop_trace_stack("unknown command: " + cmd.identifier);
-    return std::unexpected(*err);
+    set_fatal_error("Unknown command: " + identifier);
+    return std::unexpected(*get_fatal_error());
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {

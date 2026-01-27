@@ -26,6 +26,7 @@ struct InterpreterError {
     size_t length;
     std::string message;
     std::vector<CallLocation> backtrace;
+    std::optional<std::string> source_content = std::nullopt;
 };
 
 struct BuildError {
@@ -135,6 +136,7 @@ public:
 
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
+    std::expected<void, InterpreterError> execute_command_with_args(const std::string& identifier, const std::vector<std::string>& args);
     std::expected<void, InterpreterError> execute_if_block(const IfBlock& if_block);
     std::expected<void, InterpreterError> execute_function_block(const FunctionBlock& function_block);
     std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
