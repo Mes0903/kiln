@@ -32,27 +32,6 @@ public:
     const std::string& get_source_dir() const { return source_dir_; }
     const std::string& get_binary_dir() const { return binary_dir_; }
 
-    void add_sources(const std::vector<std::string>& sources, PropertyVisibility visibility);
-    const std::vector<std::string>& get_sources(PropertyVisibility visibility) const;
-
-    void add_linked_libraries(const std::vector<std::string>& libs, PropertyVisibility visibility);
-    const std::vector<std::string>& get_linked_libraries(PropertyVisibility visibility) const;
-
-    void add_include_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility);
-    const std::vector<std::string>& get_include_directories(PropertyVisibility visibility) const;
-
-    void add_link_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility);
-    const std::vector<std::string>& get_link_directories(PropertyVisibility visibility) const;
-
-    void add_compile_definitions(const std::vector<std::string>& defs, PropertyVisibility visibility);
-    const std::vector<std::string>& get_compile_definitions(PropertyVisibility visibility) const;
-
-    void add_compile_options(const std::vector<std::string>& opts, PropertyVisibility visibility);
-    const std::vector<std::string>& get_compile_options(PropertyVisibility visibility) const;
-
-    void add_precompiled_headers(const std::vector<std::string>& headers, PropertyVisibility visibility);
-    const std::vector<std::string>& get_precompiled_headers(PropertyVisibility visibility) const;
-
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
 
@@ -68,10 +47,15 @@ public:
     void add_language_flags(Language lang, const std::vector<std::string>& flags);
     const std::vector<std::string>& get_language_flags(Language lang) const;
 
-    void set_property(const std::string& name, std::string value);
+    // Generic Property Access
+    void set_property(const std::string& name, const std::string& value);
     std::string get_property(const std::string& name) const;
 
-    // Deprecated helpers for C++
+    // Generic List Property Access (for properties that accumulate like SOURCES, DEFINITIONS)
+    void append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
+    const std::vector<std::string>& get_property_list(const std::string& name, PropertyVisibility visibility) const;
+
+    // Deprecated helpers for C++ (mapped to generic properties)
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
 
@@ -83,6 +67,10 @@ public:
     // Resolves transitive properties (includes, definitions, options, libraries).
     // Must be called before generating tasks. Safe to call multiple times (cached).
     void resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets);
+    
+    // Access resolved properties (after resolve() is called)
+    const std::vector<std::string>& get_resolved_property(const std::string& name) const;
+    const std::vector<std::string>& get_resolved_interface_property(const std::string& name) const;
 
 protected:
     // Helper methods for task generation
@@ -102,34 +90,24 @@ protected:
     std::map<Language, std::string> standards_;
     std::map<Language, std::vector<std::string>> language_flags_;
 
+    // Generic Storage
+    // Scalar properties (e.g., OUTPUT_NAME, CXX_STANDARD)
     std::map<std::string, std::string> properties_;
-
-    std::map<PropertyVisibility, std::vector<std::string>> sources_;
-    std::map<PropertyVisibility, std::vector<std::string>> linked_libraries_;
-    std::map<PropertyVisibility, std::vector<std::string>> include_directories_;
-    std::map<PropertyVisibility, std::vector<std::string>> link_directories_;
-    std::map<PropertyVisibility, std::vector<std::string>> compile_definitions_;
-    std::map<PropertyVisibility, std::vector<std::string>> compile_options_;
-    std::map<PropertyVisibility, std::vector<std::string>> precompiled_headers_;
+    
+    // List properties with visibility (e.g., INCLUDE_DIRECTORIES[PUBLIC])
+    // Structure: map<PropertyName, map<Visibility, vector<Value>>>
+    std::map<std::string, std::map<PropertyVisibility, std::vector<std::string>>> list_properties_;
 
     // Resolution State
     bool resolved_ = false;
     bool visiting_ = false;
 
-    // Resolved Properties (effective build requirements)
-    std::vector<std::string> resolved_includes_;
-    std::vector<std::string> resolved_compile_definitions_;
-    std::vector<std::string> resolved_compile_options_;
-    std::vector<std::string> resolved_link_directories_;
-    // Flattened list of libraries to link against (full paths or -l names)
-    std::vector<std::string> resolved_link_libraries_;
+    // Resolved Properties Cache (effective build requirements)
+    // Map<PropertyName, ListOfValues>
+    std::map<std::string, std::vector<std::string>> resolved_properties_;
 
-    // Resolved Interface Properties (usage requirements propagated to dependents)
-    std::vector<std::string> resolved_interface_includes_;
-    std::vector<std::string> resolved_interface_compile_definitions_;
-    std::vector<std::string> resolved_interface_compile_options_;
-    std::vector<std::string> resolved_interface_link_directories_;
-    std::vector<std::string> resolved_interface_link_libraries_;
+    // Resolved Interface Properties Cache (usage requirements propagated to dependents)
+    std::map<std::string, std::vector<std::string>> resolved_interface_properties_;
 };
 
 class CustomTarget : public Target {

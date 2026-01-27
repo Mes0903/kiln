@@ -74,9 +74,9 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
             }
             targets_to_build.insert(name);
             auto target = targets_[name];
-            for (const auto& lib : target->get_linked_libraries(PropertyVisibility::PRIVATE)) collect(lib);
-            for (const auto& lib : target->get_linked_libraries(PropertyVisibility::PUBLIC)) collect(lib);
-            for (const auto& lib : target->get_linked_libraries(PropertyVisibility::INTERFACE)) collect(lib);
+            for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PRIVATE)) collect(lib);
+            for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PUBLIC)) collect(lib);
+            for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::INTERFACE)) collect(lib);
 
             auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
             if (custom) {
@@ -99,49 +99,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     print_message("STATUS", "Generating build graph...");
     BuildGraph graph;
 
-    // 1. Resolve cross-target library dependencies and propagate properties
-    for (const auto& name : targets_to_build) {
-        auto target = targets_[name];
-        // Helper to recursively collect interface properties
-        std::set<std::string> visited;
-        std::function<void(const std::shared_ptr<Target>&)> propagate = [&](const std::shared_ptr<Target>& dep) {
-            if (visited.count(dep->get_name())) return;
-            visited.insert(dep->get_name());
-
-            // Propagate includes, defs, and opts from dep to target
-            target->add_include_directories(dep->get_include_directories(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
-            target->add_include_directories(dep->get_include_directories(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
-
-            target->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
-            target->add_compile_definitions(dep->get_compile_definitions(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
-
-            target->add_compile_options(dep->get_compile_options(PropertyVisibility::PUBLIC), PropertyVisibility::PRIVATE);
-            target->add_compile_options(dep->get_compile_options(PropertyVisibility::INTERFACE), PropertyVisibility::PRIVATE);
-
-            // Recurse into dep's dependencies
-            auto collect_deps = [&](PropertyVisibility vis) {
-                for (const auto& lib_name : dep->get_linked_libraries(vis)) {
-                    if (targets_.count(lib_name)) {
-                        propagate(targets_[lib_name]);
-                    }
-                }
-            };
-            collect_deps(PropertyVisibility::PUBLIC);
-            collect_deps(PropertyVisibility::INTERFACE);
-        };
-
-        auto add_lib_deps = [&](PropertyVisibility vis) {
-            for (const auto& lib_name : target->get_linked_libraries(vis)) {
-                if (targets_.count(lib_name)) {
-                    auto dep = targets_[lib_name];
-                    propagate(dep);
-                }
-            }
-        };
-
-        add_lib_deps(PropertyVisibility::PRIVATE);
-        add_lib_deps(PropertyVisibility::PUBLIC);
-    }
+    // 1. (Redundant property propagation removed - handled by Target::resolve)
 
     // 2. Generate tasks for selected targets
     // Build linker flags from CMAKE variables
@@ -194,7 +152,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
             auto& task = graph.get_task(task_id);
 
             auto add_lib_inputs = [&](PropertyVisibility vis) {
-                for (const auto& lib_name : target->get_linked_libraries(vis)) {
+                for (const auto& lib_name : target->get_property_list("LINK_LIBRARIES", vis)) {
                     if (targets_.count(lib_name)) {
                         auto dep = targets_[lib_name];
                         std::string lib_out = dep->get_output_path();

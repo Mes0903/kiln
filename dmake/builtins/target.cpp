@@ -46,8 +46,11 @@ void register_target_builtins(Interpreter& interp) {
 
         // Inherit accumulated include and link directories
         auto* root = interp.get_root();
-        target->add_include_directories(root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
-        target->add_link_directories(root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
+        if (!root->accumulated_include_directories_.empty())
+            target->append_property("INCLUDE_DIRECTORIES", root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
+        
+        if (!root->accumulated_link_directories_.empty())
+            target->append_property("LINK_DIRECTORIES", root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
     };
 
     // Helper for adding sources to a target with validation
@@ -62,7 +65,7 @@ void register_target_builtins(Interpreter& interp) {
                 return false;
             }
         }
-        target->add_sources(sources, PropertyVisibility::PRIVATE);
+        target->append_property("SOURCES", sources, PropertyVisibility::PRIVATE);
         return true;
     };
 
@@ -170,7 +173,7 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         if (!sources.empty()) {
-            target->add_sources(sources, PropertyVisibility::PRIVATE);
+            target->append_property("SOURCES", sources, PropertyVisibility::PRIVATE);
         }
 
         interp.get_root()->targets_[name] = target;
@@ -186,59 +189,31 @@ void register_target_builtins(Interpreter& interp) {
         return it->second;
     };
 
-    interp.add_builtin("target_include_directories", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("target_include_directories");
-        std::string name;
-        std::vector<std::string> pub, priv, inter;
-        parser.add_positional(name, "target name");
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
-        PARSE_OR_RETURN(parser, interp, args);
+    // Generic handler generator for target_* commands
+    auto make_target_command = [get_target_from_name](std::string cmd_name, std::string prop_name) {
+        return [get_target_from_name, cmd_name, prop_name](Interpreter& interp, const std::vector<std::string>& args) {
+            CommandParser parser(cmd_name);
+            std::string name;
+            std::vector<std::string> pub, priv, inter;
+            parser.add_positional(name, "target name");
+            parser.add_list("PUBLIC", pub);
+            parser.add_list("PRIVATE", priv);
+            parser.add_list("INTERFACE", inter);
+            PARSE_OR_RETURN(parser, interp, args);
 
-        auto target = get_target_from_name(interp, name, "target_include_directories");
-        if (!target) return;
+            auto target = get_target_from_name(interp, name, cmd_name);
+            if (!target) return;
 
-        if (!pub.empty()) target->add_include_directories(pub, PropertyVisibility::PUBLIC);
-        if (!priv.empty()) target->add_include_directories(priv, PropertyVisibility::PRIVATE);
-        if (!inter.empty()) target->add_include_directories(inter, PropertyVisibility::INTERFACE);
-    });
+            if (!pub.empty()) target->append_property(prop_name, pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->append_property(prop_name, priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->append_property(prop_name, inter, PropertyVisibility::INTERFACE);
+        };
+    };
 
-    interp.add_builtin("target_compile_definitions", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("target_compile_definitions");
-        std::string name;
-        std::vector<std::string> pub, priv, inter;
-        parser.add_positional(name, "target name");
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
-        PARSE_OR_RETURN(parser, interp, args);
-
-        auto target = get_target_from_name(interp, name, "target_compile_definitions");
-        if (!target) return;
-
-        if (!pub.empty()) target->add_compile_definitions(pub, PropertyVisibility::PUBLIC);
-        if (!priv.empty()) target->add_compile_definitions(priv, PropertyVisibility::PRIVATE);
-        if (!inter.empty()) target->add_compile_definitions(inter, PropertyVisibility::INTERFACE);
-    });
-
-    interp.add_builtin("target_compile_options", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("target_compile_options");
-        std::string name;
-        std::vector<std::string> pub, priv, inter;
-        parser.add_positional(name, "target name");
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
-        PARSE_OR_RETURN(parser, interp, args);
-
-        auto target = get_target_from_name(interp, name, "target_compile_options");
-        if (!target) return;
-
-        if (!pub.empty()) target->add_compile_options(pub, PropertyVisibility::PUBLIC);
-        if (!priv.empty()) target->add_compile_options(priv, PropertyVisibility::PRIVATE);
-        if (!inter.empty()) target->add_compile_options(inter, PropertyVisibility::INTERFACE);
-    });
+    interp.add_builtin("target_include_directories", make_target_command("target_include_directories", "INCLUDE_DIRECTORIES"));
+    interp.add_builtin("target_compile_definitions", make_target_command("target_compile_definitions", "COMPILE_DEFINITIONS"));
+    interp.add_builtin("target_compile_options", make_target_command("target_compile_options", "COMPILE_OPTIONS"));
+    interp.add_builtin("target_precompile_headers", make_target_command("target_precompile_headers", "PRECOMPILE_HEADERS"));
 
     interp.add_builtin("target_link_libraries", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("target_link_libraries");
@@ -254,10 +229,12 @@ void register_target_builtins(Interpreter& interp) {
         auto target = get_target_from_name(interp, name, "target_link_libraries");
         if (!target) return;
 
-        if (!pub.empty()) target->add_linked_libraries(pub, PropertyVisibility::PUBLIC);
-        if (!priv.empty()) target->add_linked_libraries(priv, PropertyVisibility::PRIVATE);
-        if (!inter.empty()) target->add_linked_libraries(inter, PropertyVisibility::INTERFACE);
-        if (!def.empty()) target->add_linked_libraries(def, PropertyVisibility::PRIVATE);
+        if (!pub.empty()) target->append_property("LINK_LIBRARIES", pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->append_property("LINK_LIBRARIES", priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->append_property("LINK_LIBRARIES", inter, PropertyVisibility::INTERFACE);
+        // Default (legacy CMake) is roughly PRIVATE or PUBLIC depending on target type, 
+        // but modern CMake treats it as PRIVATE/PUBLIC. In dmake we map to PRIVATE for safety.
+        if (!def.empty()) target->append_property("LINK_LIBRARIES", def, PropertyVisibility::PRIVATE);
     });
 
     interp.add_builtin("set_target_properties", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
@@ -286,7 +263,6 @@ void register_target_builtins(Interpreter& interp) {
                 target->set_cxx_standard(prop_value);
             } else if (prop_name == "IMPORTED_LOCATION" ||
                        prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
-                // Handle both IMPORTED_LOCATION and IMPORTED_LOCATION_<CONFIG>
                 target->set_imported_location(prop_value);
             } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
                 // Parse semicolon-separated list of libraries
@@ -299,28 +275,13 @@ void register_target_builtins(Interpreter& interp) {
                     }
                 }
                 if (!libs.empty()) {
-                    target->add_linked_libraries(libs, PropertyVisibility::INTERFACE);
+                    target->append_property("LINK_LIBRARIES", libs, PropertyVisibility::INTERFACE);
                 }
+            } else {
+                // Fallback: Generic property set
+                target->set_property(prop_name, prop_value);
             }
         }
-    });
-
-    interp.add_builtin("target_precompile_headers", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("target_precompile_headers");
-        std::string name;
-        std::vector<std::string> pub, priv, inter;
-        parser.add_positional(name, "target name");
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
-        PARSE_OR_RETURN(parser, interp, args);
-
-        auto target = get_target_from_name(interp, name, "target_precompile_headers");
-        if (!target) return;
-
-        if (!pub.empty()) target->add_precompiled_headers(pub, PropertyVisibility::PUBLIC);
-        if (!priv.empty()) target->add_precompiled_headers(priv, PropertyVisibility::PRIVATE);
-        if (!inter.empty()) target->add_precompiled_headers(inter, PropertyVisibility::INTERFACE);
     });
 
     interp.add_builtin("include_directories", [](Interpreter& interp, const std::vector<std::string>& args) {
@@ -367,7 +328,6 @@ void register_target_builtins(Interpreter& interp) {
 
         std::string type = args[0];
         if (type != "TARGET") {
-            // Silently ignore non-target properties for now
             return;
         }
 
@@ -379,7 +339,7 @@ void register_target_builtins(Interpreter& interp) {
                 continue;
             }
             if (args[i] == "APPEND_STRING") {
-                append = true; // For now, treat same as append (semicolon joined)
+                append = true; 
                 continue;
             }
             if (args[i] == "PROPERTY") {
@@ -405,7 +365,6 @@ void register_target_builtins(Interpreter& interp) {
             auto target = get_target_from_name(interp, args[i], "set_property");
             if (!target) continue;
 
-            // Join values with semicolon for CMake property convention
             std::string value;
             for (const auto& v : property_values) {
                 if (!value.empty()) value += ";";
@@ -451,7 +410,6 @@ void register_target_builtins(Interpreter& interp) {
                 interp.set_variable(var_name, "");
             }
         } else {
-            // Other property types not implemented, return empty
             interp.set_variable(var_name, "");
         }
     });

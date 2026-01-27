@@ -12,75 +12,46 @@
 
 namespace dmake {
 
-void Target::add_sources(const std::vector<std::string>& sources, PropertyVisibility visibility) {
-    sources_[visibility].insert(sources_[visibility].end(), sources.begin(), sources.end());
+// --- Generic Property Implementation ---
+
+void Target::set_property(const std::string& name, const std::string& value) {
+    properties_[name] = value;
 }
 
-const std::vector<std::string>& Target::get_sources(PropertyVisibility visibility) const {
+std::string Target::get_property(const std::string& name) const {
+    if (properties_.contains(name)) {
+        return properties_.at(name);
+    }
+    return "";
+}
+
+void Target::append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {
+    auto& list = list_properties_[name][visibility];
+    list.insert(list.end(), values.begin(), values.end());
+}
+
+const std::vector<std::string>& Target::get_property_list(const std::string& name, PropertyVisibility visibility) const {
     static const std::vector<std::string> empty;
-    auto it = sources_.find(visibility);
-    return (it != sources_.end()) ? it->second : empty;
+    auto prop_it = list_properties_.find(name);
+    if (prop_it == list_properties_.end()) return empty;
+    
+    auto vis_it = prop_it->second.find(visibility);
+    return (vis_it != prop_it->second.end()) ? vis_it->second : empty;
 }
 
-void Target::add_linked_libraries(const std::vector<std::string>& libs, PropertyVisibility visibility) {
-    linked_libraries_[visibility].insert(linked_libraries_[visibility].end(), libs.begin(), libs.end());
-}
-
-const std::vector<std::string>& Target::get_linked_libraries(PropertyVisibility visibility) const {
+const std::vector<std::string>& Target::get_resolved_property(const std::string& name) const {
     static const std::vector<std::string> empty;
-    auto it = linked_libraries_.find(visibility);
-    return (it != linked_libraries_.end()) ? it->second : empty;
+    auto it = resolved_properties_.find(name);
+    return (it != resolved_properties_.end()) ? it->second : empty;
 }
 
-void Target::add_include_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility) {
-    include_directories_[visibility].insert(include_directories_[visibility].end(), dirs.begin(), dirs.end());
-}
-
-const std::vector<std::string>& Target::get_include_directories(PropertyVisibility visibility) const {
+const std::vector<std::string>& Target::get_resolved_interface_property(const std::string& name) const {
     static const std::vector<std::string> empty;
-    auto it = include_directories_.find(visibility);
-    return (it != include_directories_.end()) ? it->second : empty;
+    auto it = resolved_interface_properties_.find(name);
+    return (it != resolved_interface_properties_.end()) ? it->second : empty;
 }
 
-void Target::add_link_directories(const std::vector<std::string>& dirs, PropertyVisibility visibility) {
-    link_directories_[visibility].insert(link_directories_[visibility].end(), dirs.begin(), dirs.end());
-}
-
-const std::vector<std::string>& Target::get_link_directories(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = link_directories_.find(visibility);
-    return (it != link_directories_.end()) ? it->second : empty;
-}
-
-void Target::add_compile_definitions(const std::vector<std::string>& defs, PropertyVisibility visibility) {
-    compile_definitions_[visibility].insert(compile_definitions_[visibility].end(), defs.begin(), defs.end());
-}
-
-const std::vector<std::string>& Target::get_compile_definitions(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = compile_definitions_.find(visibility);
-    return (it != compile_definitions_.end()) ? it->second : empty;
-}
-
-void Target::add_compile_options(const std::vector<std::string>& opts, PropertyVisibility visibility) {
-    compile_options_[visibility].insert(compile_options_[visibility].end(), opts.begin(), opts.end());
-}
-
-const std::vector<std::string>& Target::get_compile_options(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = compile_options_.find(visibility);
-    return (it != compile_options_.end()) ? it->second : empty;
-}
-
-void Target::add_precompiled_headers(const std::vector<std::string>& headers, PropertyVisibility visibility) {
-    precompiled_headers_[visibility].insert(precompiled_headers_[visibility].end(), headers.begin(), headers.end());
-}
-
-const std::vector<std::string>& Target::get_precompiled_headers(PropertyVisibility visibility) const {
-    static const std::vector<std::string> empty;
-    auto it = precompiled_headers_.find(visibility);
-    return (it != precompiled_headers_.end()) ? it->second : empty;
-}
+// --- Specific Property Helpers (Legacy Wrappers) ---
 
 void Target::set_output_name(std::string output_name) {
     output_name_ = std::move(output_name);
@@ -98,18 +69,6 @@ const std::string& Target::get_language_standard(Language lang) const {
     static const std::string empty;
     auto it = standards_.find(lang);
     return (it != standards_.end()) ? it->second : empty;
-    return standards_.at(lang);
-}
-
-void Target::set_property(const std::string& name, std::string value) {
-    properties_[name] = std::move(value);
-}
-
-std::string Target::get_property(const std::string& name) const {
-    if (properties_.contains(name)) {
-        return properties_.at(name);
-    }
-    return "";
 }
 
 void Target::add_language_flags(Language lang, const std::vector<std::string>& flags) {
@@ -122,6 +81,109 @@ const std::vector<std::string>& Target::get_language_flags(Language lang) const 
     auto it = language_flags_.find(lang);
     return (it != language_flags_.end()) ? it->second : empty;
 }
+
+// --- Resolution Logic ---
+
+void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
+    if (resolved_) return;
+    if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
+    visiting_ = true;
+
+    auto resolve_path = [&](const std::string& p) -> std::string {
+        std::filesystem::path path(p);
+        if (path.is_absolute()) return path.string();
+        return (std::filesystem::path(source_dir_) / path).lexically_normal().string();
+    };
+
+    auto merge = [](std::vector<std::string>& target, const std::vector<std::string>& source) {
+        target.insert(target.end(), source.begin(), source.end());
+    };
+    
+    // Properties to resolve
+    // "SOURCES" is purposefully excluded as it is not transitive in the same way
+    struct PropInfo {
+        std::string name;
+        bool is_path;
+    };
+    std::vector<PropInfo> props_to_resolve = {
+        {"INCLUDE_DIRECTORIES", true},
+        {"COMPILE_DEFINITIONS", false},
+        {"COMPILE_OPTIONS", false},
+        {"LINK_DIRECTORIES", true},
+        {"PRECOMPILE_HEADERS", false} // Note: PCH logic might need specialized handling, but we carry it for now
+    };
+
+    // 1. Initialize with local properties
+    for (const auto& info : props_to_resolve) {
+        auto& res = resolved_properties_[info.name];
+        auto& res_iface = resolved_interface_properties_[info.name];
+
+        auto process_local = [&](PropertyVisibility vis, std::vector<std::string>& out) {
+            const auto& val = get_property_list(info.name, vis);
+            if (info.is_path) {
+                for(const auto& p : val) out.push_back(resolve_path(p));
+            } else {
+                merge(out, val);
+            }
+        };
+
+        // Self properties: PRIVATE + PUBLIC
+        process_local(PropertyVisibility::PRIVATE, res);
+        process_local(PropertyVisibility::PUBLIC, res);
+
+        // Interface properties: PUBLIC + INTERFACE
+        process_local(PropertyVisibility::PUBLIC, res_iface);
+        process_local(PropertyVisibility::INTERFACE, res_iface);
+    }
+
+    // Special handling for LINK_LIBRARIES (order matters, so we do it manually/carefully)
+    auto& res_libs = resolved_properties_["LINK_LIBRARIES"];
+    auto& res_iface_libs = resolved_interface_properties_["LINK_LIBRARIES"];
+
+    // 2. Process Dependencies
+    auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only) {
+        if (all_targets.count(lib_name)) {
+            auto dep = all_targets.at(lib_name);
+            dep->resolve(all_targets);
+
+            // Inherit for building THIS target (from dep's INTERFACE)
+            if (!is_interface_only) {
+                for (const auto& info : props_to_resolve) {
+                    merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                }
+                
+                std::string dep_path = dep->get_output_path();
+                if (!dep_path.empty()) res_libs.push_back(dep_path);
+                merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
+            }
+
+            // Propagate to Dependents (from dep's INTERFACE)
+            if (is_public || is_interface_only) {
+                for (const auto& info : props_to_resolve) {
+                    merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                }
+                
+                std::string dep_path = dep->get_output_path();
+                if (!dep_path.empty()) res_iface_libs.push_back(dep_path);
+                merge(res_iface_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
+            }
+        } else {
+             // System library or raw file
+             if (!is_interface_only) res_libs.push_back(lib_name);
+             if (is_public || is_interface_only) res_iface_libs.push_back(lib_name);
+        }
+    };
+
+    // Note: LINK_LIBRARIES is stored in the generic map too
+    for (const auto& lib : get_property_list("LINK_LIBRARIES", PropertyVisibility::PUBLIC)) process_dependency(lib, true, false);
+    for (const auto& lib : get_property_list("LINK_LIBRARIES", PropertyVisibility::PRIVATE)) process_dependency(lib, false, false);
+    for (const auto& lib : get_property_list("LINK_LIBRARIES", PropertyVisibility::INTERFACE)) process_dependency(lib, false, true);
+
+    visiting_ = false;
+    resolved_ = true;
+}
+
+// --- Task Generation ---
 
 std::string Target::get_output_path() const {
     if (is_imported_ && !imported_location_.empty()) {
@@ -138,7 +200,7 @@ std::string Target::get_output_path() const {
     } else if (type_ == TargetType::STATIC_LIBRARY) {
         path = std::filesystem::path(binary_dir_) / ("lib" + out_name + ".a");
     } else {
-        return ""; // OBJECT or INTERFACE might not have a single output path
+        return ""; 
     }
 
     return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
@@ -159,103 +221,11 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
     return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
 }
 
-void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
-    if (resolved_) return;
-    if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
-    visiting_ = true;
-
-    auto resolve_path = [&](const std::string& p) -> std::string {
-        std::filesystem::path path(p);
-        if (path.is_absolute()) return path.string();
-        return (std::filesystem::path(source_dir_) / path).lexically_normal().string();
-    };
-
-    auto merge = [](std::vector<std::string>& a, const std::vector<std::string>& b) {
-        a.insert(a.end(), b.begin(), b.end());
-    };
-    
-    // Merge includes and resolve paths immediately
-    auto merge_resolved_paths = [&](std::vector<std::string>& a, const std::vector<std::string>& b) {
-        for(const auto& p : b) a.push_back(resolve_path(p));
-    };
-
-    // 1. Initialize with local properties
-    
-    // Includes (resolve to absolute)
-    merge_resolved_paths(resolved_includes_, get_include_directories(PropertyVisibility::PRIVATE));
-    merge_resolved_paths(resolved_includes_, get_include_directories(PropertyVisibility::PUBLIC));
-    
-    merge_resolved_paths(resolved_interface_includes_, get_include_directories(PropertyVisibility::PUBLIC));
-    merge_resolved_paths(resolved_interface_includes_, get_include_directories(PropertyVisibility::INTERFACE));
-
-    // Definitions
-    merge(resolved_compile_definitions_, get_compile_definitions(PropertyVisibility::PRIVATE));
-    merge(resolved_compile_definitions_, get_compile_definitions(PropertyVisibility::PUBLIC));
-    
-    merge(resolved_interface_compile_definitions_, get_compile_definitions(PropertyVisibility::PUBLIC));
-    merge(resolved_interface_compile_definitions_, get_compile_definitions(PropertyVisibility::INTERFACE));
-
-    // Options
-    merge(resolved_compile_options_, get_compile_options(PropertyVisibility::PRIVATE));
-    merge(resolved_compile_options_, get_compile_options(PropertyVisibility::PUBLIC));
-
-    merge(resolved_interface_compile_options_, get_compile_options(PropertyVisibility::PUBLIC));
-    merge(resolved_interface_compile_options_, get_compile_options(PropertyVisibility::INTERFACE));
-
-    // Link Directories (resolve to absolute)
-    merge_resolved_paths(resolved_link_directories_, get_link_directories(PropertyVisibility::PRIVATE));
-    merge_resolved_paths(resolved_link_directories_, get_link_directories(PropertyVisibility::PUBLIC));
-    
-    merge_resolved_paths(resolved_interface_link_directories_, get_link_directories(PropertyVisibility::PUBLIC));
-    merge_resolved_paths(resolved_interface_link_directories_, get_link_directories(PropertyVisibility::INTERFACE));
-
-    // 2. Process Dependencies
-    auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only) {
-        if (all_targets.count(lib_name)) {
-            auto dep = all_targets.at(lib_name);
-            dep->resolve(all_targets);
-
-            // Inherit for building THIS target
-            if (!is_interface_only) {
-                merge(resolved_includes_, dep->resolved_interface_includes_);
-                merge(resolved_compile_definitions_, dep->resolved_interface_compile_definitions_);
-                merge(resolved_compile_options_, dep->resolved_interface_compile_options_);
-                merge(resolved_link_directories_, dep->resolved_interface_link_directories_);
-                
-                std::string dep_path = dep->get_output_path();
-                if (!dep_path.empty()) resolved_link_libraries_.push_back(dep_path);
-                merge(resolved_link_libraries_, dep->resolved_interface_link_libraries_);
-            }
-
-            // Propagate to Dependents
-            if (is_public || is_interface_only) {
-                merge(resolved_interface_includes_, dep->resolved_interface_includes_);
-                merge(resolved_interface_compile_definitions_, dep->resolved_interface_compile_definitions_);
-                merge(resolved_interface_compile_options_, dep->resolved_interface_compile_options_);
-                merge(resolved_interface_link_directories_, dep->resolved_interface_link_directories_);
-                
-                std::string dep_path = dep->get_output_path();
-                if (!dep_path.empty()) resolved_interface_link_libraries_.push_back(dep_path);
-                merge(resolved_interface_link_libraries_, dep->resolved_interface_link_libraries_);
-            }
-        } else {
-             if (!is_interface_only) resolved_link_libraries_.push_back(lib_name);
-             if (is_public || is_interface_only) resolved_interface_link_libraries_.push_back(lib_name);
-        }
-    };
-
-    for (const auto& lib : get_linked_libraries(PropertyVisibility::PUBLIC)) process_dependency(lib, true, false);
-    for (const auto& lib : get_linked_libraries(PropertyVisibility::PRIVATE)) process_dependency(lib, false, false);
-    for (const auto& lib : get_linked_libraries(PropertyVisibility::INTERFACE)) process_dependency(lib, false, true);
-
-    visiting_ = false;
-    resolved_ = true;
-}
-
 void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
                                       bool is_shared) {
-    for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
+    // SOURCES are essentially PRIVATE
+    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
         auto lang_info = LanguageClassifier::from_path(src);
         if (lang_info.is_header) continue;
         if (lang_info.lang == Language::UNKNOWN) {
@@ -279,16 +249,13 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.standard = get_language_standard(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
-        // Language-specific global flags (from CMAKE_<LANG>_FLAGS)
         for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
 
-        // Source directory must be in include path for PCH wrapper resolution
         ctx.includes.push_back(source_dir_);
-        // Use resolved includes (which are absolute)
-        for (const auto& dir : resolved_includes_) ctx.includes.push_back(dir);
+        for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) ctx.includes.push_back(dir);
 
-        for (const auto& def : resolved_compile_definitions_) ctx.definitions.push_back(def);
-        for (const auto& opt : resolved_compile_options_) ctx.options.push_back(opt);
+        for (const auto& def : get_resolved_property("COMPILE_DEFINITIONS")) ctx.definitions.push_back(def);
+        for (const auto& opt : get_resolved_property("COMPILE_OPTIONS")) ctx.options.push_back(opt);
 
         BuildTask task;
         task.id = obj;
@@ -302,7 +269,6 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
 
         if (!pch_gch_path.empty()) {
             task.dependencies.insert(pch_gch_path);
-            // PCH must also be an input so changes to PCH trigger recompilation
             task.inputs.push_back(pch_gch_path);
         }
 
@@ -310,7 +276,6 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     }
 }
 
-// Returns (pch_gch_path, pch_include_arg). Both empty if no PCH needed.
 static std::pair<std::string, std::string> generate_pch_task(
     BuildGraph& graph, 
     const Toolchain& toolchain, 
@@ -320,14 +285,14 @@ static std::pair<std::string, std::string> generate_pch_task(
     const std::vector<std::string>& definitions,
     const std::vector<std::string>& options) {
 
-    auto private_pchs = target->get_precompiled_headers(PropertyVisibility::PRIVATE);
-    auto public_pchs = target->get_precompiled_headers(PropertyVisibility::PUBLIC);
+    // Using PCH property name "PRECOMPILE_HEADERS"
+    auto private_pchs = target->get_property_list("PRECOMPILE_HEADERS", PropertyVisibility::PRIVATE);
+    auto public_pchs = target->get_property_list("PRECOMPILE_HEADERS", PropertyVisibility::PUBLIC);
 
     if (private_pchs.empty() && public_pchs.empty()) {
         return {"", ""};
     }
 
-    // PCH is usually C++ in dmake for now, but we should eventually detect language
     Language pch_lang = Language::CXX; 
     const Compiler* compiler = toolchain.get_compiler_ptr(pch_lang);
     if (!compiler) {
@@ -374,13 +339,10 @@ static std::pair<std::string, std::string> generate_pch_task(
     ctx.is_shared = is_shared;
     ctx.standard = target->get_language_standard(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
-    ctx.options.push_back("-x"); // Force header type
+    ctx.options.push_back("-x"); 
     ctx.options.push_back("c++-header");
 
-    // PCH should also get global CXX flags
     for (const auto& opt : target->get_language_flags(pch_lang)) ctx.options.push_back(opt);
-    
-    // Use resolved properties
     for (const auto& opt : options) ctx.options.push_back(opt);
     for (const auto& def : definitions) ctx.definitions.push_back(def);
 
@@ -393,7 +355,6 @@ static std::pair<std::string, std::string> generate_pch_task(
     pch_task.is_compilation = true;
     pch_task.source_file = pch_wrapper;
 
-    // Add the actual header files as inputs so PCH rebuilds when they change
     for (const auto& hdr : private_pchs) {
         auto hdr_abs = std::filesystem::path(hdr).is_absolute() ?
             std::filesystem::path(hdr) :
@@ -422,14 +383,17 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
 
-    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared, resolved_includes_, resolved_compile_definitions_, resolved_compile_options_);
+    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared, 
+        get_resolved_property("INCLUDE_DIRECTORIES"), 
+        get_resolved_property("COMPILE_DEFINITIONS"), 
+        get_resolved_property("COMPILE_OPTIONS"));
+    
     generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 
-    // Determine linker language (CXX if any CXX sources, otherwise C)
     Language linker_lang = Language::C;
-    for (const auto& src : get_sources(PropertyVisibility::PRIVATE)) {
+    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
         if (LanguageClassifier::from_path(src).lang == Language::CXX) {
             linker_lang = Language::CXX;
             break;
@@ -458,8 +422,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
 
         // Use pre-resolved link libraries
-        for (const auto& lib : resolved_link_libraries_) {
-             // Heuristic to detect file paths vs system libs
+        for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
              if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") ||
                  lib.find(".so") != std::string::npos ||
                  lib.find(".a") != std::string::npos) {
@@ -469,8 +432,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
              }
         }
 
-        // Add explicit link directories
-        for (const auto& dir : resolved_link_directories_) {
+        for (const auto& dir : get_resolved_property("LINK_DIRECTORIES")) {
             ctx.lib_dirs.push_back(dir);
         }
 
@@ -482,8 +444,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         link.dependencies.insert(obj);
     }
     
-    // Add dependencies on linked library files
-    for (const auto& lib : resolved_link_libraries_) {
+    for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
          if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
              link.inputs.push_back(lib);
              link.dependencies.insert(lib);
@@ -496,9 +457,9 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
 void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>&, const std::vector<std::string>&) {
     BuildTask task;
-    task.id = name_; // Target name is the task ID
+    task.id = name_; 
     task.parent_target = this;
-    task.always_run = true; // add_custom_target without outputs always runs
+    task.always_run = true; 
     task.working_dir = binary_dir_;
 
     for (const auto& custom_cmd : custom_commands_) {
@@ -508,7 +469,6 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
         }
     }
 
-    // Dependencies
     for (const auto& dep_name : custom_depends_) {
         if (all_targets.count(dep_name)) {
             auto dep_target = all_targets.at(dep_name);
@@ -517,15 +477,20 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
                 task.dependencies.insert(dep_out);
                 task.inputs.push_back(dep_out);
             } else {
-                // Dependency on another custom target (utility)
                 task.dependencies.insert(dep_name);
             }
         } else {
-            // Assume it's a file dependency
             std::filesystem::path p(dep_name);
             if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
             task.inputs.push_back(p.string());
         }
+    }
+    
+    // Support SOURCES in custom targets just in case
+    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+         std::filesystem::path p(src);
+         if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
+         task.inputs.push_back(p.string());
     }
 
     graph.add_task(std::move(task));
