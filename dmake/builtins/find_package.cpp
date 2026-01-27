@@ -75,26 +75,83 @@ void register_find_package_builtins(Interpreter& interp) {
         PARSE_OR_RETURN(parser, interp, args);
 
         std::string found_var = package_name + "_FOUND";
-        std::string dir_var = package_name + "_DIR";
-
-        // Check Module mode rejection
-        if (!config && !no_module) {
-            std::filesystem::path module_path = "/usr/share/cmake/Modules/Find" + package_name + ".cmake";
-            if (std::filesystem::exists(module_path)) {
-                interp.set_fatal_error("Module mode (Find" + package_name + ".cmake) is not supported yet. Please use CONFIG mode or ensure the package provides a config file.");
-                return;
+        
+        // 1. Module Mode
+        // Unless NO_MODULE is specified, try to find a module first.
+        // CMake logic: If CONFIG is specified, skip Module mode.
+        // If neither CONFIG nor NO_MODULE is specified, try Module mode.
+        bool try_module = !config && !no_module;
+        
+        if (try_module) {
+            std::vector<std::filesystem::path> module_paths;
+            
+            // 1.1 Check CMAKE_MODULE_PATH
+            std::string module_path_var = interp.get_variable("CMAKE_MODULE_PATH");
+            if (!module_path_var.empty()) {
+                 size_t start = 0;
+                size_t end = module_path_var.find(';');
+                while (end != std::string::npos) {
+                    module_paths.push_back(module_path_var.substr(start, end - start));
+                    start = end + 1;
+                    end = module_path_var.find(';', start);
+                }
+                module_paths.push_back(module_path_var.substr(start));
             }
+            
+            // 1.2 System module paths
+            std::vector<std::string> system_modules = {
+                "/usr/share/cmake/Modules",
+                "/usr/local/share/cmake/Modules",
+                "/usr/lib/cmake/Modules",
+                "/usr/lib/x86_64-linux-gnu/cmake/Modules"
+            };
+            for(const auto& p : system_modules) module_paths.push_back(p);
+            
+            std::string module_filename = "Find" + package_name + ".cmake";
+            std::filesystem::path found_module;
+            
+            for(const auto& path : module_paths) {
+                if(std::filesystem::exists(path / module_filename)) {
+                    found_module = path / module_filename;
+                    break;
+                }
+            }
+            
+            if (!found_module.empty()) {
+                if (!quiet) {
+                     interp.print_message("STATUS", "Found module: " + found_module.string());
+                }
+                auto res = interp.include_file(found_module.string());
+                if (!res) {
+                    interp.set_fatal_error(res.error());
+                    return;
+                }
+                
+                // The module is responsible for setting PackageName_FOUND
+                std::string found = interp.get_variable(found_var);
+                if (interp.is_falsy(found)) {
+                     if (required) {
+                        interp.set_fatal_error("Could not find package " + package_name + " (missing: " + package_name + "_FOUND)");
+                    } else if (!quiet) {
+                        interp.print_message("STATUS", "Could not find package " + package_name + " (Module mode)");
+                    }
+                }
+                return; // Module mode executed, we are done.
+            }
+            // If module not found, proceed to config mode (standard CMake behavior)
         }
 
+        // 2. Config Mode
+        std::string dir_var = package_name + "_DIR";
         std::vector<std::filesystem::path> search_paths;
 
-        // 1. Check PackageName_DIR hint
+        // 2.1 Check PackageName_DIR hint
         std::string hint_dir = interp.get_variable(dir_var);
         if (!hint_dir.empty()) {
             search_paths.push_back(hint_dir);
         }
 
-        // 2. Check CMAKE_PREFIX_PATH
+        // 2.2 Check CMAKE_PREFIX_PATH
         std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
         if (!prefix_path.empty()) {
             size_t start = 0;
@@ -107,7 +164,7 @@ void register_find_package_builtins(Interpreter& interp) {
             search_paths.push_back(prefix_path.substr(start));
         }
 
-        // 3. Standard system paths
+        // 2.3 Standard system paths
         std::vector<std::string> system_roots = {
             "/usr/lib/cmake",
             "/usr/share/cmake",

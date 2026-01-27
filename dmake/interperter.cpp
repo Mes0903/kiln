@@ -438,6 +438,11 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         return std::nullopt;
     };
 
+    auto find_in_dir = [&try_path](const std::filesystem::path& dir, const std::string& file_path) -> std::optional<std::filesystem::path> {
+        auto candidate = dir / file_path;
+        return try_path(candidate);
+    };
+
     std::optional<std::filesystem::path> found_path;
 
     if (path.is_absolute()) {
@@ -452,10 +457,23 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
             CMakeList module_paths(get_variable("CMAKE_MODULE_PATH"));
             for (const auto& dir : module_paths) {
                 if (!dir.empty()) {
-                    candidate = std::filesystem::path(dir) / file_path;
-                    found_path = try_path(candidate);
+                    found_path = find_in_dir(dir, file_path);
                     if (found_path) break;
                 }
+            }
+        }
+
+        // If not found, search system paths
+        if (!found_path) {
+            std::vector<std::string> system_modules = {
+                "/usr/share/cmake/Modules",
+                "/usr/local/share/cmake/Modules",
+                "/usr/lib/cmake/Modules",
+                "/usr/lib/x86_64-linux-gnu/cmake/Modules"
+            };
+            for (const auto& dir : system_modules) {
+                found_path = find_in_dir(dir, file_path);
+                if (found_path) break;
             }
         }
     }
@@ -1027,7 +1045,24 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             std::regex regex(pattern);
             std::smatch match;
             std::string left = evaluate_token(condition[start_pos]);
-            return std::regex_search(left, match, regex);
+            bool result = std::regex_search(left, match, regex);
+
+            if (result) {
+                set_variable("CMAKE_MATCH_COUNT", std::to_string(match.size() - 1));
+                for (size_t i = 0; i < match.size() && i < 10; ++i) {
+                    set_variable("CMAKE_MATCH_" + std::to_string(i), match[i].str());
+                }
+                // Clear remaining matches if fewer than previous
+                 for (size_t i = match.size(); i < 10; ++i) {
+                    set_variable("CMAKE_MATCH_" + std::to_string(i), "");
+                }
+            } else {
+                 set_variable("CMAKE_MATCH_COUNT", "0");
+                 for (size_t i = 0; i < 10; ++i) {
+                    set_variable("CMAKE_MATCH_" + std::to_string(i), "");
+                }
+            }
+            return result;
         }
 
         // Not a comparison operator - return the unary/primary result
