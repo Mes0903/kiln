@@ -207,6 +207,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     call_stack_.push_front({abs_script_dir.string(), {}});
 
     auto& vars = call_stack_.front().variables;
+    vars["CMAKE_SIZEOF_VOID_P"] = sizeof(void*);
     vars["CMAKE_CURRENT_SOURCE_DIR"] = abs_script_dir.string();
     vars["CMAKE_CURRENT_LIST_DIR"] = abs_script_dir.string();
     vars["CMAKE_CURRENT_LIST_FILE"] = (abs_script_dir / "CMakeLists.txt").string(); // Default assumption

@@ -42,8 +42,11 @@ void register_message_builtins(Interpreter& interp) {
         }
 
         std::ostringstream oss;
-        for (const auto& arg : message_args) {
-            oss << arg;
+        for(size_t i = 0; i < message_args.size(); i++) {
+            oss << message_args[i];
+            if(i != message_args.size() - 1) {
+                oss << " ";
+            }
         }
         std::string content = oss.str();
 
