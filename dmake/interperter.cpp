@@ -743,11 +743,11 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
 
     Interpreter* curr = this;
     while (curr) {
-        auto fit = curr->user_functions_.find(identifier);
+        auto fit = curr->user_functions_.find(lower_identifier);
         if (fit != curr->user_functions_.end()) {
             return invoke_user_function(fit->second, args);
         }
-        auto mit = curr->user_macros_.find(identifier);
+        auto mit = curr->user_macros_.find(lower_identifier);
         if (mit != curr->user_macros_.end()) {
             return invoke_user_macro(mit->second, args);
         }
