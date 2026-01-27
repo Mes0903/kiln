@@ -869,6 +869,13 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "foreach"});
 
+    // Save the loop variable's previous value (for nested loops)
+    bool loop_var_was_set = is_variable_set(block.loop_var);
+    std::string loop_var_old_value;
+    if (loop_var_was_set) {
+        loop_var_old_value = get_variable(block.loop_var);
+    }
+
     loop_depth_++;
     CMakeList items;
     if (std::holds_alternative<ForeachSimple>(block.params)) {
@@ -877,7 +884,14 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         const auto& r = std::get<ForeachRange>(block.params);
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
         long stop = std::stol(evaluate_argument(r.stop));
-        long step = r.step ? std::stol(evaluate_argument(*r.step)) : 1;
+        // If step not provided, infer direction from start/stop
+        long step;
+        if (r.step) {
+            step = std::stol(evaluate_argument(*r.step));
+        } else {
+            // Default step: 1 if ascending, -1 if descending
+            step = (start <= stop) ? 1 : -1;
+        }
         if (step == 0) {
             if (loop_depth_ <= 0) {
                 std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling step=0 error\n";
@@ -907,12 +921,25 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
                 std::abort();
             }
             loop_depth_--;
+            // Restore loop variable before returning
+            if (loop_var_was_set) {
+                set_variable(block.loop_var, loop_var_old_value);
+            } else {
+                unset_variable(block.loop_var);
+            }
             safe_pop_trace_stack("foreach body error");
             return res;
         }
         if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
         if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
         if (return_requested_) break;  // return() exits the loop and propagates to caller
+    }
+
+    // Restore loop variable after loop completes
+    if (loop_var_was_set) {
+        set_variable(block.loop_var, loop_var_old_value);
+    } else {
+        unset_variable(block.loop_var);
     }
 
     // Sanity check: loop depth should never go negative
@@ -964,18 +991,19 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
 }
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args) {
-    std::map<std::string, std::string> saved;
-    CMakeList all(args);
-    auto save = [&](const std::string& k) { if (call_stack_.front().variables.count(k)) saved[k] = call_stack_.front().variables[k]; };
-    save("ARGC"); save("ARGV"); save("ARGN");
-    for (size_t i = 0; i < all.size(); ++i) save("ARGV" + std::to_string(i));
-    for (const auto& p : macro.parameters) save(p);
+    // Save and set up macro parameter substitutions (text-replacement, not variables)
+    std::map<std::string, std::string> saved_substitutions = macro_substitutions_;
 
-    set_variable("ARGC", std::to_string(all.size()));
-    set_variable("ARGV", all.to_string());
-    set_variable("ARGN", all.sublist(macro.parameters.size(), all.size()).to_string());
-    for (size_t i = 0; i < all.size(); ++i) set_variable("ARGV" + std::to_string(i), all[i]);
-    for (size_t i = 0; i < macro.parameters.size() && i < all.size(); ++i) set_variable(macro.parameters[i], all[i]);
+    CMakeList all(args);
+    macro_substitutions_["ARGC"] = std::to_string(all.size());
+    macro_substitutions_["ARGV"] = all.to_string();
+    macro_substitutions_["ARGN"] = all.sublist(macro.parameters.size(), all.size()).to_string();
+    for (size_t i = 0; i < all.size(); ++i) {
+        macro_substitutions_["ARGV" + std::to_string(i)] = all[i];
+    }
+    for (size_t i = 0; i < macro.parameters.size() && i < all.size(); ++i) {
+        macro_substitutions_[macro.parameters[i]] = all[i];
+    }
 
     std::string saved_file = current_file_;
     current_file_ = macro.definition_file;
@@ -983,13 +1011,9 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     current_file_ = saved_file;
     if (!res) set_fatal_error(res.error());
 
-    for (const auto& [k, v] : saved) set_variable(k, v);
-    auto& vars = call_stack_.front().variables;
-    if (!saved.count("ARGC")) vars.erase("ARGC");
-    if (!saved.count("ARGV")) vars.erase("ARGV");
-    if (!saved.count("ARGN")) vars.erase("ARGN");
-    for (size_t i = 0; i < all.size(); ++i) if (!saved.count("ARGV" + std::to_string(i))) vars.erase("ARGV" + std::to_string(i));
-    for (const auto& p : macro.parameters) if (!saved.count(p)) vars.erase(p);
+    // Restore macro substitutions
+    macro_substitutions_ = saved_substitutions;
+
     return res;
 }
 
@@ -1433,6 +1457,12 @@ std::string Interpreter::get_variable(const std::string& name) const {
     if (call_stack_.empty()) {
         std::cerr << "FATAL: get_variable('" << name << "') called with empty call_stack_\n";
         std::abort();
+    }
+
+    // Check macro substitutions first (macro parameters take precedence)
+    auto macro_it = macro_substitutions_.find(name);
+    if (macro_it != macro_substitutions_.end()) {
+        return macro_it->second;
     }
 
     // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes

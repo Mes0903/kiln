@@ -628,14 +628,15 @@ TEST_CASE("foreach RANGE with negative step", "[interpreter][foreach]") {
     REQUIRE(output == "5\n4\n3\n2\n");
 }
 
-TEST_CASE("foreach RANGE empty range produces no iterations", "[interpreter][foreach]") {
+TEST_CASE("foreach RANGE descending without explicit step", "[interpreter][foreach]") {
+    // CMake behavior: RANGE infers direction when step is omitted
     auto output = run_script(R"(
         foreach(i RANGE 5 2)
             message("${i}")
         endforeach()
         message("done")
     )");
-    REQUIRE(output == "done\n");
+    REQUIRE(output == "5\n4\n3\n2\ndone\n");
 }
 
 TEST_CASE("foreach IN ITEMS iterates over literal items", "[interpreter][foreach]") {
@@ -678,14 +679,15 @@ TEST_CASE("foreach IN LISTS and ITEMS combined", "[interpreter][foreach]") {
     REQUIRE(output == "a\nb\nx\ny\n");
 }
 
-TEST_CASE("foreach loop variable persists after loop", "[interpreter][foreach]") {
+TEST_CASE("foreach loop variable is cleared after loop", "[interpreter][foreach]") {
+    // CMake behavior: loop variable is cleared after foreach completes
     auto output = run_script(R"(
         foreach(i RANGE 2)
             message("in loop: ${i}")
         endforeach()
-        message("after loop: ${i}")
+        message("after loop: '${i}'")
     )");
-    REQUIRE(output == "in loop: 0\nin loop: 1\nin loop: 2\nafter loop: 2\n");
+    REQUIRE(output == "in loop: 0\nin loop: 1\nin loop: 2\nafter loop: ''\n");
 }
 
 TEST_CASE("foreach can iterate over variable references", "[interpreter][foreach]") {
@@ -1034,7 +1036,7 @@ TEST_CASE("if condition: IN_LIST operator", "[interpreter][if]") {
     )");
     REQUIRE(output == "pass\n");
 
-    // Empty string in list
+    // Empty string in list - note: CMake removes empty elements during expansion
     output = run_script(R"(
         set(MY_LIST "" foo bar)
         if("" IN_LIST MY_LIST)
@@ -1043,7 +1045,7 @@ TEST_CASE("if condition: IN_LIST operator", "[interpreter][if]") {
             message("fail")
         endif()
     )");
-    REQUIRE(output == "pass\n");
+    REQUIRE(output == "fail\n");  // Empty element is removed, so not in list
 
     // Case sensitivity check
     output = run_script(R"(
@@ -2566,4 +2568,167 @@ TEST_CASE("Parser handles escaped quotes in unquoted arguments", "[parser]") {
         message("done")
     )RAW");
     REQUIRE(output == "done\n");
+}
+
+// Bug fix tests from differential fuzzing
+
+TEST_CASE("Empty list elements are removed during expansion", "[interpreter][bugfix]") {
+    // Bug: DMake was preserving empty elements, CMake removes them
+    auto output = run_script(R"(
+        set(L a;;c)
+        message("${L}")
+    )");
+    REQUIRE(output == "a;c\n");
+
+    output = run_script(R"(
+        set(L a;;;b;;;;c)
+        message("${L}")
+    )");
+    REQUIRE(output == "a;b;c\n");
+
+    output = run_script(R"(
+        set(L ;;a;b)
+        message("${L}")
+    )");
+    REQUIRE(output == "a;b\n");
+
+    output = run_script(R"(
+        set(L a;b;;)
+        message("${L}")
+    )");
+    REQUIRE(output == "a;b\n");
+}
+
+TEST_CASE("Empty list elements in foreach", "[interpreter][bugfix]") {
+    auto output = run_script(R"(
+        set(L a;;c)
+        foreach(item ${L})
+            message("${item}")
+        endforeach()
+    )");
+    REQUIRE(output == "a\nc\n");  // Only 2 iterations, empty element removed
+}
+
+TEST_CASE("Foreach variable is cleared after loop", "[interpreter][bugfix]") {
+    // Bug: Loop variable persisted after loop
+    auto output = run_script(R"(
+        foreach(i RANGE 2)
+        endforeach()
+        message("'${i}'")
+    )");
+    REQUIRE(output == "''\n");
+}
+
+TEST_CASE("Nested foreach with same variable", "[interpreter][bugfix]") {
+    // Bug: Inner loop overwrote outer loop variable
+    auto output = run_script(R"(
+        foreach(x RANGE 1)
+            foreach(x RANGE 1)
+                message("inner:${x}")
+            endforeach()
+            message("outer:${x}")
+        endforeach()
+    )");
+    REQUIRE(output == "inner:0\ninner:1\nouter:0\ninner:0\ninner:1\nouter:1\n");
+}
+
+TEST_CASE("RANGE with descending values", "[interpreter][bugfix]") {
+    // Bug: RANGE 5 2 produced no iterations
+    auto output = run_script(R"(
+        foreach(i RANGE 5 2)
+            message("${i}")
+        endforeach()
+    )");
+    REQUIRE(output == "5\n4\n3\n2\n");
+}
+
+TEST_CASE("RANGE with negative values", "[interpreter][bugfix]") {
+    auto output = run_script(R"(
+        foreach(i RANGE -2 2)
+            message("${i}")
+        endforeach()
+    )");
+    REQUIRE(output == "-2\n-1\n0\n1\n2\n");
+}
+
+TEST_CASE("Macro argument text substitution", "[interpreter][bugfix]") {
+    // Bug: Macro arguments were treated as variables, not text substitution
+    auto output = run_script(R"(
+        macro(test arg)
+            set(arg "new")
+            message("${arg}")
+        endmacro()
+        test(old)
+    )");
+    REQUIRE(output == "old\n");  // arg is text-substituted to "old", not the variable
+
+    output = run_script(R"(
+        macro(test x)
+            message("before:${x}")
+            set(x "modified")
+            message("after:${x}")
+        endmacro()
+        test(original)
+    )");
+    REQUIRE(output == "before:original\nafter:original\n");
+}
+
+TEST_CASE("Macro argument in condition", "[interpreter][bugfix]") {
+    // Macro arguments in conditions should use literal value
+    auto output = run_script(R"(
+        macro(test val)
+            if(val STREQUAL "match")
+                message("matched")
+            else()
+                message("no match")
+            endif()
+        endmacro()
+        test(match)
+        test(nomatch)
+    )");
+    REQUIRE(output == "matched\nno match\n");
+}
+
+TEST_CASE("Macro ARGN modification", "[interpreter][bugfix]") {
+    // ARGN should be read-only text substitution
+    auto output = run_script(R"(
+        macro(test first)
+            message("ARGN:${ARGN}")
+            set(ARGN "modified")
+            message("after:${ARGN}")
+        endmacro()
+        test(a b c)
+    )");
+    REQUIRE(output == "ARGN:b;c\nafter:b;c\n");
+}
+
+TEST_CASE("Macro vs Function argument handling", "[interpreter][bugfix]") {
+    // Functions create scope, macros don't - but both handle arguments differently
+    auto output = run_script(R"(
+        function(func arg)
+            set(arg "func_modified")
+            message("func:${arg}")
+        endfunction()
+
+        macro(mac arg)
+            set(arg "macro_modified")
+            message("macro:${arg}")
+        endmacro()
+
+        func(original)
+        mac(original)
+    )");
+    REQUIRE(output == "func:func_modified\nmacro:original\n");
+}
+
+TEST_CASE("Macro using argument as variable name", "[interpreter][bugfix]") {
+    // Common macro pattern: using argument as a variable name
+    auto output = run_script(R"(
+        macro(set_var varname)
+            set(${varname} "value")
+        endmacro()
+        set_var(MY_VAR)
+        message("${MY_VAR}")
+    )");
+    REQUIRE(output == "value\n");
 }

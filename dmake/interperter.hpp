@@ -207,6 +207,10 @@ private:
 
     // Return control state (for return() command)
     bool return_requested_ = false;
+
+    // Macro parameter substitution (for text-replacement in macros)
+    // Checked before variable lookup to implement CMake macro semantics
+    std::map<std::string, std::string> macro_substitutions_;
 };
 
 } // namespace dmake

@@ -15,14 +15,20 @@ std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
 
     for (char c : str) {
         if (c == ';') {
-            result.push_back(current);
+            // Only push non-empty elements (CMake behavior)
+            if (!current.empty()) {
+                result.push_back(current);
+            }
             current.clear();
         } else {
             current += c;
         }
     }
 
-    result.push_back(current);
+    // Push final element if non-empty
+    if (!current.empty()) {
+        result.push_back(current);
+    }
 
     return result;
 }
