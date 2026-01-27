@@ -977,6 +977,98 @@ TEST_CASE("if condition: DEFINED operator", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 }
 
+TEST_CASE("if condition: IN_LIST operator", "[interpreter][if]") {
+    // Basic IN_LIST - item is in list (using quoted string)
+    auto output = run_script(R"(
+        set(MY_LIST foo bar baz)
+        if("bar" IN_LIST MY_LIST)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Item not in list
+    output = run_script(R"(
+        set(MY_LIST foo bar baz)
+        if("qux" IN_LIST MY_LIST)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Empty list
+    output = run_script(R"(
+        set(MY_LIST "")
+        if("foo" IN_LIST MY_LIST)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Variable as search value
+    output = run_script(R"(
+        set(MY_LIST apple banana cherry)
+        set(SEARCH banana)
+        if(SEARCH IN_LIST MY_LIST)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted string as search value
+    output = run_script(R"(
+        set(MY_LIST "hello" "world" "test")
+        if("world" IN_LIST MY_LIST)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Empty string in list
+    output = run_script(R"(
+        set(MY_LIST "" foo bar)
+        if("" IN_LIST MY_LIST)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Case sensitivity check
+    output = run_script(R"(
+        set(MY_LIST Foo Bar Baz)
+        if("foo" IN_LIST MY_LIST)
+            message("fail")
+        else()
+            message("pass")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Unquoted variable dereferencing
+    output = run_script(R"(
+        set(MY_LIST alpha beta gamma)
+        set(SEARCH_VAR beta)
+        if(SEARCH_VAR IN_LIST MY_LIST)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
 TEST_CASE("if condition: true constants (case-insensitive)", "[interpreter][if]") {
     auto output = run_script(R"(
         set(T1 "TRUE")

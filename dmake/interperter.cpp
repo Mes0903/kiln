@@ -1272,6 +1272,21 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             }
             return result;
         }
+        // IN_LIST operator: checks if value is in a list variable
+        else if (op == "IN_LIST") {
+            pos++; // Consume operator
+            if (pos >= condition.size()) {
+                error_msg = "IN_LIST operator requires a right operand";
+                return false;
+            }
+
+            std::string value = evaluate_token(condition[start_pos]);
+            std::string list_str = evaluate_token(condition[pos++]);
+
+            // Parse the list (semicolon-separated) and check if value is in it
+            CMakeList list(list_str);
+            return list.contains(value);
+        }
 
         // Not a comparison operator - return the unary/primary result
         return unary_result;
