@@ -128,6 +128,54 @@ void register_target_builtins(Interpreter& interp) {
         interp.get_root()->targets_[name] = target;
     });
 
+    interp.add_builtin("add_custom_target", [&](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("add_custom_target");
+        std::string name;
+        bool all = false;
+        std::vector<std::vector<std::string>> commands;
+        std::vector<std::string> depends;
+        std::string working_dir;
+        std::string comment;
+        std::vector<std::string> sources;
+
+        parser.add_positional(name, "target name");
+        parser.add_flag("ALL", all);
+        parser.add_multi_list("COMMAND", commands);
+        parser.add_list("DEPENDS", depends);
+        parser.add_value("WORKING_DIRECTORY", working_dir);
+        parser.add_value("COMMENT", comment);
+        parser.add_list("SOURCES", sources);
+        // Note: VERBATIM is ignored as we currently use shell execution via popen
+        PARSE_OR_RETURN(parser, interp, args);
+
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+
+        auto target = std::make_shared<CustomTarget>(name, src_dir, bin_dir);
+        target->set_build_by_default(all);
+        if (!comment.empty()) {
+            target->set_property("COMMENT", comment);
+        }
+
+        for (const auto& cmd_args : commands) {
+            CustomCommand cmd;
+            cmd.command = cmd_args;
+            cmd.comment = comment;
+            cmd.working_dir = working_dir;
+            target->add_custom_command(std::move(cmd));
+        }
+
+        for (const auto& dep : depends) {
+            target->add_custom_dependency(dep);
+        }
+
+        if (!sources.empty()) {
+            target->add_sources(sources, PropertyVisibility::PRIVATE);
+        }
+
+        interp.get_root()->targets_[name] = target;
+    });
+
     auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> std::shared_ptr<Target> {
         auto& targets = interp.get_root()->targets_;
         auto it = targets.find(name);

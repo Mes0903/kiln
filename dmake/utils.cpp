@@ -1,5 +1,8 @@
 #include "utils.hpp"
 #include "inner/blake2b.h"
+#ifdef __linux__
+#include <linux/limits.h>
+#endif
 #include <type_traits>
 #include <vector>
 #include <cctype>
@@ -101,4 +104,16 @@ std::string dmake::join_command(const std::vector<std::string>& args) {
 
 dmake::CommandResult dmake::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
     return run_command(join_command(command), working_dir);
+}
+
+std::string dmake::get_executable_path() {
+#ifdef __linux__
+    char result[PATH_MAX];
+    ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
+    if (count != -1) {
+        return std::string(result, count);
+    }
+#endif
+    // Fallback or other platforms
+    return "dmake"; 
 }

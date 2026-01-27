@@ -28,10 +28,10 @@ std::expected<void, std::string> BuildGraph::generate_compile_commands(const std
     std::string current_dir = std::filesystem::current_path().string();
 
     for (const auto& [id, task] : tasks_) {
-        if (task.is_compilation) {
+        if (task.is_compilation && !task.commands.empty()) {
             commands.push_back({
                 .directory = current_dir,
-                .command = join_command(task.command),
+                .command = join_command(task.commands[0]),
                 .file = task.source_file,
                 .output = task.outputs.empty() ? "" : task.outputs[0]
             });
@@ -188,14 +188,18 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                 // Check if outputs exist first - no need to calculate signature if we must compile anyway
                 bool outputs_exist = true;
-                for (const auto& out : task.outputs) {
-                    if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+                if (task.outputs.empty()) {
+                    outputs_exist = false; // No outputs means always run (unless we add something like a 'stamp' file)
+                } else {
+                    for (const auto& out : task.outputs) {
+                        if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+                    }
                 }
 
                 std::string sig;
-                bool should_compile = !outputs_exist; // Must compile if outputs don't exist
+                bool should_compile = !outputs_exist || task.always_run; // Must compile if outputs don't exist or always_run is set
 
-                if (outputs_exist) {
+                if (outputs_exist && !task.always_run) {
                     // Only calculate signature if we might skip compilation
                     auto sig_res = calculate_signature(task);
                     if (!sig_res) {
@@ -216,20 +220,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                 if (should_compile) {
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
-                    std::string verb = "Compiling";
-                    std::string target_display = task.source_file.empty() ?
-                        std::filesystem::path(id).filename().string() :
-                        std::filesystem::path(task.source_file).filename().string();
-
-                    if (task.parent_target && id == task.parent_target->get_output_path()) {
-                        verb = "  Linking";
-                    }
-                    {
-                        std::lock_guard<std::mutex> lock(output_mutex_);
-                        std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
-                                  << artifact_name << "] " << target_display << std::endl;
-                    }
-
+                    
+                    // Pre-create output directories
                     for (const auto& out : task.outputs) {
                         std::error_code ec;
                         std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
@@ -241,29 +233,59 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         }
                     }
 
-                    auto result = run_command(task.command);
-                    if (result.exit_code != 0) {
-                        std::lock_guard<std::mutex> lock(output_mutex_);
-                        if (!result.output.empty()) std::cerr << result.output << std::endl;
+                    // Execute all commands in sequence
+                    for (const auto& cmd : task.commands) {
+                        std::string verb = "Running";
+                        std::string target_display = task.source_file.empty() ?
+                            std::filesystem::path(id).filename().string() :
+                            std::filesystem::path(task.source_file).filename().string();
 
-                        std::lock_guard<std::mutex> lock_loop(loop_mutex);
-                        fatal_error = "Command failed: " + join_command(task.command);
-                        cv.notify_all();
-                        return;
-                    } else if (!result.output.empty()) {
-                        std::lock_guard<std::mutex> lock(output_mutex_);
-                        std::cout << result.output << std::endl;
+                        if (task.is_compilation) {
+                             verb = "Compiling";
+                        } else if (task.parent_target && id == task.parent_target->get_output_path() && task.parent_target->get_type() != TargetType::CUSTOM) {
+                            verb = "  Linking";
+                        }
+                        
+                        // For custom targets, use the comment if available
+                        if (task.parent_target && task.parent_target->get_type() == TargetType::CUSTOM) {
+                            std::string comment = task.parent_target->get_property("COMMENT");
+                            if (!comment.empty()) {
+                                target_display = comment;
+                            }
+                        }
+                        
+                        {
+                            std::lock_guard<std::mutex> lock(output_mutex_);
+                            std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
+                                      << artifact_name << "] " << target_display << std::endl;
+                        }
+
+                        auto result = run_command(cmd, task.working_dir);
+                        if (result.exit_code != 0) {
+                            std::lock_guard<std::mutex> lock(output_mutex_);
+                            if (!result.output.empty()) std::cerr << result.output << std::endl;
+
+                            std::lock_guard<std::mutex> lock_loop(loop_mutex);
+                            fatal_error = "Command failed: " + join_command(cmd);
+                            cv.notify_all();
+                            return;
+                        } else if (!result.output.empty()) {
+                            std::lock_guard<std::mutex> lock(output_mutex_);
+                            std::cout << result.output << std::endl;
+                        }
                     }
 
                     // Must calculate signature after compilation for cache (now .d files exist)
-                    auto new_sig_res = calculate_signature(task);
-                    if (!new_sig_res) {
-                        std::lock_guard<std::mutex> lock(loop_mutex);
-                        fatal_error = new_sig_res.error();
-                        cv.notify_all();
-                        return;
+                    if (!task.always_run) {
+                        auto new_sig_res = calculate_signature(task);
+                        if (!new_sig_res) {
+                            std::lock_guard<std::mutex> lock(loop_mutex);
+                            fatal_error = new_sig_res.error();
+                            cv.notify_all();
+                            return;
+                        }
+                        sig = *new_sig_res;
                     }
-                    sig = *new_sig_res;
                 }
 
                 {
@@ -294,8 +316,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     return save_cache(build_dir, new_cache);
 }
 
-dmake::CommandResult BuildGraph::run_command(const std::vector<std::string>& command) {
-    return dmake::run_command(command);
+dmake::CommandResult BuildGraph::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
+    return dmake::run_command(command, working_dir);
 }
 
 std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
@@ -320,7 +342,10 @@ std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
     return deps;
 }
 
-static std::expected<std::vector<std::string>, std::string> get_headers_via_h_flag(const std::vector<std::string>& command) {
+static std::expected<std::vector<std::string>, std::string> get_headers_via_h_flag(const std::vector<std::vector<std::string>>& commands) {
+    if (commands.empty()) return std::vector<std::string>{};
+    const auto& command = commands[0];
+    
     std::vector<std::string> scan_cmd;
     scan_cmd.push_back("g++");
     scan_cmd.push_back("-H");
@@ -393,7 +418,9 @@ std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& pat
 
 std::expected<std::string, std::string> BuildGraph::calculate_signature(const BuildTask& task) {
     std::ostringstream oss;
-    oss << "cmd:" << join_command(task.command) << "|";
+    oss << "cmds:";
+    for (const auto& cmd : task.commands) oss << join_command(cmd) << ";";
+    oss << "|";
 
     auto version_res = get_compiler_version();
     if (!version_res) return std::unexpected(version_res.error());
@@ -423,9 +450,9 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
     }
 
     // 3. If no .d file exists but it's a compile task, use g++ -H (slow but accurate path)
-    auto is_compile_task = std::find(task.command.begin(), task.command.end(), "-c") != task.command.end();
+    auto is_compile_task = task.is_compilation;
     if (!found_deps && is_compile_task) {
-        auto headers_res = get_headers_via_h_flag(task.command);
+        auto headers_res = get_headers_via_h_flag(task.commands);
         if (!headers_res) return std::unexpected(headers_res.error());
         for (const auto& header : *headers_res) {
             if (std::filesystem::exists(header)) {

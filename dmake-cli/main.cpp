@@ -332,10 +332,49 @@ int main(int argc, char* argv[]) {
     std::string clean_project_dir = ".";
     clean_cmd->add_option("project", clean_project_dir, "Project directory");
 
+    auto* e_cmd = app.add_subcommand("mode-E", "CMake-like command-line tool mode");
+    e_cmd->alias("-E");
+    e_cmd->prefix_command();
+
     app.require_subcommand(0, 1);
     app.allow_extras();
 
     CLI11_PARSE(app, argc, argv);
+
+    if (e_cmd->parsed()) {
+        auto e_args = e_cmd->remaining();
+        if (e_args.empty()) {
+            std::cerr << "Error: -E requires a command" << std::endl;
+            return 1;
+        }
+
+        std::string cmd = e_args[0];
+        if (cmd == "echo") {
+            for (size_t i = 1; i < e_args.size(); ++i) {
+                std::cout << e_args[i] << (i == e_args.size() - 1 ? "" : " ");
+            }
+            std::cout << std::endl;
+            return 0;
+        } else if (cmd == "touch") {
+            for (size_t i = 1; i < e_args.size(); ++i) {
+                std::ofstream f(e_args[i], std::ios::app);
+            }
+            return 0;
+        } else if (cmd == "remove") {
+            for (size_t i = 1; i < e_args.size(); ++i) {
+                std::filesystem::remove_all(e_args[i]);
+            }
+            return 0;
+        } else if (cmd == "make_directory") {
+            for (size_t i = 1; i < e_args.size(); ++i) {
+                std::filesystem::create_directories(e_args[i]);
+            }
+            return 0;
+        } else {
+            std::cerr << "Error: Unknown -E command: " << cmd << std::endl;
+            return 1;
+        }
+    }
 
     if (!opt.script_path.empty()) {
         try {

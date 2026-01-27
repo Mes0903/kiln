@@ -205,7 +205,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         BuildTask task;
         task.id = obj;
         task.parent_target = this;
-        task.command = compiler->get_compile_command(ctx);
+        task.commands.push_back(compiler->get_compile_command(ctx));
         task.inputs.push_back(src_abs.string());
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
@@ -293,7 +293,7 @@ static std::pair<std::string, std::string> generate_pch_task(BuildGraph& graph, 
     for (const auto& dir : target->get_include_directories(PropertyVisibility::PUBLIC))
         ctx.includes.push_back((std::filesystem::path(target->get_source_dir()) / dir).string());
 
-    pch_task.command = compiler->get_compile_command(ctx);
+    pch_task.commands.push_back(compiler->get_compile_command(ctx));
     pch_task.inputs.push_back(pch_wrapper);
     pch_task.is_compilation = true;
     pch_task.source_file = pch_wrapper;
@@ -350,7 +350,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     link.parent_target = this;
 
     if (type_ == TargetType::STATIC_LIBRARY) {
-        link.command = linker->get_archive_command(output_path, obj_files);
+        link.commands.push_back(linker->get_archive_command(output_path, obj_files));
     } else {
         LinkContext ctx;
         ctx.output = output_path;
@@ -404,7 +404,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             ctx.lib_dirs.push_back(dir);
         }
 
-        link.command = linker->get_link_command(ctx);
+        link.commands.push_back(linker->get_link_command(ctx));
     }
 
     for (const auto& obj : obj_files) {
@@ -414,6 +414,43 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     link.outputs.push_back(output_path);
     graph.add_task(std::move(link));
+}
+
+void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>&, const std::vector<std::string>&) {
+    BuildTask task;
+    task.id = name_; // Target name is the task ID
+    task.parent_target = this;
+    task.always_run = true; // add_custom_target without outputs always runs
+    task.working_dir = binary_dir_;
+
+    for (const auto& custom_cmd : custom_commands_) {
+        task.commands.push_back(custom_cmd.command);
+        if (!custom_cmd.working_dir.empty()) {
+            task.working_dir = custom_cmd.working_dir;
+        }
+    }
+
+    // Dependencies
+    for (const auto& dep_name : custom_depends_) {
+        if (all_targets.count(dep_name)) {
+            auto dep_target = all_targets.at(dep_name);
+            std::string dep_out = dep_target->get_output_path();
+            if (!dep_out.empty()) {
+                task.dependencies.insert(dep_out);
+                task.inputs.push_back(dep_out);
+            } else {
+                // Dependency on another custom target (utility)
+                task.dependencies.insert(dep_name);
+            }
+        } else {
+            // Assume it's a file dependency
+            std::filesystem::path p(dep_name);
+            if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
+            task.inputs.push_back(p.string());
+        }
+    }
+
+    graph.add_task(std::move(task));
 }
 
 } // namespace dmake

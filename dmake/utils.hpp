@@ -53,4 +53,9 @@ CommandResult run_command(const std::string& command, const std::string& working
  */
 CommandResult run_command(const std::vector<std::string>& command, const std::string& working_dir = "");
 
+/**
+ * @brief Get the absolute path to the current executable.
+ */
+std::string get_executable_path();
+
 }

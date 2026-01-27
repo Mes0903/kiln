@@ -16,10 +16,12 @@ class Target;
 
 struct BuildTask {
     std::string id;              // Unique identifier (usually the primary output file)
-    std::vector<std::string> command;
+    std::vector<std::vector<std::string>> commands;
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     Target* parent_target = nullptr;
+    bool always_run = false;
+    std::string working_dir;
 
     // For compile_commands.json
     bool is_compilation = false;
@@ -67,7 +69,7 @@ private:
     std::vector<std::string> parse_deps_file(const std::string& path);
 
     // Subprocess execution with output capture
-    CommandResult run_command(const std::vector<std::string>& command);
+    CommandResult run_command(const std::vector<std::string>& command, const std::string& working_dir = "");
 };
 
 } // namespace dmake

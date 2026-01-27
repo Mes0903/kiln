@@ -41,8 +41,29 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Determine which targets to build
     std::set<std::string> targets_to_build;
     if (requested_targets.empty()) {
-        for (const auto& [name, _] : targets_) {
-            targets_to_build.insert(name);
+        bool any_all = false;
+        for (const auto& [name, target] : targets_) {
+            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+            if (custom && custom->is_build_by_default()) {
+                any_all = true;
+                break;
+            }
+        }
+
+        for (const auto& [name, target] : targets_) {
+            if (any_all) {
+                auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+                if (custom && custom->is_build_by_default()) {
+                    targets_to_build.insert(name);
+                }
+                // Executables and libraries are usually "ALL" in CMake by default unless EXCLUDE_FROM_ALL is set
+                // In dmake we currently treat them as ALL.
+                if (target->get_type() != TargetType::CUSTOM) {
+                    targets_to_build.insert(name);
+                }
+            } else {
+                targets_to_build.insert(name);
+            }
         }
     } else {
         std::function<void(const std::string&)> collect = [&](const std::string& name) {
@@ -56,6 +77,13 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
             for (const auto& lib : target->get_linked_libraries(PropertyVisibility::PRIVATE)) collect(lib);
             for (const auto& lib : target->get_linked_libraries(PropertyVisibility::PUBLIC)) collect(lib);
             for (const auto& lib : target->get_linked_libraries(PropertyVisibility::INTERFACE)) collect(lib);
+
+            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+            if (custom) {
+                for (const auto& dep : custom->get_custom_dependencies()) {
+                    collect(dep);
+                }
+            }
         };
         for (const auto& t : requested_targets) {
             if (!targets_.count(t)) {
@@ -158,20 +186,35 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     for (const auto& name : targets_to_build) {
         auto target = targets_[name];
         std::string out_path = target->get_output_path();
-        if (graph.has_task(out_path)) {
-            auto& link_task = graph.get_task(out_path);
+
+        // For custom targets, out_path might be empty or same as name
+        std::string task_id = out_path.empty() ? target->get_name() : out_path;
+
+        if (graph.has_task(task_id)) {
+            auto& task = graph.get_task(task_id);
 
             auto add_lib_inputs = [&](PropertyVisibility vis) {
                 for (const auto& lib_name : target->get_linked_libraries(vis)) {
                     if (targets_.count(lib_name)) {
                         auto dep = targets_[lib_name];
                         std::string lib_out = dep->get_output_path();
-                        link_task.inputs.push_back(lib_out);
+                        if (!lib_out.empty()) {
+                            task.inputs.push_back(lib_out);
+                        } else {
+                            // Dependency on a utility target
+                            task.dependencies.insert(lib_name);
+                        }
                     }
                 }
             };
             add_lib_inputs(PropertyVisibility::PRIVATE);
             add_lib_inputs(PropertyVisibility::PUBLIC);
+
+            // If it's a standard target (linking), we need to add libraries to the command line
+            if (target->get_type() != TargetType::CUSTOM && !task.commands.empty()) {
+                 // The link command already has these from Target::generate_tasks
+                 // but we need them as inputs for the graph.
+            }
         }
     }
 
@@ -252,6 +295,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         vars["CMAKE_EXECUTABLE_SUFFIX"] = "";
         vars["CMAKE_SHARED_LIBRARY_SUFFIX"] = ".so";
         vars["CMAKE_STATIC_LIBRARY_SUFFIX"] = ".a";
+
+        vars["CMAKE_COMMAND"] = get_executable_path();
 
         // Initialize default toolchain
         toolchain_.set_compiler(Language::CXX, std::make_unique<GnuCompiler>("g++", Language::CXX));
@@ -413,14 +458,14 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  for (size_t i = 2; i < args.size(); ++i) {
                      code += args[i];
                  }
-                 
+
                  Parser p(code);
                  auto ast = p.parse();
                  if (!ast) {
                      std::vector<CallLocation> backtrace;
                      Interpreter* root = interp.get_root();
                      if (!root->trace_stack_.empty()) {
-                         // For parse errors during EVAL, the current command (cmake_language) 
+                         // For parse errors during EVAL, the current command (cmake_language)
                          // should be part of the backtrace.
                          backtrace = root->trace_stack_;
                      }
@@ -428,12 +473,12 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                      interp.set_fatal_error(err);
                      return;
                  }
-                 
+
                  std::string old_file = interp.get_current_file();
                  interp.set_current_file("<EVAL>");
                  auto res = interp.interpret(ast.value());
                  interp.set_current_file(old_file);
-                 
+
                  if (!res) {
                      InterpreterError err = res.error();
                      if (err.file == "<EVAL>" && !err.source_content) {
@@ -452,7 +497,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  if (args.size() > 2) {
                      cmd_args.assign(args.begin() + 2, args.end());
                  }
-                 
+
                  auto res = interp.execute_command_with_args(cmd, cmd_args);
                  if (!res) interp.set_fatal_error(res.error());
             } else {
@@ -662,7 +707,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     std::vector<std::string> expanded_args = expand_arguments(cmd.arguments);
 
     auto res = execute_command_with_args(cmd.identifier, expanded_args);
-    
+
     if (!res) {
         if (auto err = get_fatal_error()) {
              // The error is already set, just clean up stack and return it
@@ -670,7 +715,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
              return std::unexpected(*err);
         }
     }
-    
+
     safe_pop_trace_stack("command: " + cmd.identifier);
     return res;
 }

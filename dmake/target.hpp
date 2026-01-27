@@ -8,8 +8,14 @@
 
 namespace dmake {
 
-enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY };
+enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY, CUSTOM };
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
+
+struct CustomCommand {
+    std::vector<std::string> command;
+    std::string comment;
+    std::string working_dir;
+};
 
 class BuildGraph;
 
@@ -69,10 +75,10 @@ public:
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
 
-    std::string get_output_path() const;
+    virtual std::string get_output_path() const;
 
     // The core task generation logic
-    void generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
+    virtual void generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
 
 protected:
     // Helper methods for task generation
@@ -101,6 +107,25 @@ protected:
     std::map<PropertyVisibility, std::vector<std::string>> compile_definitions_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_options_;
     std::map<PropertyVisibility, std::vector<std::string>> precompiled_headers_;
+};
+
+class CustomTarget : public Target {
+public:
+    CustomTarget(std::string name, std::string source_dir, std::string binary_dir)
+        : Target(std::move(name), TargetType::CUSTOM, std::move(source_dir), std::move(binary_dir)) {}
+
+    void add_custom_command(CustomCommand cmd) { custom_commands_.push_back(std::move(cmd)); }
+    void add_custom_dependency(std::string dep) { custom_depends_.push_back(std::move(dep)); }
+    const std::vector<std::string>& get_custom_dependencies() const { return custom_depends_; }
+    void set_build_by_default(bool b) { build_by_default_ = b; }
+    bool is_build_by_default() const { return build_by_default_; }
+
+    void generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {}) override;
+
+private:
+    std::vector<CustomCommand> custom_commands_;
+    std::vector<std::string> custom_depends_;
+    bool build_by_default_ = false;
 };
 
 } // namespace dmake
