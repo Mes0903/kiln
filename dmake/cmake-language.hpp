@@ -48,9 +48,19 @@ struct ForeachBlock;
 
 using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock, ForeachBlock>;
 
+struct ElseIfBlock {
+    std::vector<Argument> condition;
+    std::vector<AstNode> body;
+    size_t row = 0;
+    size_t col = 0;
+    size_t offset = 0;
+    size_t length = 0;
+};
+
 struct IfBlock {
     std::vector<Argument> condition;
     std::vector<AstNode> then_branch;
+    std::vector<ElseIfBlock> elseif_branches;
     std::vector<AstNode> else_branch;
     size_t row = 0;
     size_t col = 0;

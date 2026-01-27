@@ -186,6 +186,98 @@ TEST_CASE("Interpreter if/else/endif", "[interpreter]") {
     REQUIRE(output == "Inside else\n");
 }
 
+TEST_CASE("If with elseif", "[interpreter]") {
+    auto output = run_script(R"(
+        set(VAL "B")
+        if(VAL STREQUAL "A")
+            message("A")
+        elseif(VAL STREQUAL "B")
+            message("B")
+        elseif(VAL STREQUAL "C")
+            message("C")
+        else()
+            message("None")
+        endif()
+    )");
+    REQUIRE(output == "B\n");
+
+    output = run_script(R"(
+        set(VAL "C")
+        if(VAL STREQUAL "A")
+            message("A")
+        elseif(VAL STREQUAL "B")
+            message("B")
+        elseif(VAL STREQUAL "C")
+            message("C")
+        else()
+            message("None")
+        endif()
+    )");
+    REQUIRE(output == "C\n");
+
+    output = run_script(R"(
+        set(VAL "D")
+        if(VAL STREQUAL "A")
+            message("A")
+        elseif(VAL STREQUAL "B")
+            message("B")
+        elseif(VAL STREQUAL "C")
+            message("C")
+        else()
+            message("None")
+        endif()
+    )");
+    REQUIRE(output == "None\n");
+}
+
+TEST_CASE("If with elseif (no else)", "[interpreter]") {
+    auto output = run_script(R"(
+        set(VAL "B")
+        if(VAL STREQUAL "A")
+            message("A")
+        elseif(VAL STREQUAL "B")
+            message("B")
+        endif()
+    )");
+    REQUIRE(output == "B\n");
+
+    output = run_script(R"(
+        set(VAL "C")
+        if(VAL STREQUAL "A")
+            message("A")
+        elseif(VAL STREQUAL "B")
+            message("B")
+        endif()
+    )");
+    REQUIRE(output == "");
+}
+
+TEST_CASE("If with case-insensitive keywords", "[interpreter]") {
+    auto output = run_script(R"(
+        set(VAL "B")
+        IF(VAL STREQUAL "A")
+            message("A")
+        ELSEIF(VAL STREQUAL "B")
+            message("B")
+        ELSE()
+            message("None")
+        ENDIF()
+    )");
+    REQUIRE(output == "B\n");
+
+    output = run_script(R"(
+        set(VAL "D")
+        IF(VAL STREQUAL "A")
+            message("A")
+        ELSEIF(VAL STREQUAL "B")
+            message("B")
+        ELSE()
+            message("None")
+        ENDIF()
+    )");
+    REQUIRE(output == "None\n");
+}
+
 TEST_CASE("Comment", "[interpreter]") {
     auto output = run_script(R"(
         # This is a comment
@@ -207,6 +299,15 @@ TEST_CASE("Function basic invocation", "[interpreter][function]") {
         function(greet name)
             message("Hello ${name}")
         endfunction()
+
+        greet("World")
+    )");
+    REQUIRE(output == "Hello World\n");
+
+    output = run_script(R"(
+        function(greet name)
+            message("Hello ${name}")
+        ENDFUNCTION()
 
         greet("World")
     )");
@@ -466,13 +567,20 @@ TEST_CASE("CMakeList handles semicolons in variable references", "[interpreter][
     REQUIRE(output == "3\n");
 }
 
-TEST_CASE("foreach simple mode iterates over items", "[interpreter][foreach]") {
+TEST_CASE("Foreach basic", "[interpreter][foreach]") {
     auto output = run_script(R"(
-        foreach(item "a" "b" "c")
-            message("${item}")
+        foreach(i 1 2 3)
+            message("${i}")
         endforeach()
     )");
-    REQUIRE(output == "a\nb\nc\n");
+    REQUIRE(output == "1\n2\n3\n");
+
+    output = run_script(R"(
+        foreach(i 1 2 3)
+            message("${i}")
+        ENDFOREACH()
+    )");
+    REQUIRE(output == "1\n2\n3\n");
 }
 
 TEST_CASE("foreach RANGE with stop only", "[interpreter][foreach]") {

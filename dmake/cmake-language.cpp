@@ -39,7 +39,19 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
         }
 
         auto next_command = peek_identifier();
-        if (std::find(terminators.begin(), terminators.end(), next_command) != terminators.end()) {
+        std::string next_command_lower = next_command;
+        std::transform(next_command_lower.begin(), next_command_lower.end(), next_command_lower.begin(), ::tolower);
+
+        bool terminated = false;
+        for (const auto& term : terminators) {
+            std::string term_lower = term;
+            std::transform(term_lower.begin(), term_lower.end(), term_lower.begin(), ::tolower);
+            if (next_command_lower == term_lower) {
+                terminated = true;
+                break;
+            }
+        }
+        if (terminated) {
             break; 
         }
 
@@ -90,32 +102,56 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
     if_block.col = if_command.col;
     if_block.offset = if_command.offset;
 
-    auto then_branch_or_error = parse_block({"else", "endif"});
+    auto then_branch_or_error = parse_block({"elseif", "else", "endif"});
     if (!then_branch_or_error) {
         return std::unexpected(then_branch_or_error.error());
     }
     if_block.then_branch = std::move(then_branch_or_error.value());
     
-    auto next_command = peek_identifier();
-    if(next_command == "else") {
-        auto else_command_or_error = parse_command_invocation(); // consume "else"
-        if (!else_command_or_error) {
-            return std::unexpected(else_command_or_error.error());
-        }
+    while (true) {
+        auto next_command = peek_identifier();
+        std::string next_command_lower = next_command;
+        std::transform(next_command_lower.begin(), next_command_lower.end(), next_command_lower.begin(), ::tolower);
 
-        auto else_branch_or_error = parse_block({"endif"});
-        if (!else_branch_or_error) {
-            return std::unexpected(else_branch_or_error.error());
+        if (next_command_lower == "elseif") {
+            auto elseif_command_or_error = parse_command_invocation();
+            if (!elseif_command_or_error) return std::unexpected(elseif_command_or_error.error());
+            
+            ElseIfBlock elseif_branch;
+            elseif_branch.condition = std::move(elseif_command_or_error.value().arguments);
+            elseif_branch.row = elseif_command_or_error.value().row;
+            elseif_branch.col = elseif_command_or_error.value().col;
+            elseif_branch.offset = elseif_command_or_error.value().offset;
+            
+            auto body_or_error = parse_block({"elseif", "else", "endif"});
+            if (!body_or_error) return std::unexpected(body_or_error.error());
+            elseif_branch.body = std::move(body_or_error.value());
+            elseif_branch.length = pos_ - elseif_branch.offset;
+            
+            if_block.elseif_branches.push_back(std::move(elseif_branch));
+        } else if (next_command_lower == "else") {
+            auto else_command_or_error = parse_command_invocation();
+            if (!else_command_or_error) return std::unexpected(else_command_or_error.error());
+
+            auto else_branch_or_error = parse_block({"endif"});
+            if (!else_branch_or_error) return std::unexpected(else_branch_or_error.error());
+            if_block.else_branch = std::move(else_branch_or_error.value());
+            break; 
+        } else if (next_command_lower == "endif") {
+            break;
+        } else {
+             break;
         }
-        if_block.else_branch = std::move(else_branch_or_error.value());
     }
     
     auto endif_command_or_error = parse_command_invocation(); // consume "endif"
     if (!endif_command_or_error) {
          return std::unexpected(endif_command_or_error.error());
     }
-    if (endif_command_or_error.value().identifier != "endif") {
-        return std::unexpected(ParseError{row_, col_, pos_, 5, "Expected 'endif'"});
+    std::string endif_lower = endif_command_or_error.value().identifier;
+    std::transform(endif_lower.begin(), endif_lower.end(), endif_lower.begin(), ::tolower);
+    if (endif_lower != "endif") {
+        return std::unexpected(ParseError{endif_command_or_error.value().row, endif_command_or_error.value().col, endif_command_or_error.value().offset, endif_command_or_error.value().length, "Expected 'endif'"});
     }
 
     if_block.length = pos_ - if_block.offset;

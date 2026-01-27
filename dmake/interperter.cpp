@@ -769,7 +769,29 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
         return std::unexpected(cond_result.error());
     }
 
-    auto res = interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
+    if (cond_result.value()) {
+        auto res = interpret(if_block.then_branch);
+        if (!res) set_fatal_error(res.error());
+        safe_pop_trace_stack("if block");
+        return res;
+    }
+
+    for (const auto& elseif : if_block.elseif_branches) {
+        auto elseif_cond = evaluate_condition(elseif.condition, elseif.row, elseif.col, elseif.offset, elseif.length);
+        if (!elseif_cond) {
+            set_fatal_error(elseif_cond.error());
+            safe_pop_trace_stack("elseif block condition error");
+            return std::unexpected(elseif_cond.error());
+        }
+        if (elseif_cond.value()) {
+            auto res = interpret(elseif.body);
+            if (!res) set_fatal_error(res.error());
+            safe_pop_trace_stack("elseif block");
+            return res;
+        }
+    }
+
+    auto res = interpret(if_block.else_branch);
     if (!res) set_fatal_error(res.error());
     safe_pop_trace_stack("if block");
     return res;
