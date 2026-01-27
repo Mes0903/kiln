@@ -585,10 +585,10 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     if (bit != root->builtins_.end()) {
         bit->second(*this, expanded_args);
         if (auto err = get_fatal_error()) {
-            root->trace_stack_.pop_back(); // Pop BEFORE returning error
+            safe_pop_trace_stack("builtin error: " + lower_identifier);
             return std::unexpected(*err);
         }
-        root->trace_stack_.pop_back();
+        safe_pop_trace_stack("builtin: " + lower_identifier);
         return {};
     }
 
@@ -597,13 +597,13 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
         auto fit = curr->user_functions_.find(cmd.identifier);
         if (fit != curr->user_functions_.end()) {
             auto res = invoke_user_function(fit->second, expanded_args);
-            root->trace_stack_.pop_back();
+            safe_pop_trace_stack("user function: " + cmd.identifier);
             return res;
         }
         auto mit = curr->user_macros_.find(cmd.identifier);
         if (mit != curr->user_macros_.end()) {
             auto res = invoke_user_macro(mit->second, expanded_args);
-            root->trace_stack_.pop_back();
+            safe_pop_trace_stack("user macro: " + cmd.identifier);
             return res;
         }
         curr = curr->parent_;
@@ -611,7 +611,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
 
     set_fatal_error("Unknown command: " + cmd.identifier);
     auto err = get_fatal_error();
-    root->trace_stack_.pop_back();
+    safe_pop_trace_stack("unknown command: " + cmd.identifier);
     return std::unexpected(*err);
 }
 
@@ -622,13 +622,13 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
         set_fatal_error(cond_result.error());
-        root->trace_stack_.pop_back();
+        safe_pop_trace_stack("if block condition error");
         return std::unexpected(cond_result.error());
     }
 
     auto res = interpret(cond_result.value() ? if_block.then_branch : if_block.else_branch);
     if (!res) set_fatal_error(res.error());
-    root->trace_stack_.pop_back();
+    safe_pop_trace_stack("if block");
     return res;
 }
 
@@ -658,11 +658,15 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         long stop = std::stol(evaluate_argument(r.stop));
         long step = r.step ? std::stol(evaluate_argument(*r.step)) : 1;
         if (step == 0) {
+            if (loop_depth_ <= 0) {
+                std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling step=0 error\n";
+                std::abort();
+            }
             loop_depth_--;
             set_fatal_error("Step cannot be zero");
             auto err = get_fatal_error();
             clear_fatal_error();
-            root->trace_stack_.pop_back();
+            safe_pop_trace_stack("foreach step=0 error");
             return std::unexpected(*err);
         }
         for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
@@ -677,16 +681,26 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         auto res = interpret(block.body);
         if (!res) {
             set_fatal_error(res.error());
+            if (loop_depth_ <= 0) {
+                std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                std::abort();
+            }
             loop_depth_--;
-            root->trace_stack_.pop_back();
+            safe_pop_trace_stack("foreach body error");
             return res;
         }
         if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
         if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
         if (return_requested_) break;  // return() exits the loop and propagates to caller
     }
+
+    // Sanity check: loop depth should never go negative
+    if (loop_depth_ <= 0) {
+        std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when trying to decrement in foreach\n";
+        std::abort();
+    }
     loop_depth_--;
-    root->trace_stack_.pop_back();
+    safe_pop_trace_stack("foreach");
     return {};
 }
 
@@ -708,6 +722,12 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
 
     call_stack_.push_front(frame);
     auto res = interpret(func.body);
+
+    // Sanity check: we should have at least one frame (the one we just pushed)
+    if (call_stack_.empty()) {
+        std::cerr << "FATAL: call_stack_ is empty when exiting function (should have at least our frame)\n";
+        std::abort();
+    }
     call_stack_.pop_front();
 
     if (!res) set_fatal_error(res.error());
@@ -1146,19 +1166,26 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
 }
 
 std::string Interpreter::get_variable(const std::string& name) const {
-    if (!call_stack_.empty()) {
-        std::deque<CallFrame> temp = call_stack_;
-        while (!temp.empty()) {
-            auto it = temp.front().variables.find(name);
-            if (it != temp.front().variables.end()) return it->second;
-            temp.pop_front();
-        }
+    if (call_stack_.empty()) {
+        std::cerr << "FATAL: get_variable('" << name << "') called with empty call_stack_\n";
+        std::abort();
+    }
+
+    std::deque<CallFrame> temp = call_stack_;
+    while (!temp.empty()) {
+        auto it = temp.front().variables.find(name);
+        if (it != temp.front().variables.end()) return it->second;
+        temp.pop_front();
     }
     return parent_ ? parent_->get_variable(name) : "";
 }
 
 void Interpreter::set_variable(const std::string& name, const std::string& val) {
-    if (!call_stack_.empty()) call_stack_.front().variables[name] = val;
+    if (call_stack_.empty()) {
+        std::cerr << "FATAL: set_variable('" << name << "', '" << val << "') called with empty call_stack_\n";
+        std::abort();
+    }
+    call_stack_.front().variables[name] = val;
 }
 
 void Interpreter::set_cache_variable(const std::string& var_name, const std::string& value) {
@@ -1209,6 +1236,43 @@ void Interpreter::print_message(const std::string& mode, const std::string& msg,
 
 CMakeList Interpreter::from_arguments(const std::vector<std::string>& args) {
     return CMakeList(args);
+}
+
+void Interpreter::check_invariants() const {
+    // Critical invariant: call stack should never be empty during execution
+    if (call_stack_.empty()) {
+        std::cerr << "FATAL: call_stack_ is empty (this should never happen)\n";
+        std::abort();
+    }
+
+    // Loop control should only be set when in a loop
+    if (loop_control_ != LoopControl::NONE && loop_depth_ <= 0) {
+        std::cerr << "FATAL: loop_control_ is set (" << static_cast<int>(loop_control_)
+                  << ") but loop_depth_ is " << loop_depth_ << "\n";
+        std::abort();
+    }
+
+    // Loop depth should never be negative
+    if (loop_depth_ < 0) {
+        std::cerr << "FATAL: loop_depth_ is negative (" << loop_depth_ << ")\n";
+        std::abort();
+    }
+
+    // Root interpreter should have builtins
+    if (parent_ == nullptr && builtins_.empty()) {
+        std::cerr << "FATAL: root interpreter has no builtins (not properly initialized?)\n";
+        std::abort();
+    }
+}
+
+void Interpreter::safe_pop_trace_stack(const std::string& context) {
+    Interpreter* root = get_root();
+    if (root->trace_stack_.empty()) {
+        std::cerr << "FATAL: Attempting to pop empty trace_stack_ in context: " << context << "\n";
+        std::cerr << "       This indicates a push/pop imbalance in the interpreter\n";
+        std::abort();
+    }
+    root->trace_stack_.pop_back();
 }
 
 }

@@ -128,6 +128,10 @@ public:
     bool is_return_requested() const { return return_requested_; }
     void clear_return_request() { return_requested_ = false; }
 
+    // Debug/validation helpers
+    void check_invariants() const;
+    void safe_pop_trace_stack(const std::string& context);
+
 
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
