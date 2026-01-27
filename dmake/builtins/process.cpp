@@ -8,7 +8,6 @@ namespace dmake {
 
 void register_process_builtins(Interpreter& interp) {
     interp.add_builtin("execute_process", [](Interpreter& interp, const std::vector<std::string>& args) {
-        std::cout << ")" << std::endl;
         CommandParser parser("execute_process");
         std::vector<std::vector<std::string>> commands;
         std::string working_dir;
