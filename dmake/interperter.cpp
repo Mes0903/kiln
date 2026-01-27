@@ -417,7 +417,14 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  Parser p(code);
                  auto ast = p.parse();
                  if (!ast) {
-                     InterpreterError err{"<EVAL>", ast.error().row, ast.error().col, ast.error().offset, ast.error().length, "cmake_language(EVAL) parse error: " + ast.error().reason, {}, code};
+                     std::vector<CallLocation> backtrace;
+                     Interpreter* root = interp.get_root();
+                     if (!root->trace_stack_.empty()) {
+                         // For parse errors during EVAL, the current command (cmake_language) 
+                         // should be part of the backtrace.
+                         backtrace = root->trace_stack_;
+                     }
+                     InterpreterError err{"<EVAL>", ast.error().row, ast.error().col, ast.error().offset, ast.error().length, "cmake_language(EVAL) parse error: " + ast.error().reason, backtrace, code};
                      interp.set_fatal_error(err);
                      return;
                  }
@@ -429,7 +436,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  
                  if (!res) {
                      InterpreterError err = res.error();
-                     if (err.file == "<EVAL>") {
+                     if (err.file == "<EVAL>" && !err.source_content) {
                          err.source_content = code;
                      }
                      interp.set_fatal_error(err);
@@ -605,8 +612,11 @@ void Interpreter::set_fatal_error(const InterpreterError& error) {
     Interpreter* root = get_root();
     if (!root->fatal_error_) {
         root->fatal_error_ = error;
-        // If we were given an error without backtrace (e.g. from sub-interpret),
-        // we might want to fill it, but usually the caller handles it.
+    } else {
+        // Enrich existing error if possible
+        if (error.source_content && !root->fatal_error_->source_content && error.file == root->fatal_error_->file) {
+            root->fatal_error_->source_content = error.source_content;
+        }
     }
 }
 

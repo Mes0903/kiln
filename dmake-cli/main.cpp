@@ -59,18 +59,24 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
 
         std::cerr << "   " << padding << " \033[1;34m|\033[0m" << std::endl;
         std::cerr << "   \033[1;34m" << row << " |\033[0m " << line << std::endl;
-        std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(col > 0 ? col - 1 : 0, ' ');
 
         size_t caret_len = (length > 0) ? length : 1;
-        if (col > line.length()) {
-            caret_len = 0;
-        } else if (col + caret_len - 1 > line.length()) {
-            caret_len = line.length() - col + 1;
+        size_t caret_col = col;
+        if (caret_col > line.length() + 1) {
+            caret_col = line.length() + 1;
         }
         
-        if (caret_len > 0) {
-            std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m" << std::endl;
+        if (caret_col > line.length()) {
+            caret_len = 1;
+        } else if (caret_col + caret_len - 1 > line.length()) {
+            caret_len = line.length() - caret_col + 1;
         }
+        
+        std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(caret_col > 0 ? caret_col - 1 : 0, ' ');
+        if (caret_len > 0) {
+            std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m";
+        }
+        std::cerr << std::endl;
     }
 
     if (!backtrace.empty()) {
