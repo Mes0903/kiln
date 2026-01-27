@@ -495,12 +495,19 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     std::filesystem::path path = std::filesystem::path(file_path);
 
     // Helper to check if a path exists, trying with and without .cmake extension
-    auto try_path = [](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
-        if (std::filesystem::exists(p) && !std::filesystem::is_directory(p)) return p;
+    auto try_path = [this](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
+        if (cached_file_exists(p)) {
+            // Verify it's not a directory
+            std::error_code ec;
+            if (!std::filesystem::is_directory(p, ec)) return p;
+        }
         if (!p.has_extension()) {
             std::filesystem::path with_ext = p;
             with_ext.replace_extension(".cmake");
-            if (std::filesystem::exists(with_ext) && !std::filesystem::is_directory(with_ext)) return with_ext;
+            if (cached_file_exists(with_ext)) {
+                std::error_code ec;
+                if (!std::filesystem::is_directory(with_ext, ec)) return with_ext;
+            }
         }
         return std::nullopt;
     };
@@ -601,6 +608,91 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     return_requested_ = saved_return;
 
     return res;
+}
+
+const std::unordered_set<std::string>* Interpreter::get_cached_directory_listing(const std::filesystem::path& dir) {
+    Interpreter* root = get_root();
+
+    // Normalize to absolute path
+    std::error_code ec;
+    std::filesystem::path abs_dir = std::filesystem::absolute(dir, ec);
+    if (ec) return nullptr;
+
+    std::string dir_key = abs_dir.string();
+
+    // Check if directory exists
+    if (!std::filesystem::exists(abs_dir, ec) || ec) return nullptr;
+    if (!std::filesystem::is_directory(abs_dir, ec) || ec) return nullptr;
+
+    // Get current directory mtime
+    std::filesystem::file_time_type current_mtime;
+    try {
+        current_mtime = std::filesystem::last_write_time(abs_dir, ec);
+        if (ec) return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+
+    // Clock skew detection
+    auto now = std::filesystem::file_time_type::clock::now();
+    if (current_mtime > now) {
+        // Print warning once per directory
+        static std::unordered_set<std::string> warned_dirs;
+        if (!warned_dirs.contains(dir_key)) {
+            *err_ << colors::YELLOW << "Warning: Directory has modification time in the future: "
+                  << dir_key << ". Possible clock skew detected." << colors::RESET << std::endl;
+            warned_dirs.insert(dir_key);
+        }
+        // Invalidate cache entry
+        root->dir_scan_cache_.erase(dir_key);
+        // Continue with fresh scan
+    }
+
+    // Look up in cache
+    auto it = root->dir_scan_cache_.find(dir_key);
+    if (it != root->dir_scan_cache_.end()) {
+        // Cache hit - validate mtime
+        if (it->second.mtime == current_mtime) {
+            return &it->second.entries;
+        }
+        // Mtime changed - invalidate
+        root->dir_scan_cache_.erase(it);
+    }
+
+    // Cache miss - scan directory
+    std::unordered_set<std::string> entries;
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(abs_dir, ec)) {
+            if (ec) {
+                // Error during iteration - don't cache
+                return nullptr;
+            }
+            entries.insert(entry.path().filename().string());
+        }
+    } catch (...) {
+        // Permission denied or other errors - don't cache
+        return nullptr;
+    }
+
+    // Store in cache
+    DirectoryCacheEntry cache_entry{current_mtime, std::move(entries)};
+    auto [inserted_it, _] = root->dir_scan_cache_.emplace(dir_key, std::move(cache_entry));
+    return &inserted_it->second.entries;
+}
+
+bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
+    // Split path into directory and filename
+    auto parent = full_path.parent_path();
+    auto filename = full_path.filename().string();
+
+    if (filename.empty()) return false;
+
+    return cached_file_exists(parent, filename);
+}
+
+bool Interpreter::cached_file_exists(const std::filesystem::path& dir, const std::string& filename) {
+    auto* entries = get_cached_directory_listing(dir);
+    return entries && entries->contains(filename);
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {

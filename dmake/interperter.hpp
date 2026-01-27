@@ -5,6 +5,8 @@
 #include "build_system.hpp"
 #include <map>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <iostream>
 #include <unistd.h>
@@ -13,6 +15,7 @@
 #include <deque>
 #include <expected>
 #include <optional>
+#include <filesystem>
 #include "CMakeList.hpp"
 #include "toolchain.hpp"
 
@@ -101,6 +104,10 @@ public:
 
     std::expected<void, InterpreterError> include_file(const std::string& file_path, bool optional = false);
 
+    // Cached file existence check - caching handled internally
+    bool cached_file_exists(const std::filesystem::path& full_path);
+    bool cached_file_exists(const std::filesystem::path& dir, const std::string& filename);
+
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
@@ -154,6 +161,9 @@ private:
     Interpreter* get_root();
     const Interpreter* get_root() const;
 
+    // Internal cache helper - returns directory listing if cached and valid
+    const std::unordered_set<std::string>* get_cached_directory_listing(const std::filesystem::path& dir);
+
     std::string build_dir_;
     std::ostream* out_;
     std::ostream* err_;
@@ -166,6 +176,13 @@ private:
     Toolchain toolchain_;
     std::set<std::string> global_guarded_files_;
     std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
+
+    // Directory scan cache for optimizing file lookups
+    struct DirectoryCacheEntry {
+        std::filesystem::file_time_type mtime;           // Directory modification time
+        std::unordered_set<std::string> entries;         // All entries (filenames only) - O(1) lookup
+    };
+    std::unordered_map<std::string, DirectoryCacheEntry> dir_scan_cache_;  // Key: absolute directory path
 
     // Directory-scoped accumulated directories (inherited by targets)
     std::vector<std::string> accumulated_include_directories_;

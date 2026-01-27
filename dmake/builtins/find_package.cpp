@@ -111,7 +111,7 @@ void register_find_package_builtins(Interpreter& interp) {
             std::filesystem::path found_module;
             
             for(const auto& path : module_paths) {
-                if(std::filesystem::exists(path / module_filename)) {
+                if(interp.cached_file_exists(path, module_filename)) {
                     found_module = path / module_filename;
                     break;
                 }
@@ -184,7 +184,15 @@ void register_find_package_builtins(Interpreter& interp) {
         VersionComponents v_req = parse_version(version);
 
         for (const auto& path : search_paths) {
-            if (!std::filesystem::exists(path)) continue;
+            // Check if directory exists using cache
+            auto path_parent = path.parent_path();
+            auto path_name = path.filename().string();
+            if (!path_parent.empty() && !path_name.empty()) {
+                if (!interp.cached_file_exists(path_parent, path_name)) continue;
+            }
+            // Verify it's actually a directory
+            std::error_code ec;
+            if (!std::filesystem::is_directory(path, ec)) continue;
 
             // Candidates for Config file and Version file
             struct Candidate {
@@ -198,13 +206,14 @@ void register_find_package_builtins(Interpreter& interp) {
             };
 
             for (const auto& cand : candidates) {
+                if (!interp.cached_file_exists(path, cand.config)) continue;
                 std::filesystem::path config_path = path / cand.config;
-                if (!std::filesystem::exists(config_path)) continue;
-                
+
                 // Found a config file. If version checking is requested, look for version file.
                 if (!version.empty()) {
-                    std::filesystem::path version_path = path / cand.version;
-                    if (std::filesystem::exists(version_path)) {
+                    if (interp.cached_file_exists(path, cand.version)) {
+                        std::filesystem::path version_path = path / cand.version;
+
                         // Set variables for the version file
                         interp.set_variable("PACKAGE_FIND_NAME", package_name);
                         interp.set_variable("PACKAGE_FIND_VERSION", v_req.full);
@@ -213,7 +222,7 @@ void register_find_package_builtins(Interpreter& interp) {
                         interp.set_variable("PACKAGE_FIND_VERSION_PATCH", v_req.patch);
                         interp.set_variable("PACKAGE_FIND_VERSION_TWEAK", v_req.tweak);
                         interp.set_variable("PACKAGE_FIND_VERSION_COUNT", v_req.count);
-                        
+
                         // Execute version file
                         auto res = interp.include_file(version_path.string());
                         if (!res) {
@@ -223,7 +232,7 @@ void register_find_package_builtins(Interpreter& interp) {
 
                         // Check result
                         std::string compatible = interp.get_variable("PACKAGE_VERSION_COMPATIBLE");
-                        
+
                         // Clear the compatibility result so it doesn't bleed into next check
                         interp.set_variable("PACKAGE_VERSION_COMPATIBLE", "");
 

@@ -136,16 +136,20 @@ std::optional<std::filesystem::path> search_for_file(
             for (const auto& suffix : suffixes) {
                 std::filesystem::path check_dir = search_path / suffix;
 
-                if (!std::filesystem::exists(check_dir)) continue;
+                // Check if directory exists using cache
+                auto parent = check_dir.parent_path();
+                auto dirname = check_dir.filename().string();
+                if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) continue;
+                // Verify it's actually a directory
+                std::error_code ec;
+                if (!std::filesystem::is_directory(check_dir, ec)) continue;
 
                 for (const auto& name : opts.names) {
                     auto variants = name_variants(interp, name);
                     for (const auto& variant : variants) {
-                        std::filesystem::path candidate = check_dir / variant;
-
-                        std::error_code ec;
-                        if (std::filesystem::exists(candidate, ec) && validator(candidate)) {
-                            return std::filesystem::canonical(candidate, ec);
+                        if (interp.cached_file_exists(check_dir, variant) && validator(check_dir / variant)) {
+                            std::error_code ec;
+                            return std::filesystem::canonical(check_dir / variant, ec);
                         }
                     }
                 }
@@ -160,14 +164,18 @@ std::optional<std::filesystem::path> search_for_file(
                 for (const auto& suffix : suffixes) {
                     std::filesystem::path check_dir = search_path / suffix;
 
-                    if (!std::filesystem::exists(check_dir)) continue;
+                    // Check if directory exists using cache
+                    auto parent = check_dir.parent_path();
+                    auto dirname = check_dir.filename().string();
+                    if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) continue;
+                    // Verify it's actually a directory
+                    std::error_code ec;
+                    if (!std::filesystem::is_directory(check_dir, ec)) continue;
 
                     for (const auto& variant : variants) {
-                        std::filesystem::path candidate = check_dir / variant;
-
-                        std::error_code ec;
-                        if (std::filesystem::exists(candidate, ec) && validator(candidate)) {
-                            return std::filesystem::canonical(candidate, ec);
+                        if (interp.cached_file_exists(check_dir, variant) && validator(check_dir / variant)) {
+                            std::error_code ec;
+                            return std::filesystem::canonical(check_dir / variant, ec);
                         }
                     }
                 }
