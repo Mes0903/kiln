@@ -56,13 +56,10 @@ public:
     BuildTask& get_task(const std::string& id) { return tasks_.at(id); }
 
     // C++20 modules support: inject dependencies after collator runs
-    // Called by collator task to update compile task dependencies based on module imports and header units
+    // Called by collator task to update compile task dependencies based on module imports
     void inject_module_dependencies(
         const std::map<std::string, std::string>& module_to_task,  // Module name -> provider task ID
-        const std::map<std::string, std::vector<std::string>>& task_requires,  // Task ID -> required modules
-        const std::map<std::string, std::string>& header_unit_tasks,  // Header key -> header unit task ID
-        const std::map<std::string, std::set<std::string>>& task_header_imports_system,  // Task ID -> system headers
-        const std::map<std::string, std::set<std::string>>& task_header_imports_user    // Task ID -> user headers
+        const std::map<std::string, std::vector<std::string>>& task_requires  // Task ID -> required modules
     );
 
 private:

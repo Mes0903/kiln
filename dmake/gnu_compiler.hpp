@@ -146,55 +146,6 @@ public:
         return cmd;
     }
 
-    // C++20 header units: compile a header into a BMI
-    std::vector<std::string> get_header_unit_compile_command(const HeaderUnitContext& ctx) const override {
-        std::vector<std::string> cmd;
-        cmd.push_back(binary_);
-
-        // Set C++ standard (must be C++20 or later for header units)
-        if (!ctx.standard.empty()) {
-            cmd.push_back("-std=c++" + ctx.standard);
-        } else {
-            cmd.push_back("-std=c++20");
-        }
-
-        // Enable modules TS
-        cmd.push_back("-fmodules-ts");
-
-        // Header unit mode
-        cmd.push_back("-fmodule-header=" + std::string(ctx.is_system ? "system" : "user"));
-
-        // Compile, don't link
-        cmd.push_back("-c");
-
-        // Force C++ header mode
-        cmd.push_back("-x");
-        cmd.push_back("c++-header");
-
-        if (ctx.color_diagnostics) {
-            cmd.push_back("-fdiagnostics-color=always");
-        }
-
-        // Output BMI file
-        cmd.push_back("-o");
-        cmd.push_back(ctx.bmi_output);
-
-        // Include directories
-        for (const auto& dir : ctx.includes) {
-            cmd.push_back("-I" + dir);
-        }
-
-        // Definitions
-        for (const auto& def : ctx.definitions) {
-            cmd.push_back("-D" + def);
-        }
-
-        // Header to compile (as a "file" to read)
-        cmd.push_back(ctx.header);
-
-        return cmd;
-    }
-
 private:
     std::string binary_;
     Language lang_;

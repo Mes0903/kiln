@@ -246,10 +246,6 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         std::map<std::string, std::string> module_to_task;  // Module name -> provider object task
                         std::map<std::string, std::vector<std::string>> task_requires;  // Object task -> required modules
                         std::vector<ModuleMapEntry> mapper_entries;
-                        std::set<std::string> system_headers_needed;  // Unique system headers
-                        std::set<std::string> user_headers_needed;    // Unique user headers
-                        std::map<std::string, std::set<std::string>> task_header_imports_system;  // Object task -> system headers
-                        std::map<std::string, std::set<std::string>> task_header_imports_user;    // Object task -> user headers
 
                         for (const auto& ddi_path : task.inputs) {
                             auto ddi_result = parse_ddi_file(ddi_path);
@@ -284,134 +280,6 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             if (!ddi.imports.empty()) {
                                 task_requires[obj_path] = ddi.imports;
                             }
-
-                            // Collect header imports
-                            for (const auto& hdr : ddi.header_imports_system) {
-                                system_headers_needed.insert(hdr);
-                                task_header_imports_system[obj_path].insert(hdr);
-                            }
-                            for (const auto& hdr : ddi.header_imports_user) {
-                                user_headers_needed.insert(hdr);
-                                task_header_imports_user[obj_path].insert(hdr);
-                            }
-                        }
-
-                        // Generate header unit tasks for all collected headers
-                        std::map<std::string, std::string> header_unit_tasks;  // Header name -> task ID
-
-                        // Extract compiler info from a scanner task to use for header units
-                        std::string compiler_binary;
-                        std::string cpp_standard;
-                        std::vector<std::string> include_dirs;
-                        std::vector<std::string> definitions;
-                        bool color_diag = isatty(STDOUT_FILENO);
-
-                        // Find a scanner task to extract compiler info
-                        for (const auto& ddi_path : task.inputs) {
-                            // Scanner task IDs are the DDI file paths
-                            // We can look up scanner tasks but they're already completed
-                            // Instead, let's get info from a compile task which should have it
-                            break;
-                        }
-
-                        // Extract from target's resolved properties
-                        if (task.parent_target) {
-                            cpp_standard = task.parent_target->get_property("CMAKE_CXX_STANDARD");
-                            for (const auto& inc : task.parent_target->get_resolved_property("INCLUDE_DIRECTORIES")) {
-                                include_dirs.push_back(inc);
-                            }
-                            for (const auto& def : task.parent_target->get_resolved_property("COMPILE_DEFINITIONS")) {
-                                definitions.push_back(def);
-                            }
-
-                            // Get compiler binary - assume g++ for now (TODO: get from toolchain)
-                            compiler_binary = "g++";
-                        }
-
-                        auto generate_header_unit_task = [&](const std::string& header, bool is_system) {
-                            std::string bmi_path = get_header_unit_bmi_path(task.parent_target->get_binary_dir(), header, is_system);
-
-                            // Create a unique task ID for this header unit
-                            std::string task_id = bmi_path;
-
-                            // Check if task already exists
-                            if (tasks_.find(task_id) != tasks_.end()) {
-                                return task_id;
-                            }
-
-                            // Build header unit compilation command manually
-                            std::vector<std::string> cmd;
-                            cmd.push_back(compiler_binary);
-
-                            if (!cpp_standard.empty()) {
-                                cmd.push_back("-std=c++" + cpp_standard);
-                            } else {
-                                cmd.push_back("-std=c++20");
-                            }
-
-                            cmd.push_back("-fmodules-ts");
-                            cmd.push_back("-fmodule-header=" + std::string(is_system ? "system" : "user"));
-                            cmd.push_back("-c");
-                            cmd.push_back("-x");
-                            cmd.push_back("c++-header");
-
-                            if (color_diag) {
-                                cmd.push_back("-fdiagnostics-color=always");
-                            }
-
-                            cmd.push_back("-o");
-                            cmd.push_back(bmi_path);
-
-                            for (const auto& inc : include_dirs) {
-                                cmd.push_back("-I" + inc);
-                            }
-
-                            for (const auto& def : definitions) {
-                                cmd.push_back("-D" + def);
-                            }
-
-                            cmd.push_back(header);
-
-                            // Build header unit compilation task
-                            BuildTask hu_task;
-                            hu_task.id = task_id;
-                            hu_task.working_dir = task.parent_target->get_binary_dir();
-                            hu_task.parent_target = task.parent_target;
-                            hu_task.is_compilation = true;
-                            hu_task.outputs.push_back(bmi_path);
-                            hu_task.commands.push_back(cmd);
-
-                            // Add task to graph
-                            {
-                                std::lock_guard<std::mutex> lock(graph_mutation_mutex_);
-                                tasks_[task_id] = hu_task;
-                            }
-
-                            return task_id;
-                        };
-
-                        // Generate tasks for all system headers
-                        for (const auto& hdr : system_headers_needed) {
-                            std::string task_id = generate_header_unit_task(hdr, true);
-                            header_unit_tasks["<" + hdr + ">"] = task_id;
-
-                            // Add to module mapper
-                            ModuleMapEntry entry;
-                            entry.module_name = "<" + hdr + ">";
-                            entry.bmi_path = get_header_unit_bmi_path(task.parent_target->get_binary_dir(), hdr, true);
-                            mapper_entries.push_back(entry);
-                        }
-
-                        // Generate tasks for all user headers
-                        for (const auto& hdr : user_headers_needed) {
-                            std::string task_id = generate_header_unit_task(hdr, false);
-                            header_unit_tasks["\"" + hdr + "\""] = task_id;
-
-                            // Add to module mapper
-                            ModuleMapEntry entry;
-                            entry.module_name = "\"" + hdr + "\"";
-                            entry.bmi_path = get_header_unit_bmi_path(task.parent_target->get_binary_dir(), hdr, false);
-                            mapper_entries.push_back(entry);
                         }
 
                         // Write module mapper file
@@ -427,8 +295,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         mapper_file.close();
 
                         // Inject dependencies into compile tasks
-                        inject_module_dependencies(module_to_task, task_requires, header_unit_tasks,
-                                                   task_header_imports_system, task_header_imports_user);
+                        inject_module_dependencies(module_to_task, task_requires);
 
                     } else if (task.is_module_scanner) {
                         // C++20 modules: scanner task - run preprocessor and parse output
@@ -765,72 +632,39 @@ std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
 
 void BuildGraph::inject_module_dependencies(
     const std::map<std::string, std::string>& module_to_task,
-    const std::map<std::string, std::vector<std::string>>& task_requires,
-    const std::map<std::string, std::string>& header_unit_tasks,
-    const std::map<std::string, std::set<std::string>>& task_header_imports_system,
-    const std::map<std::string, std::set<std::string>>& task_header_imports_user) {
+    const std::map<std::string, std::vector<std::string>>& task_requires) {
 
     std::lock_guard<std::mutex> lock(graph_mutation_mutex_);
 
     for (auto& [task_id, task] : tasks_) {
         // Find module requirements for this task
         auto req_it = task_requires.find(task_id);
-        if (req_it != task_requires.end()) {
-            const auto& required_modules = req_it->second;
+        if (req_it == task_requires.end()) continue;
 
-            for (const auto& required_module : required_modules) {
-                // Skip standard library modules (not built locally)
-                if (required_module == "std" || required_module.starts_with("std.")) {
-                    continue;
-                }
+        const auto& required_modules = req_it->second;
 
-                auto provider_it = module_to_task.find(required_module);
-                if (provider_it == module_to_task.end()) {
-                    // Module not found - this might be a system module or error
-                    // For now, we'll silently skip; proper error handling would
-                    // require context about whether this is expected
-                    continue;
-                }
-
-                const std::string& provider_task_id = provider_it->second;
-
-                // Add dependency: this task depends on the provider task
-                task.dependencies.insert(provider_task_id);
-
-                // Update reverse dependency
-                if (tasks_.count(provider_task_id)) {
-                    tasks_[provider_task_id].dependents.insert(task_id);
-                }
+        for (const auto& required_module : required_modules) {
+            // Skip standard library modules (not built locally)
+            if (required_module == "std" || required_module.starts_with("std.")) {
+                continue;
             }
-        }
 
-        // Find system header unit requirements
-        auto sys_hdr_it = task_header_imports_system.find(task_id);
-        if (sys_hdr_it != task_header_imports_system.end()) {
-            for (const auto& hdr : sys_hdr_it->second) {
-                std::string header_key = "<" + hdr + ">";
-                auto hu_task_it = header_unit_tasks.find(header_key);
-                if (hu_task_it != header_unit_tasks.end()) {
-                    task.dependencies.insert(hu_task_it->second);
-                    if (tasks_.count(hu_task_it->second)) {
-                        tasks_[hu_task_it->second].dependents.insert(task_id);
-                    }
-                }
+            auto provider_it = module_to_task.find(required_module);
+            if (provider_it == module_to_task.end()) {
+                // Module not found - this might be a system module or error
+                // For now, we'll silently skip; proper error handling would
+                // require context about whether this is expected
+                continue;
             }
-        }
 
-        // Find user header unit requirements
-        auto usr_hdr_it = task_header_imports_user.find(task_id);
-        if (usr_hdr_it != task_header_imports_user.end()) {
-            for (const auto& hdr : usr_hdr_it->second) {
-                std::string header_key = "\"" + hdr + "\"";
-                auto hu_task_it = header_unit_tasks.find(header_key);
-                if (hu_task_it != header_unit_tasks.end()) {
-                    task.dependencies.insert(hu_task_it->second);
-                    if (tasks_.count(hu_task_it->second)) {
-                        tasks_[hu_task_it->second].dependents.insert(task_id);
-                    }
-                }
+            const std::string& provider_task_id = provider_it->second;
+
+            // Add dependency: this task depends on the provider task
+            task.dependencies.insert(provider_task_id);
+
+            // Update reverse dependency
+            if (tasks_.count(provider_task_id)) {
+                tasks_[provider_task_id].dependents.insert(task_id);
             }
         }
     }
