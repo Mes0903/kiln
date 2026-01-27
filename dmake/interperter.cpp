@@ -619,11 +619,13 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
     user_functions_[block.name] = {block.parameters, block.body};
+    user_macros_.erase(block.name);
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
     user_macros_[block.name] = {block.parameters, block.body};
+    user_functions_.erase(block.name);
     return {};
 }
 
