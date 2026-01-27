@@ -22,6 +22,21 @@ public:
             cmd.push_back("-fdiagnostics-color=always");
         }
 
+        // C++20 modules support
+        if (ctx.is_module_source) {
+            cmd.push_back("-fmodules-ts");
+
+            // Module mapper file for resolving import declarations
+            if (!ctx.module_mapper_file.empty()) {
+                cmd.push_back("-fmodule-mapper=" + ctx.module_mapper_file);
+            }
+
+            // Explicit module file mappings
+            for (const auto& mf : ctx.module_files) {
+                cmd.push_back("-fmodule-file=" + mf);
+            }
+        }
+
         for (const auto& opt : ctx.options) cmd.push_back(opt);
         for (const auto& def : ctx.definitions) cmd.push_back("-D" + def);
 
@@ -84,6 +99,50 @@ public:
         cmd.push_back("rcs");
         cmd.push_back(output);
         for (const auto& obj : objs) cmd.push_back(obj);
+        return cmd;
+    }
+
+    // C++20 modules: generate scan command for extracting module dependencies
+    // Uses preprocessor-only mode to quickly extract import/export declarations
+    std::vector<std::string> get_module_scan_command(const ModuleScanContext& ctx) const override {
+        std::vector<std::string> cmd;
+        cmd.push_back(binary_);
+
+        // Set C++ standard (must be C++20 or later for modules)
+        if (!ctx.standard.empty()) {
+            cmd.push_back("-std=c++" + ctx.standard);
+        } else {
+            cmd.push_back("-std=c++20");  // Default to C++20 for modules
+        }
+
+        // Enable modules TS
+        cmd.push_back("-fmodules-ts");
+
+        // Preprocessor-only mode with directives
+        cmd.push_back("-E");
+        cmd.push_back("-fdirectives-only");
+
+        // Force C++ mode for module interface files
+        cmd.push_back("-x");
+        cmd.push_back("c++");
+
+        if (ctx.color_diagnostics) {
+            cmd.push_back("-fdiagnostics-color=always");
+        }
+
+        // Include directories
+        for (const auto& dir : ctx.includes) {
+            cmd.push_back("-I" + dir);
+        }
+
+        // Definitions
+        for (const auto& def : ctx.definitions) {
+            cmd.push_back("-D" + def);
+        }
+
+        // Source file
+        cmd.push_back(ctx.source);
+
         return cmd;
     }
 

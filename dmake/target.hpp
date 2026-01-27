@@ -72,11 +72,25 @@ public:
     const std::vector<std::string>& get_resolved_property(const std::string& name) const;
     const std::vector<std::string>& get_resolved_interface_property(const std::string& name) const;
 
+    // Get the module mapper file path for this target
+    std::string get_module_mapper_path() const;
+
 protected:
     // Helper methods for task generation
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
                                bool is_shared);
+
+    // C++20 modules task generation
+    // Returns true if any module sources were detected
+    bool generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain);
+
+    // Generate the collator task that depends on all scanner tasks
+    // The collator parses DDI files and injects module dependencies into compile tasks
+    void generate_module_collator_task(BuildGraph& graph, const std::vector<std::string>& scanner_task_ids);
+
+    // Check if target has any module sources
+    bool has_module_sources() const;
 
     std::string name_;
     std::string output_name_;
@@ -108,6 +122,10 @@ protected:
 
     // Resolved Interface Properties Cache (usage requirements propagated to dependents)
     std::map<std::string, std::vector<std::string>> resolved_interface_properties_;
+
+    // C++20 modules state
+    mutable bool modules_detected_ = false;
+    mutable bool has_modules_ = false;
 };
 
 class CustomTarget : public Target {

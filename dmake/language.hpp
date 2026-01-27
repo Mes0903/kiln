@@ -17,6 +17,7 @@ struct LanguageInfo {
     std::string_view name;
     bool is_compileable;
     bool is_header;
+    bool is_module_interface = false;  // True for .ixx, .cppm, etc.
 };
 
 class LanguageClassifier {
