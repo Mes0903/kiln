@@ -20,6 +20,26 @@ message(STATUS "Found pthread: ${PTHREAD_LIB}")
 find_file(STDIO_H stdio.h PATHS /usr/include REQUIRED)
 message(STATUS "Found stdio.h: ${STDIO_H}")
 
+# Test find_path - should return directory, not file
+find_path(STDIO_DIR stdio.h REQUIRED)
+message(STATUS "Found stdio.h directory: ${STDIO_DIR}")
+if(STDIO_DIR MATCHES "stdio.h")
+    message(FATAL_ERROR "find_path should return directory, not file path")
+endif()
+
+# Test find_path with PATH_SUFFIXES
+find_path(LINUX_DIR version.h PATH_SUFFIXES linux)
+if(LINUX_DIR)
+    message(STATUS "Found version.h directory: ${LINUX_DIR}")
+endif()
+
+# Test find_path returns directory containing the file
+find_path(STDLIB_DIR stdlib.h REQUIRED)
+if(NOT STDLIB_DIR MATCHES "/include$")
+    message(FATAL_ERROR "find_path should return include directory")
+endif()
+message(STATUS "Find path correctly returns directory: ${STDLIB_DIR}")
+
 # Test find_program with PATHS
 find_program(BASH_EXPLICIT bash PATHS /usr/bin /bin REQUIRED)
 message(STATUS "Found bash with explicit path: ${BASH_EXPLICIT}")

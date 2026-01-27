@@ -89,6 +89,18 @@ std::vector<std::filesystem::path> build_search_paths(
     if (!prefix_path.empty()) {
         auto paths = split_env_path(prefix_path.c_str());
         for (const auto& prefix : paths) {
+            // For find_path and find_file, also add <prefix>/include
+            // For find_library, also add <prefix>/lib
+            // For find_program, also add <prefix>/bin
+            if (command_name == "find_path" || command_name == "find_file") {
+                search_paths.push_back(prefix / "include");
+            } else if (command_name == "find_library") {
+                search_paths.push_back(prefix / "lib");
+                search_paths.push_back(prefix / "lib64");
+            } else if (command_name == "find_program") {
+                search_paths.push_back(prefix / "bin");
+            }
+            // Always add the prefix itself
             search_paths.push_back(prefix);
         }
     }
@@ -329,13 +341,37 @@ std::vector<std::filesystem::path> get_file_default_paths(Interpreter& interp) {
     return paths;
 }
 
+// Get default search paths for find_path (includes CMAKE_INCLUDE_PATH)
+std::vector<std::filesystem::path> get_path_default_paths(Interpreter& interp) {
+    std::vector<std::filesystem::path> paths;
+
+    // CMAKE_INCLUDE_PATH variable
+    std::string include_path = interp.get_variable("CMAKE_INCLUDE_PATH");
+    if (!include_path.empty()) {
+        auto include_dirs = split_env_path(include_path.c_str());
+        paths.insert(paths.end(), include_dirs.begin(), include_dirs.end());
+    }
+
+    // INCLUDE environment variable
+    const char* include_env = std::getenv("INCLUDE");
+    auto include_env_dirs = split_env_path(include_env);
+    paths.insert(paths.end(), include_env_dirs.begin(), include_env_dirs.end());
+
+    // Standard include paths
+    paths.emplace_back("/usr/local/include");
+    paths.emplace_back("/usr/include");
+
+    return paths;
+}
+
 // Generic registration helper for all find commands
 void register_find_command(
     Interpreter& interp,
     const std::string& cmd_name,
     std::vector<std::filesystem::path> (*get_defaults)(Interpreter&),
     std::vector<std::string> (*get_variants)(Interpreter&, const std::string&),
-    bool (*validator)(const std::filesystem::path&)
+    bool (*validator)(const std::filesystem::path&),
+    bool return_directory = false  // find_path returns directory, not file
 ) {
     interp.add_builtin(cmd_name, [=](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser(cmd_name);
@@ -389,7 +425,14 @@ void register_find_command(
 
         if (result) {
             // Found it
-            std::string result_str = result->string();
+            std::string result_str;
+            if (return_directory) {
+                // find_path returns directory containing the file
+                result_str = result->parent_path().string();
+            } else {
+                // find_file, find_program, find_library return full path
+                result_str = result->string();
+            }
             interp.set_variable(opts.var_name, result_str);
 
             if (!opts.no_cache) {
@@ -431,6 +474,10 @@ void register_find_commands_builtins(Interpreter& interp) {
 
     register_find_command(interp, "find_file",
         get_file_default_paths, file_variants, validate_file);
+
+    // find_path returns the directory containing the file, not the file itself
+    register_find_command(interp, "find_path",
+        get_path_default_paths, file_variants, validate_file, true);
 }
 
 }  // namespace dmake

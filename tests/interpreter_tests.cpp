@@ -2208,6 +2208,83 @@ TEST_CASE("find_program with NAMES_PER_DIR", "[interpreter][find]") {
     REQUIRE(output.find("Found shell:") != std::string::npos);
 }
 
+TEST_CASE("find_path returns directory containing file", "[interpreter][find]") {
+    // Test that find_path returns directory, not file
+    auto output = run_script(R"(
+        find_path(STDIO_DIR stdio.h)
+        if(STDIO_DIR)
+            message("Found stdio.h directory: ${STDIO_DIR}")
+            # Verify it's a directory path, not a file path
+            if(STDIO_DIR MATCHES "stdio.h")
+                message("FAILED: find_path returned file path instead of directory")
+            else()
+                message("SUCCESS: find_path returned directory")
+            endif()
+        else()
+            message("FAILED: stdio.h not found")
+        endif()
+    )");
+    REQUIRE(output.find("Found stdio.h directory:") != std::string::npos);
+    REQUIRE(output.find("SUCCESS: find_path returned directory") != std::string::npos);
+    REQUIRE(output.find("FAILED") == std::string::npos);
+}
+
+TEST_CASE("find_path with PATH_SUFFIXES", "[interpreter][find]") {
+    // Create a temporary directory structure for testing
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "dmake_test_find_path";
+    std::filesystem::create_directories(temp_dir / "include" / "mylib");
+
+    // Create a test header file
+    std::ofstream test_file(temp_dir / "include" / "mylib" / "header.h");
+    test_file << "// test header";
+    test_file.close();
+
+    std::string script = R"(
+        find_path(HEADER_DIR header.h PATHS ")" + temp_dir.string() + R"(" PATH_SUFFIXES include/mylib include)
+        if(HEADER_DIR)
+            message("Found header directory: ${HEADER_DIR}")
+        else()
+            message("FAILED: header not found")
+        endif()
+    )";
+
+    auto output = run_script(script);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+
+    REQUIRE(output.find("Found header directory:") != std::string::npos);
+    REQUIRE(output.find("/include/mylib") != std::string::npos);
+}
+
+TEST_CASE("find_path vs find_file behavior", "[interpreter][find]") {
+    // Verify that find_path and find_file return different results
+    auto output = run_script(R"(
+        find_file(STDIO_FILE stdio.h)
+        find_path(STDIO_PATH stdio.h)
+
+        message("find_file result: ${STDIO_FILE}")
+        message("find_path result: ${STDIO_PATH}")
+
+        # find_file should include the filename
+        if(STDIO_FILE MATCHES "stdio.h$")
+            message("find_file correctly includes filename")
+        else()
+            message("FAILED: find_file should include filename")
+        endif()
+
+        # find_path should NOT include the filename
+        if(STDIO_PATH MATCHES "stdio.h")
+            message("FAILED: find_path should not include filename")
+        else()
+            message("find_path correctly returns only directory")
+        endif()
+    )");
+
+    REQUIRE(output.find("find_file correctly includes filename") != std::string::npos);
+    REQUIRE(output.find("find_path correctly returns only directory") != std::string::npos);
+}
+
 TEST_CASE("return", "[interpreter][return]") {
     auto output = run_script(R"(
         return()
