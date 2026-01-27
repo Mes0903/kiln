@@ -112,6 +112,23 @@ void register_list_builtins(Interpreter& interp) {
             } catch (...) {
                 interp.set_fatal_error("list(SUBLIST) invalid indices");
             }
+        } else if (operation == "FIND") {
+            CommandParser parser("list", "FIND");
+            std::string list_var, value, out_var;
+            parser.add_positional(list_var, "list variable");
+            parser.add_positional(value, "value to find");
+            parser.add_positional(out_var, "output variable");
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
+            long found_index = -1;
+            for (size_t i = 0; i < list.size(); ++i) {
+                if (list[i] == value) {
+                    found_index = static_cast<long>(i);
+                    break;
+                }
+            }
+            interp.set_variable(out_var, std::to_string(found_index));
         } else {
             interp.set_fatal_error("Unknown list operation: " + operation);
         }

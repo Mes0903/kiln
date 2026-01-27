@@ -770,14 +770,18 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
-    user_functions_[block.name] = {block.parameters, block.body};
+    std::string lower_name = block.name;
+    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+    user_functions_[lower_name] = {block.parameters, block.body};
     user_macros_.erase(block.name);
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
-    user_macros_[block.name] = {block.parameters, block.body};
-    user_functions_.erase(block.name);
+    std::string lower_name = block.name;
+    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+    user_macros_[lower_name] = {block.parameters, block.body};
+    user_functions_.erase(lower_name);
     return {};
 }
 
