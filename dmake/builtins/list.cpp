@@ -129,6 +129,28 @@ void register_list_builtins(Interpreter& interp) {
                 }
             }
             interp.set_variable(out_var, std::to_string(found_index));
+        } else if (operation == "REMOVE_ITEM") {
+            CommandParser parser("list", "FIND");
+            std::string list_var;
+            std::vector<std::string> items;
+            parser.add_positional(list_var, "list variable");
+            parser.add_default_list(items);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+
+            CMakeList list(interp.get_variable(list_var));
+            std::set<std::string> items_set(items.begin(), items.end());
+            std::vector<size_t> remove_idxs;
+            for(size_t i=0;i<list.size();i++) {
+                const auto& item = list[i];
+                if(items_set.contains(item)) {
+                    remove_idxs.push_back(i);
+                }
+            }
+            for(auto it = remove_idxs.rbegin(); it != remove_idxs.rend(); it++) {
+                list.erase(*it);
+            }
+            interp.set_variable(list_var, list.to_string());
         } else {
             interp.set_fatal_error("Unknown list operation: " + operation);
         }

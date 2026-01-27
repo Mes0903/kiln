@@ -31,6 +31,7 @@ public:
     void append(const std::string& item);
     void append(const CMakeList& other);
     void push_back(const std::string& item) { append(item); }
+    void erase(size_t idx) { items_.erase(items_.begin()+idx);  }
 
     void reverse();
     void sort();

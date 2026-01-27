@@ -549,6 +549,15 @@ TEST_CASE("list(SUBLIST) extracts sublist", "[interpreter][list]") {
     REQUIRE(output == "b;c;d\n");
 }
 
+TEST_CASE("list(REMOVE_ITEM) removes", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e")
+        list(REMOVE_ITEM MY_LIST "a" "d")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "b;c;e\n");
+}
+
 TEST_CASE("CMakeList handles empty lists", "[interpreter][list]") {
     auto output = run_script(R"(
         set(EMPTY_LIST "")
