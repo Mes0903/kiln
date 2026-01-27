@@ -1776,3 +1776,15 @@ TEST_CASE("string() TIMESTAMP operation", "[interpreter][string]") {
     // Should be a 4-digit year
     REQUIRE(output.length() == 5); // 4 digits + newline
 }
+
+TEST_CASE("var and func colision", "[interperter][edgecase]") {
+    auto output = run_script(R"(
+        function (foo)
+        message("Hello World!")
+        endfunction()
+        set(foo 1)
+        foo()
+        message("${foo}")
+    )");
+    CHECK(output == "Hello World!\n1\n");
+}
