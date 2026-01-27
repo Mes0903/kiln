@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../utils.hpp"
 #include <algorithm>
 #include <cctype>
 #include <regex>
@@ -793,9 +794,29 @@ void register_string_builtins(Interpreter& interp) {
             interp.set_variable(out_var, std::string(buffer));
 
         } else if (operation == "UUID") {
-            // UUID requires hashing (MD5/SHA1) which user wants to skip
             interp.set_fatal_error("string(UUID) is not implemented (requires hashing support)");
             return;
+
+        } else if (operation == "SHA256") {
+            CommandParser parser("string", "SHA256");
+            std::string input, out_var;
+
+            parser.add_positional(input, "input string");
+            parser.add_positional(out_var, "output variable");
+
+            PARSE_OR_RETURN(parser, interp, sub_args);
+            interp.set_variable(out_var, sha256(input).to_string());
+
+        } else if (operation == "BLAKE2B") {
+            CommandParser parser("string", "BLAKE2B");
+            std::string input, out_var, key;
+
+            parser.add_positional(input, "input string");
+            parser.add_positional(out_var, "output variable");
+            parser.add_positional(key, "key", false);
+
+            PARSE_OR_RETURN(parser, interp, sub_args);
+            interp.set_variable(out_var, blake2b(input, key).to_string());
 
         } else {
             interp.set_fatal_error("string() unknown operation: " + operation);

@@ -1,5 +1,6 @@
 #include "utils.hpp"
 #include "inner/blake2b.h"
+#include "inner/sha256.h"
 #ifdef __linux__
 #include <linux/limits.h>
 #endif
@@ -17,6 +18,16 @@ dmake::Hash256 dmake::blake2b(const void *data, size_t len, const void* key, siz
     static_assert(sizeof(hash) == 32, "Hash256 must be 32 bytes");
     static_assert(std::is_standard_layout<Hash256>::value, "Hash256 must be a standard layout type");
     dmake_blake2b(&hash, sizeof(hash), data, len, key, keylen);
+    return hash;
+}
+
+dmake::Hash256 dmake::sha256(const void* data, size_t len)
+{
+    Hash256 hash;
+    SHA256_CTX ctx;
+    dmake_sha256_init(&ctx);
+    dmake_sha256_update(&ctx, (const uint8_t*)data, len);
+    dmake_sha256_final(&ctx, (uint8_t*)&hash);
     return hash;
 }
 
@@ -119,7 +130,7 @@ std::string dmake::get_executable_path() {
     }
 #endif
     // Fallback or other platforms
-    return "dmake"; 
+    return "dmake";
 }
 
 dmake::PipelineResult dmake::execute_pipeline(const std::vector<std::vector<std::string>>& commands, const ProcessOptions& options) {
@@ -210,7 +221,7 @@ dmake::PipelineResult dmake::execute_pipeline(const std::vector<std::vector<std:
     if (options.error_variable) close(stderr_pipe[1]);
 
     PipelineResult result;
-    
+
     // Read stdout/stderr if needed
     auto read_all = [](int fd) {
         std::string out;

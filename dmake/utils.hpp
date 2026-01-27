@@ -25,6 +25,15 @@ inline Hash256 blake2b(std::string_view str, std::string_view key="")
     return blake2b(str.data(), str.size(), key.data(), key.size());
 }
 
+/**
+ * @brief Compute the SHA256 hash of the given data
+ */
+Hash256 sha256(const void* data, size_t len);
+inline Hash256 sha256(std::string_view str)
+{
+    return sha256(str.data(), str.size());
+}
+
 struct CommandResult {
     int exit_code;
     std::string output;
