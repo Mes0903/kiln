@@ -312,6 +312,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_find_commands_builtins(*this);
         register_math_builtins(*this);
         register_string_builtins(*this);
+        register_process_builtins(*this);
 
         add_builtin("enable_testing", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (!args.empty()) {

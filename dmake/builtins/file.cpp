@@ -6,6 +6,7 @@
 #include <iostream>
 #include <algorithm>
 #include <regex>
+#include <string_view>
 
 namespace dmake {
 
@@ -20,7 +21,7 @@ bool matches_glob(const std::string& text, const std::string& pattern) {
     for (char c : pattern) {
         if (c == '*') rx_str += ".*";
         else if (c == '?') rx_str += ".";
-        else if (std::string(".+^$|()[]{}").find(c) != std::string::npos) {
+        else if (std::string_view(".+^$|()[]{}").find(c) != std::string::npos) {
             rx_str += "\\";
             rx_str += c;
         }

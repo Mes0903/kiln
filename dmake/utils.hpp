@@ -58,4 +58,28 @@ CommandResult run_command(const std::vector<std::string>& command, const std::st
  */
 std::string get_executable_path();
 
+struct ProcessOptions {
+    std::string working_dir;
+    std::string input_file;
+    std::string output_file;
+    std::string error_file;
+    bool output_quiet = false;
+    bool error_quiet = false;
+    double timeout = 0.0; // Seconds, 0 means no timeout
+    // If not empty, stdout/stderr will be captured here
+    std::string* output_variable = nullptr;
+    std::string* error_variable = nullptr;
+};
+
+struct PipelineResult {
+    std::vector<int> exit_codes;
+    std::string captured_stdout;
+    std::string captured_stderr;
+};
+
+/**
+ * @brief Execute a pipeline of commands.
+ */
+PipelineResult execute_pipeline(const std::vector<std::vector<std::string>>& commands, const ProcessOptions& options = {});
+
 }

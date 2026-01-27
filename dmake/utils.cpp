@@ -4,8 +4,12 @@
 #include <linux/limits.h>
 #endif
 #include <type_traits>
-#include <vector>
-#include <cctype>
+#include <iostream>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <signal.h>
+#include <chrono>
 
 dmake::Hash256 dmake::blake2b(const void *data, size_t len, const void* key, size_t keylen)
 {
@@ -116,4 +120,165 @@ std::string dmake::get_executable_path() {
 #endif
     // Fallback or other platforms
     return "dmake"; 
+}
+
+dmake::PipelineResult dmake::execute_pipeline(const std::vector<std::vector<std::string>>& commands, const ProcessOptions& options) {
+    if (commands.empty()) return {};
+
+    size_t num_commands = commands.size();
+    std::vector<int> pids(num_commands);
+    std::vector<std::vector<int>> pipes(num_commands - 1, std::vector<int>(2));
+
+    for (size_t i = 0; i < num_commands - 1; ++i) {
+        if (pipe(pipes[i].data()) == -1) {
+            return {{1}, "", "Failed to create pipe"};
+        }
+    }
+
+    int stdout_pipe[2];
+    int stderr_pipe[2];
+    if (options.output_variable) pipe(stdout_pipe);
+    if (options.error_variable) pipe(stderr_pipe);
+
+    for (size_t i = 0; i < num_commands; ++i) {
+        pids[i] = fork();
+        if (pids[i] == 0) { // Child
+            if (!options.working_dir.empty()) {
+                if (chdir(options.working_dir.c_str()) != 0) {
+                    perror("chdir");
+                    exit(1);
+                }
+            }
+
+            // Stdin
+            if (i == 0) {
+                if (!options.input_file.empty()) {
+                    int fd = open(options.input_file.c_str(), O_RDONLY);
+                    if (fd != -1) { dup2(fd, STDIN_FILENO); close(fd); }
+                }
+            } else {
+                dup2(pipes[i - 1][0], STDIN_FILENO);
+            }
+
+            // Stdout
+            if (i == num_commands - 1) {
+                if (options.output_variable) {
+                    dup2(stdout_pipe[1], STDOUT_FILENO);
+                } else if (!options.output_file.empty()) {
+                    int fd = open(options.output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    if (fd != -1) { dup2(fd, STDOUT_FILENO); close(fd); }
+                } else if (options.output_quiet) {
+                    int fd = open("/dev/null", O_WRONLY);
+                    dup2(fd, STDOUT_FILENO);
+                    close(fd);
+                }
+            } else {
+                dup2(pipes[i][1], STDOUT_FILENO);
+            }
+
+            // Stderr
+            if (options.error_variable) {
+                dup2(stderr_pipe[1], STDERR_FILENO);
+            } else if (!options.error_file.empty()) {
+                int fd = open(options.error_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd != -1) { dup2(fd, STDERR_FILENO); close(fd); }
+            } else if (options.error_quiet) {
+                int fd = open("/dev/null", O_WRONLY);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+
+            // Close all pipes in child
+            for (auto& p : pipes) { close(p[0]); close(p[1]); }
+            if (options.output_variable) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
+            if (options.error_variable) { close(stderr_pipe[0]); close(stderr_pipe[1]); }
+
+            // Exec
+            std::vector<char*> argv;
+            for (const auto& arg : commands[i]) argv.push_back(const_cast<char*>(arg.c_str()));
+            argv.push_back(nullptr);
+
+            execvp(argv[0], argv.data());
+            perror("execvp");
+            exit(1);
+        }
+    }
+
+    // Parent
+    for (auto& p : pipes) { close(p[0]); close(p[1]); }
+    if (options.output_variable) close(stdout_pipe[1]);
+    if (options.error_variable) close(stderr_pipe[1]);
+
+    PipelineResult result;
+    
+    // Read stdout/stderr if needed
+    auto read_all = [](int fd) {
+        std::string out;
+        char buffer[4096];
+        ssize_t bytes;
+        while ((bytes = read(fd, buffer, sizeof(buffer))) > 0) {
+            out.append(buffer, bytes);
+        }
+        return out;
+    };
+
+    if (options.output_variable) {
+        result.captured_stdout = read_all(stdout_pipe[0]);
+        close(stdout_pipe[0]);
+    }
+    if (options.error_variable) {
+        result.captured_stderr = read_all(stderr_pipe[0]);
+        close(stderr_pipe[0]);
+    }
+
+    // Wait for all processes with optional timeout
+    auto start_time = std::chrono::steady_clock::now();
+    std::vector<bool> finished(num_commands, false);
+    size_t finished_count = 0;
+    result.exit_codes.resize(num_commands, -1);
+
+    while (finished_count < num_commands) {
+        bool any_progress = false;
+        for (size_t i = 0; i < num_commands; ++i) {
+            if (!finished[i]) {
+                int status;
+                pid_t res = waitpid(pids[i], &status, WNOHANG);
+                if (res > 0) {
+                    if (WIFEXITED(status)) result.exit_codes[i] = WEXITSTATUS(status);
+                    else result.exit_codes[i] = -1;
+                    finished[i] = true;
+                    finished_count++;
+                    any_progress = true;
+                } else if (res == -1) {
+                    finished[i] = true;
+                    finished_count++;
+                }
+            }
+        }
+
+        if (finished_count == num_commands) break;
+
+        if (options.timeout > 0.0) {
+            auto now = std::chrono::steady_clock::now();
+            std::chrono::duration<double> elapsed = now - start_time;
+            if (elapsed.count() >= options.timeout) {
+                // Timeout! Kill remaining
+                for (size_t i = 0; i < num_commands; ++i) {
+                    if (!finished[i]) {
+                        kill(pids[i], SIGKILL);
+                        int status;
+                        waitpid(pids[i], &status, 0);
+                        result.exit_codes[i] = -1; // Or some other indicator
+                    }
+                }
+                break;
+            }
+        }
+
+        if (!any_progress) {
+            usleep(10000); // 10ms sleep to avoid busy wait
+        }
+    }
+
+    return result;
 }

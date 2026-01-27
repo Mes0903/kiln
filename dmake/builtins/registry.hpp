@@ -14,5 +14,6 @@ void register_find_package_builtins(Interpreter& interp);
 void register_find_commands_builtins(Interpreter& interp);
 void register_math_builtins(Interpreter& interp);
 void register_string_builtins(Interpreter& interp);
+void register_process_builtins(Interpreter& interp);
 
 } // namespace dmake
