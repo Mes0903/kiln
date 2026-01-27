@@ -255,6 +255,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         vars["CMAKE_STATIC_LIBRARY_SUFFIX"] = ".a";
 
         vars["CMAKE_COMMAND"] = get_executable_path();
+        vars["CMAKE_ROOT"] = "/usr/share/cmake";
 
         // Initialize default toolchain
         toolchain_.set_compiler(Language::CXX, std::make_unique<GnuCompiler>("g++", Language::CXX));
