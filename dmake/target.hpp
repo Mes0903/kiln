@@ -80,6 +80,10 @@ public:
     // The core task generation logic
     virtual void generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
 
+    // Resolves transitive properties (includes, definitions, options, libraries).
+    // Must be called before generating tasks. Safe to call multiple times (cached).
+    void resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets);
+
 protected:
     // Helper methods for task generation
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
@@ -107,6 +111,25 @@ protected:
     std::map<PropertyVisibility, std::vector<std::string>> compile_definitions_;
     std::map<PropertyVisibility, std::vector<std::string>> compile_options_;
     std::map<PropertyVisibility, std::vector<std::string>> precompiled_headers_;
+
+    // Resolution State
+    bool resolved_ = false;
+    bool visiting_ = false;
+
+    // Resolved Properties (effective build requirements)
+    std::vector<std::string> resolved_includes_;
+    std::vector<std::string> resolved_compile_definitions_;
+    std::vector<std::string> resolved_compile_options_;
+    std::vector<std::string> resolved_link_directories_;
+    // Flattened list of libraries to link against (full paths or -l names)
+    std::vector<std::string> resolved_link_libraries_;
+
+    // Resolved Interface Properties (usage requirements propagated to dependents)
+    std::vector<std::string> resolved_interface_includes_;
+    std::vector<std::string> resolved_interface_compile_definitions_;
+    std::vector<std::string> resolved_interface_compile_options_;
+    std::vector<std::string> resolved_interface_link_directories_;
+    std::vector<std::string> resolved_interface_link_libraries_;
 };
 
 class CustomTarget : public Target {
