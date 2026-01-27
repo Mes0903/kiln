@@ -537,11 +537,11 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     // Helper to check if a path exists, trying with and without .cmake extension
     auto try_path = [](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
-        if (std::filesystem::exists(p)) return p;
+        if (std::filesystem::exists(p) && !std::filesystem::is_directory(p)) return p;
         if (!p.has_extension()) {
             std::filesystem::path with_ext = p;
             with_ext.replace_extension(".cmake");
-            if (std::filesystem::exists(with_ext)) return with_ext;
+            if (std::filesystem::exists(with_ext) && !std::filesystem::is_directory(with_ext)) return with_ext;
         }
         return std::nullopt;
     };
@@ -592,6 +592,12 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     }
 
     path = *found_path;
+
+    // Check if it's a directory (reject directories, but accept symlinks to files)
+    if (std::filesystem::is_directory(path)) {
+        if (optional) return {};
+        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() path is a directory: " + path.string(), {}});
+    }
 
     std::string abs_path = std::filesystem::absolute(path).string();
 

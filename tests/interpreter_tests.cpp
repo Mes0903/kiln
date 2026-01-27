@@ -2231,3 +2231,26 @@ TEST_CASE("cmake_parse_arguments error handling", "[interpreter]") {
         test()
     )"), Catch::Matchers::ContainsSubstring("cannot be negative"));
 }
+
+TEST_CASE("Parser handles parentheses in quoted strings", "[parser]") {
+    // Test closing paren in quoted string - use custom delimiter to avoid escaping issues
+    auto output = run_script(R"RAW(
+        string(APPEND var "\n)")
+        message("${var}")
+    )RAW");
+    REQUIRE(output == "\n)\n");
+
+    // Test opening paren in quoted string
+    output = run_script(R"RAW(
+        set(var "foo (bar")
+        message("${var}")
+    )RAW");
+    REQUIRE(output == "foo (bar\n");
+
+    // Test both parens in quoted string
+    output = run_script(R"RAW(
+        set(var "foo (bar) baz")
+        message("${var}")
+    )RAW");
+    REQUIRE(output == "foo (bar) baz\n");
+}

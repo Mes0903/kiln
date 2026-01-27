@@ -576,7 +576,20 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
     while (pos_ < content_.length()) {
         char current = content_[pos_];
         if (escaped) {
-            current_literal += current;
+            // Interpret CMake escape sequences
+            switch (current) {
+                case 'n':  current_literal += '\n'; break;
+                case 't':  current_literal += '\t'; break;
+                case 'r':  current_literal += '\r'; break;
+                case '\\': current_literal += '\\'; break;
+                case '"':  current_literal += '"'; break;
+                case ')':  current_literal += ')'; break;
+                case '(':  current_literal += '('; break;
+                case '#':  current_literal += '#'; break;
+                case ' ':  current_literal += ' '; break;
+                case ';':  current_literal += ';'; break;
+                default:   current_literal += current; break; // Unknown escape, keep as-is
+            }
             escaped = false;
             pos_++;
             col_++;
