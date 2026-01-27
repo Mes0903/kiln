@@ -45,8 +45,9 @@ struct IfBlock;
 struct FunctionBlock;
 struct MacroBlock;
 struct ForeachBlock;
+struct WhileBlock;
 
-using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock, ForeachBlock>;
+using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock, ForeachBlock, WhileBlock>;
 
 struct ElseIfBlock {
     std::vector<Argument> condition;
@@ -106,6 +107,15 @@ struct ForeachBlock {
     size_t length = 0;
 };
 
+struct WhileBlock {
+    std::vector<Argument> condition;
+    std::vector<AstNode> body;
+    size_t row = 0;
+    size_t col = 0;
+    size_t offset = 0;
+    size_t length = 0;
+};
+
 struct CommandInvocation {
     std::string identifier;
     std::vector<Argument> arguments;
@@ -133,6 +143,7 @@ private:
     std::expected<FunctionBlock, ParseError> parse_function_block(const CommandInvocation& function_command);
     std::expected<MacroBlock, ParseError> parse_macro_block(const CommandInvocation& macro_command);
     std::expected<ForeachBlock, ParseError> parse_foreach_block(const CommandInvocation& foreach_command);
+    std::expected<WhileBlock, ParseError> parse_while_block(const CommandInvocation& while_command);
     void consume_whitespace();
     std::expected<CommandInvocation, ParseError> parse_command_invocation();
     std::expected<Argument, ParseError> parse_argument();

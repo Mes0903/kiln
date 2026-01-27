@@ -2732,3 +2732,90 @@ TEST_CASE("Macro using argument as variable name", "[interpreter][bugfix]") {
     )");
     REQUIRE(output == "value\n");
 }
+
+// While loop tests
+
+TEST_CASE("while loop basic iteration", "[interpreter][while]") {
+    auto output = run_script(R"(
+        set(COUNT 0)
+        while(COUNT LESS 3)
+            message("${COUNT}")
+            math(EXPR COUNT "${COUNT} + 1")
+        endwhile()
+    )");
+    REQUIRE(output == "0\n1\n2\n");
+}
+
+TEST_CASE("while loop with break", "[interpreter][while]") {
+    auto output = run_script(R"(
+        set(I 0)
+        while(I LESS 10)
+            if(I EQUAL 3)
+                break()
+            endif()
+            message("${I}")
+            math(EXPR I "${I} + 1")
+        endwhile()
+        message("done")
+    )");
+    REQUIRE(output == "0\n1\n2\ndone\n");
+}
+
+TEST_CASE("while loop with continue", "[interpreter][while]") {
+    auto output = run_script(R"(
+        set(I 0)
+        while(I LESS 5)
+            math(EXPR I "${I} + 1")
+            if(I EQUAL 3)
+                continue()
+            endif()
+            message("${I}")
+        endwhile()
+    )");
+    REQUIRE(output == "1\n2\n4\n5\n");
+}
+
+TEST_CASE("while loop false condition", "[interpreter][while]") {
+    auto output = run_script(R"(
+        set(VAR "OFF")
+        while(VAR)
+            message("should not print")
+        endwhile()
+        message("done")
+    )");
+    REQUIRE(output == "done\n");
+}
+
+TEST_CASE("nested while loops", "[interpreter][while]") {
+    auto output = run_script(R"(
+        set(I 0)
+        while(I LESS 2)
+            set(J 0)
+            while(J LESS 2)
+                message("${I},${J}")
+                math(EXPR J "${J} + 1")
+            endwhile()
+            math(EXPR I "${I} + 1")
+        endwhile()
+    )");
+    REQUIRE(output == "0,0\n0,1\n1,0\n1,1\n");
+}
+
+TEST_CASE("while loop with return", "[interpreter][while]") {
+    auto output = run_script(R"(
+        function(test_while)
+            set(I 0)
+            while(I LESS 10)
+                if(I EQUAL 3)
+                    return()
+                endif()
+                message("${I}")
+                math(EXPR I "${I} + 1")
+            endwhile()
+            message("should not print")
+        endfunction()
+        test_while()
+        message("done")
+    )");
+    REQUIRE(output == "0\n1\n2\ndone\n");
+}

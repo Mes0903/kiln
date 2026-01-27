@@ -88,6 +88,12 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
                 return std::unexpected(foreach_block_or_error.error());
             }
             ast.emplace_back(std::move(foreach_block_or_error.value()));
+        } else if (identifier_lower == "while") {
+            auto while_block_or_error = parse_while_block(command_or_error.value());
+            if(!while_block_or_error) {
+                return std::unexpected(while_block_or_error.error());
+            }
+            ast.emplace_back(std::move(while_block_or_error.value()));
         } else {
             ast.emplace_back(std::move(command_or_error.value()));
         }
@@ -392,6 +398,37 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
 
     foreach_block.length = pos_ - foreach_block.offset;
     return foreach_block;
+}
+
+std::expected<WhileBlock, ParseError> Parser::parse_while_block(const CommandInvocation& while_command) {
+    WhileBlock while_block;
+    while_block.row = while_command.row;
+    while_block.col = while_command.col;
+    while_block.offset = while_command.offset;
+    while_block.condition = while_command.arguments;
+
+    // Parse the body
+    auto body_or_error = parse_block({"endwhile"});
+    if (!body_or_error) {
+        return std::unexpected(body_or_error.error());
+    }
+    while_block.body = std::move(body_or_error.value());
+
+    // Consume endwhile
+    auto endwhile_command_or_error = parse_command_invocation();
+    if (!endwhile_command_or_error) {
+        return std::unexpected(endwhile_command_or_error.error());
+    }
+
+    std::string identifier_lower = endwhile_command_or_error.value().identifier;
+    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (identifier_lower != "endwhile") {
+        return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endwhile'"});
+    }
+
+    while_block.length = pos_ - while_block.offset;
+    return while_block;
 }
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse() {

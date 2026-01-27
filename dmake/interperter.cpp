@@ -484,6 +484,7 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
         else if (std::holds_alternative<FunctionBlock>(node)) res = execute_function_block(std::get<FunctionBlock>(node));
         else if (std::holds_alternative<MacroBlock>(node)) res = execute_macro_block(std::get<MacroBlock>(node));
         else if (std::holds_alternative<ForeachBlock>(node)) res = execute_foreach_block(std::get<ForeachBlock>(node));
+        else if (std::holds_alternative<WhileBlock>(node)) res = execute_while_block(std::get<WhileBlock>(node));
 
         if (!res) return res;
         if (loop_control_ != LoopControl::NONE) return {};
@@ -949,6 +950,44 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     }
     loop_depth_--;
     safe_pop_trace_stack("foreach");
+    return {};
+}
+
+std::expected<void, InterpreterError> Interpreter::execute_while_block(const WhileBlock& block) {
+    Interpreter* root = get_root();
+    root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "while"});
+
+    loop_depth_++;
+
+    // Evaluate condition and loop
+    while (true) {
+        auto cond_result = evaluate_condition(block.condition, block.row, block.col, block.offset, block.length);
+        if (!cond_result) {
+            loop_depth_--;
+            safe_pop_trace_stack("while condition error");
+            return std::unexpected(cond_result.error());
+        }
+
+        // Break if condition is false
+        if (!cond_result.value()) {
+            break;
+        }
+
+        // Execute body
+        auto res = interpret(block.body);
+        if (!res) {
+            loop_depth_--;
+            safe_pop_trace_stack("while body error");
+            return res;
+        }
+
+        if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+        if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+        if (return_requested_) break;  // return() exits the loop and propagates to caller
+    }
+
+    loop_depth_--;
+    safe_pop_trace_stack("while");
     return {};
 }
 
