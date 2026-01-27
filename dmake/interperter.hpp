@@ -61,11 +61,13 @@ struct CallFrame {
 struct UserFunction {
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
+    std::string definition_file;
 };
 
 struct UserMacro {
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
+    std::string definition_file;
 };
 
 class Interpreter {

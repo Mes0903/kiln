@@ -772,7 +772,7 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
     std::string lower_name = block.name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-    user_functions_[lower_name] = {block.parameters, block.body};
+    user_functions_[lower_name] = {block.parameters, block.body, current_file_};
     user_macros_.erase(block.name);
     return {};
 }
@@ -780,7 +780,7 @@ std::expected<void, InterpreterError> Interpreter::execute_function_block(const 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
     std::string lower_name = block.name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-    user_macros_[lower_name] = {block.parameters, block.body};
+    user_macros_[lower_name] = {block.parameters, block.body, current_file_};
     user_functions_.erase(lower_name);
     return {};
 }
@@ -857,9 +857,11 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
     bool saved_return = return_requested_;
+    std::string saved_file = current_file_;
     loop_depth_ = 0;
     loop_control_ = LoopControl::NONE;
     return_requested_ = false;
+    current_file_ = func.definition_file;
 
     call_stack_.push_front(frame);
     auto res = interpret(func.body);
@@ -877,6 +879,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
     return_requested_ = saved_return;
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
+    current_file_ = saved_file;
     return res;
 }
 
@@ -894,7 +897,10 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserM
     for (size_t i = 0; i < all.size(); ++i) set_variable("ARGV" + std::to_string(i), all[i]);
     for (size_t i = 0; i < macro.parameters.size() && i < all.size(); ++i) set_variable(macro.parameters[i], all[i]);
 
+    std::string saved_file = current_file_;
+    current_file_ = macro.definition_file;
     auto res = interpret(macro.body);
+    current_file_ = saved_file;
     if (!res) set_fatal_error(res.error());
 
     for (const auto& [k, v] : saved) set_variable(k, v);
