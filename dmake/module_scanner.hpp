@@ -14,6 +14,8 @@ struct ModuleDependencyInfo {
     std::string source;                      // Source file path
     std::string provides;                    // Module name exported (empty if none)
     std::vector<std::string> imports;        // Module names imported
+    std::vector<std::string> header_imports_system;  // System headers imported (e.g., <vector>)
+    std::vector<std::string> header_imports_user;    // User headers imported (e.g., "myheader.h")
     bool is_module_partition = false;        // True if this is a module partition
     std::string partition_name;              // Partition name (if is_module_partition)
     std::filesystem::file_time_type timestamp;  // Source file timestamp at scan time
@@ -49,5 +51,8 @@ std::string get_bmi_path(const std::string& binary_dir, const std::string& modul
 
 // Get the DDI file path for a given source file
 std::string get_ddi_path(const std::string& binary_dir, const std::string& source_path);
+
+// Get the BMI path for a system header unit (e.g., <vector>)
+std::string get_header_unit_bmi_path(const std::string& binary_dir, const std::string& header, bool is_system);
 
 } // namespace dmake

@@ -32,6 +32,16 @@ struct ModuleScanContext {
     bool color_diagnostics = false;
 };
 
+struct HeaderUnitContext {
+    std::string header;                    // Header name (e.g., "vector" or "myheader.h")
+    bool is_system = false;                // True for <header>, false for "header"
+    std::string bmi_output;                // BMI output file path
+    std::vector<std::string> includes;
+    std::vector<std::string> definitions;
+    std::string standard;
+    bool color_diagnostics = false;
+};
+
 struct LinkContext {
     std::string output;
     std::vector<std::string> objects;
@@ -53,6 +63,11 @@ public:
     // C++20 modules support
     virtual std::vector<std::string> get_module_scan_command(const ModuleScanContext& ctx) const {
         return {}; // Default: no module support
+    }
+
+    // C++20 header units support
+    virtual std::vector<std::string> get_header_unit_compile_command(const HeaderUnitContext& ctx) const {
+        return {}; // Default: no header unit support
     }
 };
 

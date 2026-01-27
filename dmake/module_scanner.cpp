@@ -11,6 +11,8 @@ struct DDIJson {
     std::string source;
     std::string provides;
     std::vector<std::string> imports;
+    std::vector<std::string> header_imports_system;
+    std::vector<std::string> header_imports_user;
     bool is_module_partition = false;
     std::string partition_name;
     int64_t timestamp = 0;  // Epoch time in nanoseconds
@@ -34,6 +36,8 @@ std::expected<ModuleDependencyInfo, std::string> parse_ddi_file(const std::strin
     info.source = ddi_json.source;
     info.provides = ddi_json.provides;
     info.imports = ddi_json.imports;
+    info.header_imports_system = ddi_json.header_imports_system;
+    info.header_imports_user = ddi_json.header_imports_user;
     info.is_module_partition = ddi_json.is_module_partition;
     info.partition_name = ddi_json.partition_name;
 
@@ -56,6 +60,8 @@ std::expected<void, std::string> write_ddi_file(const std::string& path, const M
     ddi_json.source = info.source;
     ddi_json.provides = info.provides;
     ddi_json.imports = info.imports;
+    ddi_json.header_imports_system = info.header_imports_system;
+    ddi_json.header_imports_user = info.header_imports_user;
     ddi_json.is_module_partition = info.is_module_partition;
     ddi_json.partition_name = info.partition_name;
     ddi_json.timestamp = info.timestamp.time_since_epoch().count();
@@ -95,6 +101,8 @@ ModuleDependencyInfo parse_module_scan_output(const std::string& output, const s
     // Note: preprocessor output preserves these directives
     static const std::regex export_module_regex(R"(^\s*export\s+module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*;)");
     static const std::regex module_impl_regex(R"(^\s*module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)");
+    static const std::regex import_header_system_regex(R"(^\s*import\s+<([^>]+)>\s*;)");  // import <vector>;
+    static const std::regex import_header_user_regex(R"RAW(^\s*import\s+"([^"]+)"\s*;)RAW");    // import "myheader.h";
     static const std::regex import_regex(R"(^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)");
     static const std::regex import_partition_regex(R"(^\s*import\s+:([a-zA-Z_][a-zA-Z0-9_]*)\s*;)");
 
@@ -124,6 +132,24 @@ ModuleDependencyInfo parse_module_scan_output(const std::string& output, const s
             if (info.provides != module_name &&
                 std::find(info.imports.begin(), info.imports.end(), module_name) == info.imports.end()) {
                 info.imports.push_back(module_name);
+            }
+            continue;
+        }
+
+        // Check for system header import (import <header>;) - must come before module import
+        if (std::regex_search(line, match, import_header_system_regex)) {
+            std::string header = match[1].str();
+            if (std::find(info.header_imports_system.begin(), info.header_imports_system.end(), header) == info.header_imports_system.end()) {
+                info.header_imports_system.push_back(header);
+            }
+            continue;
+        }
+
+        // Check for user header import (import "header";) - must come before module import
+        if (std::regex_search(line, match, import_header_user_regex)) {
+            std::string header = match[1].str();
+            if (std::find(info.header_imports_user.begin(), info.header_imports_user.end(), header) == info.header_imports_user.end()) {
+                info.header_imports_user.push_back(header);
             }
             continue;
         }
@@ -210,6 +236,21 @@ std::string get_ddi_path(const std::string& binary_dir, const std::string& sourc
     std::filesystem::path ddi = std::filesystem::path(binary_dir) / "ddi" / ddi_suffix;
     ddi += ".ddi";
     return ddi.lexically_normal().string();
+}
+
+std::string get_header_unit_bmi_path(const std::string& binary_dir, const std::string& header, bool is_system) {
+    // For system headers: <vector> -> __system__vector.gcm
+    // For user headers: "myheader.h" -> __user__myheader.h.gcm
+    std::string prefix = is_system ? "__system__" : "__user__";
+
+    // Sanitize header name (replace / and \ with _)
+    std::string safe_name = header;
+    std::replace(safe_name.begin(), safe_name.end(), '/', '_');
+    std::replace(safe_name.begin(), safe_name.end(), '\\', '_');
+    std::replace(safe_name.begin(), safe_name.end(), '.', '_');
+
+    std::filesystem::path path = std::filesystem::path(binary_dir) / "bmis" / (prefix + safe_name + ".gcm");
+    return path.lexically_normal().string();
 }
 
 } // namespace dmake
