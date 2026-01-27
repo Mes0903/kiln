@@ -1419,11 +1419,12 @@ std::string Interpreter::get_variable(const std::string& name) const {
         std::abort();
     }
 
-    std::deque<CallFrame> temp = call_stack_;
-    while (!temp.empty()) {
-        auto it = temp.front().variables.find(name);
-        if (it != temp.front().variables.end()) return it->second;
-        temp.pop_front();
+    // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes
+    for (auto it = call_stack_.begin(); it != call_stack_.end(); ++it) {
+        auto var_it = it->variables.find(name);
+        if (var_it != it->variables.end()) {
+            return var_it->second;
+        }
     }
     return parent_ ? parent_->get_variable(name) : "";
 }
@@ -1443,14 +1444,13 @@ void Interpreter::set_cache_variable(const std::string& var_name, const std::str
 bool Interpreter::unset_variable(const std::string& name) {
     if (call_stack_.empty())
         return false;
-    auto it = call_stack_.begin();
-    while(it != call_stack_.end()) {
-        auto it2 = it->variables.find(name);
-        if (it2 != it->variables.end()) {
-            it->variables.erase(it2);
+    // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes
+    for (auto it = call_stack_.begin(); it != call_stack_.end(); ++it) {
+        auto var_it = it->variables.find(name);
+        if (var_it != it->variables.end()) {
+            it->variables.erase(var_it);
             return true;
         }
-        it++;
     }
     return false;
 }
@@ -1458,13 +1458,12 @@ bool Interpreter::unset_variable(const std::string& name) {
 bool Interpreter::is_variable_set(const std::string& name) const {
     if (call_stack_.empty())
         return false;
-    auto it = call_stack_.begin();
-    while(it != call_stack_.end()) {
-        auto it2 = it->variables.find(name);
-        if (it2 != it->variables.end()) {
+    // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes
+    for (auto it = call_stack_.begin(); it != call_stack_.end(); ++it) {
+        auto var_it = it->variables.find(name);
+        if (var_it != it->variables.end()) {
             return true;
         }
-        it++;
     }
     return false;
 }

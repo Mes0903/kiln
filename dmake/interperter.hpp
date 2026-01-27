@@ -58,7 +58,7 @@ class Interpreter;
 
 struct CallFrame {
     std::string script_dir;
-    std::map<std::string, std::string> variables;
+    std::unordered_map<std::string, std::string> variables;
 };
 
 struct UserFunction {
