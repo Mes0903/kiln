@@ -1256,6 +1256,11 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             pos++;
             std::string path = evaluate_token(condition[pos++]);
             return std::filesystem::is_symlink(path);
+        } else if (token == "COMMAND" && pos + 1 < condition.size()) {
+            pos++;
+            std::string name = evaluate_token(condition[pos++]);
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            return user_functions_.contains(name);
         }
 
         // Primary value - evaluate and check truthiness
