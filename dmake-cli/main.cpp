@@ -41,10 +41,6 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
         }
     }
     
-    // DEBUG
-    // std::cerr << "DEBUG: has_content=" << has_content << " file=" << file_path << " content_size=" << file_content.size() << std::endl;
-    if (source_content) std::cerr << "DEBUG: source_content present" << std::endl;
-
     if (has_content) {
         size_t line_start = 0;
         size_t current_line = 1;
@@ -359,7 +355,7 @@ int main(int argc, char* argv[]) {
 
             auto result = interpreter.interpret(ast_or_error.value());
             if (!result) {
-                print_error_context(result.error().file, result.error().row, result.error().col, result.error().offset, result.error().length, result.error().message, result.error().backtrace);
+                print_error_context(result.error());
                 return 1;
             }
             return 0;

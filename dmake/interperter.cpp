@@ -429,7 +429,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  
                  if (!res) {
                      InterpreterError err = res.error();
-                     std::cerr << "DEBUG: err.file='" << err.file << "'" << std::endl;
                      if (err.file == "<EVAL>") {
                          err.source_content = code;
                      }
