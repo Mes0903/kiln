@@ -124,6 +124,10 @@ public:
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 
+    void request_return() { return_requested_ = true; }
+    bool is_return_requested() const { return return_requested_; }
+    void clear_return_request() { return_requested_ = false; }
+
 
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
@@ -175,6 +179,9 @@ private:
     // Loop control state (local to current script/function scope)
     int loop_depth_ = 0;
     LoopControl loop_control_ = LoopControl::NONE;
+
+    // Return control state (for return() command)
+    bool return_requested_ = false;
 };
 
 } // namespace dmake

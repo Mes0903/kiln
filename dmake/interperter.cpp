@@ -391,6 +391,12 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             }
             interp.set_loop_control(Interpreter::LoopControl::CONTINUE);
         });
+
+        add_builtin("return", [](Interpreter& interp, const std::vector<std::string>& args) {
+            // CMake's return() doesn't accept arguments, but we silently ignore them for compatibility
+            (void)args;
+            interp.request_return();
+        });
     } else {
         vars["CMAKE_SOURCE_DIR"] = parent_->get_variable("CMAKE_SOURCE_DIR");
         vars["CMAKE_BINARY_DIR"] = parent_->get_variable("CMAKE_BINARY_DIR");
@@ -413,6 +419,7 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
 
         if (!res) return res;
         if (loop_control_ != LoopControl::NONE) return {};
+        if (return_requested_) return {};  // Early return from script/function
     }
     return {};
 }
@@ -485,6 +492,10 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     std::string old_list_file = get_variable("CMAKE_CURRENT_LIST_FILE");
     std::string old_list_dir = get_variable("CMAKE_CURRENT_LIST_DIR");
 
+    // Save return state - return() in included file shouldn't affect caller
+    bool saved_return = return_requested_;
+    return_requested_ = false;
+
     set_variable("CMAKE_CURRENT_LIST_FILE", abs_path);
     set_variable("CMAKE_CURRENT_LIST_DIR", abs_dir);
     set_current_file(abs_path);
@@ -494,6 +505,9 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     set_variable("CMAKE_CURRENT_LIST_FILE", old_list_file);
     set_variable("CMAKE_CURRENT_LIST_DIR", old_list_dir);
     set_current_file(old_file);
+
+    // Restore return state - included file's return() doesn't propagate
+    return_requested_ = saved_return;
 
     return res;
 }
@@ -669,6 +683,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         }
         if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
         if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+        if (return_requested_) break;  // return() exits the loop and propagates to caller
     }
     loop_depth_--;
     root->trace_stack_.pop_back();
@@ -686,8 +701,10 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
 
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
+    bool saved_return = return_requested_;
     loop_depth_ = 0;
     loop_control_ = LoopControl::NONE;
+    return_requested_ = false;
 
     call_stack_.push_front(frame);
     auto res = interpret(func.body);
@@ -695,6 +712,8 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
 
     if (!res) set_fatal_error(res.error());
 
+    // Functions create a new scope, so return() inside doesn't affect caller
+    return_requested_ = saved_return;
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
     return res;

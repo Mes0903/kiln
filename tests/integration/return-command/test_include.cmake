@@ -1,0 +1,5 @@
+message("=== Test 3: return() from included file ===")
+message("Main file: before include")
+include(${CMAKE_CURRENT_LIST_DIR}/included.cmake)
+message("Main file: after include - SHOULD PRINT")
+message("Success: include() returned correctly")

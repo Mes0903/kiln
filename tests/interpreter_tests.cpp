@@ -1998,3 +1998,36 @@ TEST_CASE("find_program with NAMES_PER_DIR", "[interpreter][find]") {
     )");
     REQUIRE(output.find("Found shell:") != std::string::npos);
 }
+
+TEST_CASE("return", "[interpreter][return]") {
+    auto output = run_script(R"(
+        return()
+    )");
+    CHECK(output == "");
+
+    output = run_script(R"(
+        return()
+        message("This message should not be printed")
+    )");
+    CHECK(output == "");
+
+    output = run_script(R"(
+        function (foo)
+            return()
+        endfunction()
+        foo()
+        message("1")
+    )");
+    CHECK(output == "1\n");
+}
+
+TEST_CASE("return with arguments", "[interpreter][return]") {
+    auto output = run_script(R"(
+        macro (foo)
+            return("foo")
+        endmacro()
+        foo()
+        message("1")
+    )");
+    CHECK(output == "");
+}
