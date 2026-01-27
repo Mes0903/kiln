@@ -568,6 +568,19 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     while (pos_ < content_.length() && !std::isspace(content_[pos_]) &&
            content_[pos_] != '(' && content_[pos_] != ')' &&
            content_[pos_] != '#' && content_[pos_] != '"' && content_[pos_] != '[') {
+        if (content_[pos_] == '\\' && pos_ + 1 < content_.length()) {
+            // Handle escape sequence - skip the backslash and include the next character
+            pos_++;
+            col_++;
+            pos_++;
+            if (content_[pos_ - 1] == '\n') {
+                row_++;
+                col_ = 1;
+            } else {
+                col_++;
+            }
+            continue;
+        }
         if (content_[pos_] == '$' && pos_ + 1 < content_.length() &&
             (content_[pos_ + 1] == '{' || std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_')) {
             if (start_pos < pos_) {

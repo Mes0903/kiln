@@ -1,6 +1,7 @@
 #include "build_system.hpp"
 #include "target.hpp"
 #include "utils.hpp"
+#include "module_scanner.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -220,7 +221,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                 if (should_compile) {
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
-                    
+
                     // Pre-create output directories
                     for (const auto& out : task.outputs) {
                         std::error_code ec;
@@ -233,45 +234,138 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         }
                     }
 
-                    // Execute all commands in sequence
-                    for (const auto& cmd : task.commands) {
-                        std::string verb = "Running";
-                        std::string target_display = task.source_file.empty() ?
-                            std::filesystem::path(id).filename().string() :
-                            std::filesystem::path(task.source_file).filename().string();
-
-                        if (task.is_compilation) {
-                             verb = "Compiling";
-                        } else if (task.parent_target && id == task.parent_target->get_output_path() && task.parent_target->get_type() != TargetType::CUSTOM) {
-                            verb = "  Linking";
-                        }
-                        
-                        // For custom targets, use the comment if available
-                        if (task.parent_target && task.parent_target->get_type() == TargetType::CUSTOM) {
-                            std::string comment = task.parent_target->get_property("COMMENT");
-                            if (!comment.empty()) {
-                                target_display = comment;
-                            }
-                        }
-                        
+                    // C++20 modules: handle collator tasks specially (in-process execution)
+                    if (task.is_module_collator) {
                         {
                             std::lock_guard<std::mutex> lock(output_mutex_);
-                            std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
-                                      << artifact_name << "] " << target_display << std::endl;
+                            std::cout << "\033[1;32m" << std::setw(12) << "Collating" << "\033[0m ["
+                                      << artifact_name << "] modules" << std::endl;
                         }
 
-                        auto result = run_command(cmd, task.working_dir);
-                        if (result.exit_code != 0) {
-                            std::lock_guard<std::mutex> lock(output_mutex_);
-                            if (!result.output.empty()) std::cerr << result.output << std::endl;
+                        // Parse all DDI files from scanner tasks
+                        std::map<std::string, std::string> module_to_task;  // Module name -> provider object task
+                        std::map<std::string, std::vector<std::string>> task_requires;  // Object task -> required modules
+                        std::vector<ModuleMapEntry> mapper_entries;
 
-                            std::lock_guard<std::mutex> lock_loop(loop_mutex);
-                            fatal_error = "Command failed: " + join_command(cmd);
+                        for (const auto& ddi_path : task.inputs) {
+                            auto ddi_result = parse_ddi_file(ddi_path);
+                            if (!ddi_result) {
+                                std::lock_guard<std::mutex> lock(loop_mutex);
+                                fatal_error = ddi_result.error();
+                                cv.notify_all();
+                                return;
+                            }
+
+                            const auto& ddi = *ddi_result;
+
+                            // Find the object task for this source
+                            std::string obj_path = std::filesystem::path(task.parent_target->get_binary_dir())
+                                / "objs" / (std::filesystem::path(ddi.source).filename().string() + ".o");
+                            obj_path = std::filesystem::path(obj_path).lexically_normal().string();
+
+                            // If this source provides a module, record it
+                            if (!ddi.provides.empty()) {
+                                module_to_task[ddi.provides] = obj_path;
+
+                                // Add to module mapper
+                                ModuleMapEntry entry;
+                                entry.module_name = ddi.provides;
+                                entry.bmi_path = get_bmi_path(task.parent_target->get_binary_dir(), ddi.provides);
+                                entry.source_path = ddi.source;
+                                entry.object_task_id = obj_path;
+                                mapper_entries.push_back(entry);
+                            }
+
+                            // Record what this source imports
+                            if (!ddi.imports.empty()) {
+                                task_requires[obj_path] = ddi.imports;
+                            }
+                        }
+
+                        // Write module mapper file
+                        std::string mapper_content = generate_module_mapper_content(mapper_entries);
+                        std::ofstream mapper_file(task.outputs[0]);
+                        if (!mapper_file) {
+                            std::lock_guard<std::mutex> lock(loop_mutex);
+                            fatal_error = "Failed to write module mapper: " + task.outputs[0];
                             cv.notify_all();
                             return;
-                        } else if (!result.output.empty()) {
+                        }
+                        mapper_file << mapper_content;
+                        mapper_file.close();
+
+                        // Inject dependencies into compile tasks
+                        inject_module_dependencies(module_to_task, task_requires);
+
+                    } else if (task.is_module_scanner) {
+                        // C++20 modules: scanner task - run preprocessor and parse output
+                        {
                             std::lock_guard<std::mutex> lock(output_mutex_);
-                            std::cout << result.output << std::endl;
+                            std::cout << "\033[1;32m" << std::setw(12) << "Scanning" << "\033[0m ["
+                                      << artifact_name << "] "
+                                      << std::filesystem::path(task.source_file).filename().string() << std::endl;
+                        }
+
+                        // Run the scan command
+                        auto result = run_command(task.commands[0], task.working_dir);
+                        // Scanner may have non-zero exit code for parse errors but still produce useful output
+                        // We capture stdout which contains preprocessed directives
+
+                        // Parse the output to extract module info
+                        ModuleDependencyInfo ddi = parse_module_scan_output(result.output, task.source_file);
+                        ddi.timestamp = std::filesystem::last_write_time(task.source_file);
+
+                        // Write DDI file
+                        auto write_result = write_ddi_file(task.outputs[0], ddi);
+                        if (!write_result) {
+                            std::lock_guard<std::mutex> lock(loop_mutex);
+                            fatal_error = write_result.error();
+                            cv.notify_all();
+                            return;
+                        }
+
+                    } else {
+                        // Regular task execution
+                        // Execute all commands in sequence
+                        for (const auto& cmd : task.commands) {
+                            std::string verb = "Running";
+                            std::string target_display = task.source_file.empty() ?
+                                std::filesystem::path(id).filename().string() :
+                                std::filesystem::path(task.source_file).filename().string();
+
+                            if (task.is_compilation) {
+                                 verb = "Compiling";
+                            } else if (task.parent_target && id == task.parent_target->get_output_path() && task.parent_target->get_type() != TargetType::CUSTOM) {
+                                verb = "  Linking";
+                            }
+
+                            // For custom targets, use the comment if available
+                            if (task.parent_target && task.parent_target->get_type() == TargetType::CUSTOM) {
+                                std::string comment = task.parent_target->get_property("COMMENT");
+                                if (!comment.empty()) {
+                                    target_display = comment;
+                                }
+                            }
+
+                            {
+                                std::lock_guard<std::mutex> lock(output_mutex_);
+                                std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
+                                          << artifact_name << "] " << target_display << std::endl;
+                            }
+
+                            auto result = run_command(cmd, task.working_dir);
+                            if (result.exit_code != 0) {
+                                std::lock_guard<std::mutex> lock(output_mutex_);
+                                if (!result.output.empty()) std::cerr << result.output << std::endl;
+
+                                std::lock_guard<std::mutex> lock_loop(loop_mutex);
+                                fatal_error = "Command failed: " + join_command(cmd);
+                                cv.notify_all();
+                                return;
+                            } else if (!result.output.empty()) {
+                                std::lock_guard<std::mutex> lock(output_mutex_);
+                                std::cout << result.output << std::endl;
+                            }
                         }
                     }
 
@@ -534,6 +628,46 @@ std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
     compiler_version_cache_ = result;
 
     return *compiler_version_cache_;
+}
+
+void BuildGraph::inject_module_dependencies(
+    const std::map<std::string, std::string>& module_to_task,
+    const std::map<std::string, std::vector<std::string>>& task_requires) {
+
+    std::lock_guard<std::mutex> lock(graph_mutation_mutex_);
+
+    for (auto& [task_id, task] : tasks_) {
+        // Find module requirements for this task
+        auto req_it = task_requires.find(task_id);
+        if (req_it == task_requires.end()) continue;
+
+        const auto& required_modules = req_it->second;
+
+        for (const auto& required_module : required_modules) {
+            // Skip standard library modules (not built locally)
+            if (required_module == "std" || required_module.starts_with("std.")) {
+                continue;
+            }
+
+            auto provider_it = module_to_task.find(required_module);
+            if (provider_it == module_to_task.end()) {
+                // Module not found - this might be a system module or error
+                // For now, we'll silently skip; proper error handling would
+                // require context about whether this is expected
+                continue;
+            }
+
+            const std::string& provider_task_id = provider_it->second;
+
+            // Add dependency: this task depends on the provider task
+            task.dependencies.insert(provider_task_id);
+
+            // Update reverse dependency
+            if (tasks_.count(provider_task_id)) {
+                tasks_[provider_task_id].dependents.insert(task_id);
+            }
+        }
+    }
 }
 
 } // namespace dmake

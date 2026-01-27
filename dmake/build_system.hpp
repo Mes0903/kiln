@@ -27,6 +27,13 @@ struct BuildTask {
     bool is_compilation = false;
     std::string source_file;
 
+    // For C++20 modules support
+    bool is_module_scanner = false;    // True if this is a module scanning task
+    bool is_module_collator = false;   // True if this is the collator task that builds the module map
+    bool is_module_source = false;     // True if this source file uses modules (imports or exports)
+    std::string module_provides;       // Module name this source provides (if any)
+    std::vector<std::string> module_requires;  // Module names this source requires
+
     // For graph execution
     std::set<std::string> dependencies; // Task IDs we depend on
     std::set<std::string> dependents;   // Task IDs that depend on us
@@ -48,10 +55,18 @@ public:
     bool has_task(const std::string& id) const { return tasks_.count(id); }
     BuildTask& get_task(const std::string& id) { return tasks_.at(id); }
 
+    // C++20 modules support: inject dependencies after collator runs
+    // Called by collator task to update compile task dependencies based on module imports
+    void inject_module_dependencies(
+        const std::map<std::string, std::string>& module_to_task,  // Module name -> provider task ID
+        const std::map<std::string, std::vector<std::string>>& task_requires  // Task ID -> required modules
+    );
+
 private:
     std::map<std::string, BuildTask> tasks_;
     mutable std::mutex output_mutex_;
     mutable std::mutex state_mutex_;
+    mutable std::mutex graph_mutation_mutex_;  // For thread-safe module dependency injection
 
     // Incremental build logic
     std::expected<std::string, std::string> calculate_signature(const BuildTask& task);

@@ -2,6 +2,7 @@
 #include "build_system.hpp"
 #include "language.hpp"
 #include "toolchain.hpp"
+#include "module_scanner.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -224,6 +225,9 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
 void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
                                       bool is_shared) {
+    // Check if this target has any module sources (for module mapper path)
+    bool target_has_modules = has_module_sources();
+
     // SOURCES are essentially PRIVATE
     for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
         auto lang_info = LanguageClassifier::from_path(src);
@@ -249,6 +253,14 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.standard = get_language_standard(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
+        // C++20 modules: if this is a module interface or target has modules,
+        // enable module support in compilation
+        if (lang_info.is_module_interface || target_has_modules) {
+            ctx.is_module_source = true;
+            // Module mapper will be written by the collator task
+            ctx.module_mapper_file = get_module_mapper_path();
+        }
+
         for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
 
         ctx.includes.push_back(source_dir_);
@@ -266,6 +278,11 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         task.outputs.push_back(obj + ".d");
         task.is_compilation = true;
         task.source_file = src_abs.string();
+
+        // Mark as module source if it's a module interface file
+        if (lang_info.is_module_interface) {
+            task.is_module_source = true;
+        }
 
         if (!pch_gch_path.empty()) {
             task.dependencies.insert(pch_gch_path);
@@ -383,12 +400,27 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
 
-    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared, 
-        get_resolved_property("INCLUDE_DIRECTORIES"), 
-        get_resolved_property("COMPILE_DEFINITIONS"), 
+    // C++20 modules: generate scanner tasks first (they have no dependencies)
+    bool has_modules = generate_module_scanner_tasks(graph, toolchain);
+
+    auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared,
+        get_resolved_property("INCLUDE_DIRECTORIES"),
+        get_resolved_property("COMPILE_DEFINITIONS"),
         get_resolved_property("COMPILE_OPTIONS"));
-    
+
     generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared);
+
+    // If we have modules, compile tasks need to depend on the collator
+    if (has_modules) {
+        std::string mapper_path = get_module_mapper_path();
+        for (const auto& obj : obj_files) {
+            if (graph.has_task(obj)) {
+                auto& task = graph.get_task(obj);
+                task.dependencies.insert(mapper_path);
+                task.inputs.push_back(mapper_path);
+            }
+        }
+    }
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 
@@ -494,6 +526,104 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
     }
 
     graph.add_task(std::move(task));
+}
+
+// --- C++20 Modules Support ---
+
+std::string Target::get_module_mapper_path() const {
+    return (std::filesystem::path(binary_dir_) / (name_ + ".module-mapper")).lexically_normal().string();
+}
+
+bool Target::has_module_sources() const {
+    if (modules_detected_) return has_modules_;
+
+    modules_detected_ = true;
+    has_modules_ = false;
+
+    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+        auto lang_info = LanguageClassifier::from_path(src);
+        if (lang_info.is_module_interface) {
+            has_modules_ = true;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain) {
+    std::vector<std::string> scanner_ids;
+
+    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+        auto lang_info = LanguageClassifier::from_path(src);
+
+        // Only scan module interface files (*.ixx, *.cppm, etc.)
+        // Regular .cpp files that might import modules will have their
+        // dependencies resolved through the collator
+        if (!lang_info.is_module_interface) continue;
+        if (lang_info.lang != Language::CXX) continue;
+
+        const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
+        if (!compiler) continue;
+
+        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
+        std::string ddi_path = get_ddi_path(binary_dir_, src);
+
+        ModuleScanContext ctx;
+        ctx.source = src_abs.string();
+        ctx.output = ddi_path;
+        ctx.standard = get_language_standard(lang_info.lang);
+        ctx.color_diagnostics = isatty(STDOUT_FILENO);
+
+        ctx.includes.push_back(source_dir_);
+        for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) {
+            ctx.includes.push_back(dir);
+        }
+        for (const auto& def : get_resolved_property("COMPILE_DEFINITIONS")) {
+            ctx.definitions.push_back(def);
+        }
+
+        BuildTask scanner;
+        scanner.id = ddi_path;
+        scanner.parent_target = this;
+        scanner.commands.push_back(compiler->get_module_scan_command(ctx));
+        scanner.inputs.push_back(src_abs.string());
+        scanner.outputs.push_back(ddi_path);
+        scanner.is_module_scanner = true;
+        scanner.source_file = src_abs.string();
+
+        graph.add_task(std::move(scanner));
+        scanner_ids.push_back(ddi_path);
+    }
+
+    if (!scanner_ids.empty()) {
+        generate_module_collator_task(graph, scanner_ids);
+        return true;
+    }
+
+    return false;
+}
+
+void Target::generate_module_collator_task(BuildGraph& graph, const std::vector<std::string>& scanner_task_ids) {
+    std::string mapper_path = get_module_mapper_path();
+
+    BuildTask collator;
+    collator.id = mapper_path;
+    collator.parent_target = this;
+    collator.is_module_collator = true;
+
+    // Collator depends on all scanner tasks
+    for (const auto& scanner_id : scanner_task_ids) {
+        collator.dependencies.insert(scanner_id);
+        collator.inputs.push_back(scanner_id);
+    }
+
+    collator.outputs.push_back(mapper_path);
+
+    // Collator has no commands - it's executed in-process by the build graph
+    // The actual work happens in BuildGraph::execute() when it detects a collator task
+
+    graph.add_task(std::move(collator));
 }
 
 } // namespace dmake

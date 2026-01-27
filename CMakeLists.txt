@@ -13,6 +13,7 @@ add_library(dmake SHARED
     dmake/utils.cpp
     dmake/command_parser.cpp
     dmake/language.cpp
+    dmake/module_scanner.cpp
     dmake/inner/blake2b.c
     dmake/inner/sha256.cpp
     dmake/builtins/message.cpp
