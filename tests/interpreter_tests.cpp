@@ -2362,3 +2362,30 @@ TEST_CASE("Parser handles parentheses in quoted strings", "[parser]") {
     )RAW");
     REQUIRE(output == "foo (bar) baz\n");
 }
+
+TEST_CASE("Parser handles escaped quotes in unquoted arguments", "[parser]") {
+    // Regression test: backslash-quote in unquoted argument should not break subsequent parsing
+    // This was a bug where \" in an unquoted argument would corrupt the parser state
+    auto output = run_script(R"RAW(
+        list(APPEND var --config \"test\")
+        string(APPEND var2 "\n)")
+        message("${var2}")
+    )RAW");
+    REQUIRE(output == "\n)\n");
+
+    // Test multiple escaped quotes in unquoted arguments
+    // In CMake, \" in unquoted context is literally backslash-quote, not an escape sequence
+    output = run_script(R"RAW(
+        set(var \"foo\" \"bar\")
+        message("${var}")
+    )RAW");
+    REQUIRE(output == "\\\"foo\\\";\\\"bar\\\"\n");
+
+    // Test escaped quote followed by bracket argument
+    output = run_script(R"RAW(
+        set(REMOTE "[====[test]====]")
+        list(APPEND opts \"${REMOTE}\")
+        message("done")
+    )RAW");
+    REQUIRE(output == "done\n");
+}
