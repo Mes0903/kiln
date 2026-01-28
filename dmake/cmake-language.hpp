@@ -97,9 +97,14 @@ struct ForeachIn {
     std::vector<Argument> items;  // Literal items
 };
 
+struct ForeachZipLists {
+    std::vector<std::string> loop_vars;  // Multiple loop variable names
+    std::vector<Argument> lists;         // List variable names to zip together
+};
+
 struct ForeachBlock {
-    std::string loop_var;  // The loop variable name
-    std::variant<ForeachSimple, ForeachRange, ForeachIn> params;
+    std::string loop_var;  // The loop variable name (used for simple, range, and in modes)
+    std::variant<ForeachSimple, ForeachRange, ForeachIn, ForeachZipLists> params;
     std::vector<AstNode> body;
     size_t row = 0;
     size_t col = 0;

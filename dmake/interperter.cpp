@@ -879,6 +879,116 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "foreach"});
 
+    // Handle ZIP_LISTS mode separately due to different variable handling
+    if (std::holds_alternative<ForeachZipLists>(block.params)) {
+        const auto& zip = std::get<ForeachZipLists>(block.params);
+
+        // Save previous values of all loop variables (for nested loops)
+        std::vector<std::pair<std::string, bool>> saved_vars;
+        std::vector<std::string> saved_values;
+
+        // For single loop var: save var_0, var_1, ... based on number of lists
+        // For multiple loop vars: save each variable directly
+        std::vector<std::string> var_names_to_save;
+        if (zip.loop_vars.size() == 1) {
+            // Single variable mode: create var_0, var_1, etc.
+            for (size_t i = 0; i < zip.lists.size(); ++i) {
+                var_names_to_save.push_back(zip.loop_vars[0] + "_" + std::to_string(i));
+            }
+        } else {
+            // Multiple variables mode: use variables directly
+            var_names_to_save = zip.loop_vars;
+        }
+
+        for (const auto& var_name : var_names_to_save) {
+            bool was_set = is_variable_set(var_name);
+            std::string old_value = was_set ? get_variable(var_name) : "";
+            saved_vars.push_back({var_name, was_set});
+            saved_values.push_back(old_value);
+        }
+
+        // Evaluate all lists and find max length
+        std::vector<CMakeList> evaluated_lists;
+        size_t max_length = 0;
+        for (const auto& list_arg : zip.lists) {
+            std::string list_name = evaluate_argument(list_arg);
+            CMakeList list(get_variable(list_name));
+            max_length = std::max(max_length, list.size());
+            evaluated_lists.push_back(std::move(list));
+        }
+
+        loop_depth_++;
+
+        // Iterate over all lists in parallel
+        for (size_t i = 0; i < max_length; ++i) {
+            // Set loop variables for this iteration
+            for (size_t list_idx = 0; list_idx < evaluated_lists.size(); ++list_idx) {
+                const auto& list = evaluated_lists[list_idx];
+                std::string value = (i < list.size()) ? list[i] : "";  // Pad with empty string
+
+                // Determine variable name
+                std::string var_name;
+                if (zip.loop_vars.size() == 1) {
+                    // Single loop var: set var_0, var_1, etc.
+                    var_name = zip.loop_vars[0] + "_" + std::to_string(list_idx);
+                } else {
+                    // Multiple loop vars: set directly (if we have enough variables)
+                    if (list_idx < zip.loop_vars.size()) {
+                        var_name = zip.loop_vars[list_idx];
+                    } else {
+                        // More lists than variables - skip extra lists
+                        continue;
+                    }
+                }
+
+                set_variable(var_name, value);
+            }
+
+            // Execute loop body
+            auto res = interpret(block.body);
+            if (!res) {
+                set_fatal_error(res.error());
+                if (loop_depth_ <= 0) {
+                    std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                    std::abort();
+                }
+                loop_depth_--;
+                // Restore all loop variables
+                for (size_t j = 0; j < saved_vars.size(); ++j) {
+                    if (saved_vars[j].second) {
+                        set_variable(saved_vars[j].first, saved_values[j]);
+                    } else {
+                        unset_variable(saved_vars[j].first);
+                    }
+                }
+                safe_pop_trace_stack("foreach zip_lists body error");
+                return res;
+            }
+
+            if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+            if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+            if (return_requested_) break;
+        }
+
+        // Restore all loop variables
+        for (size_t j = 0; j < saved_vars.size(); ++j) {
+            if (saved_vars[j].second) {
+                set_variable(saved_vars[j].first, saved_values[j]);
+            } else {
+                unset_variable(saved_vars[j].first);
+            }
+        }
+
+        if (loop_depth_ <= 0) {
+            std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when trying to decrement in foreach\n";
+            std::abort();
+        }
+        loop_depth_--;
+        safe_pop_trace_stack("foreach zip_lists");
+        return {};
+    }
+
+    // Original logic for non-ZIP_LISTS modes
     // Save the loop variable's previous value (for nested loops)
     bool loop_var_was_set = is_variable_set(block.loop_var);
     std::string loop_var_old_value;

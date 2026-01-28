@@ -840,6 +840,116 @@ TEST_CASE("break in macro affects caller loop", "[interpreter][foreach][macro]")
     REQUIRE(output == "1\ndone\n");
 }
 
+TEST_CASE("foreach IN ZIP_LISTS with single loop variable", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(A "1" "2" "3")
+        set(B "one" "two" "three")
+        foreach(item IN ZIP_LISTS A B)
+            message("${item_0},${item_1}")
+        endforeach()
+    )");
+    REQUIRE(output == "1,one\n2,two\n3,three\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with multiple loop variables", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(NUMS "1" "2" "3")
+        set(WORDS "one" "two" "three")
+        foreach(num word IN ZIP_LISTS NUMS WORDS)
+            message("${num},${word}")
+        endforeach()
+    )");
+    REQUIRE(output == "1,one\n2,two\n3,three\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with different length lists", "[interpreter][foreach][zip_lists]") {
+    // Shorter lists are padded with empty strings
+    auto output = run_script(R"(
+        set(SHORT "a" "b")
+        set(LONG "1" "2" "3" "4")
+        foreach(s l IN ZIP_LISTS SHORT LONG)
+            message("[${s}],[${l}]")
+        endforeach()
+    )");
+    REQUIRE(output == "[a],[1]\n[b],[2]\n[],[3]\n[],[4]\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with three lists", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(A "1" "2")
+        set(B "a" "b")
+        set(C "x" "y")
+        foreach(num letter sym IN ZIP_LISTS A B C)
+            message("${num}${letter}${sym}")
+        endforeach()
+    )");
+    REQUIRE(output == "1ax\n2by\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with single variable and three lists", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(A "1" "2")
+        set(B "a" "b")
+        set(C "x" "y")
+        foreach(item IN ZIP_LISTS A B C)
+            message("${item_0},${item_1},${item_2}")
+        endforeach()
+    )");
+    REQUIRE(output == "1,a,x\n2,b,y\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with empty list", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(EMPTY "")
+        set(NONEMPTY "a" "b")
+        foreach(e ne IN ZIP_LISTS EMPTY NONEMPTY)
+            message("[${e}],[${ne}]")
+        endforeach()
+    )");
+    REQUIRE(output == "[],[a]\n[],[b]\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS variables are cleared after loop", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(A "1")
+        set(B "a")
+        foreach(x y IN ZIP_LISTS A B)
+            message("${x},${y}")
+        endforeach()
+        message("after: '${x}','${y}'")
+    )");
+    REQUIRE(output == "1,a\nafter: '',''\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with break", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(A "1" "2" "3")
+        set(B "a" "b" "c")
+        foreach(x y IN ZIP_LISTS A B)
+            message("${x}${y}")
+            if(x EQUAL 2)
+                break()
+            endif()
+        endforeach()
+        message("done")
+    )");
+    REQUIRE(output == "1a\n2b\ndone\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS with continue", "[interpreter][foreach][zip_lists]") {
+    auto output = run_script(R"(
+        set(A "1" "2" "3")
+        set(B "a" "b" "c")
+        foreach(x y IN ZIP_LISTS A B)
+            if(x EQUAL 2)
+                continue()
+            endif()
+            message("${x}${y}")
+        endforeach()
+    )");
+    REQUIRE(output == "1a\n3c\n");
+}
+
 TEST_CASE("if condition: AND operator", "[interpreter][if]") {
     // Note: Don't use Y or N as variable names - they're boolean constants in CMake
     auto output = run_script(R"(

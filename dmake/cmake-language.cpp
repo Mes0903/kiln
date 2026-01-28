@@ -270,26 +270,96 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires a loop variable"});
     }
 
-    // Extract loop variable (must be simple identifier)
-    if (!foreach_command.arguments[0].parts.empty() &&
-        std::holds_alternative<std::string>(foreach_command.arguments[0].parts[0])) {
-        foreach_block.loop_var = std::get<std::string>(foreach_command.arguments[0].parts[0]);
+    // Check if this might be ZIP_LISTS syntax: foreach(<var1> <var2> ... IN ZIP_LISTS ...)
+    // Look ahead to find IN keyword and check what follows
+    size_t in_position = 0;
+    bool has_in_keyword = false;
+    for (size_t i = 1; i < foreach_command.arguments.size(); ++i) {
+        if (!foreach_command.arguments[i].quoted &&
+            foreach_command.arguments[i].parts.size() == 1 &&
+            std::holds_alternative<std::string>(foreach_command.arguments[i].parts[0])) {
+            std::string keyword = std::get<std::string>(foreach_command.arguments[i].parts[0]);
+            std::transform(keyword.begin(), keyword.end(), keyword.begin(), ::toupper);
+            if (keyword == "IN") {
+                has_in_keyword = true;
+                in_position = i;
+                break;
+            }
+            // Stop at other keywords (RANGE means it's not ZIP_LISTS)
+            if (keyword == "RANGE") {
+                break;
+            }
+        }
+    }
+
+    // Check if ZIP_LISTS follows IN
+    bool is_zip_lists = false;
+    if (has_in_keyword && in_position + 1 < foreach_command.arguments.size()) {
+        if (!foreach_command.arguments[in_position + 1].quoted &&
+            foreach_command.arguments[in_position + 1].parts.size() == 1 &&
+            std::holds_alternative<std::string>(foreach_command.arguments[in_position + 1].parts[0])) {
+            std::string next_keyword = std::get<std::string>(foreach_command.arguments[in_position + 1].parts[0]);
+            std::transform(next_keyword.begin(), next_keyword.end(), next_keyword.begin(), ::toupper);
+            if (next_keyword == "ZIP_LISTS") {
+                is_zip_lists = true;
+            }
+        }
+    }
+
+    // Handle ZIP_LISTS mode
+    if (is_zip_lists) {
+        ForeachZipLists zip_params;
+
+        // Extract loop variables (all arguments before IN)
+        for (size_t i = 0; i < in_position; ++i) {
+            if (!foreach_command.arguments[i].parts.empty() &&
+                foreach_command.arguments[i].parts.size() == 1 &&
+                std::holds_alternative<std::string>(foreach_command.arguments[i].parts[0])) {
+                zip_params.loop_vars.push_back(std::get<std::string>(foreach_command.arguments[i].parts[0]));
+            } else {
+                return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(IN ZIP_LISTS) loop variables must be simple identifiers"});
+            }
+        }
+
+        if (zip_params.loop_vars.empty()) {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(IN ZIP_LISTS) requires at least one loop variable"});
+        }
+
+        // Collect list arguments after ZIP_LISTS
+        for (size_t i = in_position + 2; i < foreach_command.arguments.size(); ++i) {
+            zip_params.lists.push_back(foreach_command.arguments[i]);
+        }
+
+        if (zip_params.lists.empty()) {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(IN ZIP_LISTS) requires at least one list"});
+        }
+
+        foreach_block.params = zip_params;
+        // Set loop_var to first variable for completeness (won't be used in interpreter)
+        foreach_block.loop_var = zip_params.loop_vars[0];
+
     } else {
-        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() loop variable must be a simple identifier"});
-    }
+        // Original logic for non-ZIP_LISTS modes
+        // Extract loop variable (must be simple identifier)
+        if (!foreach_command.arguments[0].parts.empty() &&
+            std::holds_alternative<std::string>(foreach_command.arguments[0].parts[0])) {
+            foreach_block.loop_var = std::get<std::string>(foreach_command.arguments[0].parts[0]);
+        } else {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() loop variable must be a simple identifier"});
+        }
 
-    if (foreach_command.arguments.size() == 1) {
-        return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires items to iterate over"});
-    }
+        if (foreach_command.arguments.size() == 1) {
+            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires items to iterate over"});
+        }
 
-    // Determine mode by checking second argument
-    std::string mode_keyword;
-    if (!foreach_command.arguments[1].quoted &&
-        foreach_command.arguments[1].parts.size() == 1 &&
-        std::holds_alternative<std::string>(foreach_command.arguments[1].parts[0])) {
-        mode_keyword = std::get<std::string>(foreach_command.arguments[1].parts[0]);
-        std::transform(mode_keyword.begin(), mode_keyword.end(), mode_keyword.begin(), ::toupper);
-    }
+        // Determine mode by checking second argument
+        std::string mode_keyword;
+        if (!foreach_command.arguments[1].quoted &&
+            foreach_command.arguments[1].parts.size() == 1 &&
+            std::holds_alternative<std::string>(foreach_command.arguments[1].parts[0])) {
+            mode_keyword = std::get<std::string>(foreach_command.arguments[1].parts[0]);
+            std::transform(mode_keyword.begin(), mode_keyword.end(), mode_keyword.begin(), ::toupper);
+        }
 
     if (mode_keyword == "RANGE") {
         // RANGE mode: foreach(i RANGE <stop>) or foreach(i RANGE <start> <stop> [<step>])
@@ -374,6 +444,7 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
                            foreach_command.arguments.begin() + 1,
                            foreach_command.arguments.end());
         foreach_block.params = simple;
+        }
     }
 
     // Parse the body
