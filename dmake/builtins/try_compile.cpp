@@ -196,7 +196,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::vector<std::string> cmake_flags;
 
         parser.add_positional(result_var, "result variable");
-        parser.add_positional(bindir, "binary directory");
+        parser.add_positional(bindir, "binary directory", false);  // Optional
         parser.add_list("SOURCES", sources);
         parser.add_list("SOURCE_FROM_CONTENT", source_from_content);
         parser.add_list("SOURCE_FROM_VAR", source_from_var);
@@ -210,6 +210,17 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.add_value("OUTPUT_VARIABLE", output_variable);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Auto-generate bindir if not specified (CMake 3.25+ behavior)
+        // We use dmake_scratch_area instead of CMake's CMakeFiles/CMakeScratch
+        if (bindir.empty()) {
+            std::string cmake_binary_dir = interp.get_variable("CMAKE_BINARY_DIR");
+            if (cmake_binary_dir.empty()) {
+                interp.set_fatal_error("try_compile requires CMAKE_BINARY_DIR to be set");
+                return;
+            }
+            bindir = (std::filesystem::path(cmake_binary_dir) / "dmake_scratch_area").string();
+        }
 
         // Process CMAKE_FLAGS (e.g., -DCOMPILE_DEFINITIONS:STRING=-DFOO)
         for (const auto& flag : cmake_flags) {
