@@ -371,12 +371,48 @@ void register_target_builtins(Interpreter& interp) {
             property_values.push_back(args[i]);
         }
 
+        // Helper to parse and append INTERFACE properties
+        auto handle_interface_property = [](const std::shared_ptr<Target>& target,
+                                             const std::string& prop_name,
+                                             const std::vector<std::string>& values,
+                                             bool append_mode) -> bool {
+            // Map INTERFACE_* to base property name
+            std::string base_prop;
+            if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") base_prop = "INCLUDE_DIRECTORIES";
+            else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") base_prop = "COMPILE_DEFINITIONS";
+            else if (prop_name == "INTERFACE_COMPILE_OPTIONS") base_prop = "COMPILE_OPTIONS";
+            else if (prop_name == "INTERFACE_LINK_LIBRARIES") base_prop = "LINK_LIBRARIES";
+            else if (prop_name == "INTERFACE_LINK_DIRECTORIES") base_prop = "LINK_DIRECTORIES";
+            else return false; // Not an INTERFACE property we handle
+
+            // Parse values (may already be a list or semicolon-separated)
+            std::vector<std::string> items;
+            for (const auto& v : values) {
+                std::istringstream ss(v);
+                std::string item;
+                while (std::getline(ss, item, ';')) {
+                    if (!item.empty()) items.push_back(item);
+                }
+            }
+
+            if (!items.empty()) {
+                target->append_property(base_prop, items, PropertyVisibility::INTERFACE);
+            }
+            return true;
+        };
+
         for (size_t i = 1; i < property_idx; ++i) {
             if (args[i] == "APPEND" || args[i] == "APPEND_STRING") continue;
 
             auto target = get_target_from_name(interp, args[i], "set_property");
             if (!target) continue;
 
+            // Try to handle as INTERFACE property first
+            if (handle_interface_property(target, property_name, property_values, append)) {
+                continue;
+            }
+
+            // Fallback: generic property handling
             std::string value;
             for (const auto& v : property_values) {
                 if (!value.empty()) value += ";";
