@@ -258,9 +258,16 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         vars["CMAKE_COMMAND"] = get_executable_path();
         vars["CMAKE_ROOT"] = "/usr/share/cmake";
 
-        // Initialize default toolchain
-        toolchain_.set_compiler(Language::CXX, std::make_unique<GnuCompiler>("g++", Language::CXX));
-        toolchain_.set_compiler(Language::C, std::make_unique<GnuCompiler>("gcc", Language::C));
+        // Initialize default toolchain and compiler variables
+        vars["CMAKE_CXX_COMPILER"] = "g++";
+        vars["CMAKE_C_COMPILER"] = "gcc";
+        toolchain_.set_compiler(Language::CXX, std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX));
+        toolchain_.set_compiler(Language::C, std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C));
+
+        // Initialize cache store
+        std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
+        cache_store_ = std::make_unique<CacheStore>(cache_path);
+        cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
 
         // Register non-internal builtins
         register_message_builtins(*this);
@@ -274,6 +281,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_string_builtins(*this);
         register_process_builtins(*this);
         register_property_builtins(*this);
+        register_try_compile_builtins(*this);
 
         add_builtin("enable_testing", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (!args.empty()) {

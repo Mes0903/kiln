@@ -179,6 +179,12 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             return std::unexpected("Build failed");
         }
 
+        // Save cache after successful build
+        auto cache_save_result = interpreter->get_cache_store().save();
+        if (!cache_save_result) {
+            std::cerr << "\033[1;33mwarning:\033[0m Failed to save cache: " << cache_save_result.error() << std::endl;
+        }
+
         return interpreter;
     } catch (const std::exception& e) {
         return std::unexpected(std::string("Exception: ") + e.what());

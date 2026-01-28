@@ -18,6 +18,7 @@
 #include <filesystem>
 #include "CMakeList.hpp"
 #include "toolchain.hpp"
+#include "cache_store.hpp"
 
 namespace dmake {
 
@@ -136,6 +137,7 @@ public:
     // Access to targets (for testing and build system)
     std::map<std::string, std::shared_ptr<Target>>& get_targets() { return get_root()->targets_; }
     Toolchain& get_toolchain() { return get_root()->toolchain_; }
+    CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
     std::vector<TestDefinition>& get_tests() { return get_root()->tests_; }
     void enable_testing_globally() { get_root()->testing_enabled_ = true; }
@@ -170,6 +172,7 @@ public:
     friend void register_math_builtins(Interpreter& interp);
     friend void register_string_builtins(Interpreter& interp);
     friend void register_property_builtins(Interpreter& interp);
+    friend void register_try_compile_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 
@@ -214,6 +217,7 @@ private:
     std::vector<TestDefinition> tests_;
     bool testing_enabled_ = false;
     Toolchain toolchain_;
+    std::unique_ptr<CacheStore> cache_store_;
     std::set<std::string> global_guarded_files_;
     std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
 

@@ -14,6 +14,7 @@ add_library(dmake SHARED
     dmake/command_parser.cpp
     dmake/language.cpp
     dmake/module_scanner.cpp
+    dmake/cache_store.cpp
     dmake/inner/blake2b.c
     dmake/inner/sha256.cpp
     dmake/builtins/message.cpp
@@ -28,6 +29,7 @@ add_library(dmake SHARED
     dmake/builtins/string.cpp
     dmake/builtins/process.cpp
     dmake/builtins/property.cpp
+    dmake/builtins/try_compile.cpp
     dmake/CMakeList.cpp
 )
 

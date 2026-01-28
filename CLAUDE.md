@@ -238,6 +238,7 @@ The parser is a **recursive descent parser** supporting:
 
 **Testing:**
 - `enable_testing()`, `add_test()` - Test registration
+- `try_compile()` - Test compilation of source code with aggressive caching
 
 **Math & Messaging:**
 - `math(EXPR)` - Arithmetic expression evaluation
@@ -460,6 +461,77 @@ Optimizes `find_*()` commands:
     2. Fallback: Run `g++ -H -E` to scan for headers if `.d` files are missing.
 - **Stat Cache**: `BuildGraph` maintains an internal cache of file timestamps to minimize disk I/O.
 
+## Centralized Cache System
+
+dmake implements a centralized JSON-based cache infrastructure for subsystems that need persistent, cross-invocation state.
+
+**Cache Location**: `<build_dir>/.dmake_subsystem_cache.json`
+
+**Architecture**:
+- **Format**: JSON serialization using Glaze (zero-copy parsing, minimal allocations)
+- **Structure**: Subsystem-based namespacing (e.g., `try_compile_cache`, `file_listing_cache`)
+- **Thread Safety**: Mutex-protected read/write operations
+- **Atomicity**: Temp file + atomic rename prevents corruption
+- **Lifecycle**: Loaded on interpreter construction, saved after successful build
+
+**Cache Subsystems**:
+- `CacheSubsystem::TryCompile` - try_compile() results with header dependency tracking
+- `CacheSubsystem::FileListing` - Directory scan cache (future use)
+
+**Implementation**: `dmake/cache_store.hpp/cpp`
+
+### try_compile() Implementation
+
+Implements CMake's `try_compile` command in SOURCE mode with aggressive caching.
+
+**Supported Features**:
+- **Source variants**: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
+- **Compilation options**: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`
+- **Linking**: `LINK_LIBRARIES` (with target name resolution), `LINK_OPTIONS`
+- **Output capture**: `OUTPUT_VARIABLE` for compiler stdout/stderr
+- **Result**: Boolean variable set to `TRUE`/`FALSE`
+
+**Cache Signature** (transparent, human-readable):
+```
+compiler:<path>|version:<version>|lang:<C/CXX>|std:<std>|
+src:<path>:<mtime>|inline:<name>:<blake2b>|
+def:<def>|lib:<lib>|opt:<opt>|dep:<header>:<mtime>|...
+```
+
+**Signature Components**:
+- Compiler path and version
+- Language and standard
+- Source file paths + mtimes (for `SOURCES`)
+- Source names + content BLAKE2b hashes (for inline sources)
+- All compile definitions (sorted)
+- Link libraries and options (sorted)
+- Discovered header dependencies + mtimes
+
+**Cache Validation**:
+- On cache lookup, validates all header mtimes match
+- If any header changed → cache miss, recompile
+- dmake version intentionally excluded (user preference)
+
+**Temporary Directory**: `<bindir>/.dmake_try_compile/<hash>/`
+- Unique per-signature (no conflicts)
+- Preserved on failure (for debugging)
+- Cleaned on success
+
+**Example**:
+```cmake
+try_compile(RESULT ${CMAKE_BINARY_DIR}
+    SOURCE_FROM_CONTENT test.cpp "int main() { return 0; }"
+    CXX_STANDARD 17
+    COMPILE_DEFINITIONS DEBUG
+    OUTPUT_VARIABLE COMPILE_OUTPUT
+)
+if(RESULT)
+    message(STATUS "Compilation succeeded")
+endif()
+```
+
+**Implementation**: `dmake/builtins/try_compile.cpp`
+
 ## Error Handling & Debugging
 
 **Build Graph Stalls**:
@@ -499,7 +571,7 @@ Location: `tests/integration/*/` - Each subdirectory is a complete test project.
 - Source files - Test code
 - `test.sh` - Shell script that takes dmake binary path as `$1`, builds project, verifies outputs
 
-**Current integration tests (15+):**
+**Current integration tests (19):**
 - `basic-exe`, `shared-lib`, `static-lib`, `interface-lib`, `object-lib`
 - `pch` (precompiled headers)
 - `incremental-rebuild` (cache validation)
@@ -507,6 +579,7 @@ Location: `tests/integration/*/` - Each subdirectory is a complete test project.
 - `find-package` (package discovery)
 - `execute-process` (process execution)
 - `modules_basic` (C++20 modules)
+- `try_compile` (source compilation with caching)
 
 **Adding integration tests:**
 1. Create directory in `tests/integration/<test-name>`
@@ -582,13 +655,26 @@ The resulting binary will be in `build/debug/dmake`.
 - C++20 module dependency extraction
 - `.ddi` file generation and parsing
 
+**CacheStore**: `dmake/cache_store.hpp/cpp`
+- Centralized JSON-based persistent cache
+- Template-based subsystem API with CacheSubsystem enum
+- Glaze serialization for structured data
+- Thread-safe operations with atomic file writes
+
+**try_compile**: `dmake/builtins/try_compile.cpp`
+- SOURCE mode implementation with all variants
+- Transparent signature computation (human-readable)
+- Header dependency tracking via .d files
+- Cache validation with mtime checks
+
 ### Adding New Features
 
 **New builtin command:**
 1. Create file in `dmake/builtins/` or add to existing
-2. Implement as lambda: `[](Interpreter& interp, const std::vector<std::string>& args) -> std::expected<void, InterpreterError>`
-3. Use `CommandParser` for argument parsing
-4. Register in `Interpreter` constructor (root interpreter only)
+2. Implement as lambda: `[](Interpreter& interp, const std::vector<std::string>& args)` (void return)
+3. Use `CommandParser` for argument parsing with `PARSE_OR_RETURN` macro
+4. Call `interp.set_fatal_error()` and return on errors
+5. Register in `Interpreter` constructor (root interpreter only) via `register_*_builtins()`
 
 **New target property:**
 1. Add to `Target` class property maps
