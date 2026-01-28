@@ -46,7 +46,7 @@ mkdir -p build && cd build && cmake .. && make
 **Run dmake CLI:**
 ```bash
 # Default: build current directory
-dmake [targets...] [-j N] [-DVAR=VAL] [--config CONFIG]
+dmake [targets...] [-j N] [-DVAR=VAL] [-DVAR:TYPE=VAL] [--config CONFIG]
 
 # Subcommands
 dmake build [project] [targets...]   # Build specific project/targets
@@ -59,6 +59,11 @@ dmake -P <script.cmake> [-DVAR=VAL]
 
 # CMake tool mode
 dmake -E <command> [args...]         # CMake-compatible tool commands
+
+# Variable definitions (CMake-compatible)
+-DVAR=value              # Set variable to value
+-DVAR:TYPE=value         # Set variable with type annotation (type is stripped)
+-DVAR                    # Set variable to ON (boolean flag)
 ```
 
 Examples:
@@ -71,6 +76,9 @@ Examples:
 
 # Build release configuration with 8 jobs
 ./build/dmake --config release -j 8
+
+# Build with variable definitions (CMake-compatible typed syntax)
+./build/dmake -DCMAKE_CXX_FLAGS_DEBUG:STRING="-g -O0" -DENABLE_FEATURE:BOOL=ON
 
 # Build and run with arguments
 ./build/dmake run my_app -- --verbose

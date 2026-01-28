@@ -104,9 +104,24 @@ void apply_definitions(dmake::Interpreter& interpreter, const std::vector<std::s
     for (const auto& def : definitions) {
         size_t eq = def.find('=');
         if (eq != std::string::npos) {
-            interpreter.set_variable(def.substr(0, eq), def.substr(eq + 1));
+            std::string var_name = def.substr(0, eq);
+            std::string value = def.substr(eq + 1);
+
+            // Strip type annotation if present (e.g., VAR:STRING=value -> VAR=value)
+            size_t colon = var_name.find(':');
+            if (colon != std::string::npos) {
+                var_name = var_name.substr(0, colon);
+            }
+
+            interpreter.set_variable(var_name, value);
         } else {
-            interpreter.set_variable(def, "ON");
+            // Handle -DVAR or -DVAR:BOOL (no value)
+            std::string var_name = def;
+            size_t colon = var_name.find(':');
+            if (colon != std::string::npos) {
+                var_name = var_name.substr(0, colon);
+            }
+            interpreter.set_variable(var_name, "ON");
         }
     }
 }
@@ -114,7 +129,18 @@ void apply_definitions(dmake::Interpreter& interpreter, const std::vector<std::s
 void set_default_flags(dmake::Interpreter& interpreter, const std::vector<std::string>& definitions, const std::string& var, const std::string& flags) {
     bool already_set = false;
     for (const auto& def : definitions) {
-        if (def.starts_with(var + "=") || def == var) {
+        // Check for VAR=value or VAR:TYPE=value or VAR or VAR:TYPE
+        std::string def_var = def;
+        size_t eq = def_var.find('=');
+        if (eq != std::string::npos) {
+            def_var = def_var.substr(0, eq);
+        }
+        size_t colon = def_var.find(':');
+        if (colon != std::string::npos) {
+            def_var = def_var.substr(0, colon);
+        }
+
+        if (def_var == var) {
             already_set = true;
             break;
         }
