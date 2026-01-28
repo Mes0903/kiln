@@ -91,15 +91,11 @@ void fake_cmake_compiler_checks_and_init(
 } // anonymous namespace
 
 Interpreter* Interpreter::get_root() {
-    Interpreter* current = this;
-    while (current->parent_ != nullptr) current = current->parent_;
-    return current;
+    return root_;
 }
 
 const Interpreter* Interpreter::get_root() const {
-    const Interpreter* current = this;
-    while (current->parent_ != nullptr) current = current->parent_;
-    return current;
+    return root_;
 }
 
 
@@ -276,6 +272,9 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
 
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent, std::optional<std::string> build_dir)
     : out_(out), err_(err), parent_(parent) {
+
+    // Cache the root interpreter to avoid O(N) parent chain traversal on every global lookup.
+    root_ = parent_ ? parent_->root_ : this;
 
     std::filesystem::path abs_script_dir = script_dir.empty() ?
         std::filesystem::current_path() :
@@ -1346,21 +1345,20 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
     // Set of keywords that should not be dereferenced as variables
     // All keywords are in uppercase; comparisons are done case-insensitively
-    static const std::set<std::string> keywords = {
-        "NOT", "AND", "OR", "(", ")",
-        "DEFINED", "TARGET", "EXISTS", "COMMAND", "POLICY", "TEST",
-        "IS_DIRECTORY", "IS_SYMLINK", "IS_ABSOLUTE",
-        "EQUAL", "LESS", "GREATER", "LESS_EQUAL", "GREATER_EQUAL", "NOT_EQUAL",
-        "STREQUAL", "STRLESS", "STRGREATER", "STRLESS_EQUAL", "STRGREATER_EQUAL",
-        "VERSION_EQUAL", "VERSION_LESS", "VERSION_GREATER",
-        "VERSION_LESS_EQUAL", "VERSION_GREATER_EQUAL",
-        "MATCHES", "IN_LIST"
+    // We use a sorted static array and linear search because it is more branch-prediction
+    // friendly for small sets of strings compared to std::set or binary search.
+    static constexpr std::array keywords = {
+        "(", ")", "AND", "COMMAND", "DEFINED", "EQUAL", "EXISTS", "GREATER",
+        "GREATER_EQUAL", "IN_LIST", "IS_ABSOLUTE", "IS_DIRECTORY", "IS_SYMLINK",
+        "LESS", "LESS_EQUAL", "MATCHES", "NOT", "NOT_EQUAL", "OR", "POLICY",
+        "STREQUAL", "STRGREATER", "STRGREATER_EQUAL", "STRLESS", "STRLESS_EQUAL",
+        "TARGET", "TEST", "VERSION_EQUAL", "VERSION_GREATER", "VERSION_GREATER_EQUAL",
+        "VERSION_LESS", "VERSION_LESS_EQUAL"
     };
 
     // Boolean constants that have fixed truthiness values (case-insensitive)
-    static const std::set<std::string> boolean_constants = {
-        "TRUE", "FALSE", "ON", "OFF", "YES", "NO", "Y", "N",
-        "IGNORE", "NOTFOUND"
+    static constexpr std::array boolean_constants = {
+        "FALSE", "IGNORE", "N", "NO", "NOTFOUND", "OFF", "ON", "TRUE", "Y", "YES"
     };
 
     // Helper to get the string value of an argument token
@@ -1410,7 +1408,9 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         // Check case-insensitively for both
         std::string upper_token = token;
         std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
-        if (arg.quoted || keywords.contains(upper_token) || boolean_constants.contains(upper_token)) {
+        if (arg.quoted || 
+            std::find(keywords.begin(), keywords.end(), upper_token) != keywords.end() || 
+            std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
             return token;
         }
 

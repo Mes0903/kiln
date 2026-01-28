@@ -268,6 +268,9 @@ private:
     // Return control state (for return() command)
     bool return_requested_ = false;
 
+    // Cache the root interpreter to avoid walking the parent chain
+    Interpreter* root_ = nullptr;
+
     // Macro parameter substitution (for text-replacement in macros)
     // Checked before variable lookup to implement CMake macro semantics
     std::map<std::string, std::string> macro_substitutions_;
