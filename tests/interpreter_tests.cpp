@@ -1401,6 +1401,9 @@ TEST_CASE("ENV namespace", "[interpreter][env]") {
         message("$ENV{DMAKE_TEST_VAR}")
     )");
     CHECK(output == "test_value\n");
+    const char* dmake_test_ptr = std::getenv("DMAKE_TEST_VAR");
+    REQUIRE(dmake_test_ptr != nullptr);
+    CHECK(std::string_view(dmake_test_ptr) == "test_value");
 
     // Test case insensitivity
     output = run_script(R"(
