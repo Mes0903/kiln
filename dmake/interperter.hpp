@@ -193,6 +193,7 @@ private:
     std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
     std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
     std::expected<void, InterpreterError> execute_while_block(const WhileBlock& while_block);
+    std::expected<void, InterpreterError> execute_block_block(const BlockBlock& block_block);
     std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<std::string>& args);
     std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args);
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);

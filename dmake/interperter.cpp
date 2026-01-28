@@ -494,6 +494,7 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
         else if (std::holds_alternative<MacroBlock>(node)) res = execute_macro_block(std::get<MacroBlock>(node));
         else if (std::holds_alternative<ForeachBlock>(node)) res = execute_foreach_block(std::get<ForeachBlock>(node));
         else if (std::holds_alternative<WhileBlock>(node)) res = execute_while_block(std::get<WhileBlock>(node));
+        else if (std::holds_alternative<BlockBlock>(node)) res = execute_block_block(std::get<BlockBlock>(node));
 
         if (!res) return res;
         if (loop_control_ != LoopControl::NONE) return {};
@@ -1107,6 +1108,59 @@ std::expected<void, InterpreterError> Interpreter::execute_while_block(const Whi
 
     loop_depth_--;
     safe_pop_trace_stack("while");
+    return {};
+}
+
+std::expected<void, InterpreterError> Interpreter::execute_block_block(const BlockBlock& block) {
+    Interpreter* root = get_root();
+    root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "block"});
+
+    // Create a new variable scope if SCOPE_FOR VARIABLES is set
+    if (block.scope_for_variables) {
+        // Push a new call frame with empty variables (inherits from parent via lookup)
+        CallFrame frame{call_stack_.front().script_dir, {}};
+        call_stack_.push_front(frame);
+
+        // Execute the body
+        auto res = interpret(block.body);
+
+        // Propagate variables back to parent scope
+        if (!block.propagate_vars.empty() && call_stack_.size() > 1) {
+            // Save propagated variable values before popping
+            std::unordered_map<std::string, std::string> propagated_values;
+            for (const auto& var_name : block.propagate_vars) {
+                auto it = call_stack_.front().variables.find(var_name);
+                if (it != call_stack_.front().variables.end()) {
+                    propagated_values[var_name] = it->second;
+                }
+            }
+
+            // Pop the block scope
+            call_stack_.pop_front();
+
+            // Set propagated variables in parent scope
+            for (const auto& [var_name, value] : propagated_values) {
+                call_stack_.front().variables[var_name] = value;
+            }
+        } else {
+            // Pop the block scope without propagation
+            call_stack_.pop_front();
+        }
+
+        if (!res) {
+            safe_pop_trace_stack("block error");
+            return res;
+        }
+    } else {
+        // No variable scope, just execute the body
+        auto res = interpret(block.body);
+        if (!res) {
+            safe_pop_trace_stack("block error");
+            return res;
+        }
+    }
+
+    safe_pop_trace_stack("block");
     return {};
 }
 

@@ -3405,3 +3405,175 @@ TEST_CASE("if condition: EXISTS with unquoted paths", "[interpreter][if][bugfix]
     // Cleanup
     std::filesystem::remove(test_file);
 }
+
+TEST_CASE("Interpreter block() scope", "[interpreter][block]") {
+    SECTION("Empty block is no-op") {
+        auto output = run_script(R"(
+            set(var "value")
+            block()
+                set(var "modified")
+            endblock()
+            message("var=${var}")
+        )");
+        REQUIRE(output == "var=modified\n");
+    }
+
+    SECTION("SCOPE_FOR POLICIES is no-op") {
+        auto output = run_script(R"(
+            set(var "value")
+            block(SCOPE_FOR POLICIES)
+                set(var "modified")
+            endblock()
+            message("var=${var}")
+        )");
+        REQUIRE(output == "var=modified\n");
+    }
+
+    SECTION("Basic variable scoping with SCOPE_FOR VARIABLES") {
+        auto output = run_script(R"(
+            set(outer "outer_value")
+            block(SCOPE_FOR VARIABLES)
+                set(inner "inner_value")
+                message("inner=${inner}")
+                message("outer=${outer}")
+            endblock()
+            message("outer=${outer}")
+            message("inner=${inner}")
+        )");
+        REQUIRE(output == "inner=inner_value\nouter=outer_value\nouter=outer_value\ninner=\n");
+    }
+
+    SECTION("PROPAGATE single variable") {
+        auto output = run_script(R"(
+            set(outer "outer_value")
+            block(PROPAGATE result)
+                set(result "computed_value")
+                set(temp "temporary")
+            endblock()
+            message("result=${result}")
+            message("temp=${temp}")
+        )");
+        REQUIRE(output == "result=computed_value\ntemp=\n");
+    }
+
+    SECTION("PROPAGATE multiple variables") {
+        auto output = run_script(R"(
+            block(PROPAGATE var1 var2)
+                set(var1 "value1")
+                set(var2 "value2")
+                set(var3 "value3")
+            endblock()
+            message("var1=${var1}")
+            message("var2=${var2}")
+            message("var3=${var3}")
+        )");
+        REQUIRE(output == "var1=value1\nvar2=value2\nvar3=\n");
+    }
+
+    SECTION("SCOPE_FOR VARIABLES") {
+        auto output = run_script(R"(
+            set(outer "outer_value")
+            block(SCOPE_FOR VARIABLES)
+                set(inner "inner_value")
+                message("inner=${inner}")
+            endblock()
+            message("inner=${inner}")
+        )");
+        REQUIRE(output == "inner=inner_value\ninner=\n");
+    }
+
+    SECTION("SCOPE_FOR VARIABLES with PROPAGATE") {
+        auto output = run_script(R"(
+            block(SCOPE_FOR VARIABLES PROPAGATE result)
+                set(result "computed")
+                set(temp "temporary")
+            endblock()
+            message("result=${result}")
+            message("temp=${temp}")
+        )");
+        REQUIRE(output == "result=computed\ntemp=\n");
+    }
+
+    SECTION("Nested blocks") {
+        auto output = run_script(R"(
+            set(level0 "L0")
+            block(PROPAGATE level1)
+                set(level1 "L1")
+                block(PROPAGATE level2)
+                    set(level2 "L2")
+                    message("level0=${level0}")
+                    message("level1=${level1}")
+                    message("level2=${level2}")
+                endblock()
+                message("level2=${level2}")
+            endblock()
+            message("level1=${level1}")
+            message("level2=${level2}")
+        )");
+        REQUIRE(output == "level0=L0\nlevel1=L1\nlevel2=L2\nlevel2=L2\nlevel1=L1\nlevel2=\n");
+    }
+
+    SECTION("Variable shadowing with SCOPE_FOR VARIABLES") {
+        auto output = run_script(R"(
+            set(var "outer")
+            block(SCOPE_FOR VARIABLES)
+                set(var "inner")
+                message("inside=${var}")
+            endblock()
+            message("outside=${var}")
+        )");
+        REQUIRE(output == "inside=inner\noutside=outer\n");
+    }
+
+    SECTION("No shadowing without SCOPE_FOR VARIABLES") {
+        auto output = run_script(R"(
+            set(var "outer")
+            block()
+                set(var "modified")
+                message("inside=${var}")
+            endblock()
+            message("outside=${var}")
+        )");
+        REQUIRE(output == "inside=modified\noutside=modified\n");
+    }
+
+    SECTION("PROPAGATE with undefined variable") {
+        auto output = run_script(R"(
+            block(PROPAGATE undefined_var)
+                # Don't set undefined_var
+                set(other "value")
+            endblock()
+            message("undefined=${undefined_var}")
+            message("other=${other}")
+        )");
+        REQUIRE(output == "undefined=\nother=\n");
+    }
+
+    SECTION("Block with if statement") {
+        auto output = run_script(R"(
+            set(condition TRUE)
+            block(PROPAGATE result)
+                if(condition)
+                    set(result "yes")
+                else()
+                    set(result "no")
+                endif()
+            endblock()
+            message("result=${result}")
+        )");
+        REQUIRE(output == "result=yes\n");
+    }
+
+    SECTION("Block with foreach loop") {
+        auto output = run_script(R"(
+            block(PROPAGATE sum)
+                set(sum 0)
+                foreach(i RANGE 1 3)
+                    math(EXPR sum "${sum} + ${i}")
+                endforeach()
+            endblock()
+            message("sum=${sum}")
+        )");
+        REQUIRE(output == "sum=6\n");
+    }
+}

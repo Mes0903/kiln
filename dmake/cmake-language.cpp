@@ -94,6 +94,12 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
                 return std::unexpected(while_block_or_error.error());
             }
             ast.emplace_back(std::move(while_block_or_error.value()));
+        } else if (identifier_lower == "block") {
+            auto block_block_or_error = parse_block_block(command_or_error.value());
+            if(!block_block_or_error) {
+                return std::unexpected(block_block_or_error.error());
+            }
+            ast.emplace_back(std::move(block_block_or_error.value()));
         } else {
             ast.emplace_back(std::move(command_or_error.value()));
         }
@@ -500,6 +506,93 @@ std::expected<WhileBlock, ParseError> Parser::parse_while_block(const CommandInv
 
     while_block.length = pos_ - while_block.offset;
     return while_block;
+}
+
+std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInvocation& block_command) {
+    BlockBlock block_block;
+    block_block.row = block_command.row;
+    block_block.col = block_command.col;
+    block_block.offset = block_command.offset;
+    block_block.scope_for_variables = false;  // Default to false (no scope unless explicitly requested)
+
+    // Parse optional arguments: [SCOPE_FOR VARIABLES] [PROPAGATE var1 var2...]
+    size_t idx = 0;
+    while (idx < block_command.arguments.size()) {
+        std::string keyword;
+        if (!block_command.arguments[idx].quoted &&
+            block_command.arguments[idx].parts.size() == 1 &&
+            std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
+            keyword = std::get<std::string>(block_command.arguments[idx].parts[0]);
+            std::transform(keyword.begin(), keyword.end(), keyword.begin(), ::toupper);
+        }
+
+        if (keyword == "SCOPE_FOR") {
+            idx++;
+            // Next argument should be VARIABLES or POLICIES
+            if (idx >= block_command.arguments.size()) {
+                return std::unexpected(ParseError{block_command.row, block_command.col, block_command.offset, block_command.length, "block(SCOPE_FOR) requires VARIABLES or POLICIES keyword"});
+            }
+
+            std::string scope_keyword;
+            if (!block_command.arguments[idx].quoted &&
+                block_command.arguments[idx].parts.size() == 1 &&
+                std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
+                scope_keyword = std::get<std::string>(block_command.arguments[idx].parts[0]);
+                std::transform(scope_keyword.begin(), scope_keyword.end(), scope_keyword.begin(), ::toupper);
+            }
+
+            if (scope_keyword == "VARIABLES") {
+                block_block.scope_for_variables = true;
+            } else if (scope_keyword == "POLICIES") {
+                // Policies not supported, but we accept for compatibility
+                // Just treat as no-op since we don't have policies
+                // Don't set scope_for_variables = true
+            } else {
+                return std::unexpected(ParseError{block_command.row, block_command.col, block_command.offset, block_command.length, "block(SCOPE_FOR) expected VARIABLES or POLICIES keyword"});
+            }
+            idx++;
+        } else if (keyword == "PROPAGATE") {
+            // PROPAGATE implies variable scoping
+            block_block.scope_for_variables = true;
+            // Collect all remaining arguments as variable names to propagate
+            idx++;
+            while (idx < block_command.arguments.size()) {
+                if (!block_command.arguments[idx].parts.empty() &&
+                    std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
+                    block_block.propagate_vars.push_back(std::get<std::string>(block_command.arguments[idx].parts[0]));
+                } else {
+                    return std::unexpected(ParseError{block_command.row, block_command.col, block_command.offset, block_command.length, "block(PROPAGATE) variable names must be simple identifiers"});
+                }
+                idx++;
+            }
+            break;  // PROPAGATE consumes all remaining arguments
+        } else {
+            return std::unexpected(ParseError{block_command.row, block_command.col, block_command.offset, block_command.length, "block() expected SCOPE_FOR or PROPAGATE keyword"});
+        }
+    }
+
+    // Parse the body
+    auto body_or_error = parse_block({"endblock"});
+    if (!body_or_error) {
+        return std::unexpected(body_or_error.error());
+    }
+    block_block.body = std::move(body_or_error.value());
+
+    // Consume endblock
+    auto endblock_command_or_error = parse_command_invocation();
+    if (!endblock_command_or_error) {
+        return std::unexpected(endblock_command_or_error.error());
+    }
+
+    std::string identifier_lower = endblock_command_or_error.value().identifier;
+    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (identifier_lower != "endblock") {
+        return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endblock'"});
+    }
+
+    block_block.length = pos_ - block_block.offset;
+    return block_block;
 }
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse() {

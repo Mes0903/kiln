@@ -46,8 +46,9 @@ struct FunctionBlock;
 struct MacroBlock;
 struct ForeachBlock;
 struct WhileBlock;
+struct BlockBlock;
 
-using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock, ForeachBlock, WhileBlock>;
+using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlock, ForeachBlock, WhileBlock, BlockBlock>;
 
 struct ElseIfBlock {
     std::vector<Argument> condition;
@@ -121,6 +122,16 @@ struct WhileBlock {
     size_t length = 0;
 };
 
+struct BlockBlock {
+    bool scope_for_variables = false;  // Default: no scope (empty block() is a no-op)
+    std::vector<std::string> propagate_vars;  // Variables to propagate back to parent scope
+    std::vector<AstNode> body;
+    size_t row = 0;
+    size_t col = 0;
+    size_t offset = 0;
+    size_t length = 0;
+};
+
 struct CommandInvocation {
     std::string identifier;
     std::vector<Argument> arguments;
@@ -149,6 +160,7 @@ private:
     std::expected<MacroBlock, ParseError> parse_macro_block(const CommandInvocation& macro_command);
     std::expected<ForeachBlock, ParseError> parse_foreach_block(const CommandInvocation& foreach_command);
     std::expected<WhileBlock, ParseError> parse_while_block(const CommandInvocation& while_command);
+    std::expected<BlockBlock, ParseError> parse_block_block(const CommandInvocation& block_command);
     void consume_whitespace();
     std::expected<CommandInvocation, ParseError> parse_command_invocation();
     std::expected<Argument, ParseError> parse_argument();
