@@ -3835,3 +3835,247 @@ TEST_CASE("CMAKE_CURRENT_FUNCTION with recursive functions", "[interpreter]") {
     )");
     REQUIRE(output == "Depth 2: recursive\nDepth 1: recursive\nDepth 0: recursive\n");
 }
+
+TEST_CASE("get_property TARGET TYPE", "[interpreter][property]") {
+    // Create a temp directory and source files for testing
+    std::string temp_dir = "build_test_get_property";
+    std::filesystem::create_directories(temp_dir);
+    {
+        std::ofstream f("test_main.cpp");
+        f << "int main() { return 0; }\n";
+        std::ofstream f2("test_lib.cpp");
+        f2 << "void lib_func() {}\n";
+    }
+
+    std::stringstream output;
+    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+
+    // Parse and run a script that tests get_property
+    std::string script = R"(
+        add_executable(myexe test_main.cpp)
+        add_library(mystaticlib STATIC test_lib.cpp)
+        add_library(mysharedlib SHARED test_lib.cpp)
+        add_library(myobjectlib OBJECT test_lib.cpp)
+        add_library(myinterfacelib INTERFACE)
+        add_custom_target(mycustomtarget COMMAND echo "hello")
+
+        get_property(EXE_TYPE TARGET myexe PROPERTY TYPE)
+        get_property(STATIC_TYPE TARGET mystaticlib PROPERTY TYPE)
+        get_property(SHARED_TYPE TARGET mysharedlib PROPERTY TYPE)
+        get_property(OBJECT_TYPE TARGET myobjectlib PROPERTY TYPE)
+        get_property(INTERFACE_TYPE TARGET myinterfacelib PROPERTY TYPE)
+        get_property(CUSTOM_TYPE TARGET mycustomtarget PROPERTY TYPE)
+
+        message("exe=${EXE_TYPE}")
+        message("static=${STATIC_TYPE}")
+        message("shared=${SHARED_TYPE}")
+        message("object=${OBJECT_TYPE}")
+        message("interface=${INTERFACE_TYPE}")
+        message("custom=${CUSTOM_TYPE}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("exe=EXECUTABLE") != std::string::npos);
+    REQUIRE(out.find("static=STATIC_LIBRARY") != std::string::npos);
+    REQUIRE(out.find("shared=SHARED_LIBRARY") != std::string::npos);
+    REQUIRE(out.find("object=OBJECT_LIBRARY") != std::string::npos);
+    REQUIRE(out.find("interface=INTERFACE_LIBRARY") != std::string::npos);
+    REQUIRE(out.find("custom=UTILITY") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test_main.cpp");
+    std::filesystem::remove("test_lib.cpp");
+}
+
+TEST_CASE("get_target_property TYPE", "[interpreter][property]") {
+    std::string temp_dir = "build_test_get_target_property";
+    std::filesystem::create_directories(temp_dir);
+    {
+        std::ofstream f("test_main2.cpp");
+        f << "int main() { return 0; }\n";
+        std::ofstream f2("test_lib2.cpp");
+        f2 << "void lib_func() {}\n";
+    }
+
+    std::stringstream output;
+    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+
+    std::string script = R"(
+        add_executable(myexe test_main2.cpp)
+        add_library(mylib STATIC test_lib2.cpp)
+
+        get_target_property(EXE_TYPE myexe TYPE)
+        get_target_property(LIB_TYPE mylib TYPE)
+
+        message("exe=${EXE_TYPE}")
+        message("lib=${LIB_TYPE}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("exe=EXECUTABLE") != std::string::npos);
+    REQUIRE(out.find("lib=STATIC_LIBRARY") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test_main2.cpp");
+    std::filesystem::remove("test_lib2.cpp");
+}
+
+TEST_CASE("get_property TARGET other properties", "[interpreter][property]") {
+    std::string temp_dir = "build_test_get_property_other";
+    std::filesystem::create_directories(temp_dir);
+    {
+        std::ofstream f("test_main3.cpp");
+        f << "int main() { return 0; }\n";
+    }
+
+    std::stringstream output;
+    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+
+    std::string script = R"(
+        add_executable(myexe test_main3.cpp)
+
+        get_property(NAME_VAL TARGET myexe PROPERTY NAME)
+        get_property(IMPORTED_VAL TARGET myexe PROPERTY IMPORTED)
+
+        message("name=${NAME_VAL}")
+        message("imported=${IMPORTED_VAL}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("name=myexe") != std::string::npos);
+    REQUIRE(out.find("imported=FALSE") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test_main3.cpp");
+}
+
+TEST_CASE("get_property TARGET SET mode", "[interpreter][property]") {
+    std::string temp_dir = "build_test_get_property_set";
+    std::filesystem::create_directories(temp_dir);
+    {
+        std::ofstream f("test_main4.cpp");
+        f << "int main() { return 0; }\n";
+    }
+
+    std::stringstream output;
+    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+
+    std::string script = R"(
+        add_executable(myexe test_main4.cpp)
+
+        get_property(TYPE_SET TARGET myexe PROPERTY TYPE SET)
+        get_property(UNKNOWN_SET TARGET myexe PROPERTY NONEXISTENT_PROP SET)
+
+        message("type_set=${TYPE_SET}")
+        message("unknown_set=${UNKNOWN_SET}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("type_set=1") != std::string::npos);
+    REQUIRE(out.find("unknown_set=0") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test_main4.cpp");
+}
+
+TEST_CASE("get_target_property NOTFOUND for missing property", "[interpreter][property]") {
+    std::string temp_dir = "build_test_get_target_property_notfound";
+    std::filesystem::create_directories(temp_dir);
+    {
+        std::ofstream f("test_main5.cpp");
+        f << "int main() { return 0; }\n";
+    }
+
+    std::stringstream output;
+    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+
+    std::string script = R"(
+        add_executable(myexe test_main5.cpp)
+
+        get_target_property(UNKNOWN_PROP myexe NONEXISTENT_PROPERTY)
+
+        message("unknown=${UNKNOWN_PROP}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("unknown=NONEXISTENT_PROPERTY-NOTFOUND") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test_main5.cpp");
+}
+
+TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
+    std::string temp_dir = "build_test_get_property_imported";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+
+    std::string script = R"(
+        add_library(myimported SHARED IMPORTED)
+        set_target_properties(myimported PROPERTIES IMPORTED_LOCATION "/usr/lib/fake.so")
+
+        get_property(TYPE_VAL TARGET myimported PROPERTY TYPE)
+        get_property(IMPORTED_VAL TARGET myimported PROPERTY IMPORTED)
+        get_property(LOCATION_VAL TARGET myimported PROPERTY IMPORTED_LOCATION)
+
+        message("type=${TYPE_VAL}")
+        message("imported=${IMPORTED_VAL}")
+        message("location=${LOCATION_VAL}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("type=SHARED_LIBRARY") != std::string::npos);
+    REQUIRE(out.find("imported=TRUE") != std::string::npos);
+    REQUIRE(out.find("location=/usr/lib/fake.so") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}

@@ -622,8 +622,37 @@ void register_property_builtins(Interpreter& interp) {
                     return;
                 }
 
-                value = target->get_property(property_name);
-                value_found = !value.empty();
+                // Handle special built-in target properties
+                if (property_name == "TYPE") {
+                    switch(target->get_type()) {
+                        case TargetType::EXECUTABLE: value = "EXECUTABLE"; break;
+                        case TargetType::SHARED_LIBRARY: value = "SHARED_LIBRARY"; break;
+                        case TargetType::STATIC_LIBRARY: value = "STATIC_LIBRARY"; break;
+                        case TargetType::OBJECT_LIBRARY: value = "OBJECT_LIBRARY"; break;
+                        case TargetType::INTERFACE_LIBRARY: value = "INTERFACE_LIBRARY"; break;
+                        case TargetType::CUSTOM: value = "UTILITY"; break;
+                    }
+                    value_found = true;
+                } else if (property_name == "NAME") {
+                    value = target->get_name();
+                    value_found = true;
+                } else if (property_name == "SOURCE_DIR") {
+                    value = target->get_source_dir();
+                    value_found = true;
+                } else if (property_name == "BINARY_DIR") {
+                    value = target->get_binary_dir();
+                    value_found = true;
+                } else if (property_name == "IMPORTED") {
+                    value = target->is_imported() ? "TRUE" : "FALSE";
+                    value_found = true;
+                } else if (property_name == "IMPORTED_LOCATION") {
+                    value = target->get_imported_location();
+                    value_found = !value.empty();
+                } else {
+                    // Try generic property
+                    value = target->get_property(property_name);
+                    value_found = !value.empty();
+                }
 
                 // If not found and inherited, check DIRECTORY scope
                 if (!value_found && is_inherited()) {

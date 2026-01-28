@@ -443,6 +443,61 @@ void register_target_builtins(Interpreter& interp) {
         }
     });
 
+    // get_target_property is a simpler form: get_target_property(<var> <target> <property>)
+    interp.add_builtin("get_target_property", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() != 3) {
+            interp.set_fatal_error("get_target_property() requires exactly 3 arguments: <variable> <target> <property>");
+            return;
+        }
+
+        std::string variable = args[0];
+        std::string target_name = args[1];
+        std::string property_name = args[2];
+
+        auto target = get_target_from_name(interp, target_name, "get_target_property");
+        if (!target) return;
+
+        // Helper to convert TargetType to string
+        auto target_type_to_string = [](TargetType type) -> std::string {
+            switch(type) {
+                case TargetType::EXECUTABLE: return "EXECUTABLE";
+                case TargetType::SHARED_LIBRARY: return "SHARED_LIBRARY";
+                case TargetType::STATIC_LIBRARY: return "STATIC_LIBRARY";
+                case TargetType::OBJECT_LIBRARY: return "OBJECT_LIBRARY";
+                case TargetType::INTERFACE_LIBRARY: return "INTERFACE_LIBRARY";
+                case TargetType::CUSTOM: return "UTILITY";
+                default: return "";
+            }
+        };
+
+        std::string result;
+
+        // Handle special built-in properties
+        if (property_name == "TYPE") {
+            result = target_type_to_string(target->get_type());
+        } else if (property_name == "NAME") {
+            result = target->get_name();
+        } else if (property_name == "SOURCE_DIR") {
+            result = target->get_source_dir();
+        } else if (property_name == "BINARY_DIR") {
+            result = target->get_binary_dir();
+        } else if (property_name == "IMPORTED") {
+            result = target->is_imported() ? "TRUE" : "FALSE";
+        } else if (property_name == "IMPORTED_LOCATION") {
+            result = target->get_imported_location();
+        } else {
+            // Try generic property
+            result = target->get_property(property_name);
+
+            // If empty, set to <property>-NOTFOUND per CMake convention
+            if (result.empty()) {
+                result = property_name + "-NOTFOUND";
+            }
+        }
+
+        interp.set_variable(variable, result);
+    });
+
     interp.add_builtin("include_directories", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
             interp.set_fatal_error("include_directories() requires at least one directory argument");

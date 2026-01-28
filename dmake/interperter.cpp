@@ -1713,7 +1713,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         // These have fixed truthiness and should not be dereferenced as variables
         std::string upper_token = token_str;
         std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
-        if (boolean_constants.contains(upper_token)) {
+        if (std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
             return !is_falsy(token_str);
         }
 
