@@ -10,6 +10,8 @@
 #include <random>
 #include <ctime>
 #include <chrono>
+#include <sys/stat.h>
+#include <filesystem>
 
 namespace dmake {
 
@@ -166,6 +168,169 @@ std::string configure_string(const std::string& input, Interpreter& interp, bool
 }
 
 } // anonymous namespace
+
+// Parse arguments in UNIX_COMMAND mode
+std::vector<std::string> parse_unix_command(const std::string& input) {
+    std::vector<std::string> result;
+    std::string current;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+    bool escape_next = false;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+
+        if (escape_next) {
+            // Backslash escapes the next literal character
+            current += c;
+            escape_next = false;
+            continue;
+        }
+
+        if (c == '\\') {
+            escape_next = true;
+            continue;
+        }
+
+        if (c == '\'' && !in_double_quote) {
+            in_single_quote = !in_single_quote;
+            continue;
+        }
+
+        if (c == '"' && !in_single_quote) {
+            in_double_quote = !in_double_quote;
+            continue;
+        }
+
+        if (std::isspace(c) && !in_single_quote && !in_double_quote) {
+            if (!current.empty()) {
+                result.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+
+        current += c;
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
+}
+
+// Parse arguments in WINDOWS_COMMAND mode
+std::vector<std::string> parse_windows_command(const std::string& input) {
+    std::vector<std::string> result;
+    std::string current;
+    bool in_quote = false;
+    size_t i = 0;
+
+    while (i < input.size()) {
+        // Count consecutive backslashes
+        size_t backslash_count = 0;
+        while (i < input.size() && input[i] == '\\') {
+            backslash_count++;
+            i++;
+        }
+
+        if (i < input.size() && input[i] == '"') {
+            // Backslashes before quote
+            // Even number: half the backslashes in output, quote is delimiter
+            // Odd number: half the backslashes (rounded down) in output, quote is literal
+            current += std::string(backslash_count / 2, '\\');
+
+            if (backslash_count % 2 == 0) {
+                // Quote is not escaped
+                // Check for "" (double quote within quoted string = literal quote)
+                if (in_quote && i + 1 < input.size() && input[i + 1] == '"') {
+                    current += '"';
+                    i += 2; // Skip both quotes
+                } else {
+                    // Toggle quote mode
+                    in_quote = !in_quote;
+                    i++;
+                }
+            } else {
+                // Quote is escaped, add literal quote
+                current += '"';
+                i++;
+            }
+        } else {
+            // Backslashes not followed by quote are literal
+            current += std::string(backslash_count, '\\');
+
+            if (i < input.size()) {
+                char c = input[i];
+
+                if (std::isspace(static_cast<unsigned char>(c)) && !in_quote) {
+                    if (!current.empty()) {
+                        result.push_back(current);
+                        current.clear();
+                    }
+                    i++;
+                } else {
+                    current += c;
+                    i++;
+                }
+            }
+        }
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
+}
+
+// Search for a program in PATH
+std::string find_program_in_path(const std::string& program_name) {
+    // If already an absolute path and executable, return as-is
+    std::filesystem::path p(program_name);
+    if (p.is_absolute()) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(p, ec)) {
+            struct stat st;
+            if (stat(p.c_str(), &st) == 0 && (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
+                return program_name;
+            }
+        }
+    }
+
+    // Search in PATH
+    const char* path_env = std::getenv("PATH");
+    if (!path_env) return "";
+
+    std::string path_str(path_env);
+    size_t start = 0;
+
+    while (start < path_str.size()) {
+        size_t end = path_str.find(':', start);
+        if (end == std::string::npos) {
+            end = path_str.size();
+        }
+
+        std::string dir = path_str.substr(start, end - start);
+        if (!dir.empty()) {
+            std::filesystem::path candidate = std::filesystem::path(dir) / program_name;
+            std::error_code ec;
+
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                struct stat st;
+                if (stat(candidate.c_str(), &st) == 0 &&
+                    (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
+                    return std::filesystem::absolute(candidate).string();
+                }
+            }
+        }
+
+        start = end + 1;
+    }
+
+    return "";
+}
 
 void register_string_builtins(Interpreter& interp) {
     interp.add_builtin("string", [](Interpreter& interp, const std::vector<std::string>& args) {
@@ -821,6 +986,148 @@ void register_string_builtins(Interpreter& interp) {
         } else {
             interp.set_fatal_error("string() unknown operation: " + operation);
             return;
+        }
+    });
+
+    // Register separate_arguments() command
+    interp.add_builtin("separate_arguments", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("separate_arguments() requires at least one argument");
+            return;
+        }
+
+        // Detect which form: simple conversion or advanced parsing
+        // Simple form: separate_arguments(<var>)
+        // Advanced form: separate_arguments(<variable> <mode> [PROGRAM [SEPARATE_ARGS]] <args>)
+
+        std::string var_name = args[0];
+
+        // Check if this is the simple form (only one argument)
+        if (args.size() == 1) {
+            // Simple form: replace spaces with semicolons in the variable's value
+            std::string value = interp.get_variable(var_name);
+            std::string result;
+
+            for (char c : value) {
+                if (std::isspace(c)) {
+                    result += ';';
+                } else {
+                    result += c;
+                }
+            }
+
+            interp.set_variable(var_name, result);
+            return;
+        }
+
+        // Advanced form: requires at least 3 arguments (var, mode, args)
+        if (args.size() < 3) {
+            interp.set_fatal_error("separate_arguments() requires at least 3 arguments for advanced form: <variable> <mode> <args>");
+            return;
+        }
+
+        std::string mode = to_upper(args[1]);
+
+        // Validate mode
+        if (mode != "UNIX_COMMAND" && mode != "WINDOWS_COMMAND" && mode != "NATIVE_COMMAND") {
+            interp.set_fatal_error("separate_arguments() invalid mode: " + args[1] + " (expected UNIX_COMMAND, WINDOWS_COMMAND, or NATIVE_COMMAND)");
+            return;
+        }
+
+        // Determine actual parsing mode
+        std::string parse_mode = mode;
+        if (mode == "NATIVE_COMMAND") {
+#ifdef _WIN32
+            parse_mode = "WINDOWS_COMMAND";
+#else
+            parse_mode = "UNIX_COMMAND";
+#endif
+        }
+
+        // Check for PROGRAM flag
+        bool has_program = false;
+        bool has_separate_args = false;
+        size_t args_start = 2;
+
+        if (args.size() > 2 && to_upper(args[2]) == "PROGRAM") {
+            has_program = true;
+            args_start = 3;
+
+            // Check for SEPARATE_ARGS flag
+            if (args.size() > 3 && to_upper(args[3]) == "SEPARATE_ARGS") {
+                has_separate_args = true;
+                args_start = 4;
+            }
+        }
+
+        if (args_start >= args.size()) {
+            interp.set_fatal_error("separate_arguments() missing command string argument");
+            return;
+        }
+
+        // Concatenate remaining arguments to form the command string
+        std::string command_str;
+        for (size_t i = args_start; i < args.size(); ++i) {
+            if (i > args_start) command_str += " ";
+            command_str += args[i];
+        }
+
+        // Parse the command string according to the mode
+        std::vector<std::string> parsed_args;
+        if (parse_mode == "UNIX_COMMAND") {
+            parsed_args = parse_unix_command(command_str);
+        } else {
+            parsed_args = parse_windows_command(command_str);
+        }
+
+        // Handle PROGRAM option
+        if (has_program) {
+            if (parsed_args.empty()) {
+                // No program found, set empty list
+                interp.set_variable(var_name, "");
+                return;
+            }
+
+            std::string program = parsed_args[0];
+            std::string program_path = find_program_in_path(program);
+
+            if (program_path.empty()) {
+                // Program not found, set empty list
+                interp.set_variable(var_name, "");
+                return;
+            }
+
+            if (has_separate_args) {
+                // Return [absolute_path, arg1, arg2, ...]
+                CMakeList result;
+                result.append(program_path);
+                for (size_t i = 1; i < parsed_args.size(); ++i) {
+                    result.append(parsed_args[i]);
+                }
+                interp.set_variable(var_name, result.to_string());
+            } else {
+                // Return [absolute_path, remaining_args_as_string]
+                CMakeList result;
+                result.append(program_path);
+
+                if (parsed_args.size() > 1) {
+                    std::string remaining;
+                    for (size_t i = 1; i < parsed_args.size(); ++i) {
+                        if (i > 1) remaining += " ";
+                        remaining += parsed_args[i];
+                    }
+                    result.append(remaining);
+                }
+
+                interp.set_variable(var_name, result.to_string());
+            }
+        } else {
+            // No PROGRAM option, just return parsed args as list
+            CMakeList result;
+            for (const auto& arg : parsed_args) {
+                result.append(arg);
+            }
+            interp.set_variable(var_name, result.to_string());
         }
     });
 }
