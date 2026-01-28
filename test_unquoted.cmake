@@ -1,0 +1,5 @@
+if(EXISTS /home/marty/Documents/not-my-projects/lagrange/lib/the_Foundation/CMakeLists.txt)
+    message(STATUS "The Foundation found at /home/marty/Documents/not-my-projects/lagrange/lib/the_Foundation/")
+else()
+    message(STATUS "The Foundation not found!")
+endif()

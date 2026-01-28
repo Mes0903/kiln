@@ -3227,3 +3227,71 @@ TEST_CASE("if condition: variable concatenation in macros", "[interpreter][if][m
     )");
     REQUIRE(output == "VAR is true\n");
 }
+
+TEST_CASE("if condition: EXISTS with unquoted paths", "[interpreter][if][bugfix]") {
+    // File test operators (EXISTS, IS_DIRECTORY, IS_ABSOLUTE, IS_SYMLINK) should
+    // treat unquoted paths as literals (with variable expansion), NOT as variable names.
+    // This is different from other if() conditions where unquoted arguments are dereferenced.
+
+    // Create a temporary file for testing
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto test_file = temp_dir / "dmake_test_exists.txt";
+    {
+        std::ofstream f(test_file);
+        f << "test content";
+    }
+
+    // Test EXISTS with unquoted path
+    auto output = run_script(R"(
+        if(EXISTS )" + test_file.string() + R"()
+            message("EXISTS unquoted: found")
+        else()
+            message("EXISTS unquoted: not found")
+        endif()
+    )");
+    REQUIRE(output == "EXISTS unquoted: found\n");
+
+    // Test EXISTS with quoted path
+    output = run_script(R"(
+        if(EXISTS ")" + test_file.string() + R"(")
+            message("EXISTS quoted: found")
+        else()
+            message("EXISTS quoted: not found")
+        endif()
+    )");
+    REQUIRE(output == "EXISTS quoted: found\n");
+
+    // Test EXISTS with variable expansion
+    output = run_script(R"(
+        set(TEST_PATH ")" + test_file.string() + R"(")
+        if(EXISTS ${TEST_PATH})
+            message("EXISTS variable: found")
+        else()
+            message("EXISTS variable: not found")
+        endif()
+    )");
+    REQUIRE(output == "EXISTS variable: found\n");
+
+    // Test IS_DIRECTORY with unquoted path
+    output = run_script(R"(
+        if(IS_DIRECTORY )" + temp_dir.string() + R"()
+            message("IS_DIRECTORY unquoted: yes")
+        else()
+            message("IS_DIRECTORY unquoted: no")
+        endif()
+    )");
+    REQUIRE(output == "IS_DIRECTORY unquoted: yes\n");
+
+    // Test IS_ABSOLUTE with unquoted path
+    output = run_script(R"(
+        if(IS_ABSOLUTE )" + test_file.string() + R"()
+            message("IS_ABSOLUTE unquoted: yes")
+        else()
+            message("IS_ABSOLUTE unquoted: no")
+        endif()
+    )");
+    REQUIRE(output == "IS_ABSOLUTE unquoted: yes\n");
+
+    // Cleanup
+    std::filesystem::remove(test_file);
+}

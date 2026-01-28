@@ -1431,19 +1431,21 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             return targets_.contains(target_name);
         } else if (token == "EXISTS" && pos + 1 < condition.size()) {
             pos++;
-            std::string path = evaluate_token(condition[pos++]);
+            // File test operators take paths literally (with variable expansion)
+            // but do NOT dereference the entire path as a variable name
+            std::string path = evaluate_argument(condition[pos++]);
             return std::filesystem::exists(path);
         } else if (token == "IS_DIRECTORY" && pos + 1 < condition.size()) {
             pos++;
-            std::string path = evaluate_token(condition[pos++]);
+            std::string path = evaluate_argument(condition[pos++]);
             return std::filesystem::is_directory(path);
         } else if (token == "IS_ABSOLUTE" && pos + 1 < condition.size()) {
             pos++;
-            std::string path = evaluate_token(condition[pos++]);
+            std::string path = evaluate_argument(condition[pos++]);
             return std::filesystem::path(path).is_absolute();
         } else if (token == "IS_SYMLINK" && pos + 1 < condition.size()) {
             pos++;
-            std::string path = evaluate_token(condition[pos++]);
+            std::string path = evaluate_argument(condition[pos++]);
             return std::filesystem::is_symlink(path);
         } else if (token == "COMMAND" && pos + 1 < condition.size()) {
             pos++;
