@@ -215,6 +215,153 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("target_compile_options", make_target_command("target_compile_options", "COMPILE_OPTIONS"));
     interp.add_builtin("target_precompile_headers", make_target_command("target_precompile_headers", "PRECOMPILE_HEADERS"));
 
+    interp.add_builtin("target_sources", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("target_sources() requires at least a target name");
+            return;
+        }
+
+        std::string target_name = args[0];
+        auto target = get_target_from_name(interp, target_name, "target_sources");
+        if (!target) return;
+
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        bool is_custom = (target->get_type() == TargetType::CUSTOM);
+
+        // Helper to validate sources exist
+        auto validate_sources = [&](const std::vector<std::string>& sources) -> bool {
+            for (const auto& file : sources) {
+                std::filesystem::path p(file);
+                if (!p.is_absolute()) {
+                    p = std::filesystem::path(src_dir) / p;
+                }
+                if (!std::filesystem::exists(p)) {
+                    interp.set_fatal_error("Source file not found: " + p.string() + " (for target " + target_name + ")");
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Parse arguments manually to handle complex FILE_SET syntax
+        PropertyVisibility current_visibility = PropertyVisibility::PRIVATE;
+        std::vector<std::string> current_sources;
+
+        auto flush_current_sources = [&]() {
+            if (!current_sources.empty()) {
+                if (is_custom && current_visibility != PropertyVisibility::PRIVATE) {
+                    interp.set_fatal_error("target_sources() on custom target '" + target_name + "' only supports PRIVATE scope");
+                    return false;
+                }
+                if (!validate_sources(current_sources)) {
+                    return false;
+                }
+                target->append_property("SOURCES", current_sources, current_visibility);
+                current_sources.clear();
+            }
+            return true;
+        };
+
+        size_t i = 1;
+        while (i < args.size()) {
+            const std::string& arg = args[i];
+
+            // Check for visibility keywords
+            if (arg == "PRIVATE") {
+                if (!flush_current_sources()) return;
+                current_visibility = PropertyVisibility::PRIVATE;
+                i++;
+            } else if (arg == "PUBLIC") {
+                if (!flush_current_sources()) return;
+                current_visibility = PropertyVisibility::PUBLIC;
+                i++;
+            } else if (arg == "INTERFACE") {
+                if (!flush_current_sources()) return;
+                current_visibility = PropertyVisibility::INTERFACE;
+                i++;
+            } else if (arg == "FILE_SET") {
+                // Flush any pending sources
+                if (!flush_current_sources()) return;
+
+                // Parse FILE_SET
+                i++;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("target_sources() FILE_SET requires a name");
+                    return;
+                }
+
+                FileSet fs;
+                fs.name = args[i++];
+                fs.visibility = current_visibility;
+
+                // Parse optional TYPE, BASE_DIRS, FILES
+                while (i < args.size()) {
+                    const std::string& keyword = args[i];
+
+                    if (keyword == "TYPE") {
+                        i++;
+                        if (i >= args.size()) {
+                            interp.set_fatal_error("target_sources() FILE_SET TYPE requires a value");
+                            return;
+                        }
+                        fs.type = args[i++];
+
+                        // Validate type
+                        if (fs.type != "HEADERS" && fs.type != "CXX_MODULES") {
+                            interp.set_fatal_error("target_sources() FILE_SET TYPE must be HEADERS or CXX_MODULES, got: " + fs.type);
+                            return;
+                        }
+
+                        // Validate CXX_MODULES can't be INTERFACE unless imported
+                        if (fs.type == "CXX_MODULES" && fs.visibility == PropertyVisibility::INTERFACE && !target->is_imported()) {
+                            interp.set_fatal_error("target_sources() FILE_SET TYPE CXX_MODULES cannot use INTERFACE scope on non-imported targets");
+                            return;
+                        }
+                    } else if (keyword == "BASE_DIRS") {
+                        i++;
+                        while (i < args.size() && args[i] != "FILES" && args[i] != "FILE_SET" &&
+                               args[i] != "PRIVATE" && args[i] != "PUBLIC" && args[i] != "INTERFACE") {
+                            fs.base_dirs.push_back(args[i++]);
+                        }
+                    } else if (keyword == "FILES") {
+                        i++;
+                        while (i < args.size() && args[i] != "TYPE" && args[i] != "BASE_DIRS" && args[i] != "FILE_SET" &&
+                               args[i] != "PRIVATE" && args[i] != "PUBLIC" && args[i] != "INTERFACE") {
+                            fs.files.push_back(args[i++]);
+                        }
+                        break;  // FILES is typically last in a FILE_SET block
+                    } else {
+                        // Hit a new visibility keyword or FILE_SET, break out
+                        break;
+                    }
+                }
+
+                // Default BASE_DIRS to CMAKE_CURRENT_SOURCE_DIR if not specified
+                if (fs.base_dirs.empty()) {
+                    fs.base_dirs.push_back(src_dir);
+                }
+
+                // Validate files exist
+                if (!validate_sources(fs.files)) {
+                    return;
+                }
+
+                // Add files to SOURCES property with appropriate visibility
+                target->append_property("SOURCES", fs.files, fs.visibility);
+
+                // Store the file set
+                target->add_file_set(std::move(fs));
+            } else {
+                // Regular source file
+                current_sources.push_back(arg);
+                i++;
+            }
+        }
+
+        // Flush any remaining sources
+        flush_current_sources();
+    });
+
     interp.add_builtin("target_link_libraries", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("target_link_libraries");
         std::string name;

@@ -120,6 +120,21 @@ dmake consists of four main layers:
 - `LINK_DIRECTORIES`, `LINK_LIBRARIES` (order-preserving)
 - `PRECOMPILE_HEADERS`
 
+**File Sets (CMake 3.23+):**
+- Organizes related files with named file sets
+- Supports `HEADERS` and `CXX_MODULES` types
+- Each file set has: name, type, visibility (PUBLIC/PRIVATE/INTERFACE), base directories, and files
+- `CXX_MODULES` file sets automatically mark sources as module interfaces
+- Files from file sets are merged into `SOURCES` property during task generation
+
+**target_sources() Command:**
+- Basic form: `target_sources(target PRIVATE/PUBLIC/INTERFACE sources...)`
+- FILE_SET form: `target_sources(target VISIBILITY FILE_SET name TYPE type BASE_DIRS dirs FILES files)`
+- Supports multiple visibility scopes and file sets in a single call
+- Validates that `CXX_MODULES` file sets don't use INTERFACE scope (except on imported targets)
+- Custom targets only support PRIVATE scope
+- Files are validated for existence before being added
+
 ### Build System
 
 - **Signature-Based Caching**: Task signatures include command, compiler version, dmake version, and all input file timestamps (including discovered headers).
@@ -210,6 +225,7 @@ The parser is a **recursive descent parser** supporting:
 **Targets:**
 - `add_executable()`, `add_library()` - Create build targets
 - `add_custom_target()` - Custom targets with COMMAND/DEPENDS/ALL
+- `target_sources()` - Add sources to targets with FILE_SET support (HEADERS, CXX_MODULES)
 - `target_include_directories()`, `target_compile_definitions()`, `target_compile_options()`
 - `target_link_libraries()`, `target_link_directories()`
 - `target_precompile_headers()` - PCH support
@@ -641,12 +657,16 @@ The resulting binary will be in `build/debug/dmake`.
 
 **Builtins**: Modular registration in `dmake/builtins/*.cpp`
 - `message.cpp`, `variable.cpp`, `list.cpp`, `string.cpp`, `math.cpp`
-- `target.cpp`, `project.cpp`, `file.cpp`, `find_commands.cpp`, `find_package.cpp`
+- `target.cpp` - target creation and configuration including `target_sources()` with FILE_SET support
+- `project.cpp`, `file.cpp`, `find_commands.cpp`, `find_package.cpp`
 - `process.cpp`, `test.cpp`
 - **Register in**: `Interpreter` constructor, inside `if (parent_ == nullptr)` block for root-only commands
 
 **Target System**: `dmake/target.hpp/cpp`
 - Unified `Target` class with type enum
+- File Sets: `FileSet` struct stores organized file collections (HEADERS, CXX_MODULES)
+- `add_file_set()` adds file sets to targets
+- `is_in_cxx_modules_file_set()` checks if source is in CXX_MODULES file set
 - Property resolution: `Target::resolve()` - handles transitive dependencies
 - Task generation: `Target::generate_tasks()` - creates BuildTasks for graph
 - Custom targets: `CustomTarget` subclass

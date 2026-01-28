@@ -52,6 +52,39 @@ const std::vector<std::string>& Target::get_resolved_interface_property(const st
     return (it != resolved_interface_properties_.end()) ? it->second : empty;
 }
 
+// --- File Set Support ---
+
+void Target::add_file_set(FileSet file_set) {
+    file_sets_.push_back(std::move(file_set));
+}
+
+bool Target::is_in_cxx_modules_file_set(const std::string& source) const {
+    for (const auto& fs : file_sets_) {
+        if (fs.type == "CXX_MODULES") {
+            for (const auto& file : fs.files) {
+                // Check if source matches (could be absolute or relative)
+                std::filesystem::path src_path(source);
+                std::filesystem::path fs_path(file);
+
+                // Try direct match
+                if (src_path == fs_path) return true;
+
+                // Try filename match
+                if (src_path.filename() == fs_path.filename()) return true;
+
+                // Try resolved paths match
+                std::filesystem::path src_abs = src_path.is_absolute() ?
+                    src_path : (std::filesystem::path(source_dir_) / src_path);
+                std::filesystem::path fs_abs = fs_path.is_absolute() ?
+                    fs_path : (std::filesystem::path(source_dir_) / fs_path);
+
+                if (src_abs.lexically_normal() == fs_abs.lexically_normal()) return true;
+            }
+        }
+    }
+    return false;
+}
+
 // --- Specific Property Helpers (Legacy Wrappers) ---
 
 void Target::set_output_name(std::string output_name) {
@@ -237,6 +270,11 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         if (lang_info.is_header) continue;
         if (lang_info.lang == Language::UNKNOWN) {
             throw std::runtime_error("No compiler registered for file '" + src + "' in target '" + name_ + "'");
+        }
+
+        // Override module interface detection if file is in CXX_MODULES file set
+        if (is_in_cxx_modules_file_set(src)) {
+            lang_info.is_module_interface = true;
         }
 
         const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
@@ -543,9 +581,18 @@ bool Target::has_module_sources() const {
     modules_detected_ = true;
     has_modules_ = false;
 
+    // Check regular SOURCES for module interface files by extension
     for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
         auto lang_info = LanguageClassifier::from_path(src);
         if (lang_info.is_module_interface) {
+            has_modules_ = true;
+            return true;
+        }
+    }
+
+    // Check CXX_MODULES file sets
+    for (const auto& fs : file_sets_) {
+        if (fs.type == "CXX_MODULES" && !fs.files.empty()) {
             has_modules_ = true;
             return true;
         }
@@ -559,6 +606,11 @@ bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& t
 
     for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
         auto lang_info = LanguageClassifier::from_path(src);
+
+        // Override module interface detection if file is in CXX_MODULES file set
+        if (is_in_cxx_modules_file_set(src)) {
+            lang_info.is_module_interface = true;
+        }
 
         // Only scan module interface files (*.ixx, *.cppm, etc.)
         // Regular .cpp files that might import modules will have their

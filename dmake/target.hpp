@@ -11,6 +11,14 @@ namespace dmake {
 enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY, CUSTOM };
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
 
+struct FileSet {
+    std::string name;
+    std::string type;  // "HEADERS" or "CXX_MODULES"
+    PropertyVisibility visibility;
+    std::vector<std::string> base_dirs;
+    std::vector<std::string> files;
+};
+
 struct CustomCommand {
     std::vector<std::string> command;
     std::string comment;
@@ -54,6 +62,11 @@ public:
     // Generic List Property Access (for properties that accumulate like SOURCES, DEFINITIONS)
     void append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
     const std::vector<std::string>& get_property_list(const std::string& name, PropertyVisibility visibility) const;
+
+    // File Set Support
+    void add_file_set(FileSet file_set);
+    const std::vector<FileSet>& get_file_sets() const { return file_sets_; }
+    bool is_in_cxx_modules_file_set(const std::string& source) const;
 
     // Deprecated helpers for C++ (mapped to generic properties)
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
@@ -111,6 +124,9 @@ protected:
     // List properties with visibility (e.g., INCLUDE_DIRECTORIES[PUBLIC])
     // Structure: map<PropertyName, map<Visibility, vector<Value>>>
     std::map<std::string, std::map<PropertyVisibility, std::vector<std::string>>> list_properties_;
+
+    // File Sets (CMake 3.23+)
+    std::vector<FileSet> file_sets_;
 
     // Resolution State
     bool resolved_ = false;
