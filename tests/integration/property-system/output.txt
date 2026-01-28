@@ -10,8 +10,10 @@
 [STATUS] Global property full docs: This is a test property for global scope
 [STATUS] Property not found correctly returns empty
 [STATUS] Interface property: 
+[STATUS] Cache variable type: STRING
+[STATUS] GNUInstallDirs loaded successfully
 [STATUS] === Property System Test Complete ===
 [STATUS] Generating build graph...
 [STATUS] Starting debug build...
-[1;32m    Finished[0m build in 0.00s
+[1;32m    Finished[0m build in 0.01s
 [STATUS] Build finished.

@@ -8,6 +8,7 @@
 namespace dmake {
 
 // Helper to parse property scope from string
+// Note: CMake inconsistently uses "CACHED_VARIABLE" for define_property() but "CACHE" for set/get_property()
 static std::optional<PropertyScope> parse_property_scope(const std::string& scope_str) {
     if (scope_str == "GLOBAL") return PropertyScope::GLOBAL;
     if (scope_str == "DIRECTORY") return PropertyScope::DIRECTORY;
@@ -16,6 +17,7 @@ static std::optional<PropertyScope> parse_property_scope(const std::string& scop
     if (scope_str == "TEST") return PropertyScope::TEST;
     if (scope_str == "VARIABLE") return PropertyScope::VARIABLE;
     if (scope_str == "CACHED_VARIABLE") return PropertyScope::CACHED_VARIABLE;
+    if (scope_str == "CACHE") return PropertyScope::CACHED_VARIABLE; // Alias for set/get_property
     return std::nullopt;
 }
 
@@ -690,11 +692,39 @@ void register_property_builtins(Interpreter& interp) {
             }
 
             case PropertyScope::CACHED_VARIABLE: {
-                std::string cache_prop_key = item_name + ".__property__." + property_name;
-                auto it = cache_variables.find(cache_prop_key);
-                if (it != cache_variables.end()) {
-                    value = it->second;
+                // Handle special built-in cache properties
+                if (property_name == "TYPE") {
+                    // Check if the cache variable exists
+                    auto cache_it = cache_variables.find(item_name);
+                    if (cache_it != cache_variables.end()) {
+                        // For now, all cache variables are treated as STRING type
+                        // CMake has BOOL, FILEPATH, PATH, STRING, INTERNAL types
+                        value = "STRING";
+                        value_found = true;
+                    }
+                } else if (property_name == "VALUE") {
+                    // Built-in VALUE property returns the cache variable's value
+                    auto cache_it = cache_variables.find(item_name);
+                    if (cache_it != cache_variables.end()) {
+                        value = cache_it->second;
+                        value_found = true;
+                    }
+                } else if (property_name == "HELPSTRING") {
+                    // Built-in HELPSTRING property (we don't track this currently)
+                    value = "";
                     value_found = true;
+                } else if (property_name == "ADVANCED") {
+                    // Built-in ADVANCED property (we don't track this currently)
+                    value = "0";
+                    value_found = true;
+                } else {
+                    // Custom cache property
+                    std::string cache_prop_key = item_name + ".__property__." + property_name;
+                    auto it = cache_variables.find(cache_prop_key);
+                    if (it != cache_variables.end()) {
+                        value = it->second;
+                        value_found = true;
+                    }
                 }
                 break;
             }

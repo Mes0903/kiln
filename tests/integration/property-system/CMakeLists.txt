@@ -85,4 +85,13 @@ set_property(TARGET testlib PROPERTY INTERFACE_COMPILE_DEFINITIONS "TEST_DEFINE=
 get_property(iface_def TARGET testlib PROPERTY INTERFACE_COMPILE_DEFINITIONS)
 message(STATUS "Interface property: ${iface_def}")
 
+# Test CACHE scope (used by GNUInstallDirs and other modules)
+set(CMAKE_INSTALL_PREFIX "/usr/local" CACHE PATH "Install prefix")
+get_property(cache_type CACHE CMAKE_INSTALL_PREFIX PROPERTY TYPE)
+message(STATUS "Cache variable type: ${cache_type}")
+
+# Test that GNUInstallDirs can load without errors
+include(GNUInstallDirs)
+message(STATUS "GNUInstallDirs loaded successfully")
+
 message(STATUS "=== Property System Test Complete ===")

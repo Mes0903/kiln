@@ -21,6 +21,8 @@ grep -q "Source property: SourceValue" output.txt || (echo "FAIL: Source propert
 grep -q "Global property brief docs: A custom global property" output.txt || (echo "FAIL: BRIEF_DOCS retrieval failed" && exit 1)
 grep -q "Global property full docs: This is a test property for global scope" output.txt || (echo "FAIL: FULL_DOCS retrieval failed" && exit 1)
 grep -q "Property not found correctly returns empty" output.txt || (echo "FAIL: Property not found check failed" && exit 1)
+grep -q "Cache variable type: STRING" output.txt || (echo "FAIL: Cache TYPE property query failed" && exit 1)
+grep -q "GNUInstallDirs loaded successfully" output.txt || (echo "FAIL: GNUInstallDirs failed to load" && exit 1)
 grep -q "Property System Test Complete" output.txt || (echo "FAIL: Test did not complete" && exit 1)
 
 # Check that the library was built
