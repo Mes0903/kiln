@@ -602,26 +602,63 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
         return parts;
     }
 
+    std::string current_literal;
     while (pos_ < content_.length() && !std::isspace(content_[pos_]) &&
            content_[pos_] != '(' && content_[pos_] != ')' &&
            content_[pos_] != '#' && content_[pos_] != '"' && content_[pos_] != '[') {
         if (content_[pos_] == '\\' && pos_ + 1 < content_.length()) {
-            // Handle escape sequence - skip the backslash and include the next character
-            pos_++;
+            // Save any accumulated text before the escape
+            if (start_pos < pos_) {
+                current_literal += content_.substr(start_pos, pos_ - start_pos);
+            }
+
+            // Process escape sequence
+            pos_++; // Skip backslash
             col_++;
+            char escaped_char = content_[pos_];
+
+            // Interpret CMake escape sequences
+            switch (escaped_char) {
+                case 'n':  current_literal += '\n'; break;
+                case 't':  current_literal += '\t'; break;
+                case 'r':  current_literal += '\r'; break;
+                case '\\': current_literal += '\\'; break;
+                case '"':  current_literal += '"'; break;
+                case ')':  current_literal += ')'; break;
+                case '(':  current_literal += '('; break;
+                case '#':  current_literal += '#'; break;
+                case ' ':  current_literal += ' '; break;
+                case ';':  current_literal += ';'; break;
+                case '\n':
+                    // Backslash-newline continues the line
+                    row_++;
+                    col_ = 1;
+                    pos_++;
+                    start_pos = pos_;
+                    continue;
+                default:
+                    // Unknown escape, keep the backslash
+                    current_literal += '\\';
+                    current_literal += escaped_char;
+                    break;
+            }
+
             pos_++;
-            if (content_[pos_ - 1] == '\n') {
-                row_++;
-                col_ = 1;
-            } else {
+            if (escaped_char != '\n') {
                 col_++;
             }
+            start_pos = pos_;
             continue;
         }
         if (content_[pos_] == '$' && pos_ + 1 < content_.length() &&
             (content_[pos_ + 1] == '{' || std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_')) {
+            // Save accumulated text (from both unescaped and escaped content)
             if (start_pos < pos_) {
-                parts.emplace_back(std::string(content_.substr(start_pos, pos_ - start_pos)));
+                current_literal += content_.substr(start_pos, pos_ - start_pos);
+            }
+            if (!current_literal.empty()) {
+                parts.emplace_back(std::move(current_literal));
+                current_literal.clear();
             }
 
             pos_++; // Move past '$'
@@ -639,8 +676,12 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
         col_++;
     }
 
+    // Collect any remaining text
     if (start_pos < pos_) {
-        parts.emplace_back(std::string(content_.substr(start_pos, pos_ - start_pos)));
+        current_literal += content_.substr(start_pos, pos_ - start_pos);
+    }
+    if (!current_literal.empty()) {
+        parts.emplace_back(std::move(current_literal));
     }
 
     if (parts.empty()) {

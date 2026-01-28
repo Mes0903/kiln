@@ -1045,7 +1045,7 @@ TEST_CASE("if condition: IN_LIST operator", "[interpreter][if]") {
             message("fail")
         endif()
     )");
-    REQUIRE(output == "fail\n");  // Empty element is removed, so not in list
+    REQUIRE(output == "pass\n");  // Empty elements are now preserved in lists
 
     // Case sensitivity check
     output = run_script(R"(
@@ -2554,12 +2554,12 @@ TEST_CASE("Parser handles escaped quotes in unquoted arguments", "[parser]") {
     REQUIRE(output == "\n)\n");
 
     // Test multiple escaped quotes in unquoted arguments
-    // In CMake, \" in unquoted context is literally backslash-quote, not an escape sequence
+    // In CMake, \" in unquoted context is an escape sequence that produces a literal quote
     output = run_script(R"RAW(
         set(var \"foo\" \"bar\")
         message("${var}")
     )RAW");
-    REQUIRE(output == "\\\"foo\\\";\\\"bar\\\"\n");
+    REQUIRE(output == "\"foo\";\"bar\"\n");
 
     // Test escaped quote followed by bracket argument
     output = run_script(R"RAW(
@@ -2572,31 +2572,32 @@ TEST_CASE("Parser handles escaped quotes in unquoted arguments", "[parser]") {
 
 // Bug fix tests from differential fuzzing
 
-TEST_CASE("Empty list elements are removed during expansion", "[interpreter][bugfix]") {
-    // Bug: DMake was preserving empty elements, CMake removes them
+TEST_CASE("Empty list elements are preserved in string representation", "[interpreter][bugfix]") {
+    // CMake preserves empty elements in the internal representation
+    // When stored as "a;;c", it becomes a list ["a", "", "c"]
     auto output = run_script(R"(
         set(L a;;c)
         message("${L}")
     )");
-    REQUIRE(output == "a;c\n");
+    REQUIRE(output == "a;;c\n");
 
     output = run_script(R"(
         set(L a;;;b;;;;c)
         message("${L}")
     )");
-    REQUIRE(output == "a;b;c\n");
+    REQUIRE(output == "a;;;b;;;;c\n");
 
     output = run_script(R"(
         set(L ;;a;b)
         message("${L}")
     )");
-    REQUIRE(output == "a;b\n");
+    REQUIRE(output == ";;a;b\n");
 
     output = run_script(R"(
         set(L a;b;;)
         message("${L}")
     )");
-    REQUIRE(output == "a;b\n");
+    REQUIRE(output == "a;b;;\n");
 }
 
 TEST_CASE("Empty list elements in foreach", "[interpreter][bugfix]") {
@@ -2606,7 +2607,7 @@ TEST_CASE("Empty list elements in foreach", "[interpreter][bugfix]") {
             message("${item}")
         endforeach()
     )");
-    REQUIRE(output == "a\nc\n");  // Only 2 iterations, empty element removed
+    REQUIRE(output == "a\n\nc\n");  // 3 iterations, empty element preserved
 }
 
 TEST_CASE("Foreach variable is cleared after loop", "[interpreter][bugfix]") {

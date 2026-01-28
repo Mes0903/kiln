@@ -117,6 +117,12 @@ void register_variable_builtins(Interpreter& interp) {
         }
 
         // Regular: set(VAR value)
+        // Special case: set(VAR) with no value is equivalent to unset(VAR)
+        if (args.size() == 1) {
+            interp.unset_variable(var_name);
+            return;
+        }
+
         std::vector<std::string> value_args(args.begin() + 1, args.end());
         CMakeList value_list(value_args);
         interp.set_variable(var_name, value_list.to_string());
