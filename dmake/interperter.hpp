@@ -42,6 +42,7 @@ struct TestDefinition {
     std::string command; // Target name or path
     std::vector<std::string> args;
     std::string working_dir;
+    std::map<std::string, std::string> properties; // Test properties
 };
 
 // ANSI escape codes for colors
@@ -55,6 +56,26 @@ namespace colors {
 
 // Forward declaration
 class Interpreter;
+
+// Property system
+enum class PropertyScope {
+    GLOBAL,
+    DIRECTORY,
+    TARGET,
+    SOURCE,
+    TEST,
+    VARIABLE,
+    CACHED_VARIABLE
+};
+
+struct PropertyDefinition {
+    PropertyScope scope;
+    std::string name;
+    bool inherited = false;
+    std::string brief_docs;
+    std::string full_docs;
+    std::string initialize_from_variable; // For TARGET properties, optional
+};
 
 struct CallFrame {
     std::string script_dir;
@@ -120,6 +141,23 @@ public:
     void enable_testing_globally() { get_root()->testing_enabled_ = true; }
     bool is_testing_enabled() const { return get_root()->get_root()->testing_enabled_; }
 
+    // Property system accessors
+    std::map<PropertyScope, std::map<std::string, PropertyDefinition>>& get_property_definitions() {
+        return get_root()->property_definitions_;
+    }
+    std::map<std::string, std::string>& get_global_properties() {
+        return get_root()->global_properties_;
+    }
+    std::map<std::string, std::map<std::string, std::string>>& get_source_properties() {
+        return get_root()->source_properties_;
+    }
+    std::map<std::string, std::string>& get_cache_variables() {
+        return get_root()->cache_variables_;
+    }
+    std::map<std::string, std::string>& get_directory_properties() {
+        return directory_properties_;
+    }
+
     // Friend registration functions
     friend void register_message_builtins(Interpreter& interp);
     friend void register_variable_builtins(Interpreter& interp);
@@ -131,6 +169,7 @@ public:
     friend void register_process_builtins(Interpreter& interp);
     friend void register_math_builtins(Interpreter& interp);
     friend void register_string_builtins(Interpreter& interp);
+    friend void register_property_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 
@@ -178,6 +217,14 @@ private:
     std::set<std::string> global_guarded_files_;
     std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
 
+    // Property system (managed by root)
+    // Property definitions: scope -> property_name -> definition
+    std::map<PropertyScope, std::map<std::string, PropertyDefinition>> property_definitions_;
+    // Global property values: property_name -> value
+    std::map<std::string, std::string> global_properties_;
+    // Source property values: absolute_source_path -> property_name -> value
+    std::map<std::string, std::map<std::string, std::string>> source_properties_;
+
     // Directory scan cache for optimizing file lookups
     struct DirectoryCacheEntry {
         std::filesystem::file_time_type mtime;           // Directory modification time
@@ -189,6 +236,9 @@ private:
     std::vector<std::string> accumulated_include_directories_;
     std::vector<std::string> accumulated_link_directories_;
     std::set<std::string> directory_guarded_files_;
+
+    // Directory-scoped property values (per interpreter scope)
+    std::map<std::string, std::string> directory_properties_;
 
     // Scope-local state
     std::map<std::string, UserFunction> user_functions_;

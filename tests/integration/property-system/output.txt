@@ -1,0 +1,17 @@
+[STATUS] Global property: GlobalValue
+[STATUS] Global property defined: 1
+[STATUS] Global property set: 1
+[STATUS] Global property after append: GlobalValue;AppendedValue
+[STATUS] Directory property: DirValue
+[STATUS] Target property: TargetValue
+[STATUS] Target property after append: TargetValue;AppendedTargetValue
+[STATUS] Source property: SourceValue
+[STATUS] Global property brief docs: A custom global property
+[STATUS] Global property full docs: This is a test property for global scope
+[STATUS] Property not found correctly returns empty
+[STATUS] Interface property: 
+[STATUS] === Property System Test Complete ===
+[STATUS] Generating build graph...
+[STATUS] Starting debug build...
+[1;32m    Finished[0m build in 0.00s
+[STATUS] Build finished.
