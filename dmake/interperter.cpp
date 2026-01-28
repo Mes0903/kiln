@@ -1078,6 +1078,19 @@ bool Interpreter::is_falsy(const std::string& val) {
         return true;
     }
 
+    // CMake behavior: strings that look like they might be numbers but aren't valid
+    // should be treated as false. Examples: "2x", "-3.5y", "+2bad"
+    // Check if the string starts with a sign or digit
+    if (!val.empty() && (std::isdigit(val[0]) || val[0] == '+' || val[0] == '-')) {
+        // Try to parse as a number
+        char* end;
+        std::strtod(val.c_str(), &end);
+        // If parsing didn't consume the entire string, it's an invalid number
+        if (*end != '\0') {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -1440,15 +1453,18 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             return !is_falsy(token_str);
         }
 
-        // If the argument has variable references (not a plain literal), use the expanded value directly
-        // Example: if(${VAR}) where VAR="ON" should evaluate "ON" for truthiness, not dereference it again
-        bool has_var_ref = !(arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0]));
-        if (has_var_ref) {
+        // Special case: if the argument is ENTIRELY a single variable reference (e.g., ${VAR}),
+        // use its expanded value directly without dereferencing again.
+        // Example: if(${VAR}) where VAR="ON" should evaluate "ON" for truthiness, not dereference ON
+        bool is_single_var_ref = (arg.parts.size() == 1 && std::holds_alternative<VariableReference>(arg.parts[0]));
+        if (is_single_var_ref) {
             return !is_falsy(token_str);
         }
 
-        // Plain unquoted literal - dereference as a variable (even if it's a keyword name)
+        // For all other cases (plain literals or concatenations like Prefix_${Suffix}),
+        // dereference the result as a variable name
         // Example: if(VAR) should look up the value of variable VAR
+        // Example: if(VAR_${suffix}) where suffix="" should expand to "VAR_", then look up VAR_
         std::string val = get_variable(token_str);
         return !is_falsy(val);
     };

@@ -3102,3 +3102,126 @@ TEST_CASE("message() concatenates arguments without spaces", "[interpreter][bugf
     )");
     REQUIRE(output == "AB\n");
 }
+
+TEST_CASE("if condition: invalid numeric strings are falsy", "[interpreter][if][bugfix]") {
+    // Strings that start like numbers but aren't valid numbers should be falsy
+    // This matches CMake behavior from IfTest.cmake.in
+
+    // Test "2x" - looks like it starts with a number but isn't valid
+    auto output = run_script(R"(
+        if(2x)
+            message("2x is true")
+        else()
+            message("2x is false")
+        endif()
+    )");
+    REQUIRE(output == "2x is false\n");
+
+    // Test "-2x" - negative number prefix but invalid
+    output = run_script(R"(
+        if(-2x)
+            message("-2x is true")
+        else()
+            message("-2x is false")
+        endif()
+    )");
+    REQUIRE(output == "-2x is false\n");
+
+    // Test with variable expansion
+    output = run_script(R"(
+        set(_bad 2x)
+        if(${_bad})
+            message("variable 2x is true")
+        else()
+            message("variable 2x is false")
+        endif()
+    )");
+    REQUIRE(output == "variable 2x is false\n");
+
+    // Valid numbers should still be truthy
+    output = run_script(R"(
+        if(2)
+            message("2 is true")
+        endif()
+        if(-2)
+            message("-2 is true")
+        endif()
+        if(2.0)
+            message("2.0 is true")
+        endif()
+        if(-2.0)
+            message("-2.0 is true")
+        endif()
+    )");
+    REQUIRE(output == "2 is true\n-2 is true\n2.0 is true\n-2.0 is true\n");
+}
+
+TEST_CASE("if condition: variable concatenation in macros", "[interpreter][if][macro][bugfix]") {
+    // When a macro has something like VAR_${_var} and _var is empty,
+    // it should expand to "VAR_" and then dereference the variable VAR_
+    // This matches CMake behavior from IfTest.cmake.in
+
+    auto output = run_script(R"(
+        set(VAR_ "")
+
+        macro(test_vars)
+            set(_var "")
+            if(VAR_${_var})
+                message("VAR_ is true")
+            else()
+                message("VAR_ is false")
+            endif()
+        endmacro()
+
+        test_vars()
+    )");
+    REQUIRE(output == "VAR_ is false\n");
+
+    // Test with a non-empty value in VAR_
+    output = run_script(R"(
+        set(VAR_ "some_value")
+
+        macro(test_vars)
+            set(_var "")
+            if(VAR_${_var})
+                message("VAR_ is true")
+            else()
+                message("VAR_ is false")
+            endif()
+        endmacro()
+
+        test_vars()
+    )");
+    REQUIRE(output == "VAR_ is true\n");
+
+    // Test with different suffix
+    output = run_script(R"(
+        set(VAR_FOO "value")
+        set(VAR_BAR "")
+
+        macro(test_vars suffix)
+            if(VAR_${suffix})
+                message("VAR_${suffix} is true")
+            else()
+                message("VAR_${suffix} is false")
+            endif()
+        endmacro()
+
+        test_vars(FOO)
+        test_vars(BAR)
+    )");
+    REQUIRE(output == "VAR_FOO is true\nVAR_BAR is false\n");
+
+    // Single variable reference should not double-dereference
+    output = run_script(R"(
+        set(VAR "ON")
+        set(ON "this_should_not_be_evaluated")
+
+        if(${VAR})
+            message("VAR is true")
+        else()
+            message("VAR is false")
+        endif()
+    )");
+    REQUIRE(output == "VAR is true\n");
+}
