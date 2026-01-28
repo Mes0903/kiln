@@ -90,7 +90,10 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
     visiting_ = true;
 
-    auto resolve_path = [&](const std::string& p) -> std::string {
+    auto resolve_path = [&](std::string p) -> std::string {
+        if(p.starts_with("-I")) {
+            p = p.substr(2);
+        }
         std::filesystem::path path(p);
         if (path.is_absolute()) return path.string();
         return (std::filesystem::path(source_dir_) / path).lexically_normal().string();
