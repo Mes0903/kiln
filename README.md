@@ -26,6 +26,7 @@ The project has very few dependencies:
 * CLI11 (https://github.com/CLIUtils/CLI11)
 * Catch2 3.x (https://github.com/catchorg/Catch2)
 * C++23 capable compiler (GCC 13+)
+* CMake (dmake is an execution enginem you still need the CMake shipped modules)
 
 To build `dmake` for the first time using CMake:
 
