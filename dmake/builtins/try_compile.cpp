@@ -4,6 +4,7 @@
 #include "../build_system.hpp"
 #include "../cache_store.hpp"
 #include "../utils.hpp"
+#include "../CMakeList.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -192,6 +193,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string cxx_standard;
         std::string c_standard;
         std::string output_variable;
+        std::vector<std::string> cmake_flags;
 
         parser.add_positional(result_var, "result variable");
         parser.add_positional(bindir, "binary directory");
@@ -202,11 +204,67 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.add_list("COMPILE_DEFINITIONS", compile_definitions);
         parser.add_list("LINK_LIBRARIES", link_libraries);
         parser.add_list("LINK_OPTIONS", link_options);
+        parser.add_list("CMAKE_FLAGS", cmake_flags);
         parser.add_value("CXX_STANDARD", cxx_standard);
         parser.add_value("C_STANDARD", c_standard);
         parser.add_value("OUTPUT_VARIABLE", output_variable);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Process CMAKE_FLAGS (e.g., -DCOMPILE_DEFINITIONS:STRING=-DFOO)
+        for (const auto& flag : cmake_flags) {
+            if (flag.size() < 2 || flag.substr(0, 2) != "-D") {
+                continue;  // Skip non-definition flags
+            }
+
+            std::string def = flag.substr(2);  // Remove "-D" prefix
+            size_t eq = def.find('=');
+            if (eq == std::string::npos) {
+                continue;  // Skip flags without values
+            }
+
+            std::string var_name = def.substr(0, eq);
+            std::string value = def.substr(eq + 1);
+
+            // Strip type annotation if present (e.g., VAR:STRING -> VAR)
+            size_t colon = var_name.find(':');
+            if (colon != std::string::npos) {
+                var_name = var_name.substr(0, colon);
+            }
+
+            // Apply based on variable name
+            if (var_name == "COMPILE_DEFINITIONS") {
+                // Value might be multiple definitions separated by semicolons
+                // Each definition might start with -D which we need to strip
+                CMakeList defs(value);
+                for (const auto& d : defs) {
+                    if (d.size() >= 2 && d.substr(0, 2) == "-D") {
+                        compile_definitions.push_back(d.substr(2));
+                    } else {
+                        compile_definitions.push_back(d);
+                    }
+                }
+            } else if (var_name == "LINK_LIBRARIES") {
+                CMakeList libs(value);
+                for (const auto& lib : libs) {
+                    link_libraries.push_back(lib);
+                }
+            } else if (var_name == "LINK_DIRECTORIES") {
+                // Add to link options as -L flags
+                CMakeList dirs(value);
+                for (const auto& dir : dirs) {
+                    if (!dir.empty()) {
+                        link_options.push_back("-L" + dir);
+                    }
+                }
+            } else if (var_name == "LINK_OPTIONS") {
+                CMakeList opts(value);
+                for (const auto& opt : opts) {
+                    link_options.push_back(opt);
+                }
+            }
+            // Ignore other CMAKE_FLAGS variables for now
+        }
 
         // Validate: need at least one source
         if (sources.empty() && source_from_content.empty() &&

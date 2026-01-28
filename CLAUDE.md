@@ -496,6 +496,7 @@ Implements CMake's `try_compile` command in SOURCE mode with aggressive caching.
 - **Source variants**: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
 - **Compilation options**: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`
 - **Linking**: `LINK_LIBRARIES` (with target name resolution), `LINK_OPTIONS`
+- **CMAKE_FLAGS**: Additional compiler/linker settings (e.g., `-DCOMPILE_DEFINITIONS:STRING=-DFOO`)
 - **Output capture**: `OUTPUT_VARIABLE` for compiler stdout/stderr
 - **Result**: Boolean variable set to `TRUE`/`FALSE`
 
@@ -525,17 +526,29 @@ def:<def>|lib:<lib>|opt:<opt>|dep:<header>:<mtime>|...
 - Preserved on failure (for debugging)
 - Cleaned on success
 
-**Example**:
+**Examples**:
 ```cmake
+# Basic usage
 try_compile(RESULT ${CMAKE_BINARY_DIR}
     SOURCE_FROM_CONTENT test.cpp "int main() { return 0; }"
     CXX_STANDARD 17
     COMPILE_DEFINITIONS DEBUG
     OUTPUT_VARIABLE COMPILE_OUTPUT
 )
-if(RESULT)
-    message(STATUS "Compilation succeeded")
-endif()
+
+# With CMAKE_FLAGS (CMake-compatible syntax)
+try_compile(RESULT ${CMAKE_BINARY_DIR}
+    SOURCES test.cpp
+    CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=-DCHECK_FUNCTION_EXISTS=pthread_create
+                -DLINK_LIBRARIES:STRING=pthread
+)
+
+# Real-world CheckFunctionExists pattern
+try_compile(CMAKE_HAVE_PTHREAD_CREATE ${CMAKE_BINARY_DIR}
+    SOURCES CheckFunctionExists.c
+    CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=-DCHECK_FUNCTION_EXISTS=pthread_create
+    LINK_LIBRARIES pthread
+)
 ```
 
 **Implementation**: `dmake/builtins/try_compile.cpp`

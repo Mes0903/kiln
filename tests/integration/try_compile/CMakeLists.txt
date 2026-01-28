@@ -74,3 +74,21 @@ if("${COMPILE_OUTPUT}" STREQUAL "")
 endif()
 
 message(STATUS "All try_compile integration tests passed!")
+
+# Test 8: CMAKE_FLAGS support
+try_compile(RESULT8 ${CMAKE_BINARY_DIR}
+    SOURCE_FROM_CONTENT test8.cpp "#ifdef MY_FLAG\nint main() { return 0; }\n#else\n#error MY_FLAG not defined\n#endif"
+    CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=-DMY_FLAG
+)
+if(NOT RESULT8)
+    message(FATAL_ERROR "Test 8 failed: CMAKE_FLAGS should work")
+endif()
+
+# Test 9: CMAKE_FLAGS with multiple flags
+try_compile(RESULT9 ${CMAKE_BINARY_DIR}
+    SOURCE_FROM_CONTENT test9.cpp "#if defined(FLAG_A) && defined(FLAG_B)\nint main() { return 0; }\n#else\n#error Flags not defined\n#endif"
+    CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=-DFLAG_A -DCOMPILE_DEFINITIONS:STRING=-DFLAG_B
+)
+if(NOT RESULT9)
+    message(FATAL_ERROR "Test 9 failed: CMAKE_FLAGS with multiple entries should work")
+endif()
