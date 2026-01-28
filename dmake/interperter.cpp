@@ -1426,7 +1426,15 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             return !is_falsy(token_str);
         }
 
-        // Otherwise dereference as a variable (even if it's a keyword name)
+        // If the argument has variable references (not a plain literal), use the expanded value directly
+        // Example: if(${VAR}) where VAR="ON" should evaluate "ON" for truthiness, not dereference it again
+        bool has_var_ref = !(arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0]));
+        if (has_var_ref) {
+            return !is_falsy(token_str);
+        }
+
+        // Plain unquoted literal - dereference as a variable (even if it's a keyword name)
+        // Example: if(VAR) should look up the value of variable VAR
         std::string val = get_variable(token_str);
         return !is_falsy(val);
     };

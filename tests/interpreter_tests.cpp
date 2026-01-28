@@ -1991,6 +1991,225 @@ TEST_CASE("string() TIMESTAMP operation", "[interpreter][string]") {
     REQUIRE(output.length() == 5); // 4 digits + newline
 }
 
+TEST_CASE("separate_arguments() simple form", "[interpreter][separate_arguments]") {
+    auto output = run_script(R"(
+        set(myvar "foo bar baz")
+        separate_arguments(myvar)
+        message("${myvar}")
+    )");
+    REQUIRE(output == "foo;bar;baz\n");
+
+    // Test with multiple spaces
+    output = run_script(R"(
+        set(myvar "foo  bar   baz")
+        separate_arguments(myvar)
+        message("${myvar}")
+    )");
+    REQUIRE(output == "foo;;bar;;;baz\n");
+
+    // Test with tabs and newlines
+    output = run_script(R"(
+        set(myvar "foo	bar
+baz")
+        separate_arguments(myvar)
+        message("${myvar}")
+    )");
+    // All whitespace becomes semicolons
+    REQUIRE(output.find(';') != std::string::npos);
+}
+
+TEST_CASE("separate_arguments() UNIX_COMMAND mode", "[interpreter][separate_arguments]") {
+    // Basic parsing
+    auto output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "foo bar baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar;baz\n");
+
+    // Double quotes
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "foo \"bar baz\" qux")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar baz;qux\n");
+
+    // Single quotes
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "foo 'bar baz' qux")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar baz;qux\n");
+
+    // Backslash escaping
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "foo bar\\ baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar baz\n");
+
+    // Escaped quote
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "foo \\\"bar\\\" baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;\"bar\";baz\n");
+
+    // No special escapes (backslash-n is literal backslash and n)
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "foo\\nbar")
+        message("${result}")
+    )");
+    REQUIRE(output == "foonbar\n");
+}
+
+TEST_CASE("separate_arguments() WINDOWS_COMMAND mode", "[interpreter][separate_arguments]") {
+    // Basic parsing
+    auto output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "foo bar baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar;baz\n");
+
+    // Double quotes
+    output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "foo \"bar baz\" qux")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar baz;qux\n");
+
+    // Backslashes are literal unless before quote
+    output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "foo\\bar baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo\\bar;baz\n");
+
+    // Backslashes before quote: even number = half in output, quote is delimiter
+    // Input: 2 backslashes before quote → 1 backslash output, quote delimiter
+    output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "foo \\\\\"bar baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;\\bar baz\n");
+
+    // Odd number: 3 backslashes before quote → 1 backslash output, literal quote
+    output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "foo \\\\\\\"bar baz")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;\\\"bar;baz\n");
+
+    // Double quote within quoted string = literal quote (Microsoft spec)
+    output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "a\"b\"\" c d")
+        message("${result}")
+    )");
+    REQUIRE(output == "ab\" c d\n");
+
+    // Examples from Microsoft docs
+    // Input: a\\\b d"e f"g h → argv[1]="a\\\b", argv[2]="de fg", argv[3]="h"
+    output = run_script(R"(
+        separate_arguments(result WINDOWS_COMMAND "a\\\\\\b d\"e f\"g h")
+        message("${result}")
+    )");
+    REQUIRE(output == "a\\\\\\b;de fg;h\n");
+}
+
+TEST_CASE("separate_arguments() NATIVE_COMMAND mode", "[interpreter][separate_arguments]") {
+    // NATIVE_COMMAND should use UNIX_COMMAND on Linux
+    auto output = run_script(R"(
+        separate_arguments(result NATIVE_COMMAND "foo \"bar baz\" qux")
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar baz;qux\n");
+}
+
+TEST_CASE("separate_arguments() PROGRAM option", "[interpreter][separate_arguments]") {
+    // Test with bash (should exist on Linux systems)
+    auto output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND PROGRAM "bash -c echo")
+        list(LENGTH result len)
+        message("${len}")
+        list(GET result 0 prog)
+        message("${prog}")
+    )");
+    auto lines = output.substr(0, output.size() - 1);
+    auto newline_pos = lines.find('\n');
+    auto first_line = lines.substr(0, newline_pos);
+    auto second_line = lines.substr(newline_pos + 1);
+
+    // Should have 2 elements: program path and remaining args as string
+    REQUIRE(first_line == "2");
+    // Program should be absolute path to bash
+    REQUIRE(second_line.find("/bash") != std::string::npos);
+
+    // Test program not found
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND PROGRAM "nonexistent_program_12345 arg1 arg2")
+        message("${result}")
+    )");
+    // Should be empty
+    REQUIRE(output == "\n");
+}
+
+TEST_CASE("separate_arguments() PROGRAM SEPARATE_ARGS option", "[interpreter][separate_arguments]") {
+    // Test with SEPARATE_ARGS flag
+    auto output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND PROGRAM SEPARATE_ARGS "bash -c echo")
+        list(LENGTH result len)
+        message("${len}")
+        list(GET result 0 prog)
+        list(GET result 1 arg1)
+        list(GET result 2 arg2)
+        message("${prog}")
+        message("${arg1}")
+        message("${arg2}")
+    )");
+
+    auto lines = output.substr(0, output.size() - 1);
+    std::vector<std::string> output_lines;
+    size_t start = 0;
+    while (start < lines.size()) {
+        size_t end = lines.find('\n', start);
+        if (end == std::string::npos) {
+            output_lines.push_back(lines.substr(start));
+            break;
+        }
+        output_lines.push_back(lines.substr(start, end - start));
+        start = end + 1;
+    }
+
+    // Should have 3 elements: program path, arg1, arg2
+    REQUIRE(output_lines[0] == "3");
+    // Program should be absolute path to bash
+    REQUIRE(output_lines[1].find("/bash") != std::string::npos);
+    REQUIRE(output_lines[2] == "-c");
+    REQUIRE(output_lines[3] == "echo");
+}
+
+TEST_CASE("separate_arguments() edge cases", "[interpreter][separate_arguments]") {
+    // Empty string
+    auto output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "")
+        message("${result}")
+    )");
+    REQUIRE(output == "\n");
+
+    // Only whitespace
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND "   ")
+        message("${result}")
+    )");
+    REQUIRE(output == "\n");
+
+    // Multiple arguments to command (should be concatenated)
+    output = run_script(R"(
+        separate_arguments(result UNIX_COMMAND foo bar baz)
+        message("${result}")
+    )");
+    REQUIRE(output == "foo;bar;baz\n");
+}
+
 TEST_CASE("var and func colision", "[interperter][edgecase]") {
     auto output = run_script(R"(
         function (foo)
