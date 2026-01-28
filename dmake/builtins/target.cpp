@@ -253,6 +253,21 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
+        // Helper to parse semicolon-separated list and append as INTERFACE property
+        auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
+            std::vector<std::string> items;
+            std::string item;
+            std::istringstream ss(value);
+            while (std::getline(ss, item, ';')) {
+                if (!item.empty()) {
+                    items.push_back(item);
+                }
+            }
+            if (!items.empty()) {
+                target->append_property(base_prop_name, items, PropertyVisibility::INTERFACE);
+            }
+        };
+
         for(size_t i = 0; i < props.size(); i += 2) {
             std::string prop_name = props[i];
             std::string prop_value = props[i+1];
@@ -265,18 +280,15 @@ void register_target_builtins(Interpreter& interp) {
                        prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
                 target->set_imported_location(prop_value);
             } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
-                // Parse semicolon-separated list of libraries
-                std::vector<std::string> libs;
-                std::string lib;
-                std::istringstream ss(prop_value);
-                while (std::getline(ss, lib, ';')) {
-                    if (!lib.empty()) {
-                        libs.push_back(lib);
-                    }
-                }
-                if (!libs.empty()) {
-                    target->append_property("LINK_LIBRARIES", libs, PropertyVisibility::INTERFACE);
-                }
+                parse_and_append_interface("LINK_LIBRARIES", prop_value);
+            } else if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
+                parse_and_append_interface("INCLUDE_DIRECTORIES", prop_value);
+            } else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") {
+                parse_and_append_interface("COMPILE_DEFINITIONS", prop_value);
+            } else if (prop_name == "INTERFACE_COMPILE_OPTIONS") {
+                parse_and_append_interface("COMPILE_OPTIONS", prop_value);
+            } else if (prop_name == "INTERFACE_LINK_DIRECTORIES") {
+                parse_and_append_interface("LINK_DIRECTORIES", prop_value);
             } else {
                 // Fallback: Generic property set
                 target->set_property(prop_name, prop_value);
