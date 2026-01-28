@@ -1082,6 +1082,11 @@ bool Interpreter::is_falsy(const std::string& val) {
 }
 
 std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length) {
+    // Empty condition evaluates to FALSE (CMake behavior)
+    if (condition.empty()) {
+        return false;
+    }
+
     // Set of keywords that should not be dereferenced as variables
     static const std::set<std::string> keywords = {
         "NOT", "AND", "OR", "(", ")",

@@ -184,6 +184,16 @@ TEST_CASE("Interpreter if/else/endif", "[interpreter]") {
         endif()
     )");
     REQUIRE(output == "Inside else\n");
+
+    // Empty if() should evaluate to FALSE (CMake behavior)
+    output = run_script(R"(
+        if()
+            message("Inside if")
+        else()
+            message("Inside else")
+        endif()
+    )");
+    REQUIRE(output == "Inside else\n");
 }
 
 TEST_CASE("If with elseif", "[interpreter]") {
