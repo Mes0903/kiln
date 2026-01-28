@@ -1778,18 +1778,112 @@ bool Interpreter::is_variable_set(const std::string& name) const {
 void Interpreter::print_message(const std::string& mode, const std::string& msg, bool is_err) {
     std::ostream& os = is_err ? *err_ : *out_;
     bool color = isatty(is_err ? STDERR_FILENO : STDOUT_FILENO);
-    std::string p, c = colors::RESET;
-    if (mode == "STATUS") { p = "[STATUS]"; c = colors::CYAN; }
-    else if (mode == "INFO") { p = "[INFO]"; }
-    else if (mode == "WARN") { p = "[WARN]"; c = colors::YELLOW; }
-    else if (mode == "ERROR") { p = "[ERROR]"; c = colors::RED; }
-    else if (mode == "FATAL") { p = "[FATAL]"; c = colors::MAGENTA; }
-    if (color) os << c << p << " " << msg << colors::RESET << std::endl;
-    else os << p << " " << msg << std::endl;
+    std::string prefix, msg_color;
+
+    // Get indentation
+    std::string indent = get_variable("CMAKE_MESSAGE_INDENT");
+
+    // Determine prefix and color based on mode
+    if (mode == "FATAL_ERROR") {
+        prefix = "[FATAL_ERROR]";
+        msg_color = colors::BOLD_RED;
+    } else if (mode == "SEND_ERROR") {
+        prefix = "[SEND_ERROR]";
+        msg_color = colors::RED;
+    } else if (mode == "WARNING") {
+        prefix = "[WARNING]";
+        msg_color = colors::YELLOW;
+    } else if (mode == "AUTHOR_WARNING") {
+        prefix = "[AUTHOR_WARNING]";
+        msg_color = colors::YELLOW;
+    } else if (mode == "DEPRECATION") {
+        prefix = "[DEPRECATION]";
+        msg_color = colors::YELLOW;
+    } else if (mode == "DEPRECATION_ERROR") {
+        prefix = "[DEPRECATION]";
+        msg_color = colors::RED;
+    } else if (mode == "NOTICE") {
+        prefix = "[NOTICE]";
+        msg_color = colors::WHITE;
+    } else if (mode == "STATUS") {
+        prefix = "[STATUS]";
+        msg_color = colors::CYAN;
+    } else if (mode == "VERBOSE") {
+        prefix = "[VERBOSE]";
+        msg_color = colors::DIM;
+    } else if (mode == "DEBUG") {
+        prefix = "[DEBUG]";
+        msg_color = colors::DIM_CYAN;
+    } else if (mode == "TRACE") {
+        prefix = "[TRACE]";
+        msg_color = colors::DIM;
+    } else if (mode == "CHECK_START") {
+        prefix = "--";
+        msg_color = colors::CYAN;
+    } else if (mode == "CHECK_PASS") {
+        prefix = "--";
+        msg_color = colors::GREEN;
+    } else if (mode == "CHECK_FAIL") {
+        prefix = "--";
+        msg_color = colors::RED;
+    } else {
+        prefix = "[INFO]";
+        msg_color = "";
+    }
+
+    if (color && !msg_color.empty()) {
+        os << msg_color << prefix << " " << indent << msg << colors::RESET << std::endl;
+    } else {
+        os << prefix << " " << indent << msg << std::endl;
+    }
 }
 
 CMakeList Interpreter::from_arguments(const std::vector<std::string>& args) {
     return CMakeList(args);
+}
+
+void Interpreter::check_start(const std::string& message) {
+    // Add indentation for nested checks
+    std::string indent(check_stack_.size() * 2, ' ');
+    print_message("CHECK_START", indent + "Checking " + message, false);
+    check_stack_.push_back(message);
+}
+
+void Interpreter::check_pass(const std::string& result_message) {
+    if (check_stack_.empty()) {
+        print_message("WARNING", "CHECK_PASS without matching CHECK_START", true);
+        return;
+    }
+
+    std::string original = check_stack_.back();
+    check_stack_.pop_back();
+
+    // Add indentation for nested checks
+    std::string indent(check_stack_.size() * 2, ' ');
+
+    // Print result with original message
+    print_message("CHECK_PASS", indent + "Checking " + original + " - " + result_message, false);
+}
+
+void Interpreter::check_fail(const std::string& result_message) {
+    if (check_stack_.empty()) {
+        print_message("WARNING", "CHECK_FAIL without matching CHECK_START", true);
+        return;
+    }
+
+    std::string original = check_stack_.back();
+    check_stack_.pop_back();
+
+    // Add indentation for nested checks
+    std::string indent(check_stack_.size() * 2, ' ');
+
+    // Print result with original message
+    print_message("CHECK_FAIL", indent + "Checking " + original + " - " + result_message, false);
+}
+
+void Interpreter::accumulate_error(const std::string& error) {
+    has_send_errors_ = true;
+    // Errors are already printed by message(), just track that we had errors
 }
 
 void Interpreter::check_invariants() const {

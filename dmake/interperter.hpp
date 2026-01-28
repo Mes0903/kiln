@@ -50,9 +50,15 @@ struct TestDefinition {
 namespace colors {
     const std::string RESET = "\033[0m";
     const std::string RED = "\033[31m";
+    const std::string BRIGHT_RED = "\033[91m";
+    const std::string BOLD_RED = "\033[1;31m";
     const std::string YELLOW = "\033[33m";
+    const std::string GREEN = "\033[32m";
     const std::string CYAN = "\033[36m";
-    const std::string MAGENTA = "\033[35m";
+    const std::string WHITE = "\033[37m";
+    const std::string DIM = "\033[2m";
+    const std::string DIM_CYAN = "\033[2;36m";
+    const std::string MAGENTA = "\033[35m"; // Legacy, not used in new scheme
 } // namespace colors
 
 // Forward declaration
@@ -123,6 +129,15 @@ public:
     void set_cache_variable(const std::string& var_name, const std::string& value);
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
+
+    // CHECK_* message support
+    void check_start(const std::string& message);
+    void check_pass(const std::string& result_message);
+    void check_fail(const std::string& result_message);
+
+    // SEND_ERROR support - accumulates errors
+    void accumulate_error(const std::string& error);
+    bool has_accumulated_errors() const { return has_send_errors_; }
 
     std::expected<void, InterpreterError> include_file(const std::string& file_path, bool optional = false);
 
@@ -267,6 +282,12 @@ private:
     // Macro parameter substitution (for text-replacement in macros)
     // Checked before variable lookup to implement CMake macro semantics
     std::map<std::string, std::string> macro_substitutions_;
+
+    // CHECK_* message state (stack for nested checks)
+    std::vector<std::string> check_stack_;
+
+    // SEND_ERROR accumulation
+    bool has_send_errors_ = false;
 };
 
 } // namespace dmake
