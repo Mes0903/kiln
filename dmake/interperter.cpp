@@ -371,7 +371,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             sub_interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
             sub_interp.set_variable("CMAKE_CURRENT_LIST_DIR", path.string());
 
-            Parser parser(content);
+            Parser parser(content, cmake_file.string());
             auto ast = parser.parse();
             if (ast) {
                 auto res = sub_interp.interpret(ast.value());
@@ -590,7 +590,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-    Parser parser(content);
+    Parser parser(content, path.string());
     auto ast = parser.parse();
     if (!ast) {
         return std::unexpected(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
@@ -808,11 +808,11 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
     while (curr) {
         auto fit = curr->user_functions_.find(lower_identifier);
         if (fit != curr->user_functions_.end()) {
-            return invoke_user_function(fit->second, args);
+            return invoke_user_function(*fit->second, args);  // Dereference unique_ptr
         }
         auto mit = curr->user_macros_.find(lower_identifier);
         if (mit != curr->user_macros_.end()) {
-            return invoke_user_macro(mit->second, args);
+            return invoke_user_macro(*mit->second, args);  // Dereference unique_ptr
         }
         curr = curr->parent_;
     }
@@ -863,15 +863,17 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
     std::string lower_name = block.name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-    user_functions_[lower_name] = {block.parameters, block.body, current_file_};
-    user_macros_.erase(block.name);
+    // Store FunctionBlock directly on heap with make_unique
+    user_functions_[lower_name] = std::make_unique<FunctionBlock>(block);
+    user_macros_.erase(lower_name);
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
     std::string lower_name = block.name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-    user_macros_[lower_name] = {block.parameters, block.body, current_file_};
+    // Store MacroBlock directly on heap with make_unique
+    user_macros_[lower_name] = std::make_unique<MacroBlock>(block);
     user_functions_.erase(lower_name);
     return {};
 }
@@ -1164,14 +1166,18 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
     return {};
 }
 
-std::expected<void, InterpreterError> Interpreter::invoke_user_function(const UserFunction& func, const std::vector<std::string>& args) {
-    CallFrame frame{call_stack_.front().script_dir, {}};
+std::expected<void, InterpreterError> Interpreter::invoke_user_function(const FunctionBlock& func, const std::vector<std::string>& args) {
+    CallFrame frame{call_stack_.front().script_dir, {}, &func};  // Pass pointer to FunctionBlock
     CMakeList all(args);
     frame.variables["ARGC"] = std::to_string(all.size());
     frame.variables["ARGV"] = all.to_string();
     frame.variables["ARGN"] = all.sublist(func.parameters.size(), all.size()).to_string();
     for (size_t i = 0; i < all.size(); ++i) frame.variables["ARGV" + std::to_string(i)] = all[i];
     for (size_t i = 0; i < func.parameters.size() && i < all.size(); ++i) frame.variables[func.parameters[i]] = all[i];
+
+    // Fix CMAKE_CURRENT_LIST_DIR bug: Set to function's definition location
+    frame.variables["CMAKE_CURRENT_LIST_DIR"] = func.definition_dir;
+    frame.variables["CMAKE_CURRENT_LIST_FILE"] = func.definition_file;
 
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
@@ -1202,7 +1208,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Us
     return res;
 }
 
-std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args) {
+std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const MacroBlock& macro, const std::vector<std::string>& args) {
     // Save and set up macro parameter substitutions (text-replacement, not variables)
     std::map<std::string, std::string> saved_substitutions = macro_substitutions_;
 
@@ -1724,6 +1730,21 @@ std::string Interpreter::get_variable(const std::string& name) const {
     auto macro_it = macro_substitutions_.find(name);
     if (macro_it != macro_substitutions_.end()) {
         return macro_it->second;
+    }
+
+    // Function-scoped special variables (lazy evaluation - check current frame only)
+    if (name == "CMAKE_CURRENT_FUNCTION" ||
+        name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
+        name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") {
+
+        // Check current frame only - O(1) lookup, no walking
+        const auto* fb = call_stack_.front().function_block;
+        if (fb != nullptr) {
+            if (name == "CMAKE_CURRENT_FUNCTION") return fb->name;
+            if (name == "CMAKE_CURRENT_FUNCTION_LIST_FILE") return fb->definition_file;
+            if (name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") return fb->definition_dir;
+        }
+        return "";  // Not in a function
     }
 
     // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes

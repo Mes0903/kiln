@@ -1,0 +1,20 @@
+function(test_function_from_subdir)
+    message("Function name: ${CMAKE_CURRENT_FUNCTION}")
+    message("Function dir: ${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
+    message("Function file: ${CMAKE_CURRENT_FUNCTION_LIST_FILE}")
+
+    # Verify we can access files relative to function's definition
+    if(EXISTS "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/helpers.cmake")
+        message("SUCCESS: Can access files relative to function definition")
+    else()
+        message(FATAL_ERROR "FAILED: Cannot access files relative to function definition")
+    endif()
+
+    # Verify CMAKE_CURRENT_LIST_DIR is set correctly (should be subdir, not main)
+    get_filename_component(func_dir_name "${CMAKE_CURRENT_FUNCTION_LIST_DIR}" NAME)
+    if(func_dir_name STREQUAL "subdir")
+        message("SUCCESS: CMAKE_CURRENT_FUNCTION_LIST_DIR is correct")
+    else()
+        message(FATAL_ERROR "FAILED: CMAKE_CURRENT_FUNCTION_LIST_DIR should end with 'subdir', got: ${func_dir_name}")
+    endif()
+endfunction()

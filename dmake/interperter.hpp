@@ -87,18 +87,7 @@ struct PropertyDefinition {
 struct CallFrame {
     std::string script_dir;
     std::unordered_map<std::string, std::string> variables;
-};
-
-struct UserFunction {
-    std::vector<std::string> parameters;
-    std::vector<AstNode> body;
-    std::string definition_file;
-};
-
-struct UserMacro {
-    std::vector<std::string> parameters;
-    std::vector<AstNode> body;
-    std::string definition_file;
+    const FunctionBlock* function_block = nullptr;  // Pointer to FunctionBlock if this is a function frame
 };
 
 class Interpreter {
@@ -209,8 +198,8 @@ private:
     std::expected<void, InterpreterError> execute_foreach_block(const ForeachBlock& foreach_block);
     std::expected<void, InterpreterError> execute_while_block(const WhileBlock& while_block);
     std::expected<void, InterpreterError> execute_block_block(const BlockBlock& block_block);
-    std::expected<void, InterpreterError> invoke_user_function(const UserFunction& func, const std::vector<std::string>& args);
-    std::expected<void, InterpreterError> invoke_user_macro(const UserMacro& macro, const std::vector<std::string>& args);
+    std::expected<void, InterpreterError> invoke_user_function(const FunctionBlock& func, const std::vector<std::string>& args);
+    std::expected<void, InterpreterError> invoke_user_macro(const MacroBlock& macro, const std::vector<std::string>& args);
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);
     std::string evaluate_variable_reference(const VariableReference& ref);
 
@@ -261,8 +250,8 @@ private:
     std::map<std::string, std::string> directory_properties_;
 
     // Scope-local state
-    std::map<std::string, UserFunction> user_functions_;
-    std::map<std::string, UserMacro> user_macros_;
+    std::unordered_map<std::string, std::unique_ptr<FunctionBlock>> user_functions_;
+    std::unordered_map<std::string, std::unique_ptr<MacroBlock>> user_macros_;
 
     Interpreter* parent_ = nullptr;
     std::deque<CallFrame> call_stack_; // Variable scopes

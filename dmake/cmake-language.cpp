@@ -2,10 +2,12 @@
 
 #include <cctype>
 #include <algorithm>
+#include <filesystem>
 
 namespace dmake {
 
-Parser::Parser(std::string_view content) : content_(content) {}
+Parser::Parser(std::string_view content, std::string filename)
+    : content_(content), filename_(std::move(filename)) {}
 
 // Helper to peek at the next identifier without consuming it
 std::string Parser::peek_identifier() {
@@ -215,6 +217,12 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
         return std::unexpected(ParseError{row_, col_, pos_, 11, "Expected 'endfunction'"});
     }
 
+    // Populate definition file metadata
+    function_block.definition_file = filename_;
+    if (!filename_.empty()) {
+        function_block.definition_dir = std::filesystem::path(filename_).parent_path().string();
+    }
+
     return function_block;
 }
 
@@ -261,6 +269,12 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
                    [](unsigned char c){ return std::tolower(c); });
     if (identifier_lower != "endmacro") {
         return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endmacro'"});
+    }
+
+    // Populate definition file metadata
+    macro_block.definition_file = filename_;
+    if (!filename_.empty()) {
+        macro_block.definition_dir = std::filesystem::path(filename_).parent_path().string();
     }
 
     return macro_block;

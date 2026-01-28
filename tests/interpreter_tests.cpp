@@ -3577,3 +3577,87 @@ TEST_CASE("Interpreter block() scope", "[interpreter][block]") {
         REQUIRE(output == "sum=6\n");
     }
 }
+
+TEST_CASE("CMAKE_CURRENT_FUNCTION variables basic functionality", "[interpreter]") {
+    // Test that CMAKE_CURRENT_FUNCTION* variables work inside a function
+    auto output = run_script(R"(
+        function(test_func)
+            message("${CMAKE_CURRENT_FUNCTION}")
+        endfunction()
+        test_func()
+    )");
+    REQUIRE(output == "test_func\n");
+
+    // Test that these variables are empty outside functions
+    output = run_script(R"(
+        message("Outside: '${CMAKE_CURRENT_FUNCTION}'")
+    )");
+    REQUIRE(output == "Outside: ''\n");
+
+    // Test CMAKE_CURRENT_FUNCTION_LIST_FILE and CMAKE_CURRENT_FUNCTION_LIST_DIR
+    // Note: In unit tests without real files, these will be empty strings
+    output = run_script(R"(
+        function(test_func2)
+            message("Name: ${CMAKE_CURRENT_FUNCTION}")
+            message("File: '${CMAKE_CURRENT_FUNCTION_LIST_FILE}'")
+            message("Dir: '${CMAKE_CURRENT_FUNCTION_LIST_DIR}'")
+        endfunction()
+        test_func2()
+    )");
+    REQUIRE(output == "Name: test_func2\nFile: ''\nDir: ''\n");
+}
+
+TEST_CASE("CMAKE_CURRENT_FUNCTION variables in nested functions", "[interpreter]") {
+    // Test nested function calls - each should report its own name
+    auto output = run_script(R"(
+        function(outer)
+            message("Outer: ${CMAKE_CURRENT_FUNCTION}")
+            inner()
+            message("Outer again: ${CMAKE_CURRENT_FUNCTION}")
+        endfunction()
+        function(inner)
+            message("Inner: ${CMAKE_CURRENT_FUNCTION}")
+        endfunction()
+        outer()
+    )");
+    REQUIRE(output == "Outer: outer\nInner: inner\nOuter again: outer\n");
+}
+
+TEST_CASE("CMAKE_CURRENT_FUNCTION variables not set in macros", "[interpreter]") {
+    // Macros don't create new scopes, so CMAKE_CURRENT_FUNCTION should not be set
+    auto output = run_script(R"(
+        macro(test_macro)
+            message("In macro: '${CMAKE_CURRENT_FUNCTION}'")
+        endmacro()
+        test_macro()
+    )");
+    REQUIRE(output == "In macro: ''\n");
+
+    // Test macro called from within a function - should show function name
+    output = run_script(R"(
+        macro(test_macro2)
+            message("In macro: '${CMAKE_CURRENT_FUNCTION}'")
+        endmacro()
+        function(test_func)
+            message("In function: '${CMAKE_CURRENT_FUNCTION}'")
+            test_macro2()
+        endfunction()
+        test_func()
+    )");
+    REQUIRE(output == "In function: 'test_func'\nIn macro: 'test_func'\n");
+}
+
+TEST_CASE("CMAKE_CURRENT_FUNCTION with recursive functions", "[interpreter]") {
+    // Test that recursive functions correctly report their own name
+    auto output = run_script(R"(
+        function(recursive depth)
+            message("Depth ${depth}: ${CMAKE_CURRENT_FUNCTION}")
+            if(depth GREATER 0)
+                math(EXPR next "${depth} - 1")
+                recursive(${next})
+            endif()
+        endfunction()
+        recursive(2)
+    )");
+    REQUIRE(output == "Depth 2: recursive\nDepth 1: recursive\nDepth 0: recursive\n");
+}

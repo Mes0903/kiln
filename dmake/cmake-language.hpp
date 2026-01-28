@@ -74,12 +74,16 @@ struct FunctionBlock {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
+    std::string definition_file = "";  // File where function was defined
+    std::string definition_dir = "";   // Directory where function was defined
 };
 
 struct MacroBlock {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
+    std::string definition_file = "";  // File where macro was defined (for consistency)
+    std::string definition_dir = "";   // Directory where macro was defined (for consistency)
 };
 
 // Foreach loop parameter types
@@ -143,12 +147,13 @@ struct CommandInvocation {
 
 class Parser {
 public:
-    explicit Parser(std::string_view content);
+    explicit Parser(std::string_view content, std::string filename = "");
 
     std::expected<std::vector<AstNode>, ParseError> parse();
 
 private:
     std::string_view content_;
+    std::string filename_;  // Current file being parsed
     size_t pos_ = 0;
     size_t row_ = 1;
     size_t col_ = 1;
