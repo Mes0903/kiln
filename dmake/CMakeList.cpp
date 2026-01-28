@@ -64,12 +64,78 @@ void CMakeList::append(const CMakeList& other) {
     items_.insert(items_.end(), other.items_.begin(), other.items_.end());
 }
 
+void CMakeList::insert(size_t idx, const std::vector<std::string>& items) {
+    items_.insert(items_.begin() + idx, items.begin(), items.end());
+}
+
 void CMakeList::reverse() {
     std::reverse(items_.begin(), items_.end());
 }
 
-void CMakeList::sort() {
-    std::sort(items_.begin(), items_.end());
+// Natural sort comparison function
+static bool natural_compare(const std::string& a, const std::string& b) {
+    auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        // If both are digits, compare numerically
+        if (is_digit(a[i]) && is_digit(b[j])) {
+            // Extract the numeric parts
+            size_t num_start_a = i, num_start_b = j;
+            while (i < a.size() && is_digit(a[i])) i++;
+            while (j < b.size() && is_digit(b[j])) j++;
+
+            std::string num_a = a.substr(num_start_a, i - num_start_a);
+            std::string num_b = b.substr(num_start_b, j - num_start_b);
+
+            // Compare numerically
+            try {
+                unsigned long long val_a = std::stoull(num_a);
+                unsigned long long val_b = std::stoull(num_b);
+                if (val_a != val_b) {
+                    return val_a < val_b;
+                }
+                // If numerically equal, longer strings (more leading zeros) come first
+                // This handles "00" vs "0" - "00" (length 2) comes before "0" (length 1)
+                if (num_a.size() != num_b.size()) {
+                    return num_a.size() > num_b.size();  // Longer first!
+                }
+            } catch (...) {
+                // If numeric conversion fails, fall back to string comparison
+                if (num_a != num_b) {
+                    return num_a < num_b;
+                }
+            }
+        } else {
+            // Lexicographic comparison
+            if (a[i] != b[j]) {
+                return a[i] < b[j];
+            }
+            i++;
+            j++;
+        }
+    }
+
+    // If we've exhausted one string, the shorter one comes first
+    return a.size() < b.size();
+}
+
+void CMakeList::sort(bool natural, bool descending) {
+    if (natural) {
+        if (descending) {
+            std::sort(items_.begin(), items_.end(), [](const std::string& a, const std::string& b) {
+                return natural_compare(b, a);  // Reverse comparison for descending
+            });
+        } else {
+            std::sort(items_.begin(), items_.end(), natural_compare);
+        }
+    } else {
+        if (descending) {
+            std::sort(items_.begin(), items_.end(), std::greater<std::string>());
+        } else {
+            std::sort(items_.begin(), items_.end());
+        }
+    }
 }
 
 void CMakeList::remove_duplicates() {

@@ -42,12 +42,24 @@ void register_list_builtins(Interpreter& interp) {
             indices.pop_back();
 
             CMakeList list(interp.get_variable(list_var));
+
+            // If list doesn't exist or is empty, set result to NOTFOUND
+            if (list.empty()) {
+                interp.set_variable(out_var, "NOTFOUND");
+                return;
+            }
+
             CMakeList result;
             for (const auto& idx_str : indices) {
                 try {
-                    size_t idx = std::stoul(idx_str);
-                    if (idx < list.size()) result.append(list[idx]);
-                    else {
+                    long idx = std::stol(idx_str);
+                    // Handle negative indices
+                    if (idx < 0) {
+                        idx = static_cast<long>(list.size()) + idx;
+                    }
+                    if (idx >= 0 && static_cast<size_t>(idx) < list.size()) {
+                        result.append(list[static_cast<size_t>(idx)]);
+                    } else {
                         interp.set_fatal_error("list(GET) index out of range: " + idx_str);
                         return;
                     }
@@ -68,6 +80,32 @@ void register_list_builtins(Interpreter& interp) {
             CMakeList list(interp.get_variable(list_var));
             for (const auto& item : items) list.append(item);
             interp.set_variable(list_var, list.to_string());
+        } else if (operation == "INSERT") {
+            CommandParser parser("list", "INSERT");
+            std::string list_var, index_str;
+            std::vector<std::string> items;
+            parser.add_positional(list_var, "list variable");
+            parser.add_positional(index_str, "index");
+            parser.add_default_list(items);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
+            try {
+                long idx = std::stol(index_str);
+                // Handle negative indices
+                if (idx < 0) {
+                    idx = static_cast<long>(list.size()) + idx;
+                }
+                if (idx < 0 || static_cast<size_t>(idx) > list.size()) {
+                    interp.set_fatal_error("list(INSERT) index out of range: " + index_str);
+                    return;
+                }
+                list.insert(static_cast<size_t>(idx), items);
+            } catch (...) {
+                interp.set_fatal_error("list(INSERT) invalid index: " + index_str);
+                return;
+            }
+            interp.set_variable(list_var, list.to_string());
         } else if (operation == "REVERSE") {
             CommandParser parser("list", "REVERSE");
             std::string list_var;
@@ -80,11 +118,39 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "SORT") {
             CommandParser parser("list", "SORT");
             std::string list_var;
+            std::string compare_mode, order_mode;
             parser.add_positional(list_var, "list variable");
+            parser.add_value("COMPARE", compare_mode);
+            parser.add_value("ORDER", order_mode);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
+            bool natural = false;
+            bool descending = false;
+
+            if (!compare_mode.empty()) {
+                std::transform(compare_mode.begin(), compare_mode.end(), compare_mode.begin(),
+                              [](unsigned char c){ return std::toupper(c); });
+                if (compare_mode == "NATURAL") {
+                    natural = true;
+                } else if (compare_mode != "STRING") {
+                    interp.set_fatal_error("list(SORT) unknown COMPARE mode: " + compare_mode);
+                    return;
+                }
+            }
+
+            if (!order_mode.empty()) {
+                std::transform(order_mode.begin(), order_mode.end(), order_mode.begin(),
+                              [](unsigned char c){ return std::toupper(c); });
+                if (order_mode == "DESCENDING") {
+                    descending = true;
+                } else if (order_mode != "ASCENDING") {
+                    interp.set_fatal_error("list(SORT) unknown ORDER mode: " + order_mode);
+                    return;
+                }
+            }
+
             CMakeList list(interp.get_variable(list_var));
-            list.sort();
+            list.sort(natural, descending);
             interp.set_variable(list_var, list.to_string());
         } else if (operation == "REMOVE_DUPLICATES") {
             CommandParser parser("list", "REMOVE_DUPLICATES");
@@ -149,6 +215,42 @@ void register_list_builtins(Interpreter& interp) {
             }
             for(auto it = remove_idxs.rbegin(); it != remove_idxs.rend(); it++) {
                 list.erase(*it);
+            }
+            interp.set_variable(list_var, list.to_string());
+        } else if (operation == "REMOVE_AT") {
+            CommandParser parser("list", "REMOVE_AT");
+            std::string list_var;
+            std::vector<std::string> indices;
+            parser.add_positional(list_var, "list variable");
+            parser.add_default_list(indices);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            CMakeList list(interp.get_variable(list_var));
+
+            // Convert all indices to positive and collect them
+            std::vector<size_t> positive_indices;
+            for (const auto& idx_str : indices) {
+                try {
+                    long idx = std::stol(idx_str);
+                    // Handle negative indices
+                    if (idx < 0) {
+                        idx = static_cast<long>(list.size()) + idx;
+                    }
+                    if (idx < 0 || static_cast<size_t>(idx) >= list.size()) {
+                        interp.set_fatal_error("list(REMOVE_AT) index out of range: " + idx_str);
+                        return;
+                    }
+                    positive_indices.push_back(static_cast<size_t>(idx));
+                } catch (...) {
+                    interp.set_fatal_error("list(REMOVE_AT) invalid index: " + idx_str);
+                    return;
+                }
+            }
+
+            // Sort indices in descending order to remove from back to front
+            std::sort(positive_indices.begin(), positive_indices.end(), std::greater<size_t>());
+            for (size_t idx : positive_indices) {
+                list.erase(idx);
             }
             interp.set_variable(list_var, list.to_string());
         } else {

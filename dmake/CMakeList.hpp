@@ -32,9 +32,10 @@ public:
     void append(const CMakeList& other);
     void push_back(const std::string& item) { append(item); }
     void erase(size_t idx) { items_.erase(items_.begin()+idx);  }
+    void insert(size_t idx, const std::vector<std::string>& items);
 
     void reverse();
-    void sort();
+    void sort(bool natural = false, bool descending = false);
     void remove_duplicates();
     CMakeList sublist(size_t begin_idx, size_t length) const;
     bool contains(const std::string& item) const;
