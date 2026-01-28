@@ -265,6 +265,215 @@ void register_file_builtins(Interpreter& interp) {
                     return;
                 }
             }
+        } else if (operation == "STRINGS") {
+            CommandParser parser("file", "STRINGS");
+            std::string filename, var;
+            std::string length_min_str, length_max_str;
+            std::string limit_count_str, limit_input_str, limit_output_str;
+            std::string regex_pattern, encoding;
+            bool newline_consume = false;
+            bool no_hex_conversion = false;
+
+            parser.add_positional(filename, "filename");
+            parser.add_positional(var, "variable");
+            parser.add_value("LENGTH_MINIMUM", length_min_str);
+            parser.add_value("LENGTH_MAXIMUM", length_max_str);
+            parser.add_value("LIMIT_COUNT", limit_count_str);
+            parser.add_value("LIMIT_INPUT", limit_input_str);
+            parser.add_value("LIMIT_OUTPUT", limit_output_str);
+            parser.add_value("REGEX", regex_pattern);
+            parser.add_value("ENCODING", encoding);
+            parser.add_flag("NEWLINE_CONSUME", newline_consume);
+            parser.add_flag("NO_HEX_CONVERSION", no_hex_conversion);
+
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            // Parse numeric limits
+            size_t length_min = 0;
+            size_t length_max = std::numeric_limits<size_t>::max();
+            size_t limit_count = std::numeric_limits<size_t>::max();
+            size_t limit_input = std::numeric_limits<size_t>::max();
+            size_t limit_output = std::numeric_limits<size_t>::max();
+
+            if (!length_min_str.empty()) {
+                try {
+                    length_min = std::stoull(length_min_str);
+                } catch (...) {
+                    interp.set_fatal_error("file(STRINGS) LENGTH_MINIMUM must be a number");
+                    return;
+                }
+            }
+            if (!length_max_str.empty()) {
+                try {
+                    length_max = std::stoull(length_max_str);
+                } catch (...) {
+                    interp.set_fatal_error("file(STRINGS) LENGTH_MAXIMUM must be a number");
+                    return;
+                }
+            }
+            if (!limit_count_str.empty()) {
+                try {
+                    limit_count = std::stoull(limit_count_str);
+                } catch (...) {
+                    interp.set_fatal_error("file(STRINGS) LIMIT_COUNT must be a number");
+                    return;
+                }
+            }
+            if (!limit_input_str.empty()) {
+                try {
+                    limit_input = std::stoull(limit_input_str);
+                } catch (...) {
+                    interp.set_fatal_error("file(STRINGS) LIMIT_INPUT must be a number");
+                    return;
+                }
+            }
+            if (!limit_output_str.empty()) {
+                try {
+                    limit_output = std::stoull(limit_output_str);
+                } catch (...) {
+                    interp.set_fatal_error("file(STRINGS) LIMIT_OUTPUT must be a number");
+                    return;
+                }
+            }
+
+            // Resolve file path
+            std::filesystem::path path = filename;
+            if (!path.is_absolute()) {
+                path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
+            }
+
+            // Open file in binary mode
+            std::ifstream file(path, std::ios::binary);
+            if (!file) {
+                interp.set_fatal_error("file(STRINGS) could not open file: " + path.string());
+                return;
+            }
+
+            // Compile regex if provided
+            std::unique_ptr<std::regex> regex_filter;
+            if (!regex_pattern.empty()) {
+                try {
+                    regex_filter = std::make_unique<std::regex>(regex_pattern);
+                } catch (const std::regex_error& e) {
+                    interp.set_fatal_error("file(STRINGS) invalid REGEX: " + std::string(e.what()));
+                    return;
+                }
+            }
+
+            // TODO: Handle encoding conversions (UTF-16, UTF-32) - for now only support default/UTF-8
+            if (!encoding.empty() && encoding != "UTF-8") {
+                interp.set_fatal_error("file(STRINGS) ENCODING not yet supported: " + encoding);
+                return;
+            }
+
+            // Extract strings
+            CMakeList results;
+            std::string current_string;
+            size_t bytes_read = 0;
+            size_t output_bytes = 0;
+            size_t string_count = 0;
+
+            auto is_printable = [](unsigned char c) {
+                // Printable characters: space (32) through ~ (126)
+                // Also allow tab (9) if NEWLINE_CONSUME is set
+                return (c >= 32 && c <= 126) || c == '\t';
+            };
+
+            auto finalize_string = [&]() {
+                if (current_string.empty()) return;
+
+                // Apply length filters
+                if (current_string.length() < length_min || current_string.length() > length_max) {
+                    current_string.clear();
+                    return;
+                }
+
+                // Apply regex filter
+                if (regex_filter && !std::regex_match(current_string, *regex_filter)) {
+                    current_string.clear();
+                    return;
+                }
+
+                // Check limits
+                if (string_count >= limit_count) {
+                    return;
+                }
+
+                size_t new_output = output_bytes + current_string.length();
+                if (new_output > limit_output) {
+                    return;
+                }
+
+                // Add to results
+                results.append(current_string);
+                output_bytes = new_output;
+                string_count++;
+                current_string.clear();
+            };
+
+            char c;
+            while (file.get(c) && bytes_read < limit_input) {
+                bytes_read++;
+                unsigned char uc = static_cast<unsigned char>(c);
+
+                // Check for string terminators
+                if (uc == '\0') {
+                    finalize_string();
+                    continue;
+                }
+
+                if (uc == '\n') {
+                    if (newline_consume) {
+                        // Treat newline as part of string content
+                        if (is_printable(uc) || uc == '\n' || uc == '\r') {
+                            current_string += c;
+                        }
+                    } else {
+                        // Newline terminates the string
+                        finalize_string();
+                    }
+                    continue;
+                }
+
+                // Carriage return handling (usually paired with newline in Windows line endings)
+                if (uc == '\r') {
+                    if (newline_consume) {
+                        current_string += c;
+                    } else {
+                        // Peek ahead to see if this is part of CRLF
+                        if (file.peek() == '\n') {
+                            finalize_string();
+                            continue;
+                        }
+                        // Standalone CR - treat as part of string
+                        if (is_printable(uc)) {
+                            current_string += c;
+                        } else {
+                            // Non-printable CR terminates string
+                            finalize_string();
+                        }
+                    }
+                    continue;
+                }
+
+                // Regular character
+                if (is_printable(uc)) {
+                    current_string += c;
+                } else {
+                    // Non-printable character terminates the string
+                    finalize_string();
+                }
+
+                // Check if we've hit the string count limit
+                if (string_count >= limit_count) {
+                    break;
+                }
+            }
+
+            // Finalize any remaining string
+            finalize_string();
+
+            interp.set_variable(var, results.to_string());
         } else {
             interp.set_fatal_error("file() sub-command not implemented: " + operation);
         }
