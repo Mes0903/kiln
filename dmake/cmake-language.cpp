@@ -579,7 +579,7 @@ std::expected<Argument, ParseError> Parser::parse_argument() {
         if (!value_or_error) {
             return std::unexpected(value_or_error.error());
         }
-        return Argument{{std::move(value_or_error.value())}, false};
+        return Argument{{std::move(value_or_error.value())}, true};
     } else {
         auto value_or_error = parse_unquoted_argument_value();
         if (!value_or_error) {

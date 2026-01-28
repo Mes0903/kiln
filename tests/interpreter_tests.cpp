@@ -2819,3 +2819,53 @@ TEST_CASE("while loop with return", "[interpreter][while]") {
     )");
     REQUIRE(output == "0\n1\n2\ndone\n");
 }
+
+TEST_CASE("Bracket arguments do not undergo list expansion", "[interpreter][bugfix][diff-fuzz]") {
+    // Bug 2: Bracket arguments should be treated like quoted arguments
+    // and NOT undergo semicolon splitting (list expansion)
+    auto output = run_script(R"(
+        message([=[a;b;c]=])
+    )");
+    REQUIRE(output == "a;b;c\n");
+
+    // Bracket arguments should also preserve variable references literally
+    output = run_script(R"(
+        set(VAR "value")
+        message([=[${VAR}]=])
+    )");
+    REQUIRE(output == "${VAR}\n");
+
+    // Multiple bracket arguments should concatenate without spaces
+    output = run_script(R"(
+        message([=[first]=] [=[second]=])
+    )");
+    REQUIRE(output == "firstsecond\n");
+}
+
+TEST_CASE("message() concatenates arguments without spaces", "[interpreter][bugfix][diff-fuzz]") {
+    // Bug 3: message() should concatenate all arguments without adding spaces
+    auto output = run_script(R"(
+        message("A" "B" "C")
+    )");
+    REQUIRE(output == "ABC\n");
+
+    // Test with variable expansion
+    output = run_script(R"(
+        set(L "a" "b")
+        message("L: " ${L})
+    )");
+    REQUIRE(output == "L: ab\n");
+
+    // Test with mixed quoted and unquoted
+    output = run_script(R"(
+        set(X "value")
+        message("prefix" ${X} "suffix")
+    )");
+    REQUIRE(output == "prefixvaluesuffix\n");
+
+    // Empty strings should contribute nothing
+    output = run_script(R"(
+        message("A" "" "B")
+    )");
+    REQUIRE(output == "AB\n");
+}
