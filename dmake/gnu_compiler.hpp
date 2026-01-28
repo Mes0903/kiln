@@ -2,8 +2,36 @@
 #include "compiler.hpp"
 #include "language.hpp"
 #include <sstream>
+#include <array>
+#include <cstdio>
+#include <regex>
+
+#ifdef __unix__
+#include <sys/utsname.h>
+#endif
 
 namespace dmake {
+
+namespace detail {
+
+// Execute a command and capture stdout
+inline std::string run_command(const std::string& command) {
+    std::array<char, 128> buffer;
+    std::string result;
+
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+    if (!pipe) {
+        return "";
+    }
+
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+
+    return result;
+}
+
+} // namespace detail
 
 class GnuCompiler : public Compiler {
 public:
@@ -144,6 +172,87 @@ public:
         cmd.push_back(ctx.source);
 
         return cmd;
+    }
+
+    // Platform detection for GCC
+    PlatformInfo detect_platform() const override {
+        PlatformInfo info;
+        info.compiler_id = "GNU";
+
+        // Get compiler version from g++ --version
+        std::string version_output = detail::run_command(binary_ + " --version 2>&1");
+        // Extract version number (pattern: X.Y.Z)
+        std::regex version_regex(R"((\d+\.\d+\.\d+))");
+        std::smatch match;
+        if (std::regex_search(version_output, match, version_regex)) {
+            info.compiler_version = match[1].str();
+        }
+
+        // System info from uname
+#ifdef __unix__
+        struct utsname uname_info;
+        if (uname(&uname_info) == 0) {
+            info.system_name = uname_info.sysname;
+            info.system_processor = uname_info.machine;
+        }
+#endif
+
+        // Pointer size (compile-time for native builds)
+        info.sizeof_void_p = std::to_string(sizeof(void*));
+
+        // Get implicit include directories from g++ -E -v
+        std::string lang_flag = (lang_ == Language::C) ? "c" : "c++";
+        std::string verbose_output = detail::run_command(
+            "echo | " + binary_ + " -E -v -x " + lang_flag + " - 2>&1");
+
+        // Parse "#include <...> search starts here:" section
+        bool in_include_section = false;
+        std::istringstream iss(verbose_output);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (line.find("#include <...> search starts here:") != std::string::npos) {
+                in_include_section = true;
+                continue;
+            }
+            if (line.find("End of search list.") != std::string::npos) {
+                in_include_section = false;
+                continue;
+            }
+            if (in_include_section && !line.empty() && line[0] == ' ') {
+                // Trim leading space
+                std::string dir = line.substr(1);
+                // Remove any trailing " (framework directory)" annotation
+                auto paren = dir.find(" (");
+                if (paren != std::string::npos) {
+                    dir = dir.substr(0, paren);
+                }
+                if (!dir.empty()) {
+                    info.implicit_includes.push_back(dir);
+                }
+            }
+        }
+
+        // Get implicit link directories from g++ -print-search-dirs
+        std::string search_dirs = detail::run_command(binary_ + " -print-search-dirs 2>&1");
+        std::istringstream search_iss(search_dirs);
+        while (std::getline(search_iss, line)) {
+            if (line.rfind("libraries: =", 0) == 0) {
+                std::string paths = line.substr(12);  // Skip "libraries: ="
+                std::istringstream path_stream(paths);
+                std::string path;
+                while (std::getline(path_stream, path, ':')) {
+                    if (!path.empty()) {
+                        info.implicit_link_dirs.push_back(path);
+                    }
+                }
+                break;
+            }
+        }
+
+        // Implicit link libraries - common for GCC
+        info.implicit_link_libs = {"stdc++", "m", "gcc_s", "c"};
+
+        return info;
     }
 
 private:

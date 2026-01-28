@@ -14,6 +14,82 @@
 
 namespace dmake {
 
+namespace {
+
+// HACK: This function fakes CMake's compiler detection and platform initialization.
+// CMake runs a complex startup sequence (CMakeDetermineSystem, CMakeDetermineCXXCompiler,
+// CMakeDetermineCompilerABI, etc.) that sets hundreds of variables. We bypass all that
+// and extract the essential information directly from the compiler.
+//
+// This is NOT proper CMake compatibility - it's a pragmatic shortcut that:
+// - Only works with GCC (will break on Clang, MSVC, etc.)
+// - Doesn't support cross-compilation properly
+// - Doesn't run CMake's try_compile() tests for ABI detection
+// - May miss variables that some Find modules expect
+//
+// TODO: Eventually either:
+// 1. Implement proper platform detection (slow but correct)
+// 2. Cache the results of CMake's detection (run once, reuse)
+// 3. Incrementally add variables as projects need them
+void fake_cmake_compiler_checks_and_init(
+    std::unordered_map<std::string, std::string>& vars,
+    Toolchain& toolchain)
+{
+    // Initialize compilers
+    vars["CMAKE_CXX_COMPILER"] = "g++";
+    vars["CMAKE_C_COMPILER"] = "gcc";
+    auto cxx_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX);
+    auto c_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C);
+
+    std::cerr << "-- Detecting platform information from compiler...\n";
+
+    // C++ compiler platform info
+    auto cxx_info = cxx_compiler->detect_platform();
+    vars["CMAKE_CXX_COMPILER_ID"] = cxx_info.compiler_id;
+    vars["CMAKE_CXX_COMPILER_VERSION"] = cxx_info.compiler_version;
+    if (!cxx_info.implicit_includes.empty()) {
+        vars["CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeList(cxx_info.implicit_includes).to_string();
+    }
+    if (!cxx_info.implicit_link_dirs.empty()) {
+        vars["CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES"] = CMakeList(cxx_info.implicit_link_dirs).to_string();
+    }
+    if (!cxx_info.implicit_link_libs.empty()) {
+        vars["CMAKE_CXX_IMPLICIT_LINK_LIBRARIES"] = CMakeList(cxx_info.implicit_link_libs).to_string();
+    }
+
+    // C compiler platform info
+    auto c_info = c_compiler->detect_platform();
+    vars["CMAKE_C_COMPILER_ID"] = c_info.compiler_id;
+    vars["CMAKE_C_COMPILER_VERSION"] = c_info.compiler_version;
+    if (!c_info.implicit_includes.empty()) {
+        vars["CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeList(c_info.implicit_includes).to_string();
+    }
+    if (!c_info.implicit_link_dirs.empty()) {
+        vars["CMAKE_C_IMPLICIT_LINK_DIRECTORIES"] = CMakeList(c_info.implicit_link_dirs).to_string();
+    }
+    if (!c_info.implicit_link_libs.empty()) {
+        vars["CMAKE_C_IMPLICIT_LINK_LIBRARIES"] = CMakeList(c_info.implicit_link_libs).to_string();
+    }
+
+    // System-level info (same for both compilers)
+    vars["CMAKE_SYSTEM_NAME"] = cxx_info.system_name;
+    vars["CMAKE_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
+    vars["CMAKE_SIZEOF_VOID_P"] = cxx_info.sizeof_void_p;
+    vars["CMAKE_HOST_SYSTEM_NAME"] = cxx_info.system_name;
+    vars["CMAKE_HOST_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
+    vars["CMAKE_C_COMPILER_LOADED"] = "1";
+    vars["CMAKE_CXX_COMPILER_LOADED"] = "1";
+
+    std::cerr << "-- Detecting platform information from compiler... done\n";
+    std::cerr << "-- Compiler: " << cxx_info.compiler_id << " " << cxx_info.compiler_version << "\n";
+    std::cerr << "-- System: " << cxx_info.system_name << " " << cxx_info.system_processor << "\n";
+
+    toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
+    toolchain.set_compiler(Language::C, std::move(c_compiler));
+}
+
+} // anonymous namespace
+
 Interpreter* Interpreter::get_root() {
     Interpreter* current = this;
     while (current->parent_ != nullptr) current = current->parent_;
@@ -258,11 +334,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         vars["CMAKE_COMMAND"] = get_executable_path();
         vars["CMAKE_ROOT"] = "/usr/share/cmake";
 
-        // Initialize default toolchain and compiler variables
-        vars["CMAKE_CXX_COMPILER"] = "g++";
-        vars["CMAKE_C_COMPILER"] = "gcc";
-        toolchain_.set_compiler(Language::CXX, std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX));
-        toolchain_.set_compiler(Language::C, std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C));
+        // Initialize toolchain with compiler detection
+        // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
+        fake_cmake_compiler_checks_and_init(vars, toolchain_);
 
         // Initialize cache store
         std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";

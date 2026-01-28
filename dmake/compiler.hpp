@@ -43,6 +43,18 @@ struct LinkContext {
     bool color_diagnostics = false;
 };
 
+// Platform information detected from the compiler and system
+struct PlatformInfo {
+    std::string compiler_id;                    // "GNU", "Clang", etc.
+    std::string compiler_version;               // "11.3.0"
+    std::string system_name;                    // "Linux", "Darwin", "Windows"
+    std::string system_processor;               // "x86_64", "aarch64", etc.
+    std::string sizeof_void_p;                  // "8" or "4"
+    std::vector<std::string> implicit_includes; // Implicit include directories
+    std::vector<std::string> implicit_link_dirs;// Implicit link directories
+    std::vector<std::string> implicit_link_libs;// Implicit link libraries
+};
+
 class Compiler {
 public:
     virtual ~Compiler() = default;
@@ -53,6 +65,11 @@ public:
     // C++20 modules support
     virtual std::vector<std::string> get_module_scan_command(const ModuleScanContext& ctx) const {
         return {}; // Default: no module support
+    }
+
+    // Platform detection - detects compiler info and system platform
+    virtual PlatformInfo detect_platform() const {
+        return {}; // Default: empty platform info
     }
 };
 

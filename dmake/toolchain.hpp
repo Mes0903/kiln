@@ -17,7 +17,7 @@ public:
         if (it == compilers_.end()) return nullptr;
         return it->second.get();
     }
-    
+
     const Compiler* get_compiler_ptr(Language lang) const {
         return get_compiler(lang);
     }
