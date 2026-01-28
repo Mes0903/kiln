@@ -15,6 +15,24 @@
 
 namespace {
 
+// Expand tabs to spaces (4-column tab stops) and return mapping from source column to visual column
+std::pair<std::string, std::vector<size_t>> expand_tabs(std::string_view line, size_t tab_width = 4) {
+    std::string result;
+    std::vector<size_t> col_map;  // col_map[i] = visual position of source column i
+
+    for (char c : line) {
+        col_map.push_back(result.length());
+        if (c == '\t') {
+            size_t spaces = tab_width - (result.length() % tab_width);
+            result.append(spaces, ' ');
+        } else {
+            result += c;
+        }
+    }
+    col_map.push_back(result.length());  // For positions at/past end of line
+    return {result, col_map};
+}
+
 struct GlobalOptions {
     int jobs = 0;
     std::string build_dir_str;
@@ -55,24 +73,18 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
         if (line_end == std::string::npos) line_end = file_content.size();
 
         std::string line = file_content.substr(line_start, line_end - line_start);
+        auto [display_line, col_map] = expand_tabs(line);
         std::string padding(std::to_string(row).length(), ' ');
 
         std::cerr << "   " << padding << " \033[1;34m|\033[0m" << std::endl;
-        std::cerr << "   \033[1;34m" << row << " |\033[0m " << line << std::endl;
+        std::cerr << "   \033[1;34m" << row << " |\033[0m " << display_line << std::endl;
 
-        size_t caret_len = (length > 0) ? length : 1;
-        size_t caret_col = col;
-        if (caret_col > line.length() + 1) {
-            caret_col = line.length() + 1;
-        }
-        
-        if (caret_col > line.length()) {
-            caret_len = 1;
-        } else if (caret_col + caret_len - 1 > line.length()) {
-            caret_len = line.length() - caret_col + 1;
-        }
-        
-        std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(caret_col > 0 ? caret_col - 1 : 0, ' ');
+        size_t caret_col = std::min(col, col_map.size()) - 1;
+        size_t visual_start = col_map[caret_col];
+        size_t visual_end = (caret_col + length < col_map.size()) ? col_map[caret_col + length] : display_line.length();
+        size_t caret_len = std::max(visual_end - visual_start, size_t{1});
+
+        std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(visual_start, ' ');
         if (caret_len > 0) {
             std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m";
         }
