@@ -263,6 +263,7 @@ The parser is a **recursive descent parser** supporting:
 **Testing:**
 - `enable_testing()`, `add_test()` - Test registration
 - `try_compile()` - Test compilation of source code with aggressive caching
+- `try_run()` - Compile and execute test programs (caches compilation, not execution)
 
 **Math & Messaging:**
 - `math(EXPR)` - Arithmetic expression evaluation
@@ -575,6 +576,89 @@ try_compile(CMAKE_HAVE_PTHREAD_CREATE ${CMAKE_BINARY_DIR}
 
 **Implementation**: `dmake/builtins/try_compile.cpp`
 
+### try_run() Implementation
+
+Implements CMake's `try_run` command for compiling and executing test programs.
+
+**Supported Syntaxes**:
+1. **New-style (CMake 3.25+)**: `try_run(<runResultVar> <compileResultVar> SOURCE_FROM_FILE name path ...)`
+   - Binary directory auto-generated under `${CMAKE_BINARY_DIR}/dmake_scratch_area`
+2. **Old-style**: `try_run(<runResultVar> <compileResultVar> bindir srcfile)` or with `SOURCES`
+
+**Supported Features**:
+- **Source variants**: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
+- **Compilation options**: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`
+- **Linking**: `LINK_LIBRARIES` (with target name resolution), `LINK_OPTIONS`
+- **CMAKE_FLAGS**: Additional compiler/linker settings (same as try_compile)
+- **Output capture**: `COMPILE_OUTPUT_VARIABLE` for build output, `RUN_OUTPUT_VARIABLE` for execution output
+- **Execution control**: `WORKING_DIRECTORY`, `ARGS` (arguments passed to executable)
+- **Result variables**:
+  - `<compileResultVar>`: `TRUE`/`FALSE` based on compilation success
+  - `<runResultVar>`: Exit code (0-255) if execution succeeded, or `FAILED_TO_RUN` if compilation failed
+
+**Cross-Compilation Behavior**:
+- When `CMAKE_CROSSCOMPILING` is true, compilation proceeds but execution is skipped unless `CMAKE_CROSSCOMPILING_EMULATOR` is configured
+- Without emulator: requires manual cache variable `<runResultVar>` with expected exit code
+- With emulator: runs executable through the emulator
+
+**Caching Strategy**:
+- Compilation is cached using the same strategy as `try_compile` (signature-based with header dependency tracking)
+- Execution is NEVER cached (runs on every invocation if compilation succeeds)
+- Binary reuse: if compilation cache hits, the cached binary is reused for execution
+
+**Temporary Directory**: `<bindir>/.dmake_try_run/<hash>/`
+- Unique per-invocation (based on variable names)
+- Preserved on failure (for debugging)
+- Cleaned on success (exit code 0)
+
+**Examples**:
+```cmake
+# Basic usage - check if code runs successfully
+try_run(RUN_RESULT COMPILE_RESULT
+    SOURCE_FROM_CONTENT test.cpp "int main() { return 0; }"
+    CXX_STANDARD 17
+)
+if(COMPILE_RESULT AND RUN_RESULT EQUAL 0)
+    message(STATUS "Test succeeded")
+endif()
+
+# With output capture
+try_run(EXIT_CODE COMPILED
+    SOURCE_FROM_CONTENT check.cpp "#include <iostream>\nint main() { std::cout << \"Works\"; return 0; }"
+    RUN_OUTPUT_VARIABLE OUTPUT
+    COMPILE_OUTPUT_VARIABLE BUILD_LOG
+)
+
+# With arguments
+try_run(RESULT COMPILED
+    SOURCES test_program.cpp
+    ARGS "--version" "-v"
+    RUN_OUTPUT_VARIABLE VERSION_OUTPUT
+)
+
+# Check function behavior at runtime
+try_run(FUNC_RESULT COMPILED
+    SOURCE_FROM_CONTENT check_strtod.c "#include <stdlib.h>\nint main() { return (strtod(\"1.5\", 0) == 1.5) ? 0 : 1; }"
+    C_STANDARD 11
+)
+if(COMPILED AND FUNC_RESULT EQUAL 0)
+    set(HAVE_WORKING_STRTOD TRUE)
+endif()
+
+# Real-world cross-compilation pattern
+if(CMAKE_CROSSCOMPILING)
+    # Set expected result manually
+    set(SIZEOF_INT 4 CACHE STRING "Size of int")
+else()
+    try_run(RUN_RES COMPILE_RES
+        SOURCE_FROM_CONTENT sizeof.c "#include <stdio.h>\nint main() { printf(\"%zu\", sizeof(int)); return 0; }"
+        RUN_OUTPUT_VARIABLE SIZEOF_INT
+    )
+endif()
+```
+
+**Implementation**: `dmake/builtins/try_compile.cpp` (shares compilation logic with try_compile)
+
 ## Error Handling & Debugging
 
 **Build Graph Stalls**:
@@ -614,15 +698,17 @@ Location: `tests/integration/*/` - Each subdirectory is a complete test project.
 - Source files - Test code
 - `test.sh` - Shell script that takes dmake binary path as `$1`, builds project, verifies outputs
 
-**Current integration tests (19):**
-- `basic-exe`, `shared-lib`, `static-lib`, `interface-lib`, `object-lib`
+**Current integration tests (21):**
+- `basic-exe`, `shared-lib`, `interface-lib`
 - `pch` (precompiled headers)
 - `incremental-rebuild` (cache validation)
 - `custom-target` (add_custom_target)
-- `find-package` (package discovery)
+- `find-package*` (package discovery with version checking)
 - `execute-process` (process execution)
-- `modules_basic` (C++20 modules)
+- `modules_basic`, `target_sources_cxx_modules` (C++20 modules)
 - `try_compile` (source compilation with caching)
+- `try_run` (compile and execute test programs)
+- Additional tests for control flow, properties, includes, etc.
 
 **Adding integration tests:**
 1. Create directory in `tests/integration/<test-name>`

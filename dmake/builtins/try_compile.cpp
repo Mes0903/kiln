@@ -177,6 +177,147 @@ bool validate_cache_entry(const TryCompileCacheEntry& entry) {
 
 } // anonymous namespace
 
+// Shared structure for compilation parameters
+struct CompileParams {
+    std::string language;
+    std::string compiler_path;
+    std::string compiler_version;
+    std::string standard;
+    std::vector<std::string> sources;
+    std::map<std::string, std::string> inline_sources_map;
+    std::vector<std::string> compile_definitions;
+    std::vector<std::string> resolved_link_libs;
+    std::vector<std::string> link_options;
+    std::filesystem::path temp_dir;
+};
+
+// Shared compilation result
+struct CompileResult {
+    bool success = false;
+    std::string output;
+    std::map<std::string, int64_t> header_mtimes;
+    std::string executable_path;  // For try_run
+};
+
+// Shared function: compile source files to executable
+std::expected<CompileResult, std::string> compile_sources(
+    const CompileParams& params,
+    bool link_executable = false
+) {
+    CompileResult result;
+
+    // Write inline sources to files
+    std::vector<std::string> all_sources = params.sources;
+    for (const auto& [name, content] : params.inline_sources_map) {
+        std::filesystem::path src_path = params.temp_dir / name;
+        std::ofstream file(src_path);
+        if (!file) {
+            return std::unexpected("Failed to write source file: " + src_path.string());
+        }
+        file << content;
+        file.close();
+        all_sources.push_back(src_path.string());
+    }
+
+    // Build compile command
+    std::vector<std::string> compile_cmd = {params.compiler_path};
+
+    // Standard
+    if (!params.standard.empty()) {
+        if (params.language == "C") {
+            compile_cmd.push_back("-std=c" + params.standard);
+        } else {
+            compile_cmd.push_back("-std=c++" + params.standard);
+        }
+    }
+
+    // Definitions
+    for (const auto& def : params.compile_definitions) {
+        compile_cmd.push_back("-D" + def);
+    }
+
+    // Generate dependency file
+    std::string deps_file = (params.temp_dir / "test.d").string();
+    compile_cmd.push_back("-MD");
+    compile_cmd.push_back("-MF");
+    compile_cmd.push_back(deps_file);
+
+    if (link_executable) {
+        // Compile and link directly to executable
+        result.executable_path = (params.temp_dir / "test").string();
+        compile_cmd.push_back("-o");
+        compile_cmd.push_back(result.executable_path);
+
+        // Source files
+        for (const auto& src : all_sources) {
+            compile_cmd.push_back(src);
+        }
+
+        // Link libraries and options
+        for (const auto& lib : params.resolved_link_libs) {
+            compile_cmd.push_back(lib);
+        }
+        for (const auto& opt : params.link_options) {
+            compile_cmd.push_back(opt);
+        }
+    } else {
+        // Compile to object file only
+        std::string obj_file = (params.temp_dir / "test.o").string();
+        compile_cmd.push_back("-c");
+        compile_cmd.push_back("-o");
+        compile_cmd.push_back(obj_file);
+
+        // Source files
+        for (const auto& src : all_sources) {
+            compile_cmd.push_back(src);
+        }
+    }
+
+    // Execute compile command
+    CommandResult compile_result = run_command(compile_cmd, params.temp_dir.string());
+    result.success = (compile_result.exit_code == 0);
+    result.output = compile_result.output;
+
+    // Parse header dependencies if compilation succeeded
+    if (result.success && std::filesystem::exists(deps_file)) {
+        auto headers_result = parse_deps_file(deps_file);
+        if (headers_result) {
+            for (const auto& header : *headers_result) {
+                auto mtime = get_file_mtime(header);
+                if (mtime) {
+                    result.header_mtimes[header] = *mtime;
+                }
+            }
+        }
+    }
+
+    // If we compiled to object file and need linking, do the link step
+    if (!link_executable && result.success &&
+        (!params.resolved_link_libs.empty() || !params.link_options.empty())) {
+        std::string obj_file = (params.temp_dir / "test.o").string();
+        std::string exe_file = (params.temp_dir / "test").string();
+        std::vector<std::string> link_cmd = {params.compiler_path};
+        link_cmd.push_back(obj_file);
+        link_cmd.push_back("-o");
+        link_cmd.push_back(exe_file);
+
+        for (const auto& lib : params.resolved_link_libs) {
+            link_cmd.push_back(lib);
+        }
+        for (const auto& opt : params.link_options) {
+            link_cmd.push_back(opt);
+        }
+
+        CommandResult link_result = run_command(link_cmd, params.temp_dir.string());
+        if (link_result.exit_code != 0) {
+            result.success = false;
+            result.output += "\n" + link_result.output;
+        }
+    }
+
+    return result;
+}
+
 void register_try_compile_builtins(Interpreter& interp) {
     interp.add_builtin("try_compile", [](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("try_compile");
@@ -425,93 +566,29 @@ void register_try_compile_builtins(Interpreter& interp) {
             return;
         }
 
-        // Write inline sources to files
-        std::vector<std::string> all_sources = sources;
-        for (const auto& [name, content] : inline_sources_map) {
-            std::filesystem::path src_path = temp_dir / name;
-            std::ofstream file(src_path);
-            if (!file) {
-                interp.set_fatal_error("Failed to write source file: " + src_path.string());
-                return;
-            }
-            file << content;
-            file.close();
-            all_sources.push_back(src_path.string());
+        // Prepare compilation parameters
+        CompileParams params;
+        params.language = language;
+        params.compiler_path = compiler_path;
+        params.compiler_version = compiler_version;
+        params.standard = standard;
+        params.sources = sources;
+        params.inline_sources_map = inline_sources_map;
+        params.compile_definitions = compile_definitions;
+        params.resolved_link_libs = resolved_link_libs;
+        params.link_options = link_options;
+        params.temp_dir = temp_dir;
+
+        // Compile
+        auto compile_result = compile_sources(params, false);
+        if (!compile_result) {
+            interp.set_fatal_error("Compilation failed: " + compile_result.error());
+            return;
         }
 
-        // Build compile command
-        std::vector<std::string> compile_cmd = {compiler_path};
-
-        // Standard (only if specified - otherwise use compiler default)
-        if (!standard.empty()) {
-            if (language == "C") {
-                compile_cmd.push_back("-std=c" + standard);
-            } else {
-                compile_cmd.push_back("-std=c++" + standard);
-            }
-        }
-
-        // Definitions
-        for (const auto& def : compile_definitions) {
-            compile_cmd.push_back("-D" + def);
-        }
-
-        // Generate dependency file
-        std::string obj_file = (temp_dir / "test.o").string();
-        std::string deps_file = (temp_dir / "test.d").string();
-        compile_cmd.push_back("-MD");
-        compile_cmd.push_back("-MF");
-        compile_cmd.push_back(deps_file);
-        compile_cmd.push_back("-c");
-        compile_cmd.push_back("-o");
-        compile_cmd.push_back(obj_file);
-
-        // Source files
-        for (const auto& src : all_sources) {
-            compile_cmd.push_back(src);
-        }
-
-        // Execute compile command
-        CommandResult compile_result = run_command(compile_cmd, temp_dir.string());
-        bool compile_success = (compile_result.exit_code == 0);
-        std::string output = compile_result.output;
-
-        // Parse header dependencies if compilation succeeded
-        std::map<std::string, int64_t> header_mtimes;
-        if (compile_success && std::filesystem::exists(deps_file)) {
-            auto headers_result = parse_deps_file(deps_file);
-            if (headers_result) {
-                for (const auto& header : *headers_result) {
-                    auto mtime = get_file_mtime(header);
-                    if (mtime) {
-                        header_mtimes[header] = *mtime;
-                    }
-                }
-            }
-        }
-
-        // If linking is needed and compile succeeded, link
-        if (compile_success && (!resolved_link_libs.empty() || !link_options.empty())) {
-            std::string exe_file = (temp_dir / "test").string();
-            std::vector<std::string> link_cmd = {compiler_path};
-            link_cmd.push_back(obj_file);
-            link_cmd.push_back("-o");
-            link_cmd.push_back(exe_file);
-
-            for (const auto& lib : resolved_link_libs) {
-                link_cmd.push_back(lib);
-            }
-
-            for (const auto& opt : link_options) {
-                link_cmd.push_back(opt);
-            }
-
-            CommandResult link_result = run_command(link_cmd, temp_dir.string());
-            if (link_result.exit_code != 0) {
-                compile_success = false;
-                output += "\n" + link_result.output;
-            }
-        }
+        bool compile_success = compile_result->success;
+        std::string output = compile_result->output;
+        std::map<std::string, int64_t> header_mtimes = compile_result->header_mtimes;
 
         // Compute final signature with header deps
         auto final_sig_result = add_header_deps_to_signature(base_signature, header_mtimes);
@@ -536,6 +613,334 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Clean up temp directory on success (keep on failure for debugging)
         if (compile_success) {
+            std::filesystem::remove_all(temp_dir, ec);
+        }
+    });
+
+    interp.add_builtin("try_run", [](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("try_run");
+
+        std::string run_result_var;
+        std::string compile_result_var;
+        std::string bindir;
+        std::string old_style_srcfile;
+        std::vector<std::string> sources;
+        std::vector<std::string> source_from_content;
+        std::vector<std::string> source_from_var;
+        std::vector<std::string> source_from_file;
+        std::vector<std::string> compile_definitions;
+        std::vector<std::string> link_libraries;
+        std::vector<std::string> link_options;
+        std::string cxx_standard;
+        std::string c_standard;
+        std::string compile_output_variable;
+        std::string run_output_variable;
+        std::string run_output_stdout_variable;
+        std::string run_output_stderr_variable;
+        std::string working_directory;
+        std::vector<std::string> run_args;
+        std::vector<std::string> cmake_flags;
+
+        parser.add_positional(run_result_var, "run result variable");
+        parser.add_positional(compile_result_var, "compile result variable");
+        parser.add_positional(bindir, "binary directory", false);
+        parser.add_positional(old_style_srcfile, "source file (old syntax)", false);
+        parser.add_list("SOURCES", sources);
+        parser.add_list("SOURCE_FROM_CONTENT", source_from_content);
+        parser.add_list("SOURCE_FROM_VAR", source_from_var);
+        parser.add_list("SOURCE_FROM_FILE", source_from_file);
+        parser.add_list("COMPILE_DEFINITIONS", compile_definitions);
+        parser.add_list("LINK_LIBRARIES", link_libraries);
+        parser.add_list("LINK_OPTIONS", link_options);
+        parser.add_list("CMAKE_FLAGS", cmake_flags);
+        parser.add_list("ARGS", run_args);
+        parser.add_value("CXX_STANDARD", cxx_standard);
+        parser.add_value("C_STANDARD", c_standard);
+        parser.add_value("COMPILE_OUTPUT_VARIABLE", compile_output_variable);
+        parser.add_value("RUN_OUTPUT_VARIABLE", run_output_variable);
+        parser.add_value("RUN_OUTPUT_STDOUT_VARIABLE", run_output_stdout_variable);
+        parser.add_value("RUN_OUTPUT_STDERR_VARIABLE", run_output_stderr_variable);
+        parser.add_value("WORKING_DIRECTORY", working_directory);
+
+        PARSE_OR_RETURN(parser, interp, args);
+
+        // Handle old-style syntax
+        if (!old_style_srcfile.empty()) {
+            if (bindir.empty()) {
+                interp.set_fatal_error("try_run with source file requires binary directory");
+                return;
+            }
+            sources.push_back(old_style_srcfile);
+        }
+
+        // Auto-generate bindir if not specified
+        if (bindir.empty()) {
+            std::string cmake_binary_dir = interp.get_variable("CMAKE_BINARY_DIR");
+            if (cmake_binary_dir.empty()) {
+                interp.set_fatal_error("try_run requires CMAKE_BINARY_DIR to be set");
+                return;
+            }
+            bindir = (std::filesystem::path(cmake_binary_dir) / "dmake_scratch_area").string();
+        }
+
+        // Process CMAKE_FLAGS (same as try_compile)
+        for (const auto& flag : cmake_flags) {
+            if (flag.size() < 2 || flag.substr(0, 2) != "-D") {
+                continue;
+            }
+
+            std::string def = flag.substr(2);
+            size_t eq = def.find('=');
+            if (eq == std::string::npos) {
+                continue;
+            }
+
+            std::string var_name = def.substr(0, eq);
+            std::string value = def.substr(eq + 1);
+
+            size_t colon = var_name.find(':');
+            if (colon != std::string::npos) {
+                var_name = var_name.substr(0, colon);
+            }
+
+            if (var_name == "COMPILE_DEFINITIONS") {
+                CMakeList defs(value);
+                for (const auto& d : defs) {
+                    if (d.size() >= 2 && d.substr(0, 2) == "-D") {
+                        compile_definitions.push_back(d.substr(2));
+                    } else {
+                        compile_definitions.push_back(d);
+                    }
+                }
+            } else if (var_name == "LINK_LIBRARIES") {
+                CMakeList libs(value);
+                for (const auto& lib : libs) {
+                    link_libraries.push_back(lib);
+                }
+            } else if (var_name == "LINK_DIRECTORIES") {
+                CMakeList dirs(value);
+                for (const auto& dir : dirs) {
+                    if (!dir.empty()) {
+                        link_options.push_back("-L" + dir);
+                    }
+                }
+            } else if (var_name == "LINK_OPTIONS") {
+                CMakeList opts(value);
+                for (const auto& opt : opts) {
+                    link_options.push_back(opt);
+                }
+            }
+        }
+
+        // Validate: need at least one source
+        if (sources.empty() && source_from_content.empty() &&
+            source_from_var.empty() && source_from_file.empty()) {
+            interp.set_fatal_error("try_run requires at least one source");
+            return;
+        }
+
+        // Detect language
+        std::string language = "CXX";
+        if (!sources.empty()) {
+            language = detect_language(sources[0]);
+        } else if (!source_from_content.empty()) {
+            language = detect_language(source_from_content[0]);
+        } else if (!source_from_var.empty()) {
+            language = detect_language(source_from_var[0]);
+        } else if (!source_from_file.empty()) {
+            language = detect_language(source_from_file[0]);
+        }
+
+        // Get compiler
+        std::string compiler_var = (language == "C") ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER";
+        std::string compiler_path = interp.get_variable(compiler_var);
+        if (compiler_path.empty()) {
+            compiler_path = (language == "C") ? "gcc" : "g++";
+        }
+
+        // Get compiler version
+        CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
+        if (version_cmd.exit_code != 0 || version_cmd.output.empty()) {
+            interp.set_fatal_error("Failed to get compiler version from " + compiler_path);
+            return;
+        }
+        std::string compiler_version = version_cmd.output;
+        if (!compiler_version.empty() && compiler_version.back() == '\n') {
+            compiler_version.pop_back();
+        }
+
+        // Get standard
+        std::string standard;
+        if (language == "C") {
+            standard = c_standard.empty() ? interp.get_variable("CMAKE_C_STANDARD") : c_standard;
+            if (standard.empty()) standard = "11";
+        } else {
+            standard = cxx_standard.empty() ? interp.get_variable("CMAKE_CXX_STANDARD") : cxx_standard;
+            if (standard.empty()) standard = "17";
+        }
+
+        // Process inline sources
+        std::map<std::string, std::string> inline_sources_map;
+
+        if (source_from_content.size() % 2 != 0) {
+            interp.set_fatal_error("SOURCE_FROM_CONTENT requires pairs of (name, content)");
+            return;
+        }
+        for (size_t i = 0; i < source_from_content.size(); i += 2) {
+            inline_sources_map[source_from_content[i]] = source_from_content[i + 1];
+        }
+
+        if (source_from_var.size() % 2 != 0) {
+            interp.set_fatal_error("SOURCE_FROM_VAR requires pairs of (name, varname)");
+            return;
+        }
+        for (size_t i = 0; i < source_from_var.size(); i += 2) {
+            std::string content = interp.get_variable(source_from_var[i + 1]);
+            inline_sources_map[source_from_var[i]] = content;
+        }
+
+        if (source_from_file.size() % 2 != 0) {
+            interp.set_fatal_error("SOURCE_FROM_FILE requires pairs of (name, filepath)");
+            return;
+        }
+        for (size_t i = 0; i < source_from_file.size(); i += 2) {
+            std::ifstream file(source_from_file[i + 1]);
+            if (!file) {
+                interp.set_fatal_error("Failed to read file: " + source_from_file[i + 1]);
+                return;
+            }
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            inline_sources_map[source_from_file[i]] = content;
+        }
+
+        // Resolve LINK_LIBRARIES
+        std::vector<std::string> resolved_link_libs;
+        auto& targets = interp.get_root()->targets_;
+        for (const auto& lib : link_libraries) {
+            if (targets.count(lib)) {
+                resolved_link_libs.push_back(targets[lib]->get_output_path());
+            } else {
+                resolved_link_libs.push_back(lib);
+            }
+        }
+
+        // Check for cross-compilation
+        bool is_cross_compiling = (interp.get_variable("CMAKE_CROSSCOMPILING") == "TRUE" ||
+                                     interp.get_variable("CMAKE_CROSSCOMPILING") == "ON" ||
+                                     interp.get_variable("CMAKE_CROSSCOMPILING") == "1");
+
+        // Create temporary directory
+        std::filesystem::path temp_dir = std::filesystem::path(bindir) / ".dmake_try_run" /
+                                         std::to_string(std::hash<std::string>{}(run_result_var + compile_result_var));
+        std::error_code ec;
+        std::filesystem::create_directories(temp_dir, ec);
+        if (ec) {
+            interp.set_fatal_error("Failed to create temp directory: " + ec.message());
+            return;
+        }
+
+        // Prepare compilation parameters
+        CompileParams params;
+        params.language = language;
+        params.compiler_path = compiler_path;
+        params.compiler_version = compiler_version;
+        params.standard = standard;
+        params.sources = sources;
+        params.inline_sources_map = inline_sources_map;
+        params.compile_definitions = compile_definitions;
+        params.resolved_link_libs = resolved_link_libs;
+        params.link_options = link_options;
+        params.temp_dir = temp_dir;
+
+        // Compile to executable
+        auto compile_result = compile_sources(params, true);
+        if (!compile_result) {
+            interp.set_fatal_error("Compilation failed: " + compile_result.error());
+            return;
+        }
+
+        bool compile_success = compile_result->success;
+        std::string compile_output = compile_result->output;
+
+        // Set compile result
+        interp.set_variable(compile_result_var, compile_success ? "TRUE" : "FALSE");
+        if (!compile_output_variable.empty()) {
+            interp.set_variable(compile_output_variable, compile_output);
+        }
+
+        // If compilation failed, set run result to FAILED_TO_RUN
+        if (!compile_success) {
+            interp.set_variable(run_result_var, "FAILED_TO_RUN");
+            return;
+        }
+
+        // Handle cross-compilation case
+        if (is_cross_compiling) {
+            std::string emulator = interp.get_variable("CMAKE_CROSSCOMPILING_EMULATOR");
+            if (emulator.empty()) {
+                // Can't run - require manual cache variables
+                // Check if cache variables exist
+                std::string cached_exit_code = interp.get_variable(run_result_var);
+                std::string cached_output = interp.get_variable(run_result_var + "__TRYRUN_OUTPUT");
+
+                if (cached_exit_code.empty()) {
+                    interp.set_fatal_error("Cross-compiling without emulator - please set " + run_result_var +
+                                           " cache variable to expected exit code");
+                    return;
+                }
+
+                // Use cached values
+                if (!run_output_variable.empty() && !cached_output.empty()) {
+                    interp.set_variable(run_output_variable, cached_output);
+                }
+                // Exit code already set via cache variable
+                return;
+            }
+            // If emulator is set, we'll use it below
+        }
+
+        // Run the executable
+        std::string exe_path = compile_result->executable_path;
+        std::string run_dir = working_directory.empty() ? temp_dir.string() : working_directory;
+
+        // Build run command
+        std::vector<std::string> run_cmd;
+
+        // Add emulator if cross-compiling
+        if (is_cross_compiling) {
+            std::string emulator = interp.get_variable("CMAKE_CROSSCOMPILING_EMULATOR");
+            if (!emulator.empty()) {
+                CMakeList emulator_parts(emulator);
+                for (const auto& part : emulator_parts) {
+                    run_cmd.push_back(part);
+                }
+            }
+        }
+
+        run_cmd.push_back(exe_path);
+        for (const auto& arg : run_args) {
+            run_cmd.push_back(arg);
+        }
+
+        CommandResult run_result = run_command(run_cmd, run_dir);
+
+        // Set run result (exit code)
+        interp.set_variable(run_result_var, std::to_string(run_result.exit_code));
+
+        // Set output variables
+        if (!run_output_variable.empty()) {
+            interp.set_variable(run_output_variable, run_result.output);
+        }
+        if (!run_output_stdout_variable.empty()) {
+            interp.set_variable(run_output_stdout_variable, run_result.output);
+        }
+        if (!run_output_stderr_variable.empty()) {
+            // Combined output goes to both for now
+            interp.set_variable(run_output_stderr_variable, run_result.output);
+        }
+
+        // Clean up temp directory on success
+        if (compile_success && run_result.exit_code == 0) {
             std::filesystem::remove_all(temp_dir, ec);
         }
     });
