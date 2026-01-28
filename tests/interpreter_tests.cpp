@@ -586,6 +586,180 @@ TEST_CASE("CMakeList handles semicolons in variable references", "[interpreter][
     REQUIRE(output == "3\n");
 }
 
+TEST_CASE("list(JOIN) joins list elements with glue", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d")
+        list(JOIN MY_LIST "," result)
+        message("${result}")
+    )");
+    REQUIRE(output == "a,b,c,d\n");
+
+    output = run_script(R"(
+        set(MY_LIST "a" "b" "c")
+        list(JOIN MY_LIST "" result)
+        message("${result}")
+    )");
+    REQUIRE(output == "abc\n");
+
+    output = run_script(R"(
+        set(MY_LIST "a" "b" "c")
+        list(JOIN MY_LIST " -> " result)
+        message("${result}")
+    )");
+    REQUIRE(output == "a -> b -> c\n");
+}
+
+TEST_CASE("list(PREPEND) adds elements to front", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "c" "d")
+        list(PREPEND MY_LIST "a" "b")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;b;c;d\n");
+}
+
+TEST_CASE("list(POP_BACK) removes and returns last element", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d")
+        list(POP_BACK MY_LIST last)
+        message("${MY_LIST}")
+        message("${last}")
+    )");
+    REQUIRE(output == "a;b;c\nd\n");
+}
+
+TEST_CASE("list(POP_BACK) with multiple values", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e")
+        list(POP_BACK MY_LIST val1 val2)
+        message("${MY_LIST}")
+        message("${val1}")
+        message("${val2}")
+    )");
+    REQUIRE(output == "a;b;c\ne\nd\n");
+}
+
+TEST_CASE("list(POP_FRONT) removes and returns first element", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d")
+        list(POP_FRONT MY_LIST first)
+        message("${MY_LIST}")
+        message("${first}")
+    )");
+    REQUIRE(output == "b;c;d\na\n");
+}
+
+TEST_CASE("list(POP_FRONT) with multiple values", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e")
+        list(POP_FRONT MY_LIST val1 val2)
+        message("${MY_LIST}")
+        message("${val1}")
+        message("${val2}")
+    )");
+    REQUIRE(output == "c;d;e\na\nb\n");
+}
+
+TEST_CASE("list(FILTER) INCLUDE filters list", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "apple" "banana" "apricot" "cherry" "avocado")
+        list(FILTER MY_LIST INCLUDE REGEX "^a.*")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "apple;apricot;avocado\n");
+}
+
+TEST_CASE("list(FILTER) EXCLUDE filters list", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "apple" "banana" "apricot" "cherry" "avocado")
+        list(FILTER MY_LIST EXCLUDE REGEX "^a.*")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "banana;cherry\n");
+}
+
+TEST_CASE("list(TRANSFORM) APPEND appends to each element", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "file1" "file2" "file3")
+        list(TRANSFORM MY_LIST APPEND ".txt")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "file1.txt;file2.txt;file3.txt\n");
+}
+
+TEST_CASE("list(TRANSFORM) PREPEND prepends to each element", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "file1" "file2" "file3")
+        list(TRANSFORM MY_LIST PREPEND "src/")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "src/file1;src/file2;src/file3\n");
+}
+
+TEST_CASE("list(TRANSFORM) TOUPPER converts to uppercase", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "hello" "world")
+        list(TRANSFORM MY_LIST TOUPPER)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "HELLO;WORLD\n");
+}
+
+TEST_CASE("list(TRANSFORM) TOLOWER converts to lowercase", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "HELLO" "WORLD")
+        list(TRANSFORM MY_LIST TOLOWER)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "hello;world\n");
+}
+
+TEST_CASE("list(TRANSFORM) STRIP removes whitespace", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "  hello  " "  world  " "  test  ")
+        list(TRANSFORM MY_LIST STRIP)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "hello;world;test\n");
+}
+
+TEST_CASE("list(TRANSFORM) REPLACE does regex replacement", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "test1.cpp" "test2.cpp" "main.cpp")
+        list(TRANSFORM MY_LIST REPLACE "\\.cpp$" ".o")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "test1.o;test2.o;main.o\n");
+}
+
+TEST_CASE("list(TRANSFORM) with OUTPUT_VARIABLE", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c")
+        list(TRANSFORM MY_LIST APPEND "x" OUTPUT_VARIABLE NEW_LIST)
+        message("${MY_LIST}")
+        message("${NEW_LIST}")
+    )");
+    REQUIRE(output == "a;b;c\nax;bx;cx\n");
+}
+
+TEST_CASE("list(TRANSFORM) with AT selector", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e")
+        list(TRANSFORM MY_LIST TOUPPER AT 1 3)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;B;c;D;e\n");
+}
+
+TEST_CASE("list(TRANSFORM) with REGEX selector", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "file1.cpp" "main.cpp" "test.txt" "util.cpp")
+        list(TRANSFORM MY_LIST TOUPPER REGEX ".*\\.cpp$")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "FILE1.CPP;MAIN.CPP;test.txt;UTIL.CPP\n");
+}
+
 TEST_CASE("Foreach basic", "[interpreter][foreach]") {
     auto output = run_script(R"(
         foreach(i 1 2 3)
