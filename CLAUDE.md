@@ -492,6 +492,12 @@ dmake implements a centralized JSON-based cache infrastructure for subsystems th
 
 Implements CMake's `try_compile` command in SOURCE mode with aggressive caching.
 
+**Supported Syntaxes**:
+1. **New-style (CMake 3.25+)**: `try_compile(result SOURCE_FROM_FILE name path ...)`
+   - Binary directory auto-generated under `${CMAKE_BINARY_DIR}/dmake_scratch_area`
+2. **Old-style**: `try_compile(result bindir srcfile)` or `try_compile(result bindir SOURCES srcfile...)`
+   - Explicit binary directory required
+
 **Supported Features**:
 - **Source variants**: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
 - **Compilation options**: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`

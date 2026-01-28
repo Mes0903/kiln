@@ -183,6 +183,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         std::string result_var;
         std::string bindir;
+        std::string old_style_srcfile;  // For old syntax: try_compile(result bindir srcfile)
         std::vector<std::string> sources;
         std::vector<std::string> source_from_content;  // Pairs: name, content, name, content...
         std::vector<std::string> source_from_var;      // Pairs: name, varname, name, varname...
@@ -197,6 +198,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         parser.add_positional(result_var, "result variable");
         parser.add_positional(bindir, "binary directory", false);  // Optional
+        parser.add_positional(old_style_srcfile, "source file (old syntax)", false);  // Optional
         parser.add_list("SOURCES", sources);
         parser.add_list("SOURCE_FROM_CONTENT", source_from_content);
         parser.add_list("SOURCE_FROM_VAR", source_from_var);
@@ -210,6 +212,15 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.add_value("OUTPUT_VARIABLE", output_variable);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Handle old-style syntax: try_compile(result bindir srcfile)
+        if (!old_style_srcfile.empty()) {
+            if (bindir.empty()) {
+                interp.set_fatal_error("try_compile with source file requires binary directory");
+                return;
+            }
+            sources.push_back(old_style_srcfile);
+        }
 
         // Auto-generate bindir if not specified (CMake 3.25+ behavior)
         // We use dmake_scratch_area instead of CMake's CMakeFiles/CMakeScratch
