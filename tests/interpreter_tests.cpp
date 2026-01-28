@@ -841,10 +841,11 @@ TEST_CASE("break in macro affects caller loop", "[interpreter][foreach][macro]")
 }
 
 TEST_CASE("if condition: AND operator", "[interpreter][if]") {
+    // Note: Don't use Y or N as variable names - they're boolean constants in CMake
     auto output = run_script(R"(
-        set(X "1")
-        set(Y "1")
-        if(X AND Y)
+        set(VAR_A "1")
+        set(VAR_B "1")
+        if(VAR_A AND VAR_B)
             message("pass")
         else()
             message("fail")
@@ -853,9 +854,9 @@ TEST_CASE("if condition: AND operator", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 
     output = run_script(R"(
-        set(X "1")
-        set(Y "0")
-        if(X AND Y)
+        set(VAR_A "1")
+        set(VAR_B "0")
+        if(VAR_A AND VAR_B)
             message("fail")
         else()
             message("pass")
@@ -865,10 +866,11 @@ TEST_CASE("if condition: AND operator", "[interpreter][if]") {
 }
 
 TEST_CASE("if condition: OR operator", "[interpreter][if]") {
+    // Note: Don't use Y or N as variable names - they're boolean constants in CMake
     auto output = run_script(R"(
-        set(X "0")
-        set(Y "1")
-        if(X OR Y)
+        set(VAR_A "0")
+        set(VAR_B "1")
+        if(VAR_A OR VAR_B)
             message("pass")
         else()
             message("fail")
@@ -877,9 +879,9 @@ TEST_CASE("if condition: OR operator", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 
     output = run_script(R"(
-        set(X "0")
-        set(Y "0")
-        if(X OR Y)
+        set(VAR_A "0")
+        set(VAR_B "0")
+        if(VAR_A OR VAR_B)
             message("fail")
         else()
             message("pass")

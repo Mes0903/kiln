@@ -1101,6 +1101,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     }
 
     // Set of keywords that should not be dereferenced as variables
+    // All keywords are in uppercase; comparisons are done case-insensitively
     static const std::set<std::string> keywords = {
         "NOT", "AND", "OR", "(", ")",
         "DEFINED", "TARGET", "EXISTS", "COMMAND", "POLICY", "TEST",
@@ -1110,6 +1111,12 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         "VERSION_EQUAL", "VERSION_LESS", "VERSION_GREATER",
         "VERSION_LESS_EQUAL", "VERSION_GREATER_EQUAL",
         "MATCHES", "IN_LIST"
+    };
+
+    // Boolean constants that have fixed truthiness values (case-insensitive)
+    static const std::set<std::string> boolean_constants = {
+        "TRUE", "FALSE", "ON", "OFF", "YES", "NO", "Y", "N",
+        "IGNORE", "NOTFOUND"
     };
 
     // Helper to get the string value of an argument token
@@ -1155,8 +1162,11 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     auto evaluate_token = [&](const Argument& arg) -> std::string {
         std::string token = get_token_string(arg);
 
-        // Don't dereference keywords (including boolean constants like TRUE, OFF, etc.) or quoted strings
-        if (arg.quoted || keywords.contains(token)) {
+        // Don't dereference keywords (operators) or boolean constants or quoted strings
+        // Check case-insensitively for both
+        std::string upper_token = token;
+        std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
+        if (arg.quoted || keywords.contains(upper_token) || boolean_constants.contains(upper_token)) {
             return token;
         }
 
@@ -1450,6 +1460,14 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
         // If it's quoted or a numeric constant, use it as-is
         if (arg.quoted || is_numeric_constant(token_str)) {
+            return !is_falsy(token_str);
+        }
+
+        // Check if this is a boolean constant (case-insensitive)
+        // These have fixed truthiness and should not be dereferenced as variables
+        std::string upper_token = token_str;
+        std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
+        if (boolean_constants.contains(upper_token)) {
             return !is_falsy(token_str);
         }
 

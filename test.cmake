@@ -1,3 +1,3 @@
-set(CMAKE_C_COMPILER_LOADED 1)
-find_package(Threads)
-
+if(TRUE)
+                 this_command_does_not_exist()
+endif()
