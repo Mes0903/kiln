@@ -18,6 +18,15 @@ namespace {
         size_t end = str.find_last_not_of(whitespace);
         return str.substr(start, end - start + 1);
     }
+
+    // Helper function to extract basename from file path
+    std::string get_basename(const std::string& path) {
+        size_t last_slash = path.find_last_of("/\\");
+        if (last_slash == std::string::npos) {
+            return path;
+        }
+        return path.substr(last_slash + 1);
+    }
 }
 
 void register_list_builtins(Interpreter& interp) {
@@ -235,6 +244,7 @@ void register_list_builtins(Interpreter& interp) {
 
             bool natural = false;
             bool descending = false;
+            bool file_basename = false;
 
             if (!compare_mode.empty()) {
                 std::transform(compare_mode.begin(), compare_mode.end(), compare_mode.begin(),
@@ -244,9 +254,7 @@ void register_list_builtins(Interpreter& interp) {
                 } else if (compare_mode == "STRING") {
                     natural = false;
                 } else if (compare_mode == "FILE_BASENAME") {
-                    // TODO: Implement FILE_BASENAME comparison
-                    interp.set_fatal_error("list(SORT) COMPARE FILE_BASENAME not yet implemented");
-                    return;
+                    file_basename = true;
                 } else {
                     interp.set_fatal_error("list(SORT) unknown COMPARE mode: " + compare_mode);
                     return;
@@ -264,9 +272,24 @@ void register_list_builtins(Interpreter& interp) {
                 }
             }
 
-            // Note: CASE is handled inside CMakeList::sort if needed
             CMakeList list(interp.get_variable(list_var));
-            list.sort(natural, descending);
+
+            // Handle FILE_BASENAME comparison specially
+            if (file_basename) {
+                auto vec = list.to_vector();
+                std::sort(vec.begin(), vec.end(), [descending](const std::string& a, const std::string& b) {
+                    std::string basename_a = get_basename(a);
+                    std::string basename_b = get_basename(b);
+                    if (descending) {
+                        return basename_a > basename_b;
+                    }
+                    return basename_a < basename_b;
+                });
+                list = CMakeList(vec);
+            } else {
+                // Note: CASE is handled inside CMakeList::sort if needed
+                list.sort(natural, descending);
+            }
             interp.set_variable(list_var, list.to_string());
         } else if (operation == "REMOVE_DUPLICATES") {
             CommandParser parser("list", "REMOVE_DUPLICATES");
@@ -570,8 +593,70 @@ void register_list_builtins(Interpreter& interp) {
                 }
             } else if (selector_mode == "FOR") {
                 // Transform elements in range (start, stop[, step])
-                interp.set_fatal_error("list(TRANSFORM) FOR selector not yet implemented");
-                return;
+                if (selector_params.empty()) {
+                    interp.set_fatal_error("list(TRANSFORM) FOR requires at least start and stop parameters");
+                    return;
+                }
+
+                // Parse FOR parameters: start, stop, [step]
+                std::vector<std::string> for_parts;
+                std::string combined = selector_params[0];
+
+                // Split by comma
+                size_t pos = 0;
+                while ((pos = combined.find(',')) != std::string::npos) {
+                    for_parts.push_back(strip(combined.substr(0, pos)));
+                    combined.erase(0, pos + 1);
+                }
+                for_parts.push_back(strip(combined));
+
+                if (for_parts.size() < 2 || for_parts.size() > 3) {
+                    interp.set_fatal_error("list(TRANSFORM) FOR requires start,stop or start,stop,step");
+                    return;
+                }
+
+                try {
+                    long start = std::stol(for_parts[0]);
+                    long stop = std::stol(for_parts[1]);
+                    long step = 1;
+                    if (for_parts.size() == 3) {
+                        step = std::stol(for_parts[2]);
+                        if (step == 0) {
+                            interp.set_fatal_error("list(TRANSFORM) FOR step cannot be zero");
+                            return;
+                        }
+                    }
+
+                    // Handle negative indices
+                    if (start < 0) {
+                        start = static_cast<long>(result.size()) + start;
+                    }
+                    if (stop < 0) {
+                        stop = static_cast<long>(result.size()) + stop;
+                    }
+
+                    auto vec = result.to_vector();
+
+                    // Apply transformation to range
+                    if (step > 0) {
+                        for (long idx = start; idx <= stop && idx < static_cast<long>(vec.size()); idx += step) {
+                            if (idx >= 0) {
+                                if (!transform_element(vec[idx])) return;
+                            }
+                        }
+                    } else {
+                        for (long idx = start; idx >= stop && idx >= 0; idx += step) {
+                            if (idx < static_cast<long>(vec.size())) {
+                                if (!transform_element(vec[idx])) return;
+                            }
+                        }
+                    }
+
+                    result = CMakeList(vec);
+                } catch (...) {
+                    interp.set_fatal_error("list(TRANSFORM) invalid FOR parameters");
+                    return;
+                }
             }
 
             // Store result

@@ -20,25 +20,15 @@ TEST_CASE("GnuCompiler: CXX compile command", "[compiler]") {
         std::string cmd = dmake::join_command(cmd_vec);
     
             CHECK(cmd_vec[0] == "g++");
-    
-            CHECK(cmd_vec[1] == "-std=c++23");
-    
+            CHECK(cmd_vec[1] == "-std=gnu++23");
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-Iinclude") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-I/usr/local/include") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-DDEBUG") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-DVERSION=1") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-fPIC") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-c") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "main.o") != cmd_vec.end());
-    
             CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "main.cpp") != cmd_vec.end());
-    
         }
     
         
@@ -52,7 +42,7 @@ TEST_CASE("GnuCompiler: C compile command", "[compiler]") {
     
     std::vector<std::string> cmd_vec = compiler.get_compile_command(ctx);
     CHECK(cmd_vec[0] == "gcc");
-    CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-std=c11") != cmd_vec.end());
+    CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-std=gnu11") != cmd_vec.end());
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "main.c") != cmd_vec.end());
 }
 

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <regex>
+#include <sys/stat.h>
 #include "builtins/registry.hpp"
 
 namespace dmake {
@@ -2131,6 +2132,54 @@ void Interpreter::finalize_directory_targets() {
             }
         }
     }
+}
+
+std::optional<int64_t> Interpreter::get_dir_mtime_cached(const std::string& path) {
+    auto root = get_root();
+
+    // Skip caching for project paths (source/binary dirs) - they can change during build
+    if (is_project_path(path)) {
+        struct stat st;
+        if (stat(path.c_str(), &st) == 0) {
+            return st.st_mtime;
+        }
+        return std::nullopt;
+    }
+
+    // Check session cache
+    auto it = root->dir_mtime_cache_.find(path);
+    if (it != root->dir_mtime_cache_.end()) {
+        return it->second;
+    }
+
+    // Not cached - stat and cache it
+    struct stat st;
+    std::optional<int64_t> mtime;
+    if (stat(path.c_str(), &st) == 0) {
+        mtime = st.st_mtime;
+    }
+
+    root->dir_mtime_cache_[path] = mtime;
+    return mtime;
+}
+
+bool Interpreter::is_project_path(const std::string& path) const {
+    std::filesystem::path abs_path = std::filesystem::absolute(path);
+    std::filesystem::path source_dir = std::filesystem::absolute(get_variable("CMAKE_SOURCE_DIR"));
+    std::filesystem::path binary_dir = std::filesystem::absolute(get_variable("CMAKE_BINARY_DIR"));
+
+    // Check if path starts with source_dir or binary_dir
+    auto mismatch_src = std::mismatch(source_dir.begin(), source_dir.end(), abs_path.begin(), abs_path.end());
+    if (mismatch_src.first == source_dir.end()) {
+        return true;  // Under source dir
+    }
+
+    auto mismatch_bin = std::mismatch(binary_dir.begin(), binary_dir.end(), abs_path.begin(), abs_path.end());
+    if (mismatch_bin.first == binary_dir.end()) {
+        return true;  // Under binary dir
+    }
+
+    return false;
 }
 
 }

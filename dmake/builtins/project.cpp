@@ -1,11 +1,13 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../utils.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <regex>
 #include <cstdlib>
+#include <cstring>
 
 namespace dmake {
 
@@ -196,6 +198,7 @@ void register_project_builtins(Interpreter& interp) {
 
         std::string project_name = args[0];
         interp.set_variable("PROJECT_NAME", project_name);
+        interp.set_variable("PROJECT_SOURCE_DIR", interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
 
         std::vector<std::string> languages;
         std::string version;
@@ -392,42 +395,64 @@ void register_project_builtins(Interpreter& interp) {
         // Create output directory if needed
         std::filesystem::create_directories(output_path.parent_path());
 
-        // Write output file
-        std::ofstream outfile(output_path, std::ios::binary);
-        if (!outfile) {
-            interp.set_fatal_error("configure_file() could not open output file: " + output_path.string());
-            return;
-        }
-        outfile << content;
-        outfile.close();
-
-        // Handle permissions
-        // Default is USE_SOURCE_PERMISSIONS (copy from input)
+        // Determine target permissions
+        namespace fs = std::filesystem;
+        fs::perms target_perms;
         if (!file_permissions.empty()) {
-            namespace fs = std::filesystem;
-            fs::perms perms = fs::perms::none;
+            target_perms = fs::perms::none;
             for (const auto& p : file_permissions) {
-                if (p == "OWNER_READ") perms |= fs::perms::owner_read;
-                else if (p == "OWNER_WRITE") perms |= fs::perms::owner_write;
-                else if (p == "OWNER_EXECUTE") perms |= fs::perms::owner_exec;
-                else if (p == "GROUP_READ") perms |= fs::perms::group_read;
-                else if (p == "GROUP_WRITE") perms |= fs::perms::group_write;
-                else if (p == "GROUP_EXECUTE") perms |= fs::perms::group_exec;
-                else if (p == "WORLD_READ") perms |= fs::perms::others_read;
-                else if (p == "WORLD_WRITE") perms |= fs::perms::others_write;
-                else if (p == "WORLD_EXECUTE") perms |= fs::perms::others_exec;
+                if (p == "OWNER_READ") target_perms |= fs::perms::owner_read;
+                else if (p == "OWNER_WRITE") target_perms |= fs::perms::owner_write;
+                else if (p == "OWNER_EXECUTE") target_perms |= fs::perms::owner_exec;
+                else if (p == "GROUP_READ") target_perms |= fs::perms::group_read;
+                else if (p == "GROUP_WRITE") target_perms |= fs::perms::group_write;
+                else if (p == "GROUP_EXECUTE") target_perms |= fs::perms::group_exec;
+                else if (p == "WORLD_READ") target_perms |= fs::perms::others_read;
+                else if (p == "WORLD_WRITE") target_perms |= fs::perms::others_write;
+                else if (p == "WORLD_EXECUTE") target_perms |= fs::perms::others_exec;
             }
-            std::filesystem::permissions(output_path, perms);
         } else if (no_source_permissions) {
-            // Standard 644 permissions
-            namespace fs = std::filesystem;
-            fs::permissions(output_path,
-                fs::perms::owner_read | fs::perms::owner_write |
-                fs::perms::group_read | fs::perms::others_read);
+            target_perms = fs::perms::owner_read | fs::perms::owner_write |
+                          fs::perms::group_read | fs::perms::others_read;
         } else {
-            // USE_SOURCE_PERMISSIONS is the default - copy from input
-            auto src_perms = std::filesystem::status(input_path).permissions();
-            std::filesystem::permissions(output_path, src_perms);
+            // USE_SOURCE_PERMISSIONS is the default
+            target_perms = fs::status(input_path).permissions();
+        }
+
+        // Check if we need to write (content changed) or update permissions
+        bool content_changed = true;
+        bool perms_changed = true;
+        if (fs::exists(output_path)) {
+            // Check content
+            std::ifstream existing_file(output_path, std::ios::binary);
+            if (existing_file) {
+                std::string existing_content((std::istreambuf_iterator<char>(existing_file)),
+                                           std::istreambuf_iterator<char>());
+                existing_file.close();
+
+                Hash256 existing_hash = blake2b(existing_content);
+                Hash256 new_hash = blake2b(content);
+                content_changed = (memcmp(existing_hash.bytes, new_hash.bytes, 32) != 0);
+            }
+
+            // Check permissions
+            auto existing_perms = fs::status(output_path).permissions();
+            perms_changed = (existing_perms != target_perms);
+        }
+
+        // Only touch the file if content or permissions changed
+        if (content_changed) {
+            std::ofstream outfile(output_path, std::ios::binary);
+            if (!outfile) {
+                interp.set_fatal_error("configure_file() could not open output file: " + output_path.string());
+                return;
+            }
+            outfile << content;
+            outfile.close();
+        }
+
+        if (perms_changed || content_changed) {
+            fs::permissions(output_path, target_perms);
         }
     });
 }

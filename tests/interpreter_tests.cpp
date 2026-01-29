@@ -761,6 +761,51 @@ TEST_CASE("list(TRANSFORM) with REGEX selector", "[interpreter][list]") {
     REQUIRE(output == "FILE1.CPP;MAIN.CPP;test.txt;UTIL.CPP\n");
 }
 
+TEST_CASE("list(TRANSFORM) with FOR selector", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "0" "1" "2" "3" "4" "5" "6" "7" "8" "9")
+        list(TRANSFORM MY_LIST APPEND "_item" FOR "2,5")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "0;1;2_item;3_item;4_item;5_item;6;7;8;9\n");
+}
+
+TEST_CASE("list(TRANSFORM) with FOR selector and step", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e" "f" "g" "h" "i" "j")
+        list(TRANSFORM MY_LIST TOUPPER FOR "0,8,2")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "A;b;C;d;E;f;G;h;I;j\n");
+}
+
+TEST_CASE("list(TRANSFORM) with FOR selector negative step", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "a" "b" "c" "d" "e")
+        list(TRANSFORM MY_LIST TOUPPER FOR "4,1,-1")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "a;B;C;D;E\n");
+}
+
+TEST_CASE("list(SORT) with COMPARE FILE_BASENAME", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "/path/to/zebra.txt" "/other/path/alpha.cpp" "/some/beta.hpp")
+        list(SORT MY_LIST COMPARE FILE_BASENAME)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "/other/path/alpha.cpp;/some/beta.hpp;/path/to/zebra.txt\n");
+}
+
+TEST_CASE("list(SORT) with COMPARE FILE_BASENAME ORDER DESCENDING", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "/path/to/zebra.txt" "/other/path/alpha.cpp" "/some/beta.hpp")
+        list(SORT MY_LIST COMPARE FILE_BASENAME ORDER DESCENDING)
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "/path/to/zebra.txt;/some/beta.hpp;/other/path/alpha.cpp\n");
+}
+
 TEST_CASE("Foreach basic", "[interpreter][foreach]") {
     auto output = run_script(R"(
         foreach(i 1 2 3)

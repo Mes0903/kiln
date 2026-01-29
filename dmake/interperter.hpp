@@ -158,6 +158,14 @@ public:
     Toolchain& get_toolchain() { return get_root()->toolchain_; }
     CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
+    // Directory mtime caching for find_xxx performance
+    // Returns mtime of directory (nullopt if doesn't exist)
+    // Uses session cache for paths outside source/binary dirs
+    std::optional<int64_t> get_dir_mtime_cached(const std::string& path);
+
+    // Check if path is under our source or binary directory (skip mtime caching for these)
+    bool is_project_path(const std::string& path) const;
+
     // Apply accumulated directory properties to all owned targets (retroactive application)
     void finalize_directory_targets();
 
@@ -260,6 +268,11 @@ private:
     std::unique_ptr<CacheStore> cache_store_;
     std::set<std::string> global_guarded_files_;
     std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
+
+    // Session-wide directory mtime cache (for find_xxx performance)
+    // Only caches directories outside source_dir and binary_dir
+    // Key: absolute path, Value: mtime (or nullopt if doesn't exist)
+    std::map<std::string, std::optional<int64_t>> dir_mtime_cache_;
 
     // Property system (managed by root)
     // Property definitions: scope -> property_name -> definition

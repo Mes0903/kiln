@@ -1,6 +1,7 @@
 #include "cache_store.hpp"
 #include <fstream>
 #include <sstream>
+#include <iostream>
 #include "glaze/glaze.hpp"
 
 namespace dmake {

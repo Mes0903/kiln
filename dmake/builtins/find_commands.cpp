@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <sys/stat.h>
 #include <algorithm>
+#include <sstream>
+#include <iostream>
 
 namespace dmake {
 namespace {  // Anonymous namespace for internal helpers
@@ -129,12 +131,73 @@ std::vector<std::filesystem::path> build_search_paths(
 
 // Result type for search_for_file - contains both the file path and the base search directory
 struct SearchResult {
-    std::filesystem::path file_path;      // Full path to the found file
-    std::filesystem::path search_dir;     // Base search directory where it was found
+    bool found = false;                      // Whether file was found
+    std::filesystem::path file_path;         // Full path to the found file (empty if not found)
+    std::filesystem::path search_dir;        // Base search directory where it was found (empty if not found)
+    std::vector<std::string> searched_dirs;  // All directories checked (in order, up to hit OR end)
 };
 
+// Compute cache signature for find command
+std::string compute_find_signature(
+    const std::string& cmd_name,
+    const FindOptions& opts,
+    const std::vector<std::filesystem::path>& search_paths
+) {
+    std::ostringstream oss;
+    oss << "cmd:" << cmd_name << "|";
+
+    // Names (sorted for consistency)
+    std::vector<std::string> sorted_names = opts.names;
+    std::sort(sorted_names.begin(), sorted_names.end());
+    for (const auto& name : sorted_names) {
+        oss << "name:" << name << "|";
+    }
+
+    // Search paths (in order - matters!)
+    for (const auto& path : search_paths) {
+        oss << "path:" << path.string() << "|";
+    }
+
+    // Suffixes (in order)
+    for (const auto& suffix : opts.path_suffixes) {
+        oss << "suffix:" << suffix << "|";
+    }
+
+    // Flags
+    oss << "names_per_dir:" << opts.names_per_dir << "|";
+
+    return oss.str();
+}
+
+// Validate cached find result by checking directory mtimes
+bool validate_find_cache_entry(
+    Interpreter& interp,
+    const FindResultCacheEntry& entry
+) {
+    for (const auto& [dir, cached_mtime] : entry.searched_dirs) {
+        auto current_mtime = interp.get_dir_mtime_cached(dir);
+
+        // Check state change
+        if (!cached_mtime.has_value() && current_mtime.has_value()) {
+            // Directory didn't exist before, exists now -> invalidate
+            return false;
+        }
+        if (cached_mtime.has_value() && !current_mtime.has_value()) {
+            // Directory existed, now gone -> continue checking (might still be valid)
+            continue;
+        }
+        if (cached_mtime.has_value() && current_mtime.has_value()) {
+            if (*cached_mtime != *current_mtime) {
+                // Directory mtime changed -> invalidate
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // Core search engine - supports both default and NAMES_PER_DIR algorithms
-std::optional<SearchResult> search_for_file(
+SearchResult search_for_file(
     Interpreter& interp,
     const FindOptions& opts,
     const std::vector<std::filesystem::path>& default_paths,
@@ -143,6 +206,9 @@ std::optional<SearchResult> search_for_file(
     const std::string& command_name
 ) {
     auto search_paths = build_search_paths(interp, opts, default_paths, command_name);
+
+    // Track searched directories for caching
+    std::vector<std::string> searched_dirs;
 
     // Prepare suffix list (empty string first for no suffix)
     std::vector<std::string> suffixes = {""};
@@ -157,10 +223,18 @@ std::optional<SearchResult> search_for_file(
                 // Check if directory exists using cache
                 auto parent = check_dir.parent_path();
                 auto dirname = check_dir.filename().string();
-                if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) continue;
+                if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) {
+                    searched_dirs.push_back(check_dir.string());
+                    continue;
+                }
                 // Verify it's actually a directory
                 std::error_code ec;
-                if (!std::filesystem::is_directory(check_dir, ec)) continue;
+                if (!std::filesystem::is_directory(check_dir, ec)) {
+                    searched_dirs.push_back(check_dir.string());
+                    continue;
+                }
+
+                searched_dirs.push_back(check_dir.string());
 
                 for (const auto& name : opts.names) {
                     auto variants = name_variants(interp, name);
@@ -177,8 +251,10 @@ std::optional<SearchResult> search_for_file(
                         if (valid) {
                             std::error_code ec;
                             return SearchResult{
+                                true,  // found
                                 std::filesystem::canonical(full_path, ec),
-                                check_dir  // Return the directory where the file was found (includes suffix)
+                                check_dir,  // Return the directory where the file was found (includes suffix)
+                                searched_dirs
                             };
                         }
                     }
@@ -200,13 +276,17 @@ std::optional<SearchResult> search_for_file(
                     auto parent = check_dir.parent_path();
                     auto dirname = check_dir.filename().string();
                     if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) {
+                        searched_dirs.push_back(check_dir.string());
                         continue;
                     }
                     // Verify it's actually a directory
                     std::error_code ec;
                     if (!std::filesystem::is_directory(check_dir, ec)) {
+                        searched_dirs.push_back(check_dir.string());
                         continue;
                     }
+
+                    searched_dirs.push_back(check_dir.string());
 
                     for (const auto& variant : variants) {
                         std::filesystem::path full_path = check_dir / variant;
@@ -217,8 +297,10 @@ std::optional<SearchResult> search_for_file(
                         if (exists && validator(full_path)) {
                             std::error_code ec;
                             return SearchResult{
+                                true,  // found
                                 std::filesystem::canonical(full_path, ec),
-                                check_dir  // Return the directory where the file was found (includes suffix)
+                                check_dir,  // Return the directory where the file was found (includes suffix)
+                                searched_dirs
                             };
                         }
                     }
@@ -227,7 +309,13 @@ std::optional<SearchResult> search_for_file(
         }
     }
 
-    return std::nullopt;
+    // Not found - return with all searched directories
+    return SearchResult{
+        false,  // not found
+        std::filesystem::path(),  // empty path
+        std::filesystem::path(),  // empty search_dir
+        searched_dirs
+    };
 }
 
 // Validate that a file is an executable program
@@ -448,20 +536,72 @@ void register_find_command(
             return;
         }
 
-        // Perform the search
+        // Check persistent cache
         auto default_paths = get_defaults(interp);
+        auto search_paths = build_search_paths(interp, opts, default_paths, cmd_name);
+        std::string signature = compute_find_signature(cmd_name, opts, search_paths);
+
+        auto& cache = interp.get_cache_store();
+        auto cached = cache.lookup<CacheSubsystem::FindResult>(signature);
+
+        if (cached) {
+            // Validate cache entry
+            if (validate_find_cache_entry(interp, *cached)) {
+                // Cache hit - no filesystem scan needed
+                if (!cached->found_path.empty()) {
+                    interp.set_variable(opts.var_name, cached->found_path);
+                    if (!opts.no_cache) {
+                        interp.set_cache_variable(opts.var_name, cached->found_path);
+                    }
+                } else {
+                    // Cached negative result
+                    std::string notfound = opts.var_name + "-NOTFOUND";
+                    interp.set_variable(opts.var_name, notfound);
+                    if (!opts.no_cache) {
+                        interp.set_cache_variable(opts.var_name, notfound);
+                    }
+                }
+                return;
+            }
+        }
+
+        // Cache miss - perform the search
         auto result = search_for_file(interp, opts, default_paths, get_variants, validator, cmd_name);
 
-        if (result) {
+        // Store in cache with searched directory mtimes
+        FindResultCacheEntry cache_entry;
+        if (result.found) {
+            // Found - store result path
+            std::string result_str;
+            if (return_directory) {
+                result_str = result.search_dir.string();
+            } else {
+                result_str = result.file_path.string();
+            }
+            cache_entry.found_path = result_str;
+        } else {
+            // Not found - store empty path
+            cache_entry.found_path = "";
+        }
+
+        // Record searched directories with their mtimes
+        for (const auto& dir : result.searched_dirs) {
+            auto mtime = interp.get_dir_mtime_cached(dir);
+            cache_entry.searched_dirs.push_back({dir, mtime});
+        }
+
+        cache.insert<CacheSubsystem::FindResult>(signature, cache_entry);
+
+        if (result.found) {
             // Found it
             std::string result_str;
             if (return_directory) {
                 // find_path returns the base search directory where the file was found
                 // For "fontconfig/fontconfig.h" found in /usr/include, return /usr/include
-                result_str = result->search_dir.string();
+                result_str = result.search_dir.string();
             } else {
                 // find_file, find_program, find_library return full path
-                result_str = result->file_path.string();
+                result_str = result.file_path.string();
             }
             interp.set_variable(opts.var_name, result_str);
 

@@ -289,9 +289,22 @@ std::expected<CompileResult, std::string> compile_sources(
         auto headers_result = parse_deps_file(deps_file);
         if (headers_result) {
             for (const auto& header : *headers_result) {
-                auto mtime = get_file_mtime(header);
-                if (mtime) {
-                    result.header_mtimes[header] = *mtime;
+                // Skip generated inline source files - they're already covered by content hash in signature
+                // and including them causes cache invalidation when temp_dir is cleaned up
+                bool is_generated = false;
+                std::filesystem::path header_path(header);
+                for (const auto& [inline_name, _] : params.inline_sources_map) {
+                    if (header_path.filename() == inline_name) {
+                        is_generated = true;
+                        break;
+                    }
+                }
+
+                if (!is_generated) {
+                    auto mtime = get_file_mtime(header);
+                    if (mtime) {
+                        result.header_mtimes[header] = *mtime;
+                    }
                 }
             }
         }
@@ -643,20 +656,13 @@ void register_try_compile_builtins(Interpreter& interp) {
             artifact_path = compile_result->executable_path;
         }
 
-        // Compute final signature with header deps
-        auto final_sig_result = add_header_deps_to_signature(base_signature, header_mtimes);
-        if (!final_sig_result) {
-            interp.set_fatal_error("Failed to compute final signature: " + final_sig_result.error());
-            return;
-        }
-        std::string final_signature = *final_sig_result;
-
-        // Store in cache
+        // Store in cache using base_signature (lookup key must match storage key!)
+        // Header dependencies are stored in the entry itself, not in the signature
         TryCompileCacheEntry entry;
         entry.success = compile_success;
         entry.output = output;
         entry.header_mtimes = header_mtimes;
-        cache.insert<CacheSubsystem::TryCompile>(final_signature, entry);
+        cache.insert<CacheSubsystem::TryCompile>(base_signature, entry);
 
         // Handle COPY_FILE if specified
         if (!copy_file.empty() && compile_success && !artifact_path.empty()) {

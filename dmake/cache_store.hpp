@@ -14,6 +14,8 @@ namespace dmake {
 enum class CacheSubsystem {
     TryCompile,
     FileListing,
+    FindResult,
+    ExternalCommand,  // Generic external command caching (pkg-config, etc.)
     // Future: ModuleScanning, etc.
 };
 
@@ -30,10 +32,32 @@ struct FileListingCacheEntry {
     std::vector<std::string> files;         // List of files in directory
 };
 
+// Cache entry for find_xxx results (find_file, find_library, find_path, find_program)
+// Tracks all directories searched up to and including the one where we found the result
+struct FindResultCacheEntry {
+    std::string found_path;  // Result path (empty if not found)
+    // Directories searched (in order) with their state at search time
+    // Key: directory path, Value: mtime (nullopt if didn't exist)
+    std::vector<std::pair<std::string, std::optional<int64_t>>> searched_dirs;
+};
+
+// Cache entry for external command results
+// Tracks output and all filesystem inputs that affect the result
+struct ExternalCommandCacheEntry {
+    std::string stdout_output;      // Captured stdout
+    std::string stderr_output;      // Captured stderr
+    int exit_code = 0;              // Exit code
+    // Tracked directories with their mtimes at execution time
+    // Can track package config dirs, compiler dirs, or any relevant paths
+    std::map<std::string, std::optional<int64_t>> tracked_dir_mtimes;
+};
+
 // Root structure for JSON serialization
 struct CacheRoot {
     std::map<std::string, TryCompileCacheEntry> try_compile_cache;
     std::map<std::string, FileListingCacheEntry> file_listing_cache;
+    std::map<std::string, FindResultCacheEntry> find_result_cache;
+    std::map<std::string, ExternalCommandCacheEntry> external_command_cache;
 };
 
 // Centralized cache store with subsystem namespacing
@@ -52,14 +76,18 @@ public:
     template<CacheSubsystem S>
     std::optional<typename std::conditional<
         S == CacheSubsystem::TryCompile, TryCompileCacheEntry,
-        typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry, void>::type
+        typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
+        typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
+        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type
     >::type> lookup(const std::string& signature);
 
     // Insert/update entry
     template<CacheSubsystem S>
     void insert(const std::string& signature, const typename std::conditional<
         S == CacheSubsystem::TryCompile, TryCompileCacheEntry,
-        typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry, void>::type
+        typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
+        typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
+        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type
     >::type& entry);
 
     // Clear all entries for a subsystem
@@ -93,6 +121,26 @@ inline std::optional<FileListingCacheEntry> CacheStore::lookup<CacheSubsystem::F
     return std::nullopt;
 }
 
+template<>
+inline std::optional<FindResultCacheEntry> CacheStore::lookup<CacheSubsystem::FindResult>(const std::string& signature) {
+    std::lock_guard lock(mutex_);
+    auto it = cache_data_.find_result_cache.find(signature);
+    if (it != cache_data_.find_result_cache.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+template<>
+inline std::optional<ExternalCommandCacheEntry> CacheStore::lookup<CacheSubsystem::ExternalCommand>(const std::string& signature) {
+    std::lock_guard lock(mutex_);
+    auto it = cache_data_.external_command_cache.find(signature);
+    if (it != cache_data_.external_command_cache.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
 // Template specializations for insert
 template<>
 inline void CacheStore::insert<CacheSubsystem::TryCompile>(const std::string& signature, const TryCompileCacheEntry& entry) {
@@ -106,6 +154,18 @@ inline void CacheStore::insert<CacheSubsystem::FileListing>(const std::string& s
     cache_data_.file_listing_cache[signature] = entry;
 }
 
+template<>
+inline void CacheStore::insert<CacheSubsystem::FindResult>(const std::string& signature, const FindResultCacheEntry& entry) {
+    std::lock_guard lock(mutex_);
+    cache_data_.find_result_cache[signature] = entry;
+}
+
+template<>
+inline void CacheStore::insert<CacheSubsystem::ExternalCommand>(const std::string& signature, const ExternalCommandCacheEntry& entry) {
+    std::lock_guard lock(mutex_);
+    cache_data_.external_command_cache[signature] = entry;
+}
+
 // Template specializations for clear_subsystem
 template<>
 inline void CacheStore::clear_subsystem<CacheSubsystem::TryCompile>() {
@@ -117,6 +177,18 @@ template<>
 inline void CacheStore::clear_subsystem<CacheSubsystem::FileListing>() {
     std::lock_guard lock(mutex_);
     cache_data_.file_listing_cache.clear();
+}
+
+template<>
+inline void CacheStore::clear_subsystem<CacheSubsystem::FindResult>() {
+    std::lock_guard lock(mutex_);
+    cache_data_.find_result_cache.clear();
+}
+
+template<>
+inline void CacheStore::clear_subsystem<CacheSubsystem::ExternalCommand>() {
+    std::lock_guard lock(mutex_);
+    cache_data_.external_command_cache.clear();
 }
 
 } // namespace dmake
