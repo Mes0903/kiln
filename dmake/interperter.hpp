@@ -189,6 +189,7 @@ public:
     friend void register_string_builtins(Interpreter& interp);
     friend void register_property_builtins(Interpreter& interp);
     friend void register_try_compile_builtins(Interpreter& interp);
+    friend void register_path_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 

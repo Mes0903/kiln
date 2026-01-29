@@ -16,5 +16,6 @@ void register_math_builtins(Interpreter& interp);
 void register_string_builtins(Interpreter& interp);
 void register_process_builtins(Interpreter& interp);
 void register_property_builtins(Interpreter& interp);
+void register_path_builtins(Interpreter& interp);
 
 } // namespace dmake

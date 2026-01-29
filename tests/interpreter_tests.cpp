@@ -4281,3 +4281,717 @@ TEST_CASE("if condition: unquoted variable reference in STREQUAL", "[interpreter
         REQUIRE(output == "correct\n");
     }
 }
+
+TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
+    SECTION("GET ROOT_NAME") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app")
+            cmake_path(GET mypath ROOT_NAME result)
+            message("${result}")
+        )");
+        REQUIRE(output == "\n");  // Unix paths don't have root names
+    }
+
+    SECTION("GET ROOT_DIRECTORY") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app")
+            cmake_path(GET mypath ROOT_DIRECTORY result)
+            message("${result}")
+        )");
+        REQUIRE(output == "/\n");
+    }
+
+    SECTION("GET FILENAME") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.exe")
+            cmake_path(GET mypath FILENAME result)
+            message("${result}")
+        )");
+        REQUIRE(output == "app.exe\n");
+    }
+
+    SECTION("GET EXTENSION") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(GET mypath EXTENSION result)
+            message("${result}")
+        )");
+        REQUIRE(output == ".tar.gz\n");
+    }
+
+    SECTION("GET EXTENSION LAST_ONLY") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(GET mypath EXTENSION LAST_ONLY result)
+            message("${result}")
+        )");
+        REQUIRE(output == ".gz\n");
+    }
+
+    SECTION("GET STEM") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(GET mypath STEM result)
+            message("${result}")
+        )");
+        REQUIRE(output == "app\n");
+    }
+
+    SECTION("GET STEM LAST_ONLY") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(GET mypath STEM LAST_ONLY result)
+            message("${result}")
+        )");
+        REQUIRE(output == "app.tar\n");
+    }
+
+    SECTION("GET PARENT_PATH") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app")
+            cmake_path(GET mypath PARENT_PATH result)
+            message("${result}")
+        )");
+        REQUIRE(output == "/usr/local/bin\n");
+    }
+
+    SECTION("GET RELATIVE_PART") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(GET mypath RELATIVE_PART result)
+            message("${result}")
+        )");
+        REQUIRE(output == "usr/local/bin\n");
+    }
+
+    SECTION("HAS_FILENAME") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app")
+            cmake_path(HAS_FILENAME mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("HAS_EXTENSION") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.exe")
+            cmake_path(HAS_EXTENSION mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("IS_ABSOLUTE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(IS_ABSOLUTE mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("IS_RELATIVE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "local/bin")
+            cmake_path(IS_RELATIVE mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("IS_PREFIX") {
+        auto output = run_script(R"(
+            cmake_path(SET prefix "/usr/local")
+            cmake_path(SET fullpath "/usr/local/bin/app")
+            cmake_path(IS_PREFIX prefix result fullpath)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("COMPARE EQUAL") {
+        auto output = run_script(R"(
+            cmake_path(SET path1 "/usr/local/bin")
+            cmake_path(SET path2 "/usr/local/bin")
+            cmake_path(COMPARE path1 EQUAL path2 result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("COMPARE NOT_EQUAL") {
+        auto output = run_script(R"(
+            cmake_path(SET path1 "/usr/local/bin")
+            cmake_path(SET path2 "/usr/bin")
+            cmake_path(COMPARE path1 NOT_EQUAL path2 result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("SET with NORMALIZE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/./local/../local/bin" NORMALIZE)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin\n");
+    }
+
+    SECTION("APPEND") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local")
+            cmake_path(APPEND mypath "bin" "app")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app\n");
+    }
+
+    SECTION("APPEND_STRING") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(APPEND_STRING mypath "/app")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app\n");
+    }
+
+    SECTION("REMOVE_FILENAME") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app")
+            cmake_path(REMOVE_FILENAME mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/\n");
+    }
+
+    SECTION("REPLACE_FILENAME") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app")
+            cmake_path(REPLACE_FILENAME mypath "newapp")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/newapp\n");
+    }
+
+    SECTION("REMOVE_EXTENSION") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(REMOVE_EXTENSION mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app\n");
+    }
+
+    SECTION("REMOVE_EXTENSION LAST_ONLY") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(REMOVE_EXTENSION mypath LAST_ONLY)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app.tar\n");
+    }
+
+    SECTION("REPLACE_EXTENSION") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(REPLACE_EXTENSION mypath ".zip")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app.zip\n");
+    }
+
+    SECTION("REPLACE_EXTENSION without dot") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin/app.tar.gz")
+            cmake_path(REPLACE_EXTENSION mypath "zip")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app.zip\n");
+    }
+
+    SECTION("NORMAL_PATH in-place") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/./local/../local/bin")
+            cmake_path(NORMAL_PATH mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin\n");
+    }
+
+    SECTION("NORMAL_PATH with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/./local/../local/bin")
+            cmake_path(NORMAL_PATH mypath OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:/usr/./local/../local/bin\nresult:/usr/local/bin\n");
+    }
+
+    SECTION("RELATIVE_PATH with default base") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/user/project")
+            cmake_path(SET mypath "/home/user/project/src/main.cpp")
+            cmake_path(RELATIVE_PATH mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "src/main.cpp\n");
+    }
+
+    SECTION("RELATIVE_PATH with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/user/project")
+            cmake_path(SET mypath "/home/user/project/src/main.cpp")
+            cmake_path(RELATIVE_PATH mypath OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:/home/user/project/src/main.cpp\nresult:src/main.cpp\n");
+    }
+
+    SECTION("RELATIVE_PATH with custom base") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/home/user/project/src/main.cpp")
+            cmake_path(RELATIVE_PATH mypath BASE_DIRECTORY "/home/user")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "project/src/main.cpp\n");
+    }
+
+    SECTION("ABSOLUTE_PATH in-place") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/user/project")
+            cmake_path(SET mypath "src/main.cpp")
+            cmake_path(ABSOLUTE_PATH mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/home/user/project/src/main.cpp\n");
+    }
+
+    SECTION("ABSOLUTE_PATH with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/user/project")
+            cmake_path(SET mypath "src/main.cpp")
+            cmake_path(ABSOLUTE_PATH mypath OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:src/main.cpp\nresult:/home/user/project/src/main.cpp\n");
+    }
+
+    SECTION("ABSOLUTE_PATH with NORMALIZE") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/user/project")
+            cmake_path(SET mypath "src/../include/header.h")
+            cmake_path(ABSOLUTE_PATH mypath NORMALIZE)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/home/user/project/include/header.h\n");
+    }
+
+    SECTION("HASH") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(HASH mypath hash1)
+            cmake_path(SET mypath2 "/usr/local/bin")
+            cmake_path(HASH mypath2 hash2)
+            if(hash1 STREQUAL hash2)
+                message("EQUAL")
+            else()
+                message("NOT_EQUAL")
+            endif()
+        )");
+        REQUIRE(output == "EQUAL\n");
+    }
+
+    SECTION("APPEND with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local")
+            cmake_path(APPEND mypath "bin" "app" OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:/usr/local\nresult:/usr/local/bin/app\n");
+    }
+
+    SECTION("REMOVE_EXTENSION with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/bin/app.tar.gz")
+            cmake_path(REMOVE_EXTENSION mypath OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:/usr/bin/app.tar.gz\nresult:/usr/bin/app\n");
+    }
+
+    SECTION("REPLACE_EXTENSION with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/bin/app.txt")
+            cmake_path(REPLACE_EXTENSION mypath ".md" OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:/usr/bin/app.txt\nresult:/usr/bin/app.md\n");
+    }
+
+    SECTION("GET EXTENSION on file without extension") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/bin/app")
+            cmake_path(GET mypath EXTENSION result)
+            message("ext:${result}")
+        )");
+        REQUIRE(output == "ext:\n");
+    }
+
+    SECTION("GET EXTENSION on dotfile") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/home/user/.bashrc")
+            cmake_path(GET mypath EXTENSION result)
+            message("${result}")
+        )");
+        REQUIRE(output == "\n");  // Dotfiles don't have extensions
+    }
+
+    SECTION("GET STEM on dotfile") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/home/user/.bashrc")
+            cmake_path(GET mypath STEM result)
+            message("${result}")
+        )");
+        REQUIRE(output == "\n");  // Stem of dotfile is empty
+    }
+
+    SECTION("NORMAL_PATH with multiple slashes and dots") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr//local/./bin/../lib/./file.so")
+            cmake_path(NORMAL_PATH mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/lib/file.so\n");
+    }
+
+    SECTION("IS_PREFIX returns false when not a prefix") {
+        auto output = run_script(R"(
+            cmake_path(SET prefix "/usr/local")
+            cmake_path(SET fullpath "/home/user/file")
+            cmake_path(IS_PREFIX prefix result fullpath)
+            message("${result}")
+        )");
+        REQUIRE(output == "FALSE\n");
+    }
+
+    SECTION("IS_PREFIX with exact match") {
+        auto output = run_script(R"(
+            cmake_path(SET prefix "/usr/local")
+            cmake_path(SET fullpath "/usr/local")
+            cmake_path(IS_PREFIX prefix result fullpath)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("HAS_PARENT_PATH on root") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/")
+            cmake_path(HAS_PARENT_PATH mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "FALSE\n");
+    }
+
+    SECTION("Complex extension handling - multiple dots") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/path/to/file.tar.gz.backup")
+            cmake_path(GET mypath EXTENSION result1)
+            cmake_path(GET mypath EXTENSION LAST_ONLY result2)
+            cmake_path(GET mypath STEM result3)
+            cmake_path(GET mypath STEM LAST_ONLY result4)
+            message("ext:${result1}")
+            message("ext_last:${result2}")
+            message("stem:${result3}")
+            message("stem_last:${result4}")
+        )");
+        REQUIRE(output == "ext:.tar.gz.backup\next_last:.backup\nstem:file\nstem_last:file.tar.gz\n");
+    }
+
+    SECTION("APPEND with absolute path argument") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local")
+            cmake_path(APPEND mypath "/absolute/path")
+            message("${mypath}")
+        )");
+        // When appending an absolute path, it replaces the current path
+        REQUIRE(output == "/absolute/path\n");
+    }
+
+    SECTION("APPEND_STRING preserves exact string") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local")
+            cmake_path(APPEND_STRING mypath "123")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local123\n");
+    }
+
+    SECTION("REPLACE_FILENAME on path without filename") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/")
+            cmake_path(REPLACE_FILENAME mypath "newfile")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/newfile\n");
+    }
+
+    SECTION("GET operations on relative path") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "src/modules/main.cpp")
+            cmake_path(GET mypath FILENAME result1)
+            cmake_path(GET mypath PARENT_PATH result2)
+            cmake_path(GET mypath EXTENSION result3)
+            message("file:${result1}")
+            message("parent:${result2}")
+            message("ext:${result3}")
+        )");
+        REQUIRE(output == "file:main.cpp\nparent:src/modules\next:.cpp\n");
+    }
+
+    SECTION("SET without NORMALIZE preserves dots") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/./local/../bin")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/./local/../bin\n");
+    }
+
+    SECTION("ABSOLUTE_PATH on already absolute path") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/user/project")
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(ABSOLUTE_PATH mypath)
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin\n");
+    }
+
+    SECTION("NATIVE_PATH in-place") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(NATIVE_PATH mypath)
+            message("${mypath}")
+        )");
+        // On Unix, native path is the same as CMake path
+        REQUIRE(output == "/usr/local/bin\n");
+    }
+
+    SECTION("NATIVE_PATH with OUTPUT_VARIABLE") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local/bin")
+            cmake_path(NATIVE_PATH mypath OUTPUT_VARIABLE result)
+            message("original:${mypath}")
+            message("result:${result}")
+        )");
+        REQUIRE(output == "original:/usr/local/bin\nresult:/usr/local/bin\n");
+    }
+
+    SECTION("HASH normalization consistency") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath1 "/usr/local/./bin")
+            cmake_path(SET mypath2 "/usr/local/bin")
+            cmake_path(HASH mypath1 hash1)
+            cmake_path(HASH mypath2 hash2)
+            if(hash1 STREQUAL hash2)
+                message("EQUAL")
+            else()
+                message("NOT_EQUAL")
+            endif()
+        )");
+        // HASH normalizes paths before hashing
+        REQUIRE(output == "EQUAL\n");
+    }
+
+    SECTION("Empty path component handling") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "")
+            cmake_path(HAS_FILENAME mypath result1)
+            cmake_path(IS_ABSOLUTE mypath result2)
+            cmake_path(IS_RELATIVE mypath result3)
+            message("has_file:${result1}")
+            message("absolute:${result2}")
+            message("relative:${result3}")
+        )");
+        REQUIRE(output == "has_file:FALSE\nabsolute:FALSE\nrelative:TRUE\n");
+    }
+
+    SECTION("COMPARE with normalized vs non-normalized") {
+        auto output = run_script(R"(
+            cmake_path(SET path1 "/usr/local/bin")
+            cmake_path(SET path2 "/usr/local/./bin")
+            cmake_path(COMPARE path1 EQUAL path2 result)
+            message("${result}")
+        )");
+        // COMPARE does NOT normalize, lexical comparison only
+        REQUIRE(output == "FALSE\n");
+    }
+
+    SECTION("Multiple APPEND calls") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr")
+            cmake_path(APPEND mypath "local")
+            cmake_path(APPEND mypath "bin")
+            cmake_path(APPEND mypath "app")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app\n");
+    }
+
+    SECTION("REMOVE_EXTENSION then REPLACE_EXTENSION") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/path/file.old.txt")
+            cmake_path(REMOVE_EXTENSION mypath)
+            cmake_path(REPLACE_EXTENSION mypath ".new")
+            message("${mypath}")
+        )");
+        REQUIRE(output == "/path/file.new\n");
+    }
+
+    SECTION("GET ROOT_PATH on relative path") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "relative/path/file.txt")
+            cmake_path(GET mypath ROOT_PATH result)
+            message("root:${result}")
+        )");
+        REQUIRE(output == "root:\n");
+    }
+
+    SECTION("HAS_ROOT_DIRECTORY on absolute path") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "/usr/local")
+            cmake_path(HAS_ROOT_DIRECTORY mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("HAS_ROOT_DIRECTORY on relative path") {
+        auto output = run_script(R"(
+            cmake_path(SET mypath "usr/local")
+            cmake_path(HAS_ROOT_DIRECTORY mypath result)
+            message("${result}")
+        )");
+        REQUIRE(output == "FALSE\n");
+    }
+}
+
+TEST_CASE("get_filename_component command", "[interpreter][get_filename_component]") {
+    SECTION("ABSOLUTE mode with relative path") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/project")
+            get_filename_component(result "src/main.cpp" ABSOLUTE)
+            message("${result}")
+        )");
+        REQUIRE(output == "/home/project/src/main.cpp\n");
+    }
+
+    SECTION("ABSOLUTE mode with BASE_DIR") {
+        auto output = run_script(R"(
+            get_filename_component(result "src/main.cpp" ABSOLUTE BASE_DIR "/custom/path")
+            message("${result}")
+        )");
+        REQUIRE(output == "/custom/path/src/main.cpp\n");
+    }
+
+    SECTION("ABSOLUTE mode with already absolute path") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/project")
+            get_filename_component(result "/usr/local/bin/app" ABSOLUTE)
+            message("${result}")
+        )");
+        REQUIRE(output == "/usr/local/bin/app\n");
+    }
+
+    SECTION("REALPATH mode normalizes path") {
+        auto output = run_script(R"(
+            set(CMAKE_CURRENT_SOURCE_DIR "/home/project")
+            get_filename_component(result "src/../include/header.h" REALPATH)
+            message("${result}")
+        )");
+        REQUIRE(output == "/home/project/include/header.h\n");
+    }
+
+    SECTION("PATH mode (alias for DIRECTORY)") {
+        auto output = run_script(R"(
+            get_filename_component(result "/usr/local/bin/app" PATH)
+            message("${result}")
+        )");
+        REQUIRE(output == "/usr/local/bin\n");
+    }
+
+    SECTION("NAME mode on path with directory") {
+        auto output = run_script(R"(
+            get_filename_component(result "/usr/local/bin/myapp" NAME)
+            message("${result}")
+        )");
+        REQUIRE(output == "myapp\n");
+    }
+
+    SECTION("EXT on file with no extension") {
+        auto output = run_script(R"(
+            get_filename_component(result "/path/to/README" EXT)
+            message("ext:${result}")
+        )");
+        REQUIRE(output == "ext:\n");
+    }
+
+    SECTION("NAME_WE on file with no extension") {
+        auto output = run_script(R"(
+            get_filename_component(result "/path/to/README" NAME_WE)
+            message("${result}")
+        )");
+        REQUIRE(output == "README\n");
+    }
+
+    SECTION("Complex extension handling") {
+        auto output = run_script(R"(
+            get_filename_component(ext1 "archive.tar.gz.backup" EXT)
+            get_filename_component(ext2 "archive.tar.gz.backup" LAST_EXT)
+            get_filename_component(stem1 "archive.tar.gz.backup" NAME_WE)
+            get_filename_component(stem2 "archive.tar.gz.backup" NAME_WLE)
+            message("EXT:${ext1}")
+            message("LAST_EXT:${ext2}")
+            message("NAME_WE:${stem1}")
+            message("NAME_WLE:${stem2}")
+        )");
+        REQUIRE(output == "EXT:.tar.gz.backup\nLAST_EXT:.backup\nNAME_WE:archive\nNAME_WLE:archive.tar.gz\n");
+    }
+
+    SECTION("Relative path handling") {
+        auto output = run_script(R"(
+            get_filename_component(dir "src/modules/utils.cpp" DIRECTORY)
+            get_filename_component(name "src/modules/utils.cpp" NAME)
+            message("DIR:${dir}")
+            message("NAME:${name}")
+        )");
+        REQUIRE(output == "DIR:src/modules\nNAME:utils.cpp\n");
+    }
+
+    SECTION("Single filename without directory") {
+        auto output = run_script(R"(
+            get_filename_component(dir "app.exe" DIRECTORY)
+            get_filename_component(name "app.exe" NAME)
+            message("DIR:${dir}")
+            message("NAME:${name}")
+        )");
+        REQUIRE(output == "DIR:\nNAME:app.exe\n");
+    }
+
+    SECTION("Extension starting with dot handling") {
+        auto output = run_script(R"(
+            get_filename_component(ext1 "file.txt" EXT)
+            get_filename_component(ext2 ".hidden" EXT)
+            get_filename_component(ext3 ".config.yaml" EXT)
+            message("${ext1}|${ext2}|${ext3}")
+        )");
+        REQUIRE(output == ".txt||\n");
+    }
+}

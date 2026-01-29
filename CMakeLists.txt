@@ -30,6 +30,7 @@ add_library(dmake SHARED
     dmake/builtins/process.cpp
     dmake/builtins/property.cpp
     dmake/builtins/try_compile.cpp
+    dmake/builtins/path.cpp
     dmake/CMakeList.cpp
 )
 
