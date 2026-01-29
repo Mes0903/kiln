@@ -129,6 +129,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     std::string fatal_error;
     std::mutex loop_mutex;
     std::condition_variable cv;
+    std::vector<std::thread> threads;  // Track all threads for joining
 
     if (jobs <= 0) {
         jobs = std::thread::hardware_concurrency();
@@ -143,12 +144,16 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     };
 
     auto start_time = std::chrono::steady_clock::now();
+    bool build_loop_running = true;
 
-    while (true) {
+    while (build_loop_running) {
         std::vector<std::string> to_start;
         {
             std::unique_lock<std::mutex> lock(loop_mutex);
-            if (!fatal_error.empty()) return std::unexpected(fatal_error);
+            if (!fatal_error.empty()) {
+                build_loop_running = false;
+                break;
+            }
             if (completed.size() == tasks_.size()) break;
 
             for (const auto& [id, task] : tasks_) {
@@ -168,7 +173,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         if (completed.find(dep) == completed.end()) oss << dep << " ";
                     }
                 }
-                return std::unexpected(oss.str());
+                fatal_error = oss.str();
+                build_loop_running = false;
+                break;
             }
 
             if (to_start.empty()) {
@@ -184,7 +191,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 running.insert(id);
             }
 
-            std::thread([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
+            threads.emplace_back([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
                 const auto& task = tasks_.at(id);
 
                 // Check if outputs exist first - no need to calculate signature if we must compile anyway
@@ -389,13 +396,25 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     running.erase(id);
                     cv.notify_all();
                 }
-            }).detach();
+            });
         }
 
         std::unique_lock<std::mutex> lock(loop_mutex);
         if (running.size() >= static_cast<size_t>(jobs) || to_start.empty()) {
             cv.wait(lock);
         }
+    }
+
+    // Join all threads before returning
+    for (auto& thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+    // Check if there was a fatal error during execution
+    if (!fatal_error.empty()) {
+        return std::unexpected(fatal_error);
     }
 
     auto end_time = std::chrono::steady_clock::now();
