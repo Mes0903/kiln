@@ -15,6 +15,8 @@ add_library(dmake SHARED
     dmake/language.cpp
     dmake/module_scanner.cpp
     dmake/cache_store.cpp
+    dmake/genex_parser.cpp
+    dmake/genex_evaluator.cpp
     dmake/inner/blake2b.c
     dmake/inner/sha256.cpp
     dmake/builtins/message.cpp
@@ -55,7 +57,8 @@ if(BUILD_TESTING)
         tests/language_tests.cpp
         tests/compiler_tests.cpp
         tests/target_sources_tests.cpp
-        tests/shadow_map_tests.cpp)
+        tests/shadow_map_tests.cpp
+        tests/genex_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

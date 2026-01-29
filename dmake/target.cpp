@@ -3,6 +3,8 @@
 #include "language.hpp"
 #include "toolchain.hpp"
 #include "module_scanner.hpp"
+#include "genex_evaluator.hpp"
+#include "interperter.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -118,7 +120,7 @@ const std::vector<std::string>& Target::get_language_flags(Language lang) const 
 
 // --- Resolution Logic ---
 
-void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
+void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp) {
     if (resolved_) return;
     if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
     visiting_ = true;
@@ -150,17 +152,62 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         {"PRECOMPILE_HEADERS", false} // Note: PCH logic might need specialized handling, but we carry it for now
     };
 
-    // 1. Initialize with local properties
+    // Prepare genex evaluator (needed before processing properties)
+    GenexEvaluationContext genex_ctx;
+    genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+    genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+    genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+    genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    genex_ctx.all_targets = &all_targets;
+    genex_ctx.current_target = this;
+    genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+    GenexEvaluator evaluator(genex_ctx);
+
+    // Helper: Format best-effort error message (Layer 2)
+    auto format_genex_error = [&](const std::string& prop_name,
+                                   const std::string& error_msg,
+                                   const std::vector<std::string>& values) -> std::string {
+        std::ostringstream oss;
+        oss << "Error during build graph generation:\n"
+            << "  Target: '" << name_ << "'\n"
+            << "  Property: '" << prop_name << "'\n"
+            << "  Values: ";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) oss << ", ";
+            oss << "'" << values[i] << "'";
+            if (i >= 3) { oss << " ... (" << (values.size() - 3) << " more)"; break; }
+        }
+        oss << "\n  Error: " << error_msg << "\n\n"
+            << "Hint: Generator expressions are typically set via target_*() commands.\n"
+            << "      Search for: target_.*" << name_ << " in your CMakeLists.txt files";
+        return oss.str();
+    };
+
+    // 1. Initialize with local properties (evaluate genex FIRST, then resolve paths)
     for (const auto& info : props_to_resolve) {
         auto& res = resolved_properties_[info.name];
         auto& res_iface = resolved_interface_properties_[info.name];
 
         auto process_local = [&](PropertyVisibility vis, std::vector<std::string>& out) {
-            const auto& val = get_property_list(info.name, vis);
+            // Get raw property values
+            auto val = get_property_list(info.name, vis);
+
+            // Evaluate generator expressions FIRST
+            auto eval_result = evaluator.evaluate_property_list(val);
+            if (!eval_result) {
+                throw std::runtime_error(format_genex_error(info.name, eval_result.error(), val));
+            }
+
+            // Then resolve paths if needed
             if (info.is_path) {
-                for(const auto& p : val) out.push_back(resolve_path(p));
+                for(const auto& p : *eval_result) {
+                    if (!p.empty()) {  // Skip empty results from genex
+                        out.push_back(resolve_path(p));
+                    }
+                }
             } else {
-                merge(out, val);
+                merge(out, *eval_result);
             }
         };
 
@@ -181,7 +228,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only) {
         if (all_targets.count(lib_name)) {
             auto dep = all_targets.at(lib_name);
-            dep->resolve(all_targets);
+            dep->resolve(all_targets, interp);
 
             // Inherit for building THIS target (from dep's INTERFACE)
             if (!is_interface_only) {
@@ -451,10 +498,10 @@ static std::pair<std::string, std::string> generate_pch_task(
     return {pch_gch_path, pch_include_arg};
 }
 
-void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
+void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
     if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
 
-    resolve(all_targets);
+    resolve(all_targets, interp);
 
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
@@ -560,7 +607,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     graph.add_task(std::move(link));
 }
 
-void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>&, const std::vector<std::string>&) {
+void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter&, const std::vector<std::string>&, const std::vector<std::string>&) {
     BuildTask task;
     task.id = name_;
     task.parent_target = this;

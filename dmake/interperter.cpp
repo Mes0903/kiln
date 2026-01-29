@@ -246,7 +246,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     }
 
     for (const auto& name : targets_to_build) {
-        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, exe_linker_flags, shared_linker_flags);
+        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
     }
 
     // Link dependency resolution (adding inputs to link tasks)

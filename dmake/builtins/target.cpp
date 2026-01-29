@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../target.hpp"
 #include "../command_parser.hpp"
+#include "../genex_parser.hpp"
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
@@ -270,6 +271,23 @@ void register_target_builtins(Interpreter& interp) {
             auto target = get_target_from_name(interp, name, cmd_name);
             if (!target) return;
 
+            // EARLY VALIDATION (Layer 1) - validate genex support before storing
+            auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
+                for (const auto& value : values) {
+                    auto validation = GenexParser::validate_genex_support(value);
+                    if (!validation) {
+                        interp.set_fatal_error(cmd_name + ": " + validation.error() + " in " + visibility + " scope");
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            if (!pub.empty() && !validate_values(pub, "PUBLIC")) return;
+            if (!priv.empty() && !validate_values(priv, "PRIVATE")) return;
+            if (!inter.empty() && !validate_values(inter, "INTERFACE")) return;
+
+            // Store validated values (will be evaluated during resolve)
             if (!pub.empty()) target->append_property(prop_name, pub, PropertyVisibility::PUBLIC);
             if (!priv.empty()) target->append_property(prop_name, priv, PropertyVisibility::PRIVATE);
             if (!inter.empty()) target->append_property(prop_name, inter, PropertyVisibility::INTERFACE);
@@ -442,6 +460,23 @@ void register_target_builtins(Interpreter& interp) {
         auto target = get_target_from_name(interp, name, "target_link_libraries");
         if (!target) return;
 
+        // EARLY VALIDATION (Layer 1) - validate genex support before resolving
+        auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
+            for (const auto& value : values) {
+                auto validation = GenexParser::validate_genex_support(value);
+                if (!validation) {
+                    interp.set_fatal_error("target_link_libraries: " + validation.error() + " in " + visibility + " scope");
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!pub.empty() && !validate_values(pub, "PUBLIC")) return;
+        if (!priv.empty() && !validate_values(priv, "PRIVATE")) return;
+        if (!inter.empty() && !validate_values(inter, "INTERFACE")) return;
+        if (!def.empty() && !validate_values(def, "default")) return;
+
         // Helper to resolve aliases in library list
         auto resolve_lib_aliases = [&](std::vector<std::string>& libs) {
             for (auto& lib : libs) {
@@ -488,6 +523,17 @@ void register_target_builtins(Interpreter& interp) {
                     items.push_back(item);
                 }
             }
+
+            // EARLY VALIDATION (Layer 1) - validate genex support
+            for (const auto& val : items) {
+                auto validation = GenexParser::validate_genex_support(val);
+                if (!validation) {
+                    interp.set_fatal_error("set_target_properties: " + validation.error() +
+                                         " in INTERFACE_" + base_prop_name + " property");
+                    return;
+                }
+            }
+
             if (!items.empty()) {
                 target->append_property(base_prop_name, items, PropertyVisibility::INTERFACE);
             }

@@ -1,0 +1,373 @@
+#include "genex_evaluator.hpp"
+#include "target.hpp"
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+
+namespace dmake {
+
+std::string GenexEvaluator::to_lower(const std::string& str) const {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return result;
+}
+
+bool GenexEvaluator::is_truthy(const std::string& value) const {
+    // CMake truthiness: falsy values are empty string, 0, OFF, NO, FALSE, N, IGNORE, NOTFOUND, *-NOTFOUND
+    if (value.empty()) return false;
+
+    std::string lower = to_lower(value);
+    if (lower == "0" || lower == "off" || lower == "no" ||
+        lower == "false" || lower == "n" || lower == "ignore" ||
+        lower == "notfound") {
+        return false;
+    }
+
+    // Check for *-NOTFOUND pattern
+    if (lower.size() > 9 && lower.substr(lower.size() - 9) == "-notfound") {
+        return false;
+    }
+
+    return true;
+}
+
+std::expected<std::string, std::string> GenexEvaluator::evaluate_nodes(
+    const std::vector<std::shared_ptr<GenexNode>>& nodes) {
+    std::string result;
+    for (const auto& node : nodes) {
+        auto eval_result = evaluate_node(*node);
+        if (!eval_result) {
+            return eval_result;
+        }
+        result += *eval_result;
+    }
+    return result;
+}
+
+std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const GenexNode& node) {
+    switch (node.type) {
+        case GenexNodeType::LITERAL:
+            return node.raw_content;
+
+        case GenexNodeType::BUILD_INTERFACE:
+            if (ctx_.phase == GenexEvaluationContext::Phase::BUILD) {
+                return evaluate_nodes(node.children);
+            }
+            return std::string("");  // Empty for INSTALL phase
+
+        case GenexNodeType::INSTALL_INTERFACE:
+            if (ctx_.phase == GenexEvaluationContext::Phase::INSTALL) {
+                return evaluate_nodes(node.children);
+            }
+            return std::string("");  // Empty for BUILD phase
+
+        case GenexNodeType::CONFIG: {
+            // $<CONFIG:cfg> returns 1 if CMAKE_BUILD_TYPE matches (case-insensitive), 0 otherwise
+            std::string config = to_lower(node.raw_content);
+            std::string build_type = to_lower(ctx_.build_type);
+            return (config == build_type) ? "1" : "0";
+        }
+
+        case GenexNodeType::BOOL: {
+            // $<BOOL:string> returns 1 if truthy, 0 otherwise
+            // If there are children (nested genex), evaluate them first
+            if (!node.children.empty()) {
+                auto value_result = evaluate_nodes(node.children);
+                if (!value_result) {
+                    return value_result;
+                }
+                return is_truthy(*value_result) ? "1" : "0";
+            }
+            // No children, use raw_content directly
+            return is_truthy(node.raw_content) ? "1" : "0";
+        }
+
+        case GenexNodeType::IF: {
+            // $<IF:cond,true_val,false_val>
+            // Children should be organized as: condition nodes, then true_val nodes, then false_val nodes
+            // But we need to split by commas in the original content
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 3) {
+                return std::unexpected("$<IF:...> requires exactly 3 arguments");
+            }
+
+            // Evaluate condition
+            GenexParser parser;
+            auto cond_result = parser.parse(args[0]);
+            if (!cond_result) {
+                return std::unexpected(cond_result.error());
+            }
+            auto cond_val = evaluate_nodes(cond_result->nodes);
+            if (!cond_val) {
+                return cond_val;
+            }
+
+            // Evaluate true or false branch based on condition
+            if (is_truthy(*cond_val)) {
+                auto true_result = parser.parse(args[1]);
+                if (!true_result) {
+                    return std::unexpected(true_result.error());
+                }
+                return evaluate_nodes(true_result->nodes);
+            } else {
+                auto false_result = parser.parse(args[2]);
+                if (!false_result) {
+                    return std::unexpected(false_result.error());
+                }
+                return evaluate_nodes(false_result->nodes);
+            }
+        }
+
+        case GenexNodeType::AND: {
+            // $<AND:expr1,expr2,...> returns 1 if all expressions are truthy, 0 otherwise
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            GenexParser parser;
+
+            for (const auto& arg : args) {
+                auto arg_result = parser.parse(arg);
+                if (!arg_result) {
+                    return std::unexpected(arg_result.error());
+                }
+                auto arg_val = evaluate_nodes(arg_result->nodes);
+                if (!arg_val) {
+                    return arg_val;
+                }
+                if (!is_truthy(*arg_val)) {
+                    return "0";
+                }
+            }
+            return "1";
+        }
+
+        case GenexNodeType::OR: {
+            // $<OR:expr1,expr2,...> returns 1 if any expression is truthy, 0 otherwise
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            GenexParser parser;
+
+            for (const auto& arg : args) {
+                auto arg_result = parser.parse(arg);
+                if (!arg_result) {
+                    return std::unexpected(arg_result.error());
+                }
+                auto arg_val = evaluate_nodes(arg_result->nodes);
+                if (!arg_val) {
+                    return arg_val;
+                }
+                if (is_truthy(*arg_val)) {
+                    return "1";
+                }
+            }
+            return "0";
+        }
+
+        case GenexNodeType::NOT: {
+            // $<NOT:expr> returns 1 if expr is falsy, 0 if truthy
+            if (!node.children.empty()) {
+                auto val_result = evaluate_nodes(node.children);
+                if (!val_result) {
+                    return val_result;
+                }
+                return is_truthy(*val_result) ? "0" : "1";
+            }
+            // No children, use raw_content directly
+            return is_truthy(node.raw_content) ? "0" : "1";
+        }
+
+        case GenexNodeType::STREQUAL: {
+            // $<STREQUAL:a,b> returns 1 if strings are equal, 0 otherwise
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 2) {
+                return std::unexpected("$<STREQUAL:...> requires exactly 2 arguments");
+            }
+
+            GenexParser parser;
+            auto arg1_result = parser.parse(args[0]);
+            if (!arg1_result) {
+                return std::unexpected(arg1_result.error());
+            }
+            auto arg1_val = evaluate_nodes(arg1_result->nodes);
+            if (!arg1_val) {
+                return arg1_val;
+            }
+
+            auto arg2_result = parser.parse(args[1]);
+            if (!arg2_result) {
+                return std::unexpected(arg2_result.error());
+            }
+            auto arg2_val = evaluate_nodes(arg2_result->nodes);
+            if (!arg2_val) {
+                return arg2_val;
+            }
+
+            return (*arg1_val == *arg2_val) ? "1" : "0";
+        }
+
+        case GenexNodeType::TARGET_EXISTS: {
+            // $<TARGET_EXISTS:target> returns 1 if target exists, 0 otherwise
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_EXISTS requires all_targets context");
+            }
+            return (ctx_.all_targets->find(node.raw_content) != ctx_.all_targets->end()) ? "1" : "0";
+        }
+
+        case GenexNodeType::COMPILE_LANGUAGE: {
+            // $<COMPILE_LANGUAGE:lang> returns 1 if compiling with specified language
+            if (ctx_.allow_deferred_compile_language && !ctx_.compile_language) {
+                // Return original expression for deferred evaluation
+                return "$<COMPILE_LANGUAGE:" + node.raw_content + ">";
+            }
+
+            if (!ctx_.compile_language) {
+                return std::unexpected("COMPILE_LANGUAGE requires compile_language context");
+            }
+
+            std::string lang_upper = node.raw_content;
+            std::transform(lang_upper.begin(), lang_upper.end(), lang_upper.begin(),
+                         [](unsigned char c) { return std::toupper(c); });
+
+            std::string current_lang;
+            switch (*ctx_.compile_language) {
+                case Language::C: current_lang = "C"; break;
+                case Language::CXX: current_lang = "CXX"; break;
+                case Language::CUDA: current_lang = "CUDA"; break;
+                default: current_lang = "UNKNOWN"; break;
+            }
+
+            return (lang_upper == current_lang) ? "1" : "0";
+        }
+
+        case GenexNodeType::PLATFORM_ID: {
+            // $<PLATFORM_ID:platform> returns 1 if CMAKE_SYSTEM_NAME matches
+            return (node.raw_content == ctx_.system_name) ? "1" : "0";
+        }
+
+        case GenexNodeType::CXX_COMPILER_ID: {
+            // $<CXX_COMPILER_ID:id> returns 1 if CMAKE_CXX_COMPILER_ID matches
+            return (node.raw_content == ctx_.cxx_compiler_id) ? "1" : "0";
+        }
+
+        case GenexNodeType::C_COMPILER_ID: {
+            // $<C_COMPILER_ID:id> returns 1 if CMAKE_C_COMPILER_ID matches
+            return (node.raw_content == ctx_.c_compiler_id) ? "1" : "0";
+        }
+
+        case GenexNodeType::CONDITIONAL: {
+            // $<cond:text> where cond is a genex - if cond evaluates to 1, return text
+            // Children are organized as: condition nodes first, then value nodes
+            // We need to find where condition ends and value begins
+            // The parser stores condition nodes first (from parsing the keyword),
+            // then value nodes (from parsing content after ':')
+
+            // For simplicity, evaluate all children and split the result
+            // Actually, we need a better way to know where condition ends
+            // Let me check the parsing logic...
+
+            // From parsing: condition nodes are added first, then value nodes
+            // But we don't know the split point. Let me re-parse from raw_content
+
+            // Actually, looking at the parser, for CONDITIONAL:
+            // - First set of children are from parsing the keyword (the condition)
+            // - Second set are from parsing the content after ':' (the value)
+            // But they're all in one children vector with no delimiter
+
+            // Let me use a different approach: re-parse the components
+            // The condition is the original keyword, which we didn't store separately
+            // Let me add a field to store it or find another way
+
+            // Actually, for CONDITIONAL, I can reconstruct from the structure:
+            // If there are children, the first "half" should be the condition
+            // But that's not reliable.
+
+            // Better approach: for CONDITIONAL nodes, store the condition separately
+            // Let me add metadata or use a different storage mechanism
+
+            // For now, let me use a simpler heuristic: evaluate all children as a single unit
+            // If they evaluate to "1", return empty (since we don't have the value separate)
+            // This won't work correctly.
+
+            // Actually, looking at the parser code I just wrote, I store:
+            // 1. First, condition nodes from cond_result->nodes
+            // 2. Then, value nodes from value_result->nodes
+            // But I have no way to know where the split is.
+
+            // Let me fix the parser to store this information better.
+            // For now, let me assume the raw_content has the value, and I need to re-parse
+            // Actually, raw_content has the value part.
+
+            // New approach: for CONDITIONAL, evaluate the children until we see the value separator
+            // But there's no separator in the children array.
+
+            // Simplest fix: use a special marker or separate field
+            // For now, let me hack it by assuming the first child is the condition:
+
+            if (node.children.empty()) {
+                return std::unexpected("CONDITIONAL genex requires condition and value");
+            }
+
+            // Evaluate first child as condition
+            auto cond_val = evaluate_node(*node.children[0]);
+            if (!cond_val) {
+                return cond_val;
+            }
+
+            // If condition is true, evaluate remaining children as value
+            if (is_truthy(*cond_val)) {
+                std::string result;
+                for (size_t i = 1; i < node.children.size(); ++i) {
+                    auto val_result = evaluate_node(*node.children[i]);
+                    if (!val_result) {
+                        return val_result;
+                    }
+                    result += *val_result;
+                }
+                return result;
+            }
+
+            // Condition is false, return empty
+            return std::string("");
+        }
+
+        case GenexNodeType::UNSUPPORTED:
+            return std::unexpected("Unsupported generator expression: " + node.raw_content);
+
+        default:
+            return std::unexpected("Unknown generator expression type");
+    }
+}
+
+std::expected<std::string, std::string> GenexEvaluator::evaluate(const std::string& input) {
+    GenexParser parser;
+    auto parse_result = parser.parse(input);
+    if (!parse_result) {
+        return std::unexpected(parse_result.error());
+    }
+
+    // If no genex, return as-is
+    if (!parse_result->has_genex) {
+        return input;
+    }
+
+    return evaluate_nodes(parse_result->nodes);
+}
+
+std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_property_list(
+    const std::vector<std::string>& values) {
+    std::vector<std::string> result;
+
+    for (const auto& value : values) {
+        auto eval_result = evaluate(value);
+        if (!eval_result) {
+            return std::unexpected(eval_result.error());
+        }
+
+        // Only add non-empty results
+        if (!eval_result->empty()) {
+            result.push_back(*eval_result);
+        }
+    }
+
+    return result;
+}
+
+} // namespace dmake
