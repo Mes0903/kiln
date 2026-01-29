@@ -2060,6 +2060,37 @@ TEST_CASE("string() REGEX REPLACE operation", "[interpreter][string]") {
     REQUIRE(output == "abcNUMdefNUM\n");
 }
 
+TEST_CASE("string() REGEX REPLACE with capture groups", "[interpreter][string]") {
+    // Test basic capture group
+    auto output1 = run_script(R"RAW(
+        string(REGEX REPLACE "version ([0-9]+)\\.([0-9]+)" "v\\1.\\2" result "version 3.6")
+        message("${result}")
+    )RAW");
+    REQUIRE(output1 == "v3.6\n");
+
+    // Test capture group with surrounding text (like OpenSSL version example)
+    auto output2 = run_script(R"(
+        set(input "# define OPENSSL_VERSION_STR \"3.6.0\"")
+        string(REGEX REPLACE "^.*OPENSSL_VERSION_STR.*\"([0-9]+\\.[0-9]+\\.[0-9]+)\".*$" "\\1" result "${input}")
+        message("${result}")
+    )");
+    REQUIRE(output2 == "3.6.0\n");
+
+    // Test multiple capture groups
+    auto output3 = run_script(R"RAW(
+        string(REGEX REPLACE "([a-z]+)([0-9]+)" "\\2-\\1" result "abc123")
+        message("${result}")
+    )RAW");
+    REQUIRE(output3 == "123-abc\n");
+
+    // Test literal dollar sign in replacement (should be preserved)
+    auto output4 = run_script(R"(
+        string(REGEX REPLACE "price" "$100" result "The price is high")
+        message("${result}")
+    )");
+    REQUIRE(output4 == "The $100 is high\n");
+}
+
 TEST_CASE("string() REGEX QUOTE operation", "[interpreter][string]") {
     auto output = run_script(R"(
         string(REGEX QUOTE result "a.b*c?d[e]")

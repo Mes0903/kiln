@@ -93,6 +93,49 @@ std::string genex_strip(const std::string& str) {
     return result;
 }
 
+// Helper to convert CMake-style regex replacement string to C++ std::regex format
+// CMake uses \1, \2, etc. for capture groups, $ is literal
+// C++ std::regex_replace uses $1, $2, etc., $$ for literal $
+std::string cmake_to_cpp_replacement(const std::string& cmake_fmt) {
+    std::string result;
+    size_t i = 0;
+
+    while (i < cmake_fmt.size()) {
+        if (cmake_fmt[i] == '\\' && i + 1 < cmake_fmt.size()) {
+            char next = cmake_fmt[i + 1];
+
+            // Check if it's a capture group reference (\1, \2, ..., \9)
+            if (next >= '0' && next <= '9') {
+                result += '$';
+                result += next;
+                i += 2;
+                continue;
+            }
+
+            // Check for escaped backslash (\\)
+            if (next == '\\') {
+                result += '\\';
+                i += 2;
+                continue;
+            }
+
+            // Other escape sequences - preserve as-is
+            result += cmake_fmt[i];
+            i++;
+        } else if (cmake_fmt[i] == '$') {
+            // In CMake, $ is literal, but in C++ regex it's special
+            // so we need to escape it as $$
+            result += "$$";
+            i++;
+        } else {
+            result += cmake_fmt[i];
+            i++;
+        }
+    }
+
+    return result;
+}
+
 // Helper to make a valid C identifier
 std::string make_c_identifier(const std::string& str) {
     std::string result;
@@ -502,7 +545,9 @@ void register_string_builtins(Interpreter& interp) {
 
                 try {
                     std::regex re(pattern);
-                    std::string result = std::regex_replace(input, re, replacement);
+                    // Convert CMake-style replacement (\1, \2) to C++ style ($1, $2)
+                    std::string cpp_replacement = cmake_to_cpp_replacement(replacement);
+                    std::string result = std::regex_replace(input, re, cpp_replacement);
                     interp.set_variable(out_var, result);
                 } catch (const std::regex_error& e) {
                     interp.set_fatal_error("string(REGEX REPLACE) invalid regex: " + std::string(e.what()));
