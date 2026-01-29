@@ -33,6 +33,8 @@ add_library(dmake SHARED
     dmake/builtins/property.cpp
     dmake/builtins/try_compile.cpp
     dmake/builtins/path.cpp
+    dmake/builtins/install.cpp
+    dmake/install_executor.cpp
     dmake/CMakeList.cpp
 )
 
@@ -45,6 +47,10 @@ target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11)
 set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake
 )
+
+# Install rules
+install(TARGETS dmake_cli RUNTIME DESTINATION bin)
+install(TARGETS dmake LIBRARY DESTINATION lib)
 
 if(BUILD_TESTING)
     enable_testing()

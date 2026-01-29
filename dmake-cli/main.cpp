@@ -1,6 +1,7 @@
 #include "dmake/cmake-language.hpp"
 #include "dmake/interperter.hpp"
 #include "dmake/utils.hpp"
+#include "dmake/install_executor.hpp"
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -379,6 +380,14 @@ int main(int argc, char* argv[]) {
     std::string clean_project_dir = ".";
     clean_cmd->add_option("project", clean_project_dir, "Project directory");
 
+    auto* install_cmd = app.add_subcommand("install", "Install project files");
+    std::string install_project_dir = ".";
+    std::string install_prefix;
+    std::string install_component;
+    install_cmd->add_option("project", install_project_dir, "Project directory");
+    install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
+    install_cmd->add_option("--component", install_component, "Install specific component only");
+
     auto* e_cmd = app.add_subcommand("mode-E", "CMake-like command-line tool mode");
     e_cmd->alias("-E");
     e_cmd->prefix_command();
@@ -468,6 +477,45 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    if (install_cmd->parsed()) {
+        // Build project first
+        auto build_res = run_build_action(opt, install_project_dir, {});
+        if (!build_res) {
+            std::cerr << "Build failed: " << build_res.error() << std::endl;
+            return 1;
+        }
+
+        auto& interpreter = build_res.value();
+
+        // Determine install prefix
+        std::string prefix = install_prefix.empty()
+            ? interpreter->get_variable("CMAKE_INSTALL_PREFIX")
+            : install_prefix;
+
+        if (prefix.empty()) {
+            prefix = "/usr/local";  // CMake default
+        }
+
+        std::cout << "\033[1;34mInstalling to:\033[0m " << prefix << std::endl;
+
+        // Execute install
+        auto result = dmake::execute_install_rules(
+            interpreter.get(),
+            interpreter->get_install_rules(),
+            prefix,
+            to_cmake_case(opt.config),
+            install_component
+        );
+
+        if (!result) {
+            std::cerr << "\033[1;31merror:\033[0m " << result.error() << std::endl;
+            return 1;
+        }
+
+        std::cout << "\033[1;32mInstallation complete.\033[0m" << std::endl;
+        return 0;
+    }
+
     if (run_cmd->parsed()) {
         if (!std::filesystem::exists(std::filesystem::path(run_project_dir) / "CMakeLists.txt")) {
             if (std::filesystem::exists("CMakeLists.txt")) {
@@ -535,7 +583,7 @@ int main(int argc, char* argv[]) {
     std::string project_dir = build_project_dir;
     std::vector<std::string> targets = build_targets;
 
-    if (!build_cmd->parsed() && !test_cmd->parsed() && !run_cmd->parsed() && !clean_cmd->parsed()) {
+    if (!build_cmd->parsed() && !test_cmd->parsed() && !run_cmd->parsed() && !clean_cmd->parsed() && !install_cmd->parsed()) {
         auto remaining = app.remaining();
         if (!remaining.empty()) {
             project_dir = remaining[0];

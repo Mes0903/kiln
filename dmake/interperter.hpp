@@ -59,6 +59,66 @@ struct CustomCommandRule {
     std::string binary_dir;                     // Binary directory where command was defined
 };
 
+// Install system structures
+enum class InstallRuleType {
+    TARGETS,
+    FILES,
+    PROGRAMS,
+    DIRECTORY,
+    SCRIPT,
+    CODE
+};
+
+struct InstallDestination {
+    std::string destination;                // Relative to CMAKE_INSTALL_PREFIX
+    std::vector<std::string> permissions;   // OWNER_READ, OWNER_WRITE, etc.
+    std::string component = "Unspecified";  // Component name
+    std::vector<std::string> configurations; // Debug, Release, etc.
+    bool optional = false;                  // Continue if source missing
+    bool exclude_from_all = false;          // Skip from default install
+};
+
+struct InstallTargetsRule {
+    std::vector<std::string> targets;
+    InstallDestination archive_dest;        // Static libraries (.a)
+    InstallDestination library_dest;        // Shared libraries (.so)
+    InstallDestination runtime_dest;        // Executables
+    InstallDestination public_header_dest;  // Public headers
+    InstallDestination private_header_dest; // Private headers
+};
+
+struct InstallFilesRule {
+    std::vector<std::string> files;
+    InstallDestination destination;
+    bool is_programs = false;               // Different default permissions
+};
+
+struct InstallDirectoryRule {
+    std::vector<std::string> directories;
+    InstallDestination destination;
+    std::vector<std::string> file_patterns;      // FILES_MATCHING PATTERN
+    std::vector<std::string> exclude_patterns;   // PATTERN EXCLUDE
+    bool use_source_permissions = false;
+};
+
+struct InstallScriptRule {
+    std::string script_path;                // For SCRIPT mode
+    std::string code;                       // For CODE mode
+    std::string component = "Unspecified";
+};
+
+struct InstallRule {
+    InstallRuleType type;
+    std::string source_dir;  // CMAKE_CURRENT_SOURCE_DIR when defined
+    std::string binary_dir;  // CMAKE_CURRENT_BINARY_DIR when defined
+
+    // Only one is populated based on type
+    std::shared_ptr<InstallTargetsRule> targets_rule;
+    std::shared_ptr<InstallFilesRule> files_rule;
+    std::shared_ptr<InstallDirectoryRule> directory_rule;
+    std::shared_ptr<InstallScriptRule> script_rule;
+};
+
 // ANSI escape codes for colors
 namespace colors {
     const std::string RESET = "\033[0m";
@@ -193,6 +253,14 @@ public:
         return get_root()->custom_command_rules_;
     }
 
+    // Install rules
+    std::vector<std::shared_ptr<InstallRule>>& get_install_rules() {
+        return get_root()->install_rules_;
+    }
+    const std::vector<std::shared_ptr<InstallRule>>& get_install_rules() const {
+        return get_root()->install_rules_;
+    }
+
     // Property system accessors
     std::map<PropertyScope, std::map<std::string, PropertyDefinition>>& get_property_definitions() {
         return get_root()->property_definitions_;
@@ -239,6 +307,7 @@ public:
     friend void register_property_builtins(Interpreter& interp);
     friend void register_try_compile_builtins(Interpreter& interp);
     friend void register_path_builtins(Interpreter& interp);
+    friend void register_install_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 
@@ -288,6 +357,10 @@ private:
     // Custom command rules (OUTPUT form of add_custom_command)
     // Maps output file path -> rule that generates it
     std::map<std::string, std::shared_ptr<CustomCommandRule>> custom_command_rules_;
+
+    // Install rules
+    std::vector<std::shared_ptr<InstallRule>> install_rules_;
+
     Toolchain toolchain_;
     std::unique_ptr<CacheStore> cache_store_;
     std::set<std::string> global_guarded_files_;

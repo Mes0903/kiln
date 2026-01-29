@@ -350,6 +350,11 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         variables_.set("CMAKE_CURRENT_BINARY_DIR", abs_binary_dir.string());
         variables_.set("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
+        // Set default install prefix if not already set
+        if (get_variable("CMAKE_INSTALL_PREFIX").empty()) {
+            variables_.set("CMAKE_INSTALL_PREFIX", "/usr/local");
+        }
+
         if (abs_binary_dir == abs_script_dir) {
             set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
         }
@@ -419,6 +424,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_property_builtins(*this);
         register_try_compile_builtins(*this);
         register_path_builtins(*this);
+        register_install_builtins(*this);
 
         add_builtin("enable_testing", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (!args.empty()) {
