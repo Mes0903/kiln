@@ -809,7 +809,58 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     std::string current_literal;
     while (pos_ < content_.length() && !std::isspace(content_[pos_]) &&
            content_[pos_] != '(' && content_[pos_] != ')' &&
-           content_[pos_] != '#' && content_[pos_] != '"' && content_[pos_] != '[') {
+           content_[pos_] != '#') {
+        // Handle embedded quoted strings within unquoted arguments
+        // E.g., LAGRANGE_APP_VERSION="${PROJECT_VERSION}" is one argument
+        if (content_[pos_] == '"') {
+            // Save accumulated literal before the quote
+            if (start_pos < pos_) {
+                current_literal += content_.substr(start_pos, pos_ - start_pos);
+            }
+            if (!current_literal.empty()) {
+                parts.emplace_back(std::move(current_literal));
+                current_literal.clear();
+            }
+
+            // Parse the quoted part
+            auto quoted_value = parse_quoted_argument_value();
+            if (!quoted_value) {
+                return std::unexpected(quoted_value.error());
+            }
+            // Add all parts from the quoted argument (including literal quotes)
+            // But wrap them: add opening quote, the parts, closing quote
+            parts.emplace_back(std::string("\""));
+            for (auto& part : *quoted_value) {
+                parts.emplace_back(std::move(part));
+            }
+            parts.emplace_back(std::string("\""));
+
+            start_pos = pos_;
+            continue;
+        }
+
+        // Handle bracket arguments embedded in unquoted arguments
+        if (content_[pos_] == '[' && pos_ + 1 < content_.length() &&
+            (content_[pos_ + 1] == '[' || content_[pos_ + 1] == '=')) {
+            // Save accumulated literal
+            if (start_pos < pos_) {
+                current_literal += content_.substr(start_pos, pos_ - start_pos);
+            }
+            if (!current_literal.empty()) {
+                parts.emplace_back(std::move(current_literal));
+                current_literal.clear();
+            }
+
+            // Parse bracket argument
+            auto bracket_value = parse_bracket_argument();
+            if (!bracket_value) {
+                return std::unexpected(bracket_value.error());
+            }
+            parts.emplace_back(std::move(*bracket_value));
+
+            start_pos = pos_;
+            continue;
+        }
         if (content_[pos_] == '\\' && pos_ + 1 < content_.length()) {
             // Save any accumulated text before the escape
             if (start_pos < pos_) {

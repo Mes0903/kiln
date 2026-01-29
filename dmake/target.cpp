@@ -365,7 +365,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
 
         for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
 
-        ctx.includes.push_back(source_dir_);
+        // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
         for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) ctx.includes.push_back(dir);
 
         for (const auto& def : get_resolved_property("COMPILE_DEFINITIONS")) ctx.definitions.push_back(def);
@@ -481,7 +481,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     for (const auto& opt : options) ctx.options.push_back(opt);
     for (const auto& def : definitions) ctx.definitions.push_back(def);
 
-    ctx.includes.push_back(target->get_source_dir());
+    // Note: Do NOT automatically add source_dir - only add what's explicitly passed in includes
     for (const auto& dir : includes)
         ctx.includes.push_back(dir);
 
@@ -737,9 +737,7 @@ bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& t
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
-        // CMake automatically adds both source and binary directories
-        ctx.includes.push_back(source_dir_);
-        ctx.includes.push_back(binary_dir_);
+        // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
         for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) {
             ctx.includes.push_back(dir);
         }

@@ -133,7 +133,14 @@ public:
         for (const auto& obj : ctx.objects) cmd.push_back(obj);
 
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
-        for (const auto& lib : ctx.libs) cmd.push_back("-l" + lib);
+        for (const auto& lib : ctx.libs) {
+            // Strip -l prefix if present (some CMakeLists.txt files include it)
+            std::string clean_lib = lib;
+            if (clean_lib.starts_with("-l")) {
+                clean_lib = clean_lib.substr(2);
+            }
+            cmd.push_back("-l" + clean_lib);
+        }
 
         return cmd;
     }

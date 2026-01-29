@@ -186,6 +186,7 @@ struct CompileParams {
     std::vector<std::string> sources;
     std::map<std::string, std::string> inline_sources_map;
     std::vector<std::string> compile_definitions;
+    std::vector<std::string> raw_compile_flags;  // Flags passed as-is (e.g., -Werror)
     std::vector<std::string> resolved_link_libs;
     std::vector<std::string> link_options;
     std::filesystem::path temp_dir;
@@ -234,6 +235,11 @@ std::expected<CompileResult, std::string> compile_sources(
     // Definitions
     for (const auto& def : params.compile_definitions) {
         compile_cmd.push_back("-D" + def);
+    }
+
+    // Raw compile flags (passed as-is)
+    for (const auto& flag : params.raw_compile_flags) {
+        compile_cmd.push_back(flag);
     }
 
     // Generate dependency file
@@ -330,6 +336,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::vector<std::string> source_from_var;      // Pairs: name, varname, name, varname...
         std::vector<std::string> source_from_file;     // Pairs: name, filepath, name, filepath...
         std::vector<std::string> compile_definitions;
+        std::vector<std::string> raw_compile_flags;    // Compiler flags passed as-is (from CMAKE_FLAGS)
         std::vector<std::string> link_libraries;
         std::vector<std::string> link_options;
         std::string cxx_standard;
@@ -401,14 +408,22 @@ void register_try_compile_builtins(Interpreter& interp) {
 
             // Apply based on variable name
             if (var_name == "COMPILE_DEFINITIONS") {
-                // Value might be multiple definitions separated by semicolons
-                // Each definition might start with -D which we need to strip
-                CMakeList defs(value);
-                for (const auto& d : defs) {
-                    if (d.size() >= 2 && d.substr(0, 2) == "-D") {
-                        compile_definitions.push_back(d.substr(2));
+                // CMAKE_FLAGS COMPILE_DEFINITIONS can contain both definitions and compiler flags
+                // Definitions start with -D, everything else is a compiler flag
+                CMakeList items(value);
+                for (const auto& item : items) {
+                    if (item.empty()) continue;
+
+                    if (item.size() >= 2 && item.substr(0, 2) == "-D") {
+                        // It's a definition - strip -D and add to compile_definitions
+                        compile_definitions.push_back(item.substr(2));
+                    } else if (item[0] == '-') {
+                        // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
+                        // Add to raw_compile_flags to be passed as-is
+                        raw_compile_flags.push_back(item);
                     } else {
-                        compile_definitions.push_back(d);
+                        // Plain definition without -D prefix
+                        compile_definitions.push_back(item);
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
@@ -587,13 +602,15 @@ void register_try_compile_builtins(Interpreter& interp) {
         params.sources = sources;
         params.inline_sources_map = inline_sources_map;
         params.compile_definitions = compile_definitions;
+        params.raw_compile_flags = raw_compile_flags;
         params.resolved_link_libs = resolved_link_libs;
         params.link_options = link_options;
         params.temp_dir = temp_dir;
 
         // Compile
-        bool link_to_executable = (!build_static_lib && !copy_file.empty()) ||
-                                  (!build_static_lib && (!params.resolved_link_libs.empty() || !params.link_options.empty()));
+        // Default to linking to executable unless building static library
+        // This is necessary for check_function_exists which needs to link against system libraries
+        bool link_to_executable = !build_static_lib;
         auto compile_result = compile_sources(params, link_to_executable);
         if (!compile_result) {
             interp.set_fatal_error("Compilation failed: " + compile_result.error());
@@ -690,6 +707,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::vector<std::string> source_from_var;
         std::vector<std::string> source_from_file;
         std::vector<std::string> compile_definitions;
+        std::vector<std::string> raw_compile_flags;
         std::vector<std::string> link_libraries;
         std::vector<std::string> link_options;
         std::string cxx_standard;
@@ -765,12 +783,20 @@ void register_try_compile_builtins(Interpreter& interp) {
             }
 
             if (var_name == "COMPILE_DEFINITIONS") {
-                CMakeList defs(value);
-                for (const auto& d : defs) {
-                    if (d.size() >= 2 && d.substr(0, 2) == "-D") {
-                        compile_definitions.push_back(d.substr(2));
+                // CMAKE_FLAGS COMPILE_DEFINITIONS can contain both definitions and compiler flags
+                CMakeList items(value);
+                for (const auto& item : items) {
+                    if (item.empty()) continue;
+
+                    if (item.size() >= 2 && item.substr(0, 2) == "-D") {
+                        // It's a definition - strip -D and add to compile_definitions
+                        compile_definitions.push_back(item.substr(2));
+                    } else if (item[0] == '-') {
+                        // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
+                        raw_compile_flags.push_back(item);
                     } else {
-                        compile_definitions.push_back(d);
+                        // Plain definition without -D prefix
+                        compile_definitions.push_back(item);
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
@@ -909,6 +935,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         params.sources = sources;
         params.inline_sources_map = inline_sources_map;
         params.compile_definitions = compile_definitions;
+        params.raw_compile_flags = raw_compile_flags;
         params.resolved_link_libs = resolved_link_libs;
         params.link_options = link_options;
         params.temp_dir = temp_dir;
