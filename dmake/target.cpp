@@ -481,7 +481,9 @@ static std::pair<std::string, std::string> generate_pch_task(
     for (const auto& opt : options) ctx.options.push_back(opt);
     for (const auto& def : definitions) ctx.definitions.push_back(def);
 
-    // Note: Do NOT automatically add source_dir - only add what's explicitly passed in includes
+    // PCH wrapper includes headers relative to source_dir, so we need source_dir in the include path
+    ctx.includes.push_back(target->get_source_dir());
+
     for (const auto& dir : includes)
         ctx.includes.push_back(dir);
 

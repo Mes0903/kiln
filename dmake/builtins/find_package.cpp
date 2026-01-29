@@ -114,11 +114,21 @@ void register_find_package_builtins(Interpreter& interp) {
                 return true; // No required components to check
             }
 
+            // Only check components if package was found
+            std::string pkg_found = interp.get_variable(found_var);
+            if (interp.is_falsy(pkg_found)) {
+                return false; // Package not found, so components can't be found either
+            }
+
             std::vector<std::string> missing_components;
             for (const auto& comp : components) {
                 std::string comp_found_var = package_name + "_" + comp + "_FOUND";
                 std::string comp_found = interp.get_variable(comp_found_var);
-                if (interp.is_falsy(comp_found)) {
+
+                // Only consider a component missing if it's explicitly set to FALSE
+                // If undefined, assume the Find module doesn't set component variables
+                // and trust that it validated components internally
+                if (!comp_found.empty() && interp.is_falsy(comp_found)) {
                     missing_components.push_back(comp);
                 }
             }

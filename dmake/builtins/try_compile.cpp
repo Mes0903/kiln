@@ -234,7 +234,12 @@ std::expected<CompileResult, std::string> compile_sources(
 
     // Definitions
     for (const auto& def : params.compile_definitions) {
-        compile_cmd.push_back("-D" + def);
+        // Strip -D prefix if present (CMake allows passing it with or without)
+        if (def.size() >= 2 && def.substr(0, 2) == "-D") {
+            compile_cmd.push_back(def);
+        } else {
+            compile_cmd.push_back("-D" + def);
+        }
     }
 
     // Raw compile flags (passed as-is)
