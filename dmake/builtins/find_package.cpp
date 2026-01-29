@@ -64,6 +64,8 @@ void register_find_package_builtins(Interpreter& interp) {
         bool config = false;
         bool no_module = false;
         bool quiet = false;
+        std::vector<std::string> components;
+        std::vector<std::string> optional_components;
 
         parser.add_positional(package_name, "package name", true);
         parser.add_positional(version, "version", false);
@@ -71,11 +73,78 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.add_flag("CONFIG", config);
         parser.add_flag("NO_MODULE", no_module);
         parser.add_flag("QUIET", quiet);
+        parser.add_list("COMPONENTS", components);
+        parser.add_list("OPTIONAL_COMPONENTS", optional_components);
 
         PARSE_OR_RETURN(parser, interp, args);
 
         std::string found_var = package_name + "_FOUND";
-        
+
+        // Set component-related variables before calling Find module or Config file
+        std::vector<std::string> all_components = components;
+        all_components.insert(all_components.end(), optional_components.begin(), optional_components.end());
+
+        if (!all_components.empty()) {
+            // Set <Package>_FIND_COMPONENTS to semicolon-separated list of all components
+            std::string components_str;
+            for (size_t i = 0; i < all_components.size(); ++i) {
+                if (i > 0) components_str += ";";
+                components_str += all_components[i];
+            }
+            interp.set_variable(package_name + "_FIND_COMPONENTS", components_str);
+
+            // Set <Package>_FIND_REQUIRED_<Component> for each component
+            for (const auto& comp : components) {
+                interp.set_variable(package_name + "_FIND_REQUIRED_" + comp, "TRUE");
+            }
+            for (const auto& comp : optional_components) {
+                interp.set_variable(package_name + "_FIND_REQUIRED_" + comp, "FALSE");
+            }
+        }
+
+        // Set <Package>_FIND_REQUIRED
+        interp.set_variable(package_name + "_FIND_REQUIRED", required ? "TRUE" : "FALSE");
+
+        // Set <Package>_FIND_QUIETLY
+        interp.set_variable(package_name + "_FIND_QUIETLY", quiet ? "TRUE" : "FALSE");
+
+        // Helper to validate that all required components were found
+        auto validate_components = [&]() -> bool {
+            if (components.empty()) {
+                return true; // No required components to check
+            }
+
+            std::vector<std::string> missing_components;
+            for (const auto& comp : components) {
+                std::string comp_found_var = package_name + "_" + comp + "_FOUND";
+                std::string comp_found = interp.get_variable(comp_found_var);
+                if (interp.is_falsy(comp_found)) {
+                    missing_components.push_back(comp);
+                }
+            }
+
+            if (!missing_components.empty()) {
+                // Build error message
+                std::string missing_str;
+                for (size_t i = 0; i < missing_components.size(); ++i) {
+                    if (i > 0) missing_str += " ";
+                    missing_str += missing_components[i];
+                }
+
+                if (required) {
+                    interp.set_fatal_error("Could not find package " + package_name + " (missing required components: " + missing_str + ")");
+                } else if (!quiet) {
+                    interp.print_message("STATUS", "Package " + package_name + " missing components: " + missing_str);
+                }
+
+                // Set package as not found if required components are missing
+                interp.set_variable(found_var, "OFF");
+                return false;
+            }
+
+            return true;
+        };
+
         // 1. Module Mode
         // Unless NO_MODULE is specified, try to find a module first.
         // CMake logic: If CONFIG is specified, skip Module mode.
@@ -126,7 +195,7 @@ void register_find_package_builtins(Interpreter& interp) {
                     interp.set_fatal_error(res.error());
                     return;
                 }
-                
+
                 // The module is responsible for setting PackageName_FOUND
                 std::string found = interp.get_variable(found_var);
                 if (interp.is_falsy(found)) {
@@ -135,7 +204,11 @@ void register_find_package_builtins(Interpreter& interp) {
                     } else if (!quiet) {
                         interp.print_message("STATUS", "Could not find package " + package_name + " (Module mode)");
                     }
+                    return;
                 }
+
+                // Validate required components
+                validate_components();
                 return; // Module mode executed, we are done.
             }
             // If module not found, proceed to config mode (standard CMake behavior)
@@ -266,11 +339,27 @@ void register_find_package_builtins(Interpreter& interp) {
             auto res = interp.include_file(found_path.string());
             if (!res) {
                 interp.set_fatal_error(res.error());
+                return;
             }
+
+            // Validate required components
+            validate_components();
         } else {
             interp.set_variable(found_var, "OFF");
             if (required) {
-                interp.set_fatal_error("Could not find package " + package_name + " in CONFIG mode" + (version.empty() ? "" : " with version " + version) + ".");
+                std::string error_msg = "Could not find package " + package_name + " in CONFIG mode";
+                if (!version.empty()) {
+                    error_msg += " with version " + version;
+                }
+                if (!components.empty()) {
+                    error_msg += " (required components:";
+                    for (size_t i = 0; i < components.size(); ++i) {
+                        error_msg += " " + components[i];
+                    }
+                    error_msg += ")";
+                }
+                error_msg += ".";
+                interp.set_fatal_error(error_msg);
             } else if (!quiet) {
                 interp.print_message("STATUS", "Could not find package " + package_name + " (optional)");
             }
