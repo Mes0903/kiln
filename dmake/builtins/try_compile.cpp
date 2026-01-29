@@ -335,6 +335,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string cxx_standard;
         std::string c_standard;
         std::string output_variable;
+        std::string copy_file;
+        std::string copy_file_error;
         std::vector<std::string> cmake_flags;
 
         parser.add_positional(result_var, "result variable");
@@ -351,6 +353,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.add_value("CXX_STANDARD", cxx_standard);
         parser.add_value("C_STANDARD", c_standard);
         parser.add_value("OUTPUT_VARIABLE", output_variable);
+        parser.add_value("COPY_FILE", copy_file);
+        parser.add_value("COPY_FILE_ERROR", copy_file_error);
 
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -451,22 +455,26 @@ void register_try_compile_builtins(Interpreter& interp) {
             language = detect_language(source_from_file[0]);
         }
 
-        // Get compiler
+        // Get compiler path and version from variables
         std::string compiler_var = (language == "C") ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER";
         std::string compiler_path = interp.get_variable(compiler_var);
         if (compiler_path.empty()) {
             compiler_path = (language == "C") ? "gcc" : "g++";
         }
 
-        // Get compiler version directly
-        CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
-        if (version_cmd.exit_code != 0 || version_cmd.output.empty()) {
-            interp.set_fatal_error("Failed to get compiler version from " + compiler_path);
-            return;
-        }
-        std::string compiler_version = version_cmd.output;
-        if (!compiler_version.empty() && compiler_version.back() == '\n') {
-            compiler_version.pop_back();
+        std::string version_var = (language == "C") ? "CMAKE_C_COMPILER_VERSION" : "CMAKE_CXX_COMPILER_VERSION";
+        std::string compiler_version = interp.get_variable(version_var);
+        if (compiler_version.empty()) {
+            // Fallback: query compiler version if not set
+            CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
+            if (version_cmd.exit_code == 0 && !version_cmd.output.empty()) {
+                compiler_version = version_cmd.output;
+                if (!compiler_version.empty() && compiler_version.back() == '\n') {
+                    compiler_version.pop_back();
+                }
+            } else {
+                compiler_version = "unknown";
+            }
         }
 
         // Get standard
@@ -566,6 +574,10 @@ void register_try_compile_builtins(Interpreter& interp) {
             return;
         }
 
+        // Check CMAKE_TRY_COMPILE_TARGET_TYPE
+        std::string target_type = interp.get_variable("CMAKE_TRY_COMPILE_TARGET_TYPE");
+        bool build_static_lib = (target_type == "STATIC_LIBRARY");
+
         // Prepare compilation parameters
         CompileParams params;
         params.language = language;
@@ -580,7 +592,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         params.temp_dir = temp_dir;
 
         // Compile
-        auto compile_result = compile_sources(params, false);
+        bool link_to_executable = (!build_static_lib && !copy_file.empty()) ||
+                                  (!build_static_lib && (!params.resolved_link_libs.empty() || !params.link_options.empty()));
+        auto compile_result = compile_sources(params, link_to_executable);
         if (!compile_result) {
             interp.set_fatal_error("Compilation failed: " + compile_result.error());
             return;
@@ -589,6 +603,28 @@ void register_try_compile_builtins(Interpreter& interp) {
         bool compile_success = compile_result->success;
         std::string output = compile_result->output;
         std::map<std::string, int64_t> header_mtimes = compile_result->header_mtimes;
+        std::string artifact_path;
+
+        // For static library, create the .a file
+        if (build_static_lib && compile_success) {
+            // compile_sources with link_to_executable=false creates .o files
+            // We need to find the object file(s) and create a static library
+            std::string obj_file = (temp_dir / "test.o").string();
+            std::string lib_file = (temp_dir / "libtest.a").string();
+
+            std::vector<std::string> ar_cmd = {"ar", "rcs", lib_file, obj_file};
+            CommandResult ar_result = run_command(ar_cmd, temp_dir.string());
+
+            if (ar_result.exit_code != 0) {
+                compile_success = false;
+                output += "\nArchive creation failed:\n" + ar_result.output;
+            } else {
+                artifact_path = lib_file;
+            }
+        } else if (compile_success) {
+            // Executable was built
+            artifact_path = compile_result->executable_path;
+        }
 
         // Compute final signature with header deps
         auto final_sig_result = add_header_deps_to_signature(base_signature, header_mtimes);
@@ -604,6 +640,31 @@ void register_try_compile_builtins(Interpreter& interp) {
         entry.output = output;
         entry.header_mtimes = header_mtimes;
         cache.insert<CacheSubsystem::TryCompile>(final_signature, entry);
+
+        // Handle COPY_FILE if specified
+        if (!copy_file.empty() && compile_success && !artifact_path.empty()) {
+            std::error_code copy_ec;
+
+            // Create parent directories for copy destination
+            std::filesystem::path copy_dest(copy_file);
+            if (copy_dest.has_parent_path()) {
+                std::filesystem::create_directories(copy_dest.parent_path(), copy_ec);
+                if (copy_ec && !copy_file_error.empty()) {
+                    interp.set_variable(copy_file_error, "Failed to create directory: " + copy_ec.message());
+                    copy_ec.clear();
+                }
+            }
+
+            // Copy the file
+            if (!copy_ec) {
+                std::filesystem::copy_file(artifact_path, copy_file,
+                                          std::filesystem::copy_options::overwrite_existing,
+                                          copy_ec);
+                if (copy_ec && !copy_file_error.empty()) {
+                    interp.set_variable(copy_file_error, "Failed to copy file: " + copy_ec.message());
+                }
+            }
+        }
 
         // Set result variables
         interp.set_variable(result_var, compile_success ? "TRUE" : "FALSE");
