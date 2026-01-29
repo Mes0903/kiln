@@ -557,17 +557,53 @@ void register_try_compile_builtins(Interpreter& interp) {
             inline_sources_map[source_from_file[i]] = content;
         }
 
-        // Resolve LINK_LIBRARIES (convert target names to paths)
+        // Resolve LINK_LIBRARIES (convert target names to paths + propagate properties)
         std::vector<std::string> resolved_link_libs;
+        std::vector<std::string> propagated_includes;
+        std::vector<std::string> propagated_definitions;
+        std::vector<std::string> propagated_options;
         auto& targets = interp.get_root()->targets_;
         for (const auto& lib : link_libraries) {
             if (targets.count(lib)) {
-                // It's a target - use its output path
-                resolved_link_libs.push_back(targets[lib]->get_output_path());
+                auto& target = targets[lib];
+                // Resolve the target to get transitive properties
+                target->resolve(targets, interp);
+
+                // Propagate INTERFACE properties from the target
+                const auto& iface_includes = target->get_resolved_interface_property("INCLUDE_DIRECTORIES");
+                propagated_includes.insert(propagated_includes.end(), iface_includes.begin(), iface_includes.end());
+
+                const auto& iface_defs = target->get_resolved_interface_property("COMPILE_DEFINITIONS");
+                propagated_definitions.insert(propagated_definitions.end(), iface_defs.begin(), iface_defs.end());
+
+                const auto& iface_opts = target->get_resolved_interface_property("COMPILE_OPTIONS");
+                propagated_options.insert(propagated_options.end(), iface_opts.begin(), iface_opts.end());
+
+                // Add the target's output path
+                std::string output_path = target->get_output_path();
+                if (!output_path.empty()) {
+                    resolved_link_libs.push_back(output_path);
+                }
+
+                // Add transitive link libraries
+                const auto& transitive_libs = target->get_resolved_interface_property("LINK_LIBRARIES");
+                resolved_link_libs.insert(resolved_link_libs.end(), transitive_libs.begin(), transitive_libs.end());
             } else {
                 // System library or path
                 resolved_link_libs.push_back(lib);
             }
+        }
+
+        // Merge propagated properties
+        for (const auto& inc : propagated_includes) {
+            // Add as -I flags to raw_compile_flags
+            raw_compile_flags.push_back("-I" + inc);
+        }
+        for (const auto& def : propagated_definitions) {
+            compile_definitions.push_back(def);
+        }
+        for (const auto& opt : propagated_options) {
+            raw_compile_flags.push_back(opt);
         }
 
         // Compute initial signature (without header deps)
@@ -911,15 +947,52 @@ void register_try_compile_builtins(Interpreter& interp) {
             inline_sources_map[source_from_file[i]] = content;
         }
 
-        // Resolve LINK_LIBRARIES
+        // Resolve LINK_LIBRARIES (convert target names to paths + propagate properties)
         std::vector<std::string> resolved_link_libs;
+        std::vector<std::string> propagated_includes;
+        std::vector<std::string> propagated_definitions;
+        std::vector<std::string> propagated_options;
         auto& targets = interp.get_root()->targets_;
         for (const auto& lib : link_libraries) {
             if (targets.count(lib)) {
-                resolved_link_libs.push_back(targets[lib]->get_output_path());
+                auto& target = targets[lib];
+                // Resolve the target to get transitive properties
+                target->resolve(targets, interp);
+
+                // Propagate INTERFACE properties from the target
+                const auto& iface_includes = target->get_resolved_interface_property("INCLUDE_DIRECTORIES");
+                propagated_includes.insert(propagated_includes.end(), iface_includes.begin(), iface_includes.end());
+
+                const auto& iface_defs = target->get_resolved_interface_property("COMPILE_DEFINITIONS");
+                propagated_definitions.insert(propagated_definitions.end(), iface_defs.begin(), iface_defs.end());
+
+                const auto& iface_opts = target->get_resolved_interface_property("COMPILE_OPTIONS");
+                propagated_options.insert(propagated_options.end(), iface_opts.begin(), iface_opts.end());
+
+                // Add the target's output path
+                std::string output_path = target->get_output_path();
+                if (!output_path.empty()) {
+                    resolved_link_libs.push_back(output_path);
+                }
+
+                // Add transitive link libraries
+                const auto& transitive_libs = target->get_resolved_interface_property("LINK_LIBRARIES");
+                resolved_link_libs.insert(resolved_link_libs.end(), transitive_libs.begin(), transitive_libs.end());
             } else {
+                // System library or path
                 resolved_link_libs.push_back(lib);
             }
+        }
+
+        // Merge propagated properties
+        for (const auto& inc : propagated_includes) {
+            raw_compile_flags.push_back("-I" + inc);
+        }
+        for (const auto& def : propagated_definitions) {
+            compile_definitions.push_back(def);
+        }
+        for (const auto& opt : propagated_options) {
+            raw_compile_flags.push_back(opt);
         }
 
         // Check for cross-compilation
