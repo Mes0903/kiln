@@ -19,6 +19,7 @@
 #include "CMakeList.hpp"
 #include "toolchain.hpp"
 #include "cache_store.hpp"
+#include "shadow_map.hpp"
 
 namespace dmake {
 
@@ -85,9 +86,8 @@ struct PropertyDefinition {
     std::string initialize_from_variable; // For TARGET properties, optional
 };
 
-struct CallFrame {
+struct FrameMetadata {
     std::string script_dir;
-    std::unordered_map<std::string, std::string> variables;
     const FunctionBlock* function_block = nullptr;  // Pointer to FunctionBlock if this is a function frame
 };
 
@@ -161,6 +161,10 @@ public:
     std::map<std::string, std::string>& get_cache_variables() {
         return get_root()->cache_variables_;
     }
+
+    // Variable map accessor for builtins (needed for PARENT_SCOPE)
+    ShadowMap& get_variables() { return variables_; }
+    const ShadowMap& get_variables() const { return variables_; }
     std::map<std::string, std::string>& get_directory_properties() {
         return directory_properties_;
     }
@@ -271,7 +275,11 @@ private:
     std::unordered_map<std::string, std::unique_ptr<MacroBlock>> user_macros_;
 
     Interpreter* parent_ = nullptr;
-    std::deque<CallFrame> call_stack_; // Variable scopes
+
+    // Shadow Map-based variable scoping (O(1) access, automatic cleanup)
+    ShadowMap variables_;  // Regular variables with scope tracking
+
+    std::deque<FrameMetadata> frame_stack_; // Metadata only (no variables)
     std::vector<CallLocation> trace_stack_; // For backtraces
     std::string current_file_;
     std::optional<InterpreterError> fatal_error_;

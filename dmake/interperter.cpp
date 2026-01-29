@@ -33,70 +33,78 @@ namespace {
 // 3. Incrementally add variables as projects need them
 static std::unordered_map<std::string, std::string> backup_vars; // We setup interperter multiple times during tests, so back up vars to avoid re-detecting compilers
 void fake_cmake_compiler_checks_and_init(
-    std::unordered_map<std::string, std::string>& vars,
+    Interpreter& interp,
     Toolchain& toolchain)
 {
     if(!backup_vars.empty()) {
-        vars.insert(backup_vars.begin(), backup_vars.end());
-        auto cxx_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX);
-        auto c_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C);
+        interp.get_variables().merge(backup_vars);
+        auto cxx_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_CXX_COMPILER"), Language::CXX);
+        auto c_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_C_COMPILER"), Language::C);
         toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
         toolchain.set_compiler(Language::C, std::move(c_compiler));
         return;
     }
-    // Initialize compilers
-    vars["CMAKE_CXX_COMPILER"] = "g++";
-    vars["CMAKE_C_COMPILER"] = "gcc";
-    auto cxx_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX);
-    auto c_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C);
 
-    // std::cerr << "-- Detecting platform information from compiler...\n";
+    // Initialize compilers
+    interp.set_variable("CMAKE_CXX_COMPILER", "g++");
+    interp.set_variable("CMAKE_C_COMPILER", "gcc");
+    auto cxx_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_CXX_COMPILER"), Language::CXX);
+    auto c_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_C_COMPILER"), Language::C);
 
     // C++ compiler platform info
     auto cxx_info = cxx_compiler->detect_platform();
-    vars["CMAKE_CXX_COMPILER_ID"] = cxx_info.compiler_id;
-    vars["CMAKE_CXX_COMPILER_VERSION"] = cxx_info.compiler_version;
+    interp.set_variable("CMAKE_CXX_COMPILER_ID", cxx_info.compiler_id);
+    interp.set_variable("CMAKE_CXX_COMPILER_VERSION", cxx_info.compiler_version);
     if (!cxx_info.implicit_includes.empty()) {
-        vars["CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeList(cxx_info.implicit_includes).to_string();
+        interp.set_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeList(cxx_info.implicit_includes).to_string());
     }
     if (!cxx_info.implicit_link_dirs.empty()) {
-        vars["CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES"] = CMakeList(cxx_info.implicit_link_dirs).to_string();
+        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", CMakeList(cxx_info.implicit_link_dirs).to_string());
     }
     if (!cxx_info.implicit_link_libs.empty()) {
-        vars["CMAKE_CXX_IMPLICIT_LINK_LIBRARIES"] = CMakeList(cxx_info.implicit_link_libs).to_string();
+        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeList(cxx_info.implicit_link_libs).to_string());
     }
 
     // C compiler platform info
     auto c_info = c_compiler->detect_platform();
-    vars["CMAKE_C_COMPILER_ID"] = c_info.compiler_id;
-    vars["CMAKE_C_COMPILER_VERSION"] = c_info.compiler_version;
+    interp.set_variable("CMAKE_C_COMPILER_ID", c_info.compiler_id);
+    interp.set_variable("CMAKE_C_COMPILER_VERSION", c_info.compiler_version);
     if (!c_info.implicit_includes.empty()) {
-        vars["CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeList(c_info.implicit_includes).to_string();
+        interp.set_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeList(c_info.implicit_includes).to_string());
     }
     if (!c_info.implicit_link_dirs.empty()) {
-        vars["CMAKE_C_IMPLICIT_LINK_DIRECTORIES"] = CMakeList(c_info.implicit_link_dirs).to_string();
+        interp.set_variable("CMAKE_C_IMPLICIT_LINK_DIRECTORIES", CMakeList(c_info.implicit_link_dirs).to_string());
     }
     if (!c_info.implicit_link_libs.empty()) {
-        vars["CMAKE_C_IMPLICIT_LINK_LIBRARIES"] = CMakeList(c_info.implicit_link_libs).to_string();
+        interp.set_variable("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeList(c_info.implicit_link_libs).to_string());
     }
 
     // System-level info (same for both compilers)
-    vars["CMAKE_SYSTEM_NAME"] = cxx_info.system_name;
-    vars["CMAKE_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
-    vars["CMAKE_SIZEOF_VOID_P"] = cxx_info.sizeof_void_p;
-    vars["CMAKE_HOST_SYSTEM_NAME"] = cxx_info.system_name;
-    vars["CMAKE_HOST_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
-    vars["CMAKE_C_COMPILER_LOADED"] = "1";
-    vars["CMAKE_CXX_COMPILER_LOADED"] = "1";
-
-    // std::cerr << "-- Detecting platform information from compiler... done\n";
-    // std::cerr << "-- Compiler: " << cxx_info.compiler_id << " " << cxx_info.compiler_version << "\n";
-    // std::cerr << "-- System: " << cxx_info.system_name << " " << cxx_info.system_processor << "\n";
+    interp.set_variable("CMAKE_SYSTEM_NAME", cxx_info.system_name);
+    interp.set_variable("CMAKE_SYSTEM_PROCESSOR", cxx_info.system_processor);
+    interp.set_variable("CMAKE_SIZEOF_VOID_P", cxx_info.sizeof_void_p);
+    interp.set_variable("CMAKE_HOST_SYSTEM_NAME", cxx_info.system_name);
+    interp.set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", cxx_info.system_processor);
+    interp.set_variable("CMAKE_C_COMPILER_LOADED", "1");
+    interp.set_variable("CMAKE_CXX_COMPILER_LOADED", "1");
 
     toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
     toolchain.set_compiler(Language::C, std::move(c_compiler));
 
-    backup_vars.insert(vars.begin(), vars.end());
+    // Cache only the compiler-related variables (not directory-specific ones)
+    static constexpr std::array compiler_vars = {
+        "CMAKE_CXX_COMPILER", "CMAKE_C_COMPILER",
+        "CMAKE_CXX_COMPILER_ID", "CMAKE_CXX_COMPILER_VERSION",
+        "CMAKE_C_COMPILER_ID", "CMAKE_C_COMPILER_VERSION",
+        "CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR",
+        "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME", "CMAKE_HOST_SYSTEM_PROCESSOR",
+        "CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_LIBRARIES",
+        "CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_LIBRARIES",
+        "CMAKE_C_COMPILER_LOADED", "CMAKE_CXX_COMPILER_LOADED"
+    };
+    for (const auto& name : compiler_vars) {
+        backup_vars[name] = interp.get_variable(name);
+    }
 }
 
 } // anonymous namespace
@@ -306,13 +314,13 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     std::filesystem::path abs_script_dir = script_dir.empty() ?
         std::filesystem::current_path() :
         std::filesystem::absolute(script_dir).lexically_normal();
-    call_stack_.push_front({abs_script_dir.string(), {}});
+    frame_stack_.push_front({abs_script_dir.string(), nullptr});
 
-    auto& vars = call_stack_.front().variables;
-    vars["CMAKE_SIZEOF_VOID_P"] = sizeof(void*);
-    vars["CMAKE_CURRENT_SOURCE_DIR"] = abs_script_dir.string();
-    vars["CMAKE_CURRENT_LIST_DIR"] = abs_script_dir.string();
-    vars["CMAKE_CURRENT_LIST_FILE"] = (abs_script_dir / "CMakeLists.txt").string(); // Default assumption
+    // Initialize variables via ShadowMap (depth starts at 0)
+    variables_.set("CMAKE_SIZEOF_VOID_P", std::to_string(sizeof(void*)));
+    variables_.set("CMAKE_CURRENT_SOURCE_DIR", abs_script_dir.string());
+    variables_.set("CMAKE_CURRENT_LIST_DIR", abs_script_dir.string());
+    variables_.set("CMAKE_CURRENT_LIST_FILE", (abs_script_dir / "CMakeLists.txt").string()); // Default assumption
 
     if (parent_ == nullptr) {
         std::filesystem::path abs_binary_dir;
@@ -324,45 +332,46 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             abs_binary_dir = abs_script_dir / build_dir_;
         }
 
-        vars["DMAKE_VERSION"] = "0.1.0";
+        variables_.set("DMAKE_VERSION", "0.1.0");
 
-        vars["CMAKE_SOURCE_DIR"] = vars["CMAKE_CURRENT_SOURCE_DIR"];
-        vars["CMAKE_BINARY_DIR"] = abs_binary_dir.string();
-        vars["CMAKE_CURRENT_BINARY_DIR"] = abs_binary_dir.string();
-        vars["CMAKE_EXPORT_COMPILE_COMMANDS"] = "ON";
+        variables_.set("CMAKE_SOURCE_DIR", variables_.get("CMAKE_CURRENT_SOURCE_DIR"));
+        variables_.set("CMAKE_BINARY_DIR", abs_binary_dir.string());
+        variables_.set("CMAKE_CURRENT_BINARY_DIR", abs_binary_dir.string());
+        variables_.set("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
         if (abs_binary_dir == abs_script_dir) {
             set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
         }
 
-        vars["CMAKE_VERSION"] = "3.20.0";
-        vars["CMAKE_MAJOR_VERSION"] = "3";
-        vars["CMAKE_MINOR_VERSION"] = "20";
-        vars["CMAKE_PATCH_VERSION"] = "0";
+        variables_.set("CMAKE_VERSION", "3.20.0");
+        variables_.set("CMAKE_MAJOR_VERSION", "3");
+        variables_.set("CMAKE_MINOR_VERSION", "20");
+        variables_.set("CMAKE_PATCH_VERSION", "0");
 
-        vars["CMAKE_FILES_DIRECTORY"] = "/CMakeFiles";
+        variables_.set("CMAKE_FILES_DIRECTORY", "/CMakeFiles");
 
         // Platform flags
 #ifdef __unix__
-        vars["UNIX"] = "1";
+        variables_.set("UNIX", "1");
 #endif
 #ifdef __APPLE__
-        vars["APPLE"] = "1";
+        variables_.set("APPLE", "1");
 #endif
 #ifdef _WIN32
-        vars["WIN32"] = "1";
+        variables_.set("WIN32", "1");
 #endif
 
-        vars["CMAKE_EXECUTABLE_SUFFIX"] = "";
-        vars["CMAKE_SHARED_LIBRARY_SUFFIX"] = ".so";
-        vars["CMAKE_STATIC_LIBRARY_SUFFIX"] = ".a";
+        variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
+        variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
+        variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
 
-        vars["CMAKE_COMMAND"] = get_executable_path();
-        vars["CMAKE_ROOT"] = "/usr/share/cmake";
+        variables_.set("CMAKE_COMMAND", get_executable_path());
+        variables_.set("CMAKE_ROOT", "/usr/share/cmake");
 
         // Initialize toolchain with compiler detection
         // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
-        fake_cmake_compiler_checks_and_init(vars, toolchain_);
+        // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
+        fake_cmake_compiler_checks_and_init(*this, toolchain_);
 
         // Initialize built-in global properties
         // CMake modules expect these to be set (e.g., CheckLanguage.cmake checks ENABLED_LANGUAGES)
@@ -593,13 +602,13 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             }
         });
     } else {
-        vars["CMAKE_SOURCE_DIR"] = parent_->get_variable("CMAKE_SOURCE_DIR");
-        vars["CMAKE_BINARY_DIR"] = parent_->get_variable("CMAKE_BINARY_DIR");
+        variables_.set("CMAKE_SOURCE_DIR", parent_->get_variable("CMAKE_SOURCE_DIR"));
+        variables_.set("CMAKE_BINARY_DIR", parent_->get_variable("CMAKE_BINARY_DIR"));
         build_dir_ = parent_->build_dir_;
 
         // Calculate CMAKE_CURRENT_BINARY_DIR based on relative path from source root
         std::filesystem::path rel_path = std::filesystem::relative(abs_script_dir, parent_->get_variable("CMAKE_SOURCE_DIR"));
-        vars["CMAKE_CURRENT_BINARY_DIR"] = (std::filesystem::path(vars["CMAKE_BINARY_DIR"]) / rel_path).lexically_normal().string();
+        variables_.set("CMAKE_CURRENT_BINARY_DIR", (std::filesystem::path(variables_.get("CMAKE_BINARY_DIR")) / rel_path).lexically_normal().string());
     }
 }
 
@@ -1237,34 +1246,32 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
 
     // Create a new variable scope if SCOPE_FOR VARIABLES is set
     if (block.scope_for_variables) {
-        // Push a new call frame with empty variables (inherits from parent via lookup)
-        CallFrame frame{call_stack_.front().script_dir, {}};
-        call_stack_.push_front(frame);
+        // Push a new variable scope
+        variables_.push_scope();
 
         // Execute the body
         auto res = interpret(block.body);
 
-        // Propagate variables back to parent scope
-        if (!block.propagate_vars.empty() && call_stack_.size() > 1) {
+        // Propagate variables back to parent scope before popping
+        if (!block.propagate_vars.empty()) {
             // Save propagated variable values before popping
             std::unordered_map<std::string, std::string> propagated_values;
             for (const auto& var_name : block.propagate_vars) {
-                auto it = call_stack_.front().variables.find(var_name);
-                if (it != call_stack_.front().variables.end()) {
-                    propagated_values[var_name] = it->second;
+                if (variables_.is_defined(var_name)) {
+                    propagated_values[var_name] = variables_.get(var_name);
                 }
             }
 
             // Pop the block scope
-            call_stack_.pop_front();
+            variables_.pop_scope();
 
             // Set propagated variables in parent scope
             for (const auto& [var_name, value] : propagated_values) {
-                call_stack_.front().variables[var_name] = value;
+                variables_.set(var_name, value);
             }
         } else {
             // Pop the block scope without propagation
-            call_stack_.pop_front();
+            variables_.pop_scope();
         }
 
         if (!res) {
@@ -1285,17 +1292,27 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
 }
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_function(const FunctionBlock& func, const std::vector<std::string>& args) {
-    CallFrame frame{call_stack_.front().script_dir, {}, &func};  // Pass pointer to FunctionBlock
+    // Push metadata frame (for script_dir and function_block tracking)
+    frame_stack_.push_front({func.definition_dir, &func});
+
+    // Push variable scope
+    variables_.push_scope();
+
+    // Set function parameters
     CMakeList all(args);
-    frame.variables["ARGC"] = std::to_string(all.size());
-    frame.variables["ARGV"] = all.to_string();
-    frame.variables["ARGN"] = all.sublist(func.parameters.size(), all.size()).to_string();
-    for (size_t i = 0; i < all.size(); ++i) frame.variables["ARGV" + std::to_string(i)] = all[i];
-    for (size_t i = 0; i < func.parameters.size() && i < all.size(); ++i) frame.variables[func.parameters[i]] = all[i];
+    variables_.set("ARGC", std::to_string(all.size()));
+    variables_.set("ARGV", all.to_string());
+    variables_.set("ARGN", all.sublist(func.parameters.size(), all.size()).to_string());
+    for (size_t i = 0; i < all.size(); ++i) {
+        variables_.set("ARGV" + std::to_string(i), all[i]);
+    }
+    for (size_t i = 0; i < func.parameters.size() && i < all.size(); ++i) {
+        variables_.set(func.parameters[i], all[i]);
+    }
 
     // Fix CMAKE_CURRENT_LIST_DIR bug: Set to function's definition location
-    frame.variables["CMAKE_CURRENT_LIST_DIR"] = func.definition_dir;
-    frame.variables["CMAKE_CURRENT_LIST_FILE"] = func.definition_file;
+    variables_.set("CMAKE_CURRENT_LIST_DIR", func.definition_dir);
+    variables_.set("CMAKE_CURRENT_LIST_FILE", func.definition_file);
 
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
@@ -1311,15 +1328,13 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     return_requested_ = false;
     current_file_ = func.definition_file;
 
-    call_stack_.push_front(frame);
     auto res = interpret(func.body);
 
-    // Sanity check: we should have at least one frame (the one we just pushed)
-    if (call_stack_.empty()) {
-        std::cerr << "FATAL: call_stack_ is empty when exiting function (should have at least our frame)\n";
-        std::abort();
-    }
-    call_stack_.pop_front();
+    // Pop variable scope (automatic cleanup of all function-local variables)
+    variables_.pop_scope();
+
+    // Pop metadata frame
+    frame_stack_.pop_front();
 
     if (!res) set_fatal_error(res.error());
 
@@ -1437,12 +1452,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
     // Helper to check if a variable is defined in any scope
     auto is_variable_defined = [&](const std::string& name) -> bool {
-        for (const auto& frame : call_stack_) {
-            if (frame.variables.contains(name)) {
-                return true;
-            }
-        }
-        return false;
+        return variables_.is_defined(name);
     };
 
     // Helper to evaluate an argument, dereferencing variables unless it's a keyword or constant
@@ -1731,12 +1741,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             std::string var_name = get_token_string(condition[pos++]);
 
             // Check if variable is defined in any scope
-            for (const auto& frame : call_stack_) {
-                if (frame.variables.contains(var_name)) {
-                    return true;
-                }
-            }
-            return false;
+            return variables_.is_defined(var_name);
         } else if (token == "TARGET" && pos + 1 < condition.size()) {
             pos++;
             std::string target_name = get_token_string(condition[pos++]);
@@ -1863,8 +1868,8 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
 }
 
 std::string Interpreter::get_variable(const std::string& name) const {
-    if (call_stack_.empty()) {
-        std::cerr << "FATAL: get_variable('" << name << "') called with empty call_stack_\n";
+    if (frame_stack_.empty()) {
+        std::cerr << "FATAL: get_variable('" << name << "') called with empty frame_stack_\n";
         std::abort();
     }
 
@@ -1879,8 +1884,8 @@ std::string Interpreter::get_variable(const std::string& name) const {
         name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
         name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") {
 
-        // Check current frame only - O(1) lookup, no walking
-        const auto* fb = call_stack_.front().function_block;
+        // Check current frame only - O(1) lookup
+        const auto* fb = frame_stack_.front().function_block;
         if (fb != nullptr) {
             if (name == "CMAKE_CURRENT_FUNCTION") return fb->name;
             if (name == "CMAKE_CURRENT_FUNCTION_LIST_FILE") return fb->definition_file;
@@ -1889,11 +1894,17 @@ std::string Interpreter::get_variable(const std::string& name) const {
         return "";  // Not in a function
     }
 
-    // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes
-    for (auto it = call_stack_.begin(); it != call_stack_.end(); ++it) {
-        auto var_it = it->variables.find(name);
-        if (var_it != it->variables.end()) {
-            return var_it->second;
+    // Check local variables (O(1) via ShadowMap)
+    std::string value = variables_.get(name);
+    if (!value.empty()) {
+        return value;
+    }
+
+    // Check parent interpreter (subdirectory scope)
+    if (parent_) {
+        value = parent_->get_variable(name);
+        if (!value.empty()) {
+            return value;
         }
     }
 
@@ -1903,15 +1914,11 @@ std::string Interpreter::get_variable(const std::string& name) const {
         return cache_it->second;
     }
 
-    return parent_ ? parent_->get_variable(name) : "";
+    return "";
 }
 
 void Interpreter::set_variable(const std::string& name, const std::string& val) {
-    if (call_stack_.empty()) {
-        std::cerr << "FATAL: set_variable('" << name << "', '" << val << "') called with empty call_stack_\n";
-        std::abort();
-    }
-    call_stack_.front().variables[name] = val;
+    variables_.set(name, val);
 }
 
 void Interpreter::set_cache_variable(const std::string& var_name, const std::string& value) {
@@ -1919,30 +1926,28 @@ void Interpreter::set_cache_variable(const std::string& var_name, const std::str
 }
 
 bool Interpreter::unset_variable(const std::string& name) {
-    if (call_stack_.empty())
-        return false;
-    // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes
-    for (auto it = call_stack_.begin(); it != call_stack_.end(); ++it) {
-        auto var_it = it->variables.find(name);
-        if (var_it != it->variables.end()) {
-            it->variables.erase(var_it);
-            return true;
-        }
-    }
-    return false;
+    variables_.unset(name);
+    return true;  // ShadowMap::unset is always safe (no-op if variable doesn't exist)
 }
 
 bool Interpreter::is_variable_set(const std::string& name) const {
-    if (call_stack_.empty())
-        return false;
-    // Search front-to-back (newest to oldest scope) - call_stack_ uses push_front for new scopes
-    for (auto it = call_stack_.begin(); it != call_stack_.end(); ++it) {
-        auto var_it = it->variables.find(name);
-        if (var_it != it->variables.end()) {
-            return true;
-        }
+    // Check macro substitutions first
+    if (macro_substitutions_.contains(name)) {
+        return true;
     }
-    return false;
+
+    // Check local variables (O(1) via ShadowMap)
+    if (variables_.is_defined(name)) {
+        return true;
+    }
+
+    // Check parent interpreter (subdirectory scope)
+    if (parent_ && parent_->is_variable_set(name)) {
+        return true;
+    }
+
+    // Check cache variables
+    return get_root()->cache_variables_.contains(name);
 }
 
 void Interpreter::print_message(const std::string& mode, const std::string& msg, bool is_err) {
@@ -2057,9 +2062,9 @@ void Interpreter::accumulate_error(const std::string& error) {
 }
 
 void Interpreter::check_invariants() const {
-    // Critical invariant: call stack should never be empty during execution
-    if (call_stack_.empty()) {
-        std::cerr << "FATAL: call_stack_ is empty (this should never happen)\n";
+    // Critical invariant: frame stack should never be empty during execution
+    if (frame_stack_.empty()) {
+        std::cerr << "FATAL: frame_stack_ is empty (this should never happen)\n";
         std::abort();
     }
 

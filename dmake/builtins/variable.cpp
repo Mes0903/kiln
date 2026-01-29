@@ -83,12 +83,10 @@ void register_variable_builtins(Interpreter& interp) {
             std::string value = value_list.to_string();
 
             // Set in parent scope
-            if (interp.call_stack_.size() < 2) {
-                interp.set_fatal_error("set() PARENT_SCOPE requires a parent scope (must be called from a function)");
-                return;
+            auto result = interp.get_variables().set_parent_scope(var_name, value);
+            if (!result) {
+                interp.set_fatal_error("set() " + result.error());
             }
-
-            interp.call_stack_[1].variables[var_name] = value;
             return;
         }
 
@@ -179,11 +177,10 @@ void register_variable_builtins(Interpreter& interp) {
 
         // Handle: unset(VAR PARENT_SCOPE)
         if (parent_it != args.end()) {
-            if (interp.call_stack_.size() < 2) {
-                interp.set_fatal_error("unset() PARENT_SCOPE requires a parent scope (must be called from a function)");
-                return;
+            auto result = interp.get_variables().unset_parent_scope(var_name);
+            if (!result) {
+                interp.set_fatal_error("unset() " + result.error());
             }
-            interp.call_stack_[1].variables.erase(var_name);
             return;
         }
 

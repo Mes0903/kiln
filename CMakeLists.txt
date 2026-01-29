@@ -54,7 +54,8 @@ if(BUILD_TESTING)
         tests/command_parser.cpp
         tests/language_tests.cpp
         tests/compiler_tests.cpp
-        tests/target_sources_tests.cpp)
+        tests/target_sources_tests.cpp
+        tests/shadow_map_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)
