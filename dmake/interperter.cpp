@@ -1793,6 +1793,12 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             std::string name = evaluate_token(condition[pos++]);
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
             return get_root()->user_functions_.contains(name);
+        } else if (token == "POLICY" && pos + 1 < condition.size()) {
+            pos++;
+            pos++;  // Consume the policy name/number
+            // Always return true - dmake doesn't implement policies but we want
+            // scripts to think we support the latest policies
+            return true;
         }
 
         // Primary value - evaluate and check truthiness
