@@ -368,7 +368,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         // Initialize cache store
         std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
         cache_store_ = std::make_unique<CacheStore>(cache_path);
-        cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
+        auto res = cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
+        (void)res;
 
         // Register non-internal builtins
         register_message_builtins(*this);

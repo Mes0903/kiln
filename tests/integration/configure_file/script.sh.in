@@ -1,0 +1,12 @@
+#!/bin/bash
+# Generated script - should preserve ${BASH_VAR} syntax with @ONLY
+
+PROJECT="@PROJECT_NAME@"
+VERSION="@VERSION@"
+
+# This should NOT be expanded with @ONLY
+BASH_VAR="${HOME}/path"
+ANOTHER="${USER}"
+
+echo "Project: $PROJECT v$VERSION"
+echo "Home: $BASH_VAR"

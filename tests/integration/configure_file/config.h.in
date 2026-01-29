@@ -1,0 +1,17 @@
+// Configuration header
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define PROJECT_NAME "@PROJECT_NAME@"
+#define VERSION "@VERSION@"
+#define FULL_NAME "${PROJECT_NAME} v${VERSION}"
+
+#cmakedefine FEATURE_ENABLED
+#cmakedefine FEATURE_DISABLED
+#cmakedefine01 BOOL_FEATURE
+#cmakedefine VALUE_FEATURE @VALUE_FEATURE@
+
+// Some computed values
+#define BUILD_TYPE "@CMAKE_BUILD_TYPE@"
+
+#endif // CONFIG_H
