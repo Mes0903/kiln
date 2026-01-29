@@ -372,6 +372,7 @@ void register_file_builtins(Interpreter& interp) {
             size_t bytes_read = 0;
             size_t output_bytes = 0;
             size_t string_count = 0;
+            std::vector<std::string> last_match_groups;  // For CMAKE_MATCH_* variables
 
             auto is_printable = [](unsigned char c) {
                 // Printable characters: space (32) through ~ (126)
@@ -388,10 +389,18 @@ void register_file_builtins(Interpreter& interp) {
                     return;
                 }
 
-                // Apply regex filter
-                if (regex_filter && !std::regex_match(current_string, *regex_filter)) {
-                    current_string.clear();
-                    return;
+                // Apply regex filter - use regex_search for substring matching (not full match)
+                if (regex_filter) {
+                    std::smatch match;
+                    if (!std::regex_search(current_string, match, *regex_filter)) {
+                        current_string.clear();
+                        return;
+                    }
+                    // Store match groups for CMAKE_MATCH_* variables
+                    last_match_groups.clear();
+                    for (size_t i = 0; i < match.size(); ++i) {
+                        last_match_groups.push_back(match[i].str());
+                    }
                 }
 
                 // Check limits
@@ -474,6 +483,14 @@ void register_file_builtins(Interpreter& interp) {
             finalize_string();
 
             interp.set_variable(var, results.to_string());
+
+            // Set CMAKE_MATCH_* variables from the last regex match (if any)
+            if (!last_match_groups.empty()) {
+                interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(last_match_groups.size() - 1));
+                for (size_t i = 0; i < last_match_groups.size() && i < 10; ++i) {
+                    interp.set_variable("CMAKE_MATCH_" + std::to_string(i), last_match_groups[i]);
+                }
+            }
         } else {
             interp.set_fatal_error("file() sub-command not implemented: " + operation);
         }

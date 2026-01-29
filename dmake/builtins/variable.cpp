@@ -68,12 +68,10 @@ void register_variable_builtins(Interpreter& interp) {
             CMakeList value_list(value_args);
             std::string value = value_list.to_string();
 
-            // Set in cache namespace
+            // Set in cache namespace only - CACHE variables are globally accessible
+            // via get_variable()'s cache lookup, not via local scope
             auto* root = interp.get_root();
             root->cache_variables_[var_name] = value;
-
-            // Also set as regular variable (CMake behavior)
-            interp.set_variable(var_name, value);
             return;
         }
 

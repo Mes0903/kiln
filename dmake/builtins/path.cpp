@@ -35,10 +35,14 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
         return;
     }
 
-    std::filesystem::path path(args[1]);
+    // args[1] is a variable name, dereference it to get the path value
+    std::filesystem::path path(interp.get_variable(args[1]));
     std::string component_upper = to_upper(args[2]);
-    std::string out_var = args[3];
     std::string result;
+
+    // Check for LAST_ONLY flag - if present, out_var is at args[4], otherwise args[3]
+    bool last_only = (args.size() > 4 && to_upper(args[3]) == "LAST_ONLY");
+    std::string out_var = last_only ? args[4] : args[3];
 
     if (component_upper == "ROOT_NAME") {
         result = to_cmake_path(path.root_name());
@@ -49,7 +53,6 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
     } else if (component_upper == "FILENAME") {
         result = to_cmake_path(path.filename());
     } else if (component_upper == "EXTENSION") {
-        bool last_only = (args.size() > 4 && to_upper(args[4]) == "LAST_ONLY");
         std::string filename = path.filename().string();
 
         if (!filename.empty() && filename != "." && filename != "..") {
@@ -59,7 +62,6 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
             }
         }
     } else if (component_upper == "STEM") {
-        bool last_only = (args.size() > 4 && to_upper(args[4]) == "LAST_ONLY");
         std::string filename = path.filename().string();
 
         if (!filename.empty() && filename != "." && filename != "..") {
@@ -83,35 +85,39 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
 }
 
 // HAS_* query subcommands
+// cmake_path(HAS_FILENAME <path-var> <out-var>)
 void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
-    if (args.size() < 4) {
-        interp.set_fatal_error("cmake_path(HAS_*) requires at least 4 arguments");
+    if (args.size() < 3) {
+        interp.set_fatal_error("cmake_path(HAS_*) requires at least 3 arguments");
         return;
     }
 
-    std::filesystem::path path(args[1]);
-    std::string component_upper = to_upper(args[2]);
-    std::string out_var = args[3];
+    // args[0] is the subcommand (HAS_FILENAME, etc.)
+    // args[1] is a variable name, dereference it to get the path value
+    // args[2] is the output variable
+    std::string subcommand_upper = to_upper(args[0]);
+    std::filesystem::path path(interp.get_variable(args[1]));
+    std::string out_var = args[2];
     bool result = false;
 
-    if (component_upper == "HAS_ROOT_NAME") {
+    if (subcommand_upper == "HAS_ROOT_NAME") {
         result = path.has_root_name();
-    } else if (component_upper == "HAS_ROOT_DIRECTORY") {
+    } else if (subcommand_upper == "HAS_ROOT_DIRECTORY") {
         result = path.has_root_directory();
-    } else if (component_upper == "HAS_ROOT_PATH") {
+    } else if (subcommand_upper == "HAS_ROOT_PATH") {
         result = path.has_root_path();
-    } else if (component_upper == "HAS_FILENAME") {
+    } else if (subcommand_upper == "HAS_FILENAME") {
         result = path.has_filename();
-    } else if (component_upper == "HAS_EXTENSION") {
+    } else if (subcommand_upper == "HAS_EXTENSION") {
         result = path.has_extension();
-    } else if (component_upper == "HAS_STEM") {
+    } else if (subcommand_upper == "HAS_STEM") {
         result = path.has_stem();
-    } else if (component_upper == "HAS_RELATIVE_PATH") {
+    } else if (subcommand_upper == "HAS_RELATIVE_PATH") {
         result = path.has_relative_path();
-    } else if (component_upper == "HAS_PARENT_PATH") {
+    } else if (subcommand_upper == "HAS_PARENT_PATH") {
         result = path.has_parent_path();
     } else {
-        interp.set_fatal_error("cmake_path: unknown query '" + args[2] + "'");
+        interp.set_fatal_error("cmake_path: unknown query '" + args[0] + "'");
         return;
     }
 
@@ -119,27 +125,33 @@ void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
 }
 
 // IS_ABSOLUTE, IS_RELATIVE, IS_PREFIX
+// cmake_path(IS_ABSOLUTE <path-var> <out-var>)
+// cmake_path(IS_PREFIX <path-var> <out-var> <input>)
 void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
-    if (args.size() < 4) {
-        interp.set_fatal_error("cmake_path(IS_*) requires at least 4 arguments");
+    if (args.size() < 3) {
+        interp.set_fatal_error("cmake_path(IS_*) requires at least 3 arguments");
         return;
     }
 
-    std::filesystem::path path(args[1]);
-    std::string query_upper = to_upper(args[2]);
-    std::string out_var = args[3];
+    // args[0] is the subcommand (IS_ABSOLUTE, IS_RELATIVE, IS_PREFIX)
+    // args[1] is a variable name, dereference it to get the path value
+    // args[2] is the output variable
+    std::string subcommand_upper = to_upper(args[0]);
+    std::filesystem::path path(interp.get_variable(args[1]));
+    std::string out_var = args[2];
     bool result = false;
 
-    if (query_upper == "IS_ABSOLUTE") {
+    if (subcommand_upper == "IS_ABSOLUTE") {
         result = path.is_absolute();
-    } else if (query_upper == "IS_RELATIVE") {
+    } else if (subcommand_upper == "IS_RELATIVE") {
         result = path.is_relative();
-    } else if (query_upper == "IS_PREFIX") {
-        if (args.size() < 5) {
-            interp.set_fatal_error("cmake_path(IS_PREFIX) requires 5 arguments");
+    } else if (subcommand_upper == "IS_PREFIX") {
+        if (args.size() < 4) {
+            interp.set_fatal_error("cmake_path(IS_PREFIX) requires 4 arguments");
             return;
         }
-        std::filesystem::path other(args[4]);
+        // args[3] is another variable name for the path to check against
+        std::filesystem::path other(interp.get_variable(args[3]));
 
         // Check if 'path' is a prefix of 'other'
         auto path_it = path.begin();
@@ -174,9 +186,10 @@ void handle_compare(Interpreter& interp, const std::vector<std::string>& args) {
         return;
     }
 
-    std::filesystem::path path1(args[1]);
+    // args[1] and args[3] are variable names, dereference them
+    std::filesystem::path path1(interp.get_variable(args[1]));
     std::string op_upper = to_upper(args[2]);
-    std::filesystem::path path2(args[3]);
+    std::filesystem::path path2(interp.get_variable(args[3]));
     std::string out_var = args[4];
     bool result = false;
 

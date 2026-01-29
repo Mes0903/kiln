@@ -41,7 +41,7 @@ void fake_cmake_compiler_checks_and_init(
     auto cxx_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX);
     auto c_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C);
 
-    std::cerr << "-- Detecting platform information from compiler...\n";
+    // std::cerr << "-- Detecting platform information from compiler...\n";
 
     // C++ compiler platform info
     auto cxx_info = cxx_compiler->detect_platform();
@@ -80,9 +80,9 @@ void fake_cmake_compiler_checks_and_init(
     vars["CMAKE_C_COMPILER_LOADED"] = "1";
     vars["CMAKE_CXX_COMPILER_LOADED"] = "1";
 
-    std::cerr << "-- Detecting platform information from compiler... done\n";
-    std::cerr << "-- Compiler: " << cxx_info.compiler_id << " " << cxx_info.compiler_version << "\n";
-    std::cerr << "-- System: " << cxx_info.system_name << " " << cxx_info.system_processor << "\n";
+    // std::cerr << "-- Detecting platform information from compiler... done\n";
+    // std::cerr << "-- Compiler: " << cxx_info.compiler_id << " " << cxx_info.compiler_version << "\n";
+    // std::cerr << "-- System: " << cxx_info.system_name << " " << cxx_info.system_processor << "\n";
 
     toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
     toolchain.set_compiler(Language::C, std::move(c_compiler));
@@ -1290,6 +1290,11 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     LoopControl saved_control = loop_control_;
     bool saved_return = return_requested_;
     std::string saved_file = current_file_;
+    // Save and clear macro substitutions - functions create a new scope so outer
+    // macro parameters should not bleed into the function's variable lookups
+    std::map<std::string, std::string> saved_macro_substitutions = macro_substitutions_;
+    macro_substitutions_.clear();
+
     loop_depth_ = 0;
     loop_control_ = LoopControl::NONE;
     return_requested_ = false;
@@ -1312,6 +1317,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
     current_file_ = saved_file;
+    macro_substitutions_ = saved_macro_substitutions;
     return res;
 }
 
@@ -1879,6 +1885,13 @@ std::string Interpreter::get_variable(const std::string& name) const {
             return var_it->second;
         }
     }
+
+    // Check cache variables (CACHE variables are globally accessible)
+    auto cache_it = get_root()->cache_variables_.find(name);
+    if (cache_it != get_root()->cache_variables_.end()) {
+        return cache_it->second;
+    }
+
     return parent_ ? parent_->get_variable(name) : "";
 }
 
