@@ -13,6 +13,7 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
 
     if (keyword == "BUILD_INTERFACE") return GenexNodeType::BUILD_INTERFACE;
     if (keyword == "INSTALL_INTERFACE") return GenexNodeType::INSTALL_INTERFACE;
+    if (keyword == "LINK_ONLY") return GenexNodeType::LINK_ONLY;
     if (keyword == "CONFIG") return GenexNodeType::CONFIG;
     if (keyword == "BOOL") return GenexNodeType::BOOL;
     if (keyword == "IF") return GenexNodeType::IF;
@@ -207,6 +208,7 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
         // For certain types, parse arguments recursively
         if (type == GenexNodeType::BUILD_INTERFACE ||
             type == GenexNodeType::INSTALL_INTERFACE ||
+            type == GenexNodeType::LINK_ONLY ||
             type == GenexNodeType::NOT) {
             // Single argument that may contain nested genex
             GenexParser inner_parser;

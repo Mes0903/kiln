@@ -14,6 +14,15 @@ namespace dmake {
 // Forward declaration
 class Target;
 
+// Result of evaluating a link library entry
+// Carries semantic metadata alongside the evaluated value
+struct LinkLibraryResult {
+    std::string value;           // The evaluated library name/path
+    bool link_only = false;      // $<LINK_ONLY:...> - don't propagate INTERFACE properties
+    // Future extensibility:
+    // bool compile_only = false;  // $<COMPILE_ONLY:...> if CMake adds it
+};
+
 // Context for evaluating generator expressions
 struct GenexEvaluationContext {
     std::string build_type;           // CMAKE_BUILD_TYPE
@@ -38,6 +47,10 @@ public:
     // Evaluate a list of property values
     std::expected<std::vector<std::string>, std::string> evaluate_property_list(
         const std::vector<std::string>& values);
+
+    // Evaluate a link library entry, returning structured result with metadata
+    // Use this for LINK_LIBRARIES to properly handle $<LINK_ONLY:...>
+    std::expected<LinkLibraryResult, std::string> evaluate_link_library(const std::string& input);
 
 private:
     GenexEvaluationContext ctx_;

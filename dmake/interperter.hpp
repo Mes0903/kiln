@@ -47,6 +47,18 @@ struct TestDefinition {
     std::map<std::string, std::string> properties; // Test properties
 };
 
+// Custom command rule for OUTPUT form of add_custom_command
+// Maps output files to the commands that generate them
+struct CustomCommandRule {
+    std::vector<std::string> outputs;           // Files this command generates
+    std::vector<std::vector<std::string>> commands;  // Commands to run (in order)
+    std::vector<std::string> depends;           // Input files/targets
+    std::string working_dir;                    // Working directory for commands
+    std::string comment;                        // Display comment during build
+    std::string source_dir;                     // Source directory where command was defined
+    std::string binary_dir;                     // Binary directory where command was defined
+};
+
 // ANSI escape codes for colors
 namespace colors {
     const std::string RESET = "\033[0m";
@@ -173,6 +185,14 @@ public:
     void enable_testing_globally() { get_root()->testing_enabled_ = true; }
     bool is_testing_enabled() const { return get_root()->get_root()->testing_enabled_; }
 
+    // Custom command rules (OUTPUT form of add_custom_command)
+    std::map<std::string, std::shared_ptr<CustomCommandRule>>& get_custom_command_rules() {
+        return get_root()->custom_command_rules_;
+    }
+    const std::map<std::string, std::shared_ptr<CustomCommandRule>>& get_custom_command_rules() const {
+        return get_root()->custom_command_rules_;
+    }
+
     // Property system accessors
     std::map<PropertyScope, std::map<std::string, PropertyDefinition>>& get_property_definitions() {
         return get_root()->property_definitions_;
@@ -264,6 +284,10 @@ private:
     std::map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
     bool testing_enabled_ = false;
+
+    // Custom command rules (OUTPUT form of add_custom_command)
+    // Maps output file path -> rule that generates it
+    std::map<std::string, std::shared_ptr<CustomCommandRule>> custom_command_rules_;
     Toolchain toolchain_;
     std::unique_ptr<CacheStore> cache_store_;
     std::set<std::string> global_guarded_files_;

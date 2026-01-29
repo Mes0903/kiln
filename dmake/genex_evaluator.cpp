@@ -62,6 +62,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             }
             return std::string("");  // Empty for BUILD phase
 
+        case GenexNodeType::LINK_ONLY:
+            // LINK_ONLY evaluates to its content - the semantic meaning
+            // (skip INTERFACE propagation) is handled by evaluate_link_library()
+            return evaluate_nodes(node.children);
+
         case GenexNodeType::CONFIG: {
             // $<CONFIG:cfg> returns 1 if CMAKE_BUILD_TYPE matches (case-insensitive), 0 otherwise
             std::string config = to_lower(node.raw_content);
@@ -365,6 +370,37 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
         if (!eval_result->empty()) {
             result.push_back(*eval_result);
         }
+    }
+
+    return result;
+}
+
+std::expected<LinkLibraryResult, std::string> GenexEvaluator::evaluate_link_library(const std::string& input) {
+    GenexParser parser;
+    auto parse_result = parser.parse(input);
+    if (!parse_result) {
+        return std::unexpected(parse_result.error());
+    }
+
+    LinkLibraryResult result;
+
+    // Check if the top-level is a LINK_ONLY wrapper
+    if (parse_result->nodes.size() == 1 &&
+        parse_result->nodes[0]->type == GenexNodeType::LINK_ONLY) {
+        result.link_only = true;
+        // Evaluate the inner content
+        auto inner_result = evaluate_nodes(parse_result->nodes[0]->children);
+        if (!inner_result) {
+            return std::unexpected(inner_result.error());
+        }
+        result.value = *inner_result;
+    } else {
+        // Normal evaluation
+        auto eval_result = evaluate_nodes(parse_result->nodes);
+        if (!eval_result) {
+            return std::unexpected(eval_result.error());
+        }
+        result.value = *eval_result;
     }
 
     return result;

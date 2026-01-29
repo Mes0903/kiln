@@ -235,24 +235,31 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     auto& res_iface_libs = resolved_interface_properties_["LINK_LIBRARIES"];
 
     // 2. Process Dependencies
-    auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only) {
+    // link_only: when true (from $<LINK_ONLY:...>), link the library but don't propagate INTERFACE properties
+    auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only, bool link_only) {
         if (all_targets.count(lib_name)) {
             auto dep = all_targets.at(lib_name);
             dep->resolve(all_targets, interp);
 
             // Inherit for building THIS target (from dep's INTERFACE)
+            // Skip INTERFACE property propagation if link_only is set
             if (!is_interface_only) {
-                for (const auto& info : props_to_resolve) {
-                    merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                if (!link_only) {
+                    for (const auto& info : props_to_resolve) {
+                        merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                    }
                 }
 
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_libs.push_back(dep_path);
+
+                // Still need transitive link libraries even with link_only
                 merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
             }
 
             // Propagate to Dependents (from dep's INTERFACE)
-            if (is_public || is_interface_only) {
+            // Skip if link_only - the dependency shouldn't propagate to our dependents
+            if ((is_public || is_interface_only) && !link_only) {
                 for (const auto& info : props_to_resolve) {
                     merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
                 }
@@ -264,14 +271,27 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         } else {
              // System library or raw file
              if (!is_interface_only) res_libs.push_back(lib_name);
-             if (is_public || is_interface_only) res_iface_libs.push_back(lib_name);
+             if ((is_public || is_interface_only) && !link_only) res_iface_libs.push_back(lib_name);
         }
     };
 
-    // Note: LINK_LIBRARIES is stored in the generic map too
-    for (const auto& lib : get_property_list("LINK_LIBRARIES", PropertyVisibility::PUBLIC)) process_dependency(lib, true, false);
-    for (const auto& lib : get_property_list("LINK_LIBRARIES", PropertyVisibility::PRIVATE)) process_dependency(lib, false, false);
-    for (const auto& lib : get_property_list("LINK_LIBRARIES", PropertyVisibility::INTERFACE)) process_dependency(lib, false, true);
+    // Helper to evaluate link library with genex support (handles $<LINK_ONLY:...>)
+    auto process_link_libraries = [&](PropertyVisibility vis, bool is_public, bool is_interface_only) {
+        for (const auto& lib : get_property_list("LINK_LIBRARIES", vis)) {
+            auto eval_result = evaluator.evaluate_link_library(lib);
+            if (!eval_result) {
+                throw std::runtime_error("Error evaluating LINK_LIBRARIES for target '" + name_ +
+                                        "': " + eval_result.error());
+            }
+            if (!eval_result->value.empty()) {
+                process_dependency(eval_result->value, is_public, is_interface_only, eval_result->link_only);
+            }
+        }
+    };
+
+    process_link_libraries(PropertyVisibility::PUBLIC, true, false);
+    process_link_libraries(PropertyVisibility::PRIVATE, false, false);
+    process_link_libraries(PropertyVisibility::INTERFACE, false, true);
 
     visiting_ = false;
     resolved_ = true;
@@ -512,6 +532,48 @@ static std::pair<std::string, std::string> generate_pch_task(
     return {pch_gch_path, pch_include_arg};
 }
 
+// Helper to generate a task for a custom command rule
+static void generate_custom_command_task(BuildGraph& graph, const CustomCommandRule& rule,
+                                         const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
+    // Use first output as task ID
+    BuildTask task;
+    task.id = rule.outputs[0];
+    task.working_dir = rule.working_dir;
+    task.always_run = false;  // Custom commands can be cached based on inputs
+
+    for (const auto& cmd : rule.commands) {
+        task.commands.push_back(cmd);
+    }
+
+    for (const auto& out : rule.outputs) {
+        task.outputs.push_back(out);
+    }
+
+    // Process dependencies
+    for (const auto& dep : rule.depends) {
+        // Check if it's a target
+        if (all_targets.count(dep)) {
+            auto dep_target = all_targets.at(dep);
+            std::string dep_out = dep_target->get_output_path();
+            if (!dep_out.empty()) {
+                task.dependencies.insert(dep_out);
+                task.inputs.push_back(dep_out);
+            } else {
+                task.dependencies.insert(dep);
+            }
+        } else {
+            // File dependency
+            std::filesystem::path p(dep);
+            if (!p.is_absolute()) {
+                p = std::filesystem::path(rule.source_dir) / dep;
+            }
+            task.inputs.push_back(p.lexically_normal().string());
+        }
+    }
+
+    graph.add_task(std::move(task));
+}
+
 void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
     if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
 
@@ -519,6 +581,44 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
+
+    // Get custom command rules from interpreter
+    const auto& custom_rules = interp.get_custom_command_rules();
+
+    // Track which custom command tasks we've created
+    std::set<std::string> generated_custom_tasks;
+
+    // Check if any sources are generated by custom commands and create those tasks
+    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
+        std::string normalized = src_abs.lexically_normal().string();
+
+        auto it = custom_rules.find(normalized);
+        if (it != custom_rules.end() && !generated_custom_tasks.count(it->second->outputs[0])) {
+            generate_custom_command_task(graph, *it->second, all_targets);
+            generated_custom_tasks.insert(it->second->outputs[0]);
+        }
+    }
+
+    // Generate PRE_BUILD task if we have any pre-build commands
+    std::string pre_build_task_id;
+    if (!pre_build_commands_.empty()) {
+        pre_build_task_id = name_ + "_pre_build";
+        BuildTask pre_build;
+        pre_build.id = pre_build_task_id;
+        pre_build.parent_target = this;
+        pre_build.always_run = true;
+        pre_build.working_dir = binary_dir_;
+
+        for (const auto& cmd : pre_build_commands_) {
+            pre_build.commands.push_back(cmd.command);
+            if (!cmd.working_dir.empty()) {
+                pre_build.working_dir = cmd.working_dir;
+            }
+        }
+
+        graph.add_task(std::move(pre_build));
+    }
 
     // C++20 modules: generate scanner tasks first (they have no dependencies)
     bool has_modules = generate_module_scanner_tasks(graph, toolchain);
@@ -529,6 +629,27 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         get_resolved_property("COMPILE_OPTIONS"));
 
     generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, all_targets);
+
+    // Add dependencies for compile tasks: PRE_BUILD and custom command outputs
+    for (const auto& obj : obj_files) {
+        if (graph.has_task(obj)) {
+            auto& task = graph.get_task(obj);
+
+            // Depend on PRE_BUILD task if it exists
+            if (!pre_build_task_id.empty()) {
+                task.dependencies.insert(pre_build_task_id);
+            }
+
+            // Depend on custom command that generates source file
+            std::filesystem::path src_path(task.source_file);
+            std::string normalized_src = src_path.lexically_normal().string();
+            auto cc_it = custom_rules.find(normalized_src);
+            if (cc_it != custom_rules.end()) {
+                task.dependencies.insert(cc_it->second->outputs[0]);
+                task.inputs.push_back(cc_it->second->outputs[0]);
+            }
+        }
+    }
 
     // If we have modules, compile tasks need to depend on the collator
     if (has_modules) {
@@ -618,8 +739,48 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
     }
 
+    // Add PRE_LINK commands before the actual link command
+    if (!pre_link_commands_.empty()) {
+        // Save the link command(s)
+        auto link_cmds = std::move(link.commands);
+        link.commands.clear();
+
+        // Add PRE_LINK commands first
+        for (const auto& cmd : pre_link_commands_) {
+            link.commands.push_back(cmd.command);
+        }
+
+        // Then add the actual link command(s)
+        for (auto& cmd : link_cmds) {
+            link.commands.push_back(std::move(cmd));
+        }
+    }
+
     link.outputs.push_back(output_path);
     graph.add_task(std::move(link));
+
+    // Generate POST_BUILD task if we have any post-build commands
+    if (!post_build_commands_.empty()) {
+        std::string post_build_task_id = name_ + "_post_build";
+        BuildTask post_build;
+        post_build.id = post_build_task_id;
+        post_build.parent_target = this;
+        post_build.always_run = true;
+        post_build.working_dir = binary_dir_;
+
+        for (const auto& cmd : post_build_commands_) {
+            post_build.commands.push_back(cmd.command);
+            if (!cmd.working_dir.empty()) {
+                post_build.working_dir = cmd.working_dir;
+            }
+        }
+
+        // POST_BUILD depends on the link task completing
+        post_build.dependencies.insert(output_path);
+        post_build.inputs.push_back(output_path);
+
+        graph.add_task(std::move(post_build));
+    }
 }
 
 void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter&, const std::vector<std::string>&, const std::vector<std::string>&) {

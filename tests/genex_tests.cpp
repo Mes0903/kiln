@@ -314,3 +314,79 @@ TEST_CASE("GenexParser - Extract genex types", "[genex][parser]") {
     REQUIRE(result->count(GenexNodeType::BUILD_INTERFACE) == 1);
     REQUIRE(result->count(GenexNodeType::CONFIG) == 1);
 }
+
+// ============================================================================
+// LINK_ONLY Tests
+// ============================================================================
+
+TEST_CASE("GenexParser - LINK_ONLY", "[genex][parser][link_only]") {
+    GenexParser parser;
+    auto result = parser.parse("$<LINK_ONLY:pthread>");
+    REQUIRE(result.has_value());
+    REQUIRE(result->has_genex == true);
+    REQUIRE(result->nodes.size() == 1);
+    REQUIRE(result->nodes[0]->type == GenexNodeType::LINK_ONLY);
+}
+
+TEST_CASE("GenexEvaluator - LINK_ONLY basic evaluation", "[genex][evaluator][link_only]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // LINK_ONLY should evaluate to its content
+    auto result = eval.evaluate("$<LINK_ONLY:pthread>");
+    REQUIRE(result.has_value());
+    REQUIRE(*result == "pthread");
+}
+
+TEST_CASE("GenexEvaluator - LINK_ONLY with nested genex", "[genex][evaluator][link_only]") {
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    GenexEvaluator eval(ctx);
+
+    // LINK_ONLY can wrap other genex
+    auto result = eval.evaluate("$<LINK_ONLY:$<$<CONFIG:Debug>:debug_lib>>");
+    REQUIRE(result.has_value());
+    REQUIRE(*result == "debug_lib");
+
+    ctx.build_type = "Release";
+    GenexEvaluator eval2(ctx);
+    result = eval2.evaluate("$<LINK_ONLY:$<$<CONFIG:Debug>:debug_lib>>");
+    REQUIRE(result.has_value());
+    REQUIRE(*result == "");
+}
+
+TEST_CASE("GenexEvaluator - evaluate_link_library returns metadata", "[genex][evaluator][link_only]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // Regular library - link_only should be false
+    auto result = eval.evaluate_link_library("pthread");
+    REQUIRE(result.has_value());
+    REQUIRE(result->value == "pthread");
+    REQUIRE(result->link_only == false);
+
+    // LINK_ONLY wrapped - link_only should be true
+    result = eval.evaluate_link_library("$<LINK_ONLY:pthread>");
+    REQUIRE(result.has_value());
+    REQUIRE(result->value == "pthread");
+    REQUIRE(result->link_only == true);
+}
+
+TEST_CASE("GenexEvaluator - evaluate_link_library with complex genex", "[genex][evaluator][link_only]") {
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    ctx.phase = GenexEvaluationContext::Phase::BUILD;
+    GenexEvaluator eval(ctx);
+
+    // BUILD_INTERFACE - not link_only
+    auto result = eval.evaluate_link_library("$<BUILD_INTERFACE:mylib>");
+    REQUIRE(result.has_value());
+    REQUIRE(result->value == "mylib");
+    REQUIRE(result->link_only == false);
+
+    // LINK_ONLY wrapping BUILD_INTERFACE
+    result = eval.evaluate_link_library("$<LINK_ONLY:$<BUILD_INTERFACE:mylib>>");
+    REQUIRE(result.has_value());
+    REQUIRE(result->value == "mylib");
+    REQUIRE(result->link_only == true);
+}

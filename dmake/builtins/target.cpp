@@ -204,6 +204,195 @@ void register_target_builtins(Interpreter& interp) {
         interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
     });
 
+    // add_custom_command - two forms:
+    // 1. OUTPUT form: add_custom_command(OUTPUT outputs... COMMAND cmd... [DEPENDS deps...] [WORKING_DIRECTORY dir] [COMMENT comment])
+    // 2. TARGET form: add_custom_command(TARGET target PRE_BUILD|PRE_LINK|POST_BUILD COMMAND cmd...)
+    interp.add_builtin("add_custom_command", [&](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("add_custom_command() requires arguments");
+            return;
+        }
+
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+
+        // Detect which form based on first keyword
+        if (args[0] == "OUTPUT") {
+            // OUTPUT form - generates files
+            CommandParser parser("add_custom_command");
+            std::vector<std::string> outputs;
+            std::vector<std::vector<std::string>> commands;
+            std::vector<std::string> depends;
+            std::vector<std::string> byproducts;
+            std::string working_dir;
+            std::string comment;
+            bool append = false;
+            bool verbatim = false;
+
+            parser.add_list("OUTPUT", outputs);
+            parser.add_multi_list("COMMAND", commands);
+            parser.add_list("DEPENDS", depends);
+            parser.add_list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
+            parser.add_value("WORKING_DIRECTORY", working_dir);
+            parser.add_value("COMMENT", comment);
+            parser.add_flag("APPEND", append);
+            parser.add_flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
+            PARSE_OR_RETURN(parser, interp, args);
+
+            if (outputs.empty()) {
+                interp.set_fatal_error("add_custom_command(OUTPUT) requires at least one output file");
+                return;
+            }
+
+            if (commands.empty() && !append) {
+                interp.set_fatal_error("add_custom_command(OUTPUT) requires at least one COMMAND");
+                return;
+            }
+
+            // Normalize output paths (relative to binary dir)
+            std::vector<std::string> normalized_outputs;
+            for (const auto& out : outputs) {
+                std::filesystem::path p(out);
+                if (!p.is_absolute()) {
+                    p = std::filesystem::path(bin_dir) / p;
+                }
+                normalized_outputs.push_back(p.lexically_normal().string());
+            }
+
+            // Also treat BYPRODUCTS as outputs
+            for (const auto& out : byproducts) {
+                std::filesystem::path p(out);
+                if (!p.is_absolute()) {
+                    p = std::filesystem::path(bin_dir) / p;
+                }
+                normalized_outputs.push_back(p.lexically_normal().string());
+            }
+
+            // Default working directory to binary dir
+            if (working_dir.empty()) {
+                working_dir = bin_dir;
+            } else if (!std::filesystem::path(working_dir).is_absolute()) {
+                working_dir = (std::filesystem::path(bin_dir) / working_dir).lexically_normal().string();
+            }
+
+            auto& rules = interp.get_custom_command_rules();
+
+            if (append) {
+                // APPEND: add commands to existing rule
+                // Find existing rule for any of our outputs
+                std::shared_ptr<CustomCommandRule> existing_rule;
+                for (const auto& out : normalized_outputs) {
+                    auto it = rules.find(out);
+                    if (it != rules.end()) {
+                        existing_rule = it->second;
+                        break;
+                    }
+                }
+
+                if (!existing_rule) {
+                    interp.set_fatal_error("add_custom_command(APPEND) requires an existing rule for the output");
+                    return;
+                }
+
+                // Append commands
+                for (const auto& cmd : commands) {
+                    existing_rule->commands.push_back(cmd);
+                }
+                // Append depends
+                for (const auto& dep : depends) {
+                    existing_rule->depends.push_back(dep);
+                }
+            } else {
+                // Create new rule
+                auto rule = std::make_shared<CustomCommandRule>();
+                rule->outputs = normalized_outputs;
+                rule->commands = commands;
+                rule->depends = depends;
+                rule->working_dir = working_dir;
+                rule->comment = comment;
+                rule->source_dir = src_dir;
+                rule->binary_dir = bin_dir;
+
+                // Register rule for each output
+                for (const auto& out : normalized_outputs) {
+                    rules[out] = rule;
+                }
+            }
+        } else if (args[0] == "TARGET") {
+            // TARGET form - build events
+            if (args.size() < 4) {
+                interp.set_fatal_error("add_custom_command(TARGET) requires: TARGET <name> PRE_BUILD|PRE_LINK|POST_BUILD COMMAND ...");
+                return;
+            }
+
+            std::string target_name = args[1];
+            std::string timing = args[2];
+
+            // Validate timing keyword
+            if (timing != "PRE_BUILD" && timing != "PRE_LINK" && timing != "POST_BUILD") {
+                interp.set_fatal_error("add_custom_command(TARGET) requires PRE_BUILD, PRE_LINK, or POST_BUILD, got: " + timing);
+                return;
+            }
+
+            // Find the target
+            std::string resolved_name = interp.resolve_target_alias(target_name);
+            auto& targets = interp.get_root()->targets_;
+            auto it = targets.find(resolved_name);
+            if (it == targets.end()) {
+                interp.set_fatal_error("add_custom_command(TARGET) target '" + target_name + "' does not exist");
+                return;
+            }
+            auto target = it->second;
+
+            // Parse remaining arguments
+            CommandParser parser("add_custom_command");
+            std::vector<std::vector<std::string>> commands;
+            std::string working_dir;
+            std::string comment;
+            bool verbatim = false;
+
+            parser.add_multi_list("COMMAND", commands);
+            parser.add_value("WORKING_DIRECTORY", working_dir);
+            parser.add_value("COMMENT", comment);
+            parser.add_flag("VERBATIM", verbatim);
+
+            // Parse from index 3 onwards (skip TARGET <name> <timing>)
+            std::vector<std::string> remaining_args(args.begin() + 3, args.end());
+            PARSE_OR_RETURN(parser, interp, remaining_args);
+
+            if (commands.empty()) {
+                interp.set_fatal_error("add_custom_command(TARGET) requires at least one COMMAND");
+                return;
+            }
+
+            // Default working directory
+            if (working_dir.empty()) {
+                working_dir = bin_dir;
+            } else if (!std::filesystem::path(working_dir).is_absolute()) {
+                working_dir = (std::filesystem::path(bin_dir) / working_dir).lexically_normal().string();
+            }
+
+            // Add commands to target
+            for (const auto& cmd_args : commands) {
+                CustomCommand cmd;
+                cmd.command = cmd_args;
+                cmd.comment = comment;
+                cmd.working_dir = working_dir;
+
+                if (timing == "PRE_BUILD") {
+                    target->add_pre_build_command(std::move(cmd));
+                } else if (timing == "PRE_LINK") {
+                    target->add_pre_link_command(std::move(cmd));
+                } else {  // POST_BUILD
+                    target->add_post_build_command(std::move(cmd));
+                }
+            }
+        } else {
+            interp.set_fatal_error("add_custom_command() first argument must be OUTPUT or TARGET, got: " + args[0]);
+            return;
+        }
+    });
+
     interp.add_builtin("add_custom_target", [&](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("add_custom_target");
         std::string name;

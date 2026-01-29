@@ -75,6 +75,14 @@ public:
     void add_dependency(const std::string& dep) { manually_added_dependencies_.push_back(dep); }
     const std::vector<std::string>& get_manually_added_dependencies() const { return manually_added_dependencies_; }
 
+    // Build event commands (TARGET form of add_custom_command)
+    void add_pre_build_command(CustomCommand cmd) { pre_build_commands_.push_back(std::move(cmd)); }
+    void add_pre_link_command(CustomCommand cmd) { pre_link_commands_.push_back(std::move(cmd)); }
+    void add_post_build_command(CustomCommand cmd) { post_build_commands_.push_back(std::move(cmd)); }
+    const std::vector<CustomCommand>& get_pre_build_commands() const { return pre_build_commands_; }
+    const std::vector<CustomCommand>& get_pre_link_commands() const { return pre_link_commands_; }
+    const std::vector<CustomCommand>& get_post_build_commands() const { return post_build_commands_; }
+
     // Deprecated helpers for C++ (mapped to generic properties)
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
@@ -153,6 +161,11 @@ protected:
 
     // Manually added dependencies (from add_dependencies command)
     std::vector<std::string> manually_added_dependencies_;
+
+    // Build event commands (TARGET form of add_custom_command)
+    std::vector<CustomCommand> pre_build_commands_;
+    std::vector<CustomCommand> pre_link_commands_;
+    std::vector<CustomCommand> post_build_commands_;
 };
 
 class CustomTarget : public Target {

@@ -13,6 +13,7 @@ enum class GenexNodeType {
     LITERAL,              // Plain text, no genex
     BUILD_INTERFACE,      // $<BUILD_INTERFACE:...>
     INSTALL_INTERFACE,    // $<INSTALL_INTERFACE:...>
+    LINK_ONLY,            // $<LINK_ONLY:...> - link but don't propagate INTERFACE properties
     CONFIG,               // $<CONFIG:cfg>
     BOOL,                 // $<BOOL:string>
     IF,                   // $<IF:cond,true_val,false_val>
