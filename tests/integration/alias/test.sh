@@ -6,8 +6,11 @@ TEST_DIR=$(dirname "$0")
 
 echo "=== Testing ALIAS support ==="
 
-# Build the project (should handle aliases correctly)
+# Clean first
 cd "$TEST_DIR"
+$DMAKE clean
+
+# Build the project (should handle aliases correctly)
 $DMAKE
 
 # Verify outputs exist
@@ -16,12 +19,12 @@ if [ ! -f "build/debug/myapp" ]; then
     exit 1
 fi
 
-if [ ! -f "build/debug/objs/libmylib.a" ]; then
+if [ ! -f "build/debug/libmylib.a" ]; then
     echo "ERROR: libmylib.a not found"
     exit 1
 fi
 
-if [ ! -f "build/debug/objs/libutils.a" ]; then
+if [ ! -f "build/debug/libutils.a" ]; then
     echo "ERROR: libutils.a not found"
     exit 1
 fi
@@ -43,7 +46,7 @@ fi
 # Clean and test building library alias
 $DMAKE clean
 $DMAKE MyNamespace::MyLib
-if [ ! -f "build/debug/objs/libmylib.a" ]; then
+if [ ! -f "build/debug/libmylib.a" ]; then
     echo "ERROR: Failed to build library using alias name"
     exit 1
 fi
