@@ -98,6 +98,22 @@ const Interpreter* Interpreter::get_root() const {
     return root_;
 }
 
+Interpreter* Interpreter::get_interpreter_for_directory(const std::string& dir) {
+    std::filesystem::path abs_dir;
+    if (std::filesystem::path(dir).is_absolute()) {
+        abs_dir = std::filesystem::path(dir).lexically_normal();
+    } else {
+        abs_dir = (std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / dir).lexically_normal();
+    }
+
+    auto& registry = get_directory_interpreters();
+    auto it = registry.find(abs_dir.string());
+    if (it != registry.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
 
 std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_build(int jobs, const std::vector<std::string>& requested_targets) {
     // Sanity check CMAKE_BUILD_TYPE
@@ -337,6 +353,18 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
         fake_cmake_compiler_checks_and_init(vars, toolchain_);
 
+        // Initialize built-in global properties
+        // CMake modules expect these to be set (e.g., CheckLanguage.cmake checks ENABLED_LANGUAGES)
+        global_properties_["ENABLED_LANGUAGES"] = "C;CXX";
+        global_properties_["GENERATOR_IS_MULTI_CONFIG"] = "FALSE";
+        global_properties_["TARGET_SUPPORTS_SHARED_LIBS"] = "TRUE";
+        global_properties_["CMAKE_ROLE"] = "PROJECT";
+        global_properties_["FIND_LIBRARY_USE_LIB64_PATHS"] = "TRUE";
+        global_properties_["FIND_LIBRARY_USE_LIB32_PATHS"] = "FALSE";
+
+        // Register this interpreter for its directory
+        directory_interpreters_[abs_script_dir.string()] = this;
+
         // Initialize cache store
         std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
         cache_store_ = std::make_unique<CacheStore>(cache_path);
@@ -443,6 +471,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             sub_interp.set_current_file(cmake_file.string());
             sub_interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
             sub_interp.set_variable("CMAKE_CURRENT_LIST_DIR", path.string());
+
+            // Register this interpreter for its directory
+            std::filesystem::path abs_path = std::filesystem::absolute(path).lexically_normal();
+            interp.get_directory_interpreters()[abs_path.string()] = &sub_interp;
 
             Parser parser(content, cmake_file.string());
             auto ast = parser.parse();
@@ -1401,6 +1433,16 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     // - Everything else is dereferenced as a variable:
     //   - If defined, return the variable's value (even if empty)
     //   - If undefined, return empty string
+    // Helper to check if an argument contains any variable references
+    auto contains_variable_reference = [](const Argument& arg) -> bool {
+        for (const auto& part : arg.parts) {
+            if (std::holds_alternative<VariableReference>(part)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     auto evaluate_token = [&](const Argument& arg) -> std::string {
         std::string token = get_token_string(arg);
 
@@ -1408,14 +1450,21 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         // Check case-insensitively for both
         std::string upper_token = token;
         std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
-        if (arg.quoted || 
-            std::find(keywords.begin(), keywords.end(), upper_token) != keywords.end() || 
+        if (arg.quoted ||
+            std::find(keywords.begin(), keywords.end(), upper_token) != keywords.end() ||
             std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
             return token;
         }
 
         // Don't dereference numeric constants (0, 1, -5, 3.14, etc.)
         if (is_numeric_constant(token)) {
+            return token;
+        }
+
+        // If the argument contained variable references (e.g., ${type}), the expansion
+        // already happened in get_token_string(). Don't dereference the result again.
+        // Only pure literals should be dereferenced as variable names.
+        if (contains_variable_reference(arg)) {
             return token;
         }
 

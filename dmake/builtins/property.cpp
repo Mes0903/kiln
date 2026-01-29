@@ -18,6 +18,7 @@ static std::optional<PropertyScope> parse_property_scope(const std::string& scop
     if (scope_str == "VARIABLE") return PropertyScope::VARIABLE;
     if (scope_str == "CACHED_VARIABLE") return PropertyScope::CACHED_VARIABLE;
     if (scope_str == "CACHE") return PropertyScope::CACHED_VARIABLE; // Alias for set/get_property
+    if (scope_str == "INSTALL") return PropertyScope::INSTALL;
     return std::nullopt;
 }
 
@@ -235,31 +236,38 @@ void register_property_builtins(Interpreter& interp) {
                     target_interpreters.push_back(&interp);
                 } else {
                     for (const auto& dir_path : items) {
-                        // For now, only support current directory
-                        // Full support would require tracking interpreter per directory
-                        if (dir_path == "." || dir_path == interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) {
+                        // Check if it's the current directory
+                        std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+                        if (dir_path == "." || dir_path == current_source_dir) {
                             target_interpreters.push_back(&interp);
                         } else {
-                            interp.set_fatal_error("set_property(DIRECTORY ...) with explicit directories not yet fully supported");
-                            return;
+                            // Look up the interpreter for the specified directory
+                            Interpreter* dir_interp = interp.get_interpreter_for_directory(dir_path);
+                            if (dir_interp) {
+                                target_interpreters.push_back(dir_interp);
+                            } else {
+                                interp.set_fatal_error("set_property(DIRECTORY ...) unknown directory: " + dir_path);
+                                return;
+                            }
                         }
                     }
                 }
 
                 for (auto* target_interp : target_interpreters) {
+                    auto& dir_props = target_interp->get_directory_properties();
                     if (append || append_string) {
-                        std::string old_val = target_interp->directory_properties_[property_name];
+                        std::string old_val = dir_props[property_name];
                         if (!old_val.empty() && !value.empty()) {
                             if (append_string) {
-                                target_interp->directory_properties_[property_name] = old_val + value;
+                                dir_props[property_name] = old_val + value;
                             } else {
-                                target_interp->directory_properties_[property_name] = old_val + ";" + value;
+                                dir_props[property_name] = old_val + ";" + value;
                             }
                         } else if (!value.empty()) {
-                            target_interp->directory_properties_[property_name] = value;
+                            dir_props[property_name] = value;
                         }
                     } else {
-                        target_interp->directory_properties_[property_name] = value;
+                        dir_props[property_name] = value;
                     }
                 }
                 break;
@@ -441,6 +449,37 @@ void register_property_builtins(Interpreter& interp) {
                 interp.set_fatal_error("set_property(VARIABLE ...) is only for documentation, cannot set values");
                 return;
             }
+
+            case PropertyScope::INSTALL: {
+                // Items are installed file paths
+                if (items.empty()) {
+                    interp.set_fatal_error("set_property(INSTALL ...) requires at least one installed file path");
+                    return;
+                }
+
+                auto& install_properties = interp.get_install_properties();
+                for (const auto& install_path : items) {
+                    // Normalize the install path
+                    std::filesystem::path normalized = std::filesystem::path(install_path).lexically_normal();
+                    std::string path_key = normalized.string();
+
+                    if (append || append_string) {
+                        std::string old_val = install_properties[path_key][property_name];
+                        if (!old_val.empty() && !value.empty()) {
+                            if (append_string) {
+                                install_properties[path_key][property_name] = old_val + value;
+                            } else {
+                                install_properties[path_key][property_name] = old_val + ";" + value;
+                            }
+                        } else if (!value.empty()) {
+                            install_properties[path_key][property_name] = value;
+                        }
+                    } else {
+                        install_properties[path_key][property_name] = value;
+                    }
+                }
+                break;
+            }
         }
     });
 
@@ -582,16 +621,32 @@ void register_property_builtins(Interpreter& interp) {
             }
 
             case PropertyScope::DIRECTORY: {
-                // Check current directory properties
-                auto it = directory_properties.find(property_name);
-                if (it != directory_properties.end()) {
+                // Determine which interpreter's directory properties to use
+                Interpreter* target_interp = &interp;
+                if (!item_name.empty()) {
+                    // Explicit directory path provided
+                    std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+                    if (item_name != "." && item_name != current_source_dir) {
+                        target_interp = interp.get_interpreter_for_directory(item_name);
+                        if (!target_interp) {
+                            // Unknown directory - return empty
+                            interp.set_variable(var_name, "");
+                            return;
+                        }
+                    }
+                }
+
+                // Check target directory properties
+                auto& target_dir_props = target_interp->get_directory_properties();
+                auto it = target_dir_props.find(property_name);
+                if (it != target_dir_props.end()) {
                     value = it->second;
                     value_found = true;
                 }
 
                 // If not found and property is inherited, check parent directories
                 if (!value_found && is_inherited()) {
-                    Interpreter* current = interp.parent_;
+                    Interpreter* current = target_interp->parent_;
                     while (current != nullptr) {
                         auto& parent_dir_props = current->get_directory_properties();
                         auto parent_it = parent_dir_props.find(property_name);
@@ -762,6 +817,28 @@ void register_property_builtins(Interpreter& interp) {
                 // VARIABLE scope only has documentation
                 interp.set_variable(var_name, "");
                 return;
+            }
+
+            case PropertyScope::INSTALL: {
+                // Item name is the installed file path
+                if (item_name.empty()) {
+                    interp.set_fatal_error("get_property(INSTALL ...) requires an installed file path");
+                    return;
+                }
+
+                auto& install_properties = interp.get_install_properties();
+                std::filesystem::path normalized = std::filesystem::path(item_name).lexically_normal();
+                std::string path_key = normalized.string();
+
+                auto path_it = install_properties.find(path_key);
+                if (path_it != install_properties.end()) {
+                    auto prop_it = path_it->second.find(property_name);
+                    if (prop_it != path_it->second.end()) {
+                        value = prop_it->second;
+                        value_found = true;
+                    }
+                }
+                break;
             }
         }
 

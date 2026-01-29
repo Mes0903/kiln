@@ -72,7 +72,8 @@ enum class PropertyScope {
     SOURCE,
     TEST,
     VARIABLE,
-    CACHED_VARIABLE
+    CACHED_VARIABLE,
+    INSTALL
 };
 
 struct PropertyDefinition {
@@ -164,6 +165,17 @@ public:
         return directory_properties_;
     }
 
+    // Directory-to-interpreter registry for explicit DIRECTORY scope operations
+    std::unordered_map<std::string, Interpreter*>& get_directory_interpreters() {
+        return get_root()->directory_interpreters_;
+    }
+    Interpreter* get_interpreter_for_directory(const std::string& dir);
+
+    // Install properties: installed_path -> property_name -> value
+    std::map<std::string, std::map<std::string, std::string>>& get_install_properties() {
+        return get_root()->install_properties_;
+    }
+
     // Friend registration functions
     friend void register_message_builtins(Interpreter& interp);
     friend void register_variable_builtins(Interpreter& interp);
@@ -233,6 +245,10 @@ private:
     std::map<std::string, std::string> global_properties_;
     // Source property values: absolute_source_path -> property_name -> value
     std::map<std::string, std::map<std::string, std::string>> source_properties_;
+    // Install property values: normalized_install_path -> property_name -> value
+    std::map<std::string, std::map<std::string, std::string>> install_properties_;
+    // Directory-to-interpreter registry for explicit DIRECTORY scope operations
+    std::unordered_map<std::string, Interpreter*> directory_interpreters_;
 
     // Directory scan cache for optimizing file lookups
     struct DirectoryCacheEntry {

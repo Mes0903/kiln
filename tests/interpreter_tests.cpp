@@ -4079,3 +4079,205 @@ TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
     // Cleanup
     std::filesystem::remove_all(temp_dir);
 }
+
+TEST_CASE("Built-in global properties", "[interpreter][property]") {
+    std::string temp_dir = "build_test_builtin_global_props";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+
+    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+        for (const auto& arg : args) output << arg;
+        output << std::endl;
+    });
+
+    // Test built-in global properties
+    std::string script = R"(
+        get_property(LANGS GLOBAL PROPERTY ENABLED_LANGUAGES)
+        get_property(MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+        get_property(SHARED_LIBS GLOBAL PROPERTY TARGET_SUPPORTS_SHARED_LIBS)
+        get_property(ROLE GLOBAL PROPERTY CMAKE_ROLE)
+        get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
+        message("langs=${LANGS}")
+        message("multi_config=${MULTI_CONFIG}")
+        message("shared_libs=${SHARED_LIBS}")
+        message("role=${ROLE}")
+        message("lib64=${LIB64}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("langs=C;CXX") != std::string::npos);
+    REQUIRE(out.find("multi_config=FALSE") != std::string::npos);
+    REQUIRE(out.find("shared_libs=TRUE") != std::string::npos);
+    REQUIRE(out.find("role=PROJECT") != std::string::npos);
+    REQUIRE(out.find("lib64=TRUE") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("set/get_property INSTALL scope", "[interpreter][property]") {
+    std::string temp_dir = "build_test_install_props";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+
+    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+        for (const auto& arg : args) output << arg;
+        output << std::endl;
+    });
+
+    // Test INSTALL scope properties
+    std::string script = R"(
+        set_property(INSTALL bin/myapp PROPERTY CPACK_START_MENU_SHORTCUTS "MyApp")
+        set_property(INSTALL lib/mylib.so PROPERTY CPACK_DEBIAN_PACKAGE_NAME "mylib")
+        set_property(INSTALL bin/myapp APPEND PROPERTY EXTRA_OPTS "opt1")
+        set_property(INSTALL bin/myapp APPEND PROPERTY EXTRA_OPTS "opt2")
+
+        get_property(SHORTCUT INSTALL bin/myapp PROPERTY CPACK_START_MENU_SHORTCUTS)
+        get_property(DEB_NAME INSTALL lib/mylib.so PROPERTY CPACK_DEBIAN_PACKAGE_NAME)
+        get_property(OPTS INSTALL bin/myapp PROPERTY EXTRA_OPTS)
+        get_property(MISSING INSTALL bin/myapp PROPERTY NONEXISTENT)
+
+        message("shortcut=${SHORTCUT}")
+        message("deb_name=${DEB_NAME}")
+        message("opts=${OPTS}")
+        message("missing=${MISSING}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("shortcut=MyApp") != std::string::npos);
+    REQUIRE(out.find("deb_name=mylib") != std::string::npos);
+    REQUIRE(out.find("opts=opt1;opt2") != std::string::npos);
+    REQUIRE(out.find("missing=") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
+    std::string temp_dir = "build_test_project_langs";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+
+    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+        for (const auto& arg : args) output << arg;
+        output << std::endl;
+    });
+
+    // Test project() with LANGUAGES
+    std::string script = R"(
+        get_property(BEFORE GLOBAL PROPERTY ENABLED_LANGUAGES)
+        message("before=${BEFORE}")
+
+        project(MyProject LANGUAGES CXX CUDA)
+
+        get_property(AFTER GLOBAL PROPERTY ENABLED_LANGUAGES)
+        message("after=${AFTER}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("before=C;CXX") != std::string::npos);
+    REQUIRE(out.find("after=CXX;CUDA") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("if condition: unquoted variable reference in STREQUAL", "[interpreter][if][bugfix]") {
+    // When using ${VAR} (unquoted) in a STREQUAL comparison, the expanded value
+    // should be compared directly, NOT dereferenced again as a variable name.
+    // This was a bug where ${type} expanding to "STATIC_LIBRARY" would then
+    // try to look up a variable named "STATIC_LIBRARY" (returning empty string).
+
+    SECTION("Basic unquoted variable in STREQUAL") {
+        auto output = run_script(R"(
+            set(type "STATIC_LIBRARY")
+            if(${type} STREQUAL "STATIC_LIBRARY")
+                message("match")
+            else()
+                message("no match")
+            endif()
+        )");
+        REQUIRE(output == "match\n");
+    }
+
+    SECTION("Quoted variable should also work") {
+        auto output = run_script(R"(
+            set(type "STATIC_LIBRARY")
+            if("${type}" STREQUAL "STATIC_LIBRARY")
+                message("match")
+            else()
+                message("no match")
+            endif()
+        )");
+        REQUIRE(output == "match\n");
+    }
+
+    SECTION("Complex condition with NOT and AND") {
+        auto output = run_script(R"(
+            set(type "STATIC_LIBRARY")
+            if(NOT ${type} STREQUAL "STATIC_LIBRARY"
+                   AND NOT ${type} STREQUAL "SHARED_LIBRARY")
+                message("none")
+            else()
+                message("found")
+            endif()
+        )");
+        REQUIRE(output == "found\n");
+    }
+
+    SECTION("Variable expanding to non-matching value") {
+        auto output = run_script(R"(
+            set(type "OBJECT_LIBRARY")
+            if(${type} STREQUAL "STATIC_LIBRARY")
+                message("static")
+            elseif(${type} STREQUAL "OBJECT_LIBRARY")
+                message("object")
+            else()
+                message("other")
+            endif()
+        )");
+        REQUIRE(output == "object\n");
+    }
+
+    SECTION("Variable with value that looks like a variable name") {
+        // Even if the expanded value happens to be a defined variable name,
+        // it should NOT be dereferenced again
+        auto output = run_script(R"(
+            set(OTHER_VAR "wrong")
+            set(type "OTHER_VAR")
+            if(${type} STREQUAL "OTHER_VAR")
+                message("correct")
+            else()
+                message("wrong - double dereferenced")
+            endif()
+        )");
+        REQUIRE(output == "correct\n");
+    }
+}
