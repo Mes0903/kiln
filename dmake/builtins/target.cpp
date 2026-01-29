@@ -73,11 +73,41 @@ void register_target_builtins(Interpreter& interp) {
         CommandParser parser("add_executable");
         std::string name;
         bool imported = false;
+        bool is_alias = false;
         std::vector<std::string> sources;
         parser.add_positional(name, "target name");
         parser.add_flag("IMPORTED", imported);
+        parser.add_flag("ALIAS", is_alias);
         parser.add_default_list(sources);
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Handle ALIAS targets
+        if (is_alias) {
+            if (sources.size() != 1) {
+                interp.set_fatal_error("add_executable() ALIAS requires exactly one target name");
+                return;
+            }
+            std::string alias_target = sources[0];
+
+            // Validate that the aliased target exists
+            std::string resolved = interp.resolve_target_alias(alias_target);
+            auto& targets = interp.get_root()->targets_;
+            if (targets.find(resolved) == targets.end()) {
+                interp.set_fatal_error("add_executable() ALIAS target '" + alias_target + "' does not exist");
+                return;
+            }
+
+            // Validate that the target is an executable
+            auto target = targets[resolved];
+            if (target->get_type() != TargetType::EXECUTABLE) {
+                interp.set_fatal_error("add_executable() ALIAS target '" + alias_target + "' is not an executable");
+                return;
+            }
+
+            // Store the alias
+            interp.get_target_aliases()[name] = resolved;
+            return;
+        }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
@@ -95,7 +125,7 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("add_library");
         std::string name;
-        bool shared = false, static_lib = false, object_lib = false, interface_lib = false, imported = false;
+        bool shared = false, static_lib = false, object_lib = false, interface_lib = false, imported = false, is_alias = false;
         std::vector<std::string> sources;
 
         parser.add_positional(name, "target name");
@@ -104,8 +134,39 @@ void register_target_builtins(Interpreter& interp) {
         parser.add_flag("OBJECT", object_lib);
         parser.add_flag("INTERFACE", interface_lib);
         parser.add_flag("IMPORTED", imported);
+        parser.add_flag("ALIAS", is_alias);
         parser.add_default_list(sources);
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Handle ALIAS targets
+        if (is_alias) {
+            if (sources.size() != 1) {
+                interp.set_fatal_error("add_library() ALIAS requires exactly one target name");
+                return;
+            }
+            std::string alias_target = sources[0];
+
+            // Validate that the aliased target exists
+            std::string resolved = interp.resolve_target_alias(alias_target);
+            auto& targets = interp.get_root()->targets_;
+            if (targets.find(resolved) == targets.end()) {
+                interp.set_fatal_error("add_library() ALIAS target '" + alias_target + "' does not exist");
+                return;
+            }
+
+            // Validate that the target is a library
+            auto target = targets[resolved];
+            auto type = target->get_type();
+            if (type != TargetType::SHARED_LIBRARY && type != TargetType::STATIC_LIBRARY &&
+                type != TargetType::OBJECT_LIBRARY && type != TargetType::INTERFACE_LIBRARY) {
+                interp.set_fatal_error("add_library() ALIAS target '" + alias_target + "' is not a library");
+                return;
+            }
+
+            // Store the alias
+            interp.get_target_aliases()[name] = resolved;
+            return;
+        }
 
         int type_count = (shared ? 1 : 0) + (static_lib ? 1 : 0) + (object_lib ? 1 : 0) + (interface_lib ? 1 : 0);
         if (type_count > 1) {
@@ -180,8 +241,11 @@ void register_target_builtins(Interpreter& interp) {
     });
 
     auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> std::shared_ptr<Target> {
+        // Resolve alias first
+        std::string resolved_name = interp.resolve_target_alias(name);
+
         auto& targets = interp.get_root()->targets_;
-        auto it = targets.find(name);
+        auto it = targets.find(resolved_name);
         if (it == targets.end()) {
             interp.set_fatal_error(cmd_name + "() called on unknown target '" + name + "'");
             return nullptr;
@@ -376,10 +440,22 @@ void register_target_builtins(Interpreter& interp) {
         auto target = get_target_from_name(interp, name, "target_link_libraries");
         if (!target) return;
 
+        // Helper to resolve aliases in library list
+        auto resolve_lib_aliases = [&](std::vector<std::string>& libs) {
+            for (auto& lib : libs) {
+                lib = interp.resolve_target_alias(lib);
+            }
+        };
+
+        resolve_lib_aliases(pub);
+        resolve_lib_aliases(priv);
+        resolve_lib_aliases(inter);
+        resolve_lib_aliases(def);
+
         if (!pub.empty()) target->append_property("LINK_LIBRARIES", pub, PropertyVisibility::PUBLIC);
         if (!priv.empty()) target->append_property("LINK_LIBRARIES", priv, PropertyVisibility::PRIVATE);
         if (!inter.empty()) target->append_property("LINK_LIBRARIES", inter, PropertyVisibility::INTERFACE);
-        // Default (legacy CMake) is roughly PRIVATE or PUBLIC depending on target type, 
+        // Default (legacy CMake) is roughly PRIVATE or PUBLIC depending on target type,
         // but modern CMake treats it as PRIVATE/PUBLIC. In dmake we map to PRIVATE for safety.
         if (!def.empty()) target->append_property("LINK_LIBRARIES", def, PropertyVisibility::PRIVATE);
     });

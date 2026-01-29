@@ -193,10 +193,12 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
             }
         };
         for (const auto& t : requested_targets) {
-            if (!targets_.count(t)) {
+            // Resolve aliases to real target names
+            std::string resolved = resolve_target_alias(t);
+            if (!targets_.count(resolved)) {
                 return std::unexpected(BuildError{current_file_, "Unknown target: " + t});
             }
-            collect(t);
+            collect(resolved);
         }
     }
 

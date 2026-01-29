@@ -1,12 +1,12 @@
-include(OurTestBigEndian)
-test_big_endian(IS_BIG_ENDIAN)
-message("IS_BIG_ENDIAN: ${IS_BIG_ENDIAN}")
 
-include(CheckTypeSize)
-
-# Check for size of long.
-check_type_size(long SIZEOF_LONG)
-
-message("HAVE_SIZEOF_LONG: ${HAVE_SIZEOF_LONG}")
-message("SIZEOF_LONG: ${SIZEOF_LONG}")
-message("SIZEOF_LONG_CODE: ${SIZEOF_LONG_CODE}")
+  set(X11_INC_SEARCH_PATH
+    /usr/pkg/xorg/include
+    /usr/X11R6/include
+    /usr/X11R7/include
+    /usr/include/X11
+    /usr/openwin/include
+    /usr/openwin/share/include
+    /opt/graphics/OpenGL/include
+    /opt/X11/include
+  )
+find_path(X11_X11_INCLUDE_PATH X11/X.h                             ${X11_INC_SEARCH_PATH})

@@ -194,28 +194,97 @@ void register_project_builtins(Interpreter& interp) {
             return;
         }
 
-        interp.set_variable("PROJECT_NAME", args[0]);
+        std::string project_name = args[0];
+        interp.set_variable("PROJECT_NAME", project_name);
 
         std::vector<std::string> languages;
-        bool in_languages = false;
+        std::string version;
+
+        // Parse arguments
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "LANGUAGES") {
-                in_languages = true;
-            } else if (args[i] == "VERSION" || args[i] == "DESCRIPTION" ||
-                       args[i] == "HOMEPAGE_URL") {
-                in_languages = false;
-            } else if (in_languages) {
+            if (args[i] == "VERSION") {
+                if (i + 1 >= args.size()) {
+                    interp.set_fatal_error("project() VERSION keyword requires a value");
+                    return;
+                }
+                version = args[++i];
+            } else if (args[i] == "LANGUAGES") {
+                // Collect all languages until next keyword
+                ++i;
+                while (i < args.size() && args[i] != "VERSION" &&
+                       args[i] != "DESCRIPTION" && args[i] != "HOMEPAGE_URL") {
+                    languages.push_back(args[i++]);
+                }
+                --i; // Adjust for loop increment
+            } else if (args[i] == "DESCRIPTION" || args[i] == "HOMEPAGE_URL") {
+                // Skip these keywords and their values
+                if (i + 1 < args.size()) {
+                    ++i; // Skip the value
+                }
+            }
+            // If no keyword, treat as language (for backward compatibility)
+            else if (i == 1 && args[i] != "VERSION" && args[i] != "DESCRIPTION" &&
+                     args[i] != "HOMEPAGE_URL" && args[i] != "LANGUAGES") {
                 languages.push_back(args[i]);
             }
         }
 
-        if (!languages.empty()) {
-            std::string enabled_langs;
-            for (size_t i = 0; i < languages.size(); ++i) {
-                if (i > 0) enabled_langs += ";";
-                enabled_langs += languages[i];
+        // Validate languages (default is C and CXX if not specified)
+        if (languages.empty()) {
+            languages = {"C", "CXX"};
+        }
+
+        for (const auto& lang : languages) {
+            if (lang != "C" && lang != "CXX" && lang != "NONE") {
+                interp.set_fatal_error("project() unsupported language: " + lang +
+                                     " (only C, CXX, and NONE are supported)");
+                return;
             }
-            interp.get_global_properties()["ENABLED_LANGUAGES"] = enabled_langs;
+        }
+
+        // Store enabled languages
+        std::string enabled_langs;
+        for (size_t i = 0; i < languages.size(); ++i) {
+            if (i > 0) enabled_langs += ";";
+            enabled_langs += languages[i];
+        }
+        interp.get_global_properties()["ENABLED_LANGUAGES"] = enabled_langs;
+
+        // Process VERSION if provided
+        if (!version.empty()) {
+            // Parse version components: major[.minor[.patch[.tweak]]]
+            std::vector<std::string> components;
+            std::string component;
+            for (char c : version) {
+                if (c == '.') {
+                    components.push_back(component);
+                    component.clear();
+                } else if (std::isdigit(static_cast<unsigned char>(c))) {
+                    component += c;
+                } else {
+                    interp.set_fatal_error("project() VERSION contains invalid character: " + version);
+                    return;
+                }
+            }
+            if (!component.empty()) {
+                components.push_back(component);
+            }
+
+            if (components.empty() || components.size() > 4) {
+                interp.set_fatal_error("project() VERSION must have 1-4 components: " + version);
+                return;
+            }
+
+            // Set version variables
+            interp.set_variable("PROJECT_VERSION", version);
+            interp.set_variable(project_name + "_VERSION", version);
+
+            const char* suffixes[] = {"_MAJOR", "_MINOR", "_PATCH", "_TWEAK"};
+            for (size_t i = 0; i < 4; ++i) {
+                std::string value = (i < components.size()) ? components[i] : "";
+                interp.set_variable("PROJECT_VERSION" + std::string(suffixes[i]), value);
+                interp.set_variable(project_name + "_VERSION" + std::string(suffixes[i]), value);
+            }
         }
     });
 
