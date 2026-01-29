@@ -127,8 +127,14 @@ std::vector<std::filesystem::path> build_search_paths(
     return search_paths;
 }
 
+// Result type for search_for_file - contains both the file path and the base search directory
+struct SearchResult {
+    std::filesystem::path file_path;      // Full path to the found file
+    std::filesystem::path search_dir;     // Base search directory where it was found
+};
+
 // Core search engine - supports both default and NAMES_PER_DIR algorithms
-std::optional<std::filesystem::path> search_for_file(
+std::optional<SearchResult> search_for_file(
     Interpreter& interp,
     const FindOptions& opts,
     const std::vector<std::filesystem::path>& default_paths,
@@ -159,9 +165,21 @@ std::optional<std::filesystem::path> search_for_file(
                 for (const auto& name : opts.names) {
                     auto variants = name_variants(interp, name);
                     for (const auto& variant : variants) {
-                        if (interp.cached_file_exists(check_dir, variant) && validator(check_dir / variant)) {
+                        std::filesystem::path full_path = check_dir / variant;
+                        // For names with path components (e.g., X11/X.h), use single-parameter check
+                        bool exists = (variant.find('/') != std::string::npos)
+                            ? interp.cached_file_exists(full_path)
+                            : interp.cached_file_exists(check_dir, variant);
+                        bool valid = exists && validator(full_path);
+
+                        // DEBUG: Uncomment to trace search
+
+                        if (valid) {
                             std::error_code ec;
-                            return std::filesystem::canonical(check_dir / variant, ec);
+                            return SearchResult{
+                                std::filesystem::canonical(full_path, ec),
+                                search_path  // Return the base search path, not check_dir
+                            };
                         }
                     }
                 }
@@ -176,18 +194,32 @@ std::optional<std::filesystem::path> search_for_file(
                 for (const auto& suffix : suffixes) {
                     std::filesystem::path check_dir = search_path / suffix;
 
+                    // DEBUG
+
                     // Check if directory exists using cache
                     auto parent = check_dir.parent_path();
                     auto dirname = check_dir.filename().string();
-                    if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) continue;
+                    if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) {
+                        continue;
+                    }
                     // Verify it's actually a directory
                     std::error_code ec;
-                    if (!std::filesystem::is_directory(check_dir, ec)) continue;
+                    if (!std::filesystem::is_directory(check_dir, ec)) {
+                        continue;
+                    }
 
                     for (const auto& variant : variants) {
-                        if (interp.cached_file_exists(check_dir, variant) && validator(check_dir / variant)) {
+                        std::filesystem::path full_path = check_dir / variant;
+                        // For names with path components (e.g., X11/X.h), use single-parameter check
+                        bool exists = (variant.find('/') != std::string::npos)
+                            ? interp.cached_file_exists(full_path)
+                            : interp.cached_file_exists(check_dir, variant);
+                        if (exists && validator(full_path)) {
                             std::error_code ec;
-                            return std::filesystem::canonical(check_dir / variant, ec);
+                            return SearchResult{
+                                std::filesystem::canonical(full_path, ec),
+                                search_path  // Return the base search path, not check_dir
+                            };
                         }
                     }
                 }
@@ -395,15 +427,12 @@ void register_find_command(
 
         // Handle short-hand syntax: find_program(VAR name [path1 path2...])
         if (opts.names.empty() && !default_args.empty()) {
-            // First item goes to names, rest are analyzed
-            for (size_t i = 0; i < default_args.size(); ++i) {
-                const auto& arg = default_args[i];
-                // Heuristic: if it looks like a path, put it in PATHS, otherwise in NAMES
-                if (arg.find('/') != std::string::npos || arg.starts_with("ENV ")) {
-                    opts.paths.push_back(arg);
-                } else {
-                    opts.names.push_back(arg);
-                }
+            // First item is always the name to search for
+            opts.names.push_back(default_args[0]);
+
+            // Rest are paths (if provided)
+            for (size_t i = 1; i < default_args.size(); ++i) {
+                opts.paths.push_back(default_args[i]);
             }
         }
 
@@ -427,11 +456,11 @@ void register_find_command(
             // Found it
             std::string result_str;
             if (return_directory) {
-                // find_path returns directory containing the file
-                result_str = result->parent_path().string();
+                // find_path returns the base search directory where the file was found
+                result_str = result->search_dir.string();
             } else {
                 // find_file, find_program, find_library return full path
-                result_str = result->string();
+                result_str = result->file_path.string();
             }
             interp.set_variable(opts.var_name, result_str);
 

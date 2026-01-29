@@ -828,7 +828,17 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
 
     if (filename.empty()) return false;
 
-    return cached_file_exists(parent, filename);
+    // Try to get cached listing of parent directory
+    // This will populate the cache on-demand if not already cached
+    auto* entries = get_cached_directory_listing(parent);
+    if (!entries) {
+        // Cache population failed (permissions, doesn't exist, etc.)
+        // Fall back to direct filesystem check
+        std::error_code ec;
+        return std::filesystem::exists(full_path, ec);
+    }
+
+    return entries->contains(filename);
 }
 
 bool Interpreter::cached_file_exists(const std::filesystem::path& dir, const std::string& filename) {

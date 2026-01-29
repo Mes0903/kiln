@@ -753,11 +753,37 @@ std::expected<Argument, ParseError> Parser::parse_argument() {
         }
         return Argument{std::move(value_or_error.value()), true};
     } else if (content_[pos_] == '[') {
-        auto value_or_error = parse_bracket_argument();
+        // Check if this is a bracket argument ([[...]] or [=[...]=]) or a registry key ([HKEY_...])
+        // Bracket arguments require '[' or '=' after the opening '['
+        if (pos_ + 1 < content_.length() &&
+            (content_[pos_ + 1] == '[' || content_[pos_ + 1] == '=')) {
+            auto value_or_error = parse_bracket_argument();
+            if (!value_or_error) {
+                return std::unexpected(value_or_error.error());
+            }
+            return Argument{{std::move(value_or_error.value())}, true};
+        }
+        // Check for Windows registry key syntax: [HKEY_...]
+        // On Linux, these resolve to empty strings since there's no registry
+        if (pos_ + 5 < content_.length() &&
+            content_.substr(pos_ + 1, 5) == "HKEY_") {
+            // Consume everything up to and including the closing ']'
+            size_t end_pos = content_.find(']', pos_);
+            if (end_pos != std::string::npos) {
+                // Skip the entire registry key including brackets
+                size_t len = end_pos - pos_ + 1;
+                pos_ = end_pos + 1;
+                col_ += len;
+                // Return empty - registry keys resolve to nothing on non-Windows
+                return Argument{{std::string("")}, false};
+            }
+        }
+        // Otherwise treat as unquoted argument
+        auto value_or_error = parse_unquoted_argument_value();
         if (!value_or_error) {
             return std::unexpected(value_or_error.error());
         }
-        return Argument{{std::move(value_or_error.value())}, true};
+        return Argument{std::move(value_or_error.value()), false};
     } else {
         auto value_or_error = parse_unquoted_argument_value();
         if (!value_or_error) {
