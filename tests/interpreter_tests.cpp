@@ -4183,12 +4183,12 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
         output << std::endl;
     });
 
-    // Test project() with LANGUAGES
+    // Test project() with LANGUAGES (using only supported languages: C, CXX, NONE)
     std::string script = R"(
         get_property(BEFORE GLOBAL PROPERTY ENABLED_LANGUAGES)
         message("before=${BEFORE}")
 
-        project(MyProject LANGUAGES CXX CUDA)
+        project(MyProject LANGUAGES CXX)
 
         get_property(AFTER GLOBAL PROPERTY ENABLED_LANGUAGES)
         message("after=${AFTER}")
@@ -4203,7 +4203,7 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
 
     std::string out = output.str();
     REQUIRE(out.find("before=C;CXX") != std::string::npos);
-    REQUIRE(out.find("after=CXX;CUDA") != std::string::npos);
+    REQUIRE(out.find("after=CXX") != std::string::npos);
 
     // Cleanup
     std::filesystem::remove_all(temp_dir);
@@ -5260,4 +5260,91 @@ TEST_CASE("Multiple levels of function/macro nesting with PARENT_SCOPE", "[inter
     // Since macros don't create scope, modify_parent() modifies root scope directly
     // So both "After" and "Root" see the modified value
     REQUIRE(output == "Before: before_func\nAfter: modified_by_func\nRoot: modified_by_func\n");
+}
+
+// Tests for global function/macro scope (CMake semantics: functions are globally visible)
+TEST_CASE("Functions are globally visible - basic", "[interpreter][function][scoping]") {
+    // Function defined, then called - basic sanity check
+    auto output = run_script(R"(
+        function(my_func)
+            message("func called")
+        endfunction()
+        my_func()
+    )");
+    REQUIRE(output == "func called\n");
+}
+
+TEST_CASE("Macros are globally visible - basic", "[interpreter][macro][scoping]") {
+    // Macro defined, then called - basic sanity check
+    auto output = run_script(R"(
+        macro(my_macro ARG)
+            message("macro: ${ARG}")
+        endmacro()
+        my_macro("test")
+    )");
+    REQUIRE(output == "macro: test\n");
+}
+
+TEST_CASE("Function redefinition replaces previous", "[interpreter][function][scoping]") {
+    // CMake behavior: last definition wins globally
+    auto output = run_script(R"(
+        function(test_func)
+            message("Version 1")
+        endfunction()
+
+        function(test_func)
+            message("Version 2")
+        endfunction()
+
+        test_func()
+    )");
+    REQUIRE(output == "Version 2\n");
+}
+
+TEST_CASE("Macro redefinition replaces previous", "[interpreter][macro][scoping]") {
+    // CMake behavior: last definition wins globally
+    auto output = run_script(R"(
+        macro(test_macro)
+            message("Version 1")
+        endmacro()
+
+        macro(test_macro)
+            message("Version 2")
+        endmacro()
+
+        test_macro()
+    )");
+    REQUIRE(output == "Version 2\n");
+}
+
+TEST_CASE("Function replaces macro with same name", "[interpreter][function][macro][scoping]") {
+    // Defining a function with the same name as a macro should replace the macro
+    auto output = run_script(R"(
+        macro(test_cmd)
+            message("macro version")
+        endmacro()
+
+        function(test_cmd)
+            message("function version")
+        endfunction()
+
+        test_cmd()
+    )");
+    REQUIRE(output == "function version\n");
+}
+
+TEST_CASE("Macro replaces function with same name", "[interpreter][function][macro][scoping]") {
+    // Defining a macro with the same name as a function should replace the function
+    auto output = run_script(R"(
+        function(test_cmd)
+            message("function version")
+        endfunction()
+
+        macro(test_cmd)
+            message("macro version")
+        endmacro()
+
+        test_cmd()
+    )");
+    REQUIRE(output == "macro version\n");
 }

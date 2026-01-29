@@ -285,7 +285,8 @@ private:
     // Directory-scoped property values (per interpreter scope)
     std::map<std::string, std::string> directory_properties_;
 
-    // Scope-local state
+    // Global functions and macros (stored at root, accessible everywhere)
+    // CMake semantics: functions/macros are globally visible once defined
     std::unordered_map<std::string, std::unique_ptr<FunctionBlock>> user_functions_;
     std::unordered_map<std::string, std::unique_ptr<MacroBlock>> user_macros_;
 

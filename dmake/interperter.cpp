@@ -943,17 +943,14 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
         return {};
     }
 
-    Interpreter* curr = this;
-    while (curr) {
-        auto fit = curr->user_functions_.find(lower_identifier);
-        if (fit != curr->user_functions_.end()) {
-            return invoke_user_function(*fit->second, args);  // Dereference unique_ptr
-        }
-        auto mit = curr->user_macros_.find(lower_identifier);
-        if (mit != curr->user_macros_.end()) {
-            return invoke_user_macro(*mit->second, args);  // Dereference unique_ptr
-        }
-        curr = curr->parent_;
+    // Look up user functions/macros at root - CMake functions are globally visible
+    auto fit = root->user_functions_.find(lower_identifier);
+    if (fit != root->user_functions_.end()) {
+        return invoke_user_function(*fit->second, args);
+    }
+    auto mit = root->user_macros_.find(lower_identifier);
+    if (mit != root->user_macros_.end()) {
+        return invoke_user_macro(*mit->second, args);
     }
 
     set_fatal_error("Unknown command: " + identifier);
@@ -1002,18 +999,20 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
     std::string lower_name = block.name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-    // Store FunctionBlock directly on heap with make_unique
-    user_functions_[lower_name] = std::make_unique<FunctionBlock>(block);
-    user_macros_.erase(lower_name);
+    // Store at root - CMake functions/macros are globally visible
+    Interpreter* root = get_root();
+    root->user_functions_[lower_name] = std::make_unique<FunctionBlock>(block);
+    root->user_macros_.erase(lower_name);
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
     std::string lower_name = block.name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-    // Store MacroBlock directly on heap with make_unique
-    user_macros_[lower_name] = std::make_unique<MacroBlock>(block);
-    user_functions_.erase(lower_name);
+    // Store at root - CMake functions/macros are globally visible
+    Interpreter* root = get_root();
+    root->user_macros_[lower_name] = std::make_unique<MacroBlock>(block);
+    root->user_functions_.erase(lower_name);
     return {};
 }
 
@@ -1780,7 +1779,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             pos++;
             std::string name = evaluate_token(condition[pos++]);
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-            return user_functions_.contains(name);
+            return get_root()->user_functions_.contains(name);
         }
 
         // Primary value - evaluate and check truthiness

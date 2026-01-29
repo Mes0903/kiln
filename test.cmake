@@ -1,1 +1,1 @@
-find_package(Freetype REQUIRED)
+find_package(Fontconfig)
