@@ -31,10 +31,19 @@ namespace {
 // 1. Implement proper platform detection (slow but correct)
 // 2. Cache the results of CMake's detection (run once, reuse)
 // 3. Incrementally add variables as projects need them
+static std::unordered_map<std::string, std::string> backup_vars; // We setup interperter multiple times during tests, so back up vars to avoid re-detecting compilers
 void fake_cmake_compiler_checks_and_init(
     std::unordered_map<std::string, std::string>& vars,
     Toolchain& toolchain)
 {
+    if(!backup_vars.empty()) {
+        vars.insert(backup_vars.begin(), backup_vars.end());
+        auto cxx_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_CXX_COMPILER"], Language::CXX);
+        auto c_compiler = std::make_unique<GnuCompiler>(vars["CMAKE_C_COMPILER"], Language::C);
+        toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
+        toolchain.set_compiler(Language::C, std::move(c_compiler));
+        return;
+    }
     // Initialize compilers
     vars["CMAKE_CXX_COMPILER"] = "g++";
     vars["CMAKE_C_COMPILER"] = "gcc";
@@ -86,6 +95,8 @@ void fake_cmake_compiler_checks_and_init(
 
     toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
     toolchain.set_compiler(Language::C, std::move(c_compiler));
+
+    backup_vars.insert(vars.begin(), vars.end());
 }
 
 } // anonymous namespace

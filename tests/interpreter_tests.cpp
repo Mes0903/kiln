@@ -4995,3 +4995,269 @@ TEST_CASE("get_filename_component command", "[interpreter][get_filename_componen
         REQUIRE(output == ".txt||\n");
     }
 }
+
+// ============================================================================
+// SCOPING RULES REGRESSION TESTS
+// These tests ensure correct scoping behavior between macros, functions, and
+// cache variables. They prevent regression of bugs discovered during development.
+// ============================================================================
+
+TEST_CASE("Function called from macro has correct ARGV/ARGC", "[interpreter][scoping][bugfix]") {
+    // Regression test: Functions called from within macros were seeing the macro's
+    // parameters in their ARGV/ARGC instead of their own parameters.
+    // Root cause: macro_substitutions_ was checked before function frame variables
+    // in get_variable(), causing macro parameters to bleed into function scope.
+    // Fix: Clear macro_substitutions_ when entering function scope.
+
+    auto output = run_script(R"(
+        function(my_func arg1 arg2)
+            message("ARGC=${ARGC}")
+            message("ARGV=${ARGV}")
+            message("arg1=${arg1}")
+            message("arg2=${arg2}")
+        endfunction()
+
+        macro(my_macro mac_arg1 mac_arg2)
+            my_func("from_macro_1" "from_macro_2")
+        endmacro()
+
+        my_macro("outer_1" "outer_2")
+    )");
+
+    // Function should see its own arguments, not the macro's arguments
+    REQUIRE(output == "ARGC=2\nARGV=from_macro_1;from_macro_2\narg1=from_macro_1\narg2=from_macro_2\n");
+}
+
+TEST_CASE("Nested macro/function calls preserve correct scope", "[interpreter][scoping][bugfix]") {
+    // Test that deeply nested macro/function calls maintain correct variable scoping
+
+    auto output = run_script(R"(
+        function(inner_func x)
+            message("inner_func ARGC=${ARGC}")
+            message("inner_func x=${x}")
+        endfunction()
+
+        function(middle_func y)
+            message("middle_func ARGC=${ARGC}")
+            message("middle_func y=${y}")
+            inner_func("inner_val")
+        endfunction()
+
+        macro(outer_macro z)
+            message("outer_macro z=${z}")
+            middle_func("middle_val")
+        endmacro()
+
+        outer_macro("outer_val")
+    )");
+
+    REQUIRE(output == "outer_macro z=outer_val\nmiddle_func ARGC=1\nmiddle_func y=middle_val\ninner_func ARGC=1\ninner_func x=inner_val\n");
+}
+
+TEST_CASE("Function called from macro doesn't see macro's local variables", "[interpreter][scoping][bugfix]") {
+    // Functions should not see variables set within the macro's body
+
+    auto output = run_script(R"(
+        function(check_vars)
+            message("MACRO_VAR=${MACRO_VAR}")
+            message("ARGC=${ARGC}")
+        endfunction()
+
+        macro(set_and_call)
+            set(MACRO_VAR "macro_local")
+            check_vars()
+        endmacro()
+
+        set_and_call()
+    )");
+
+    // The function can see MACRO_VAR because macros leak variables to caller scope,
+    // but ARGC should be 0 (not the macro's ARGC)
+    REQUIRE(output == "MACRO_VAR=macro_local\nARGC=0\n");
+}
+
+TEST_CASE("Cache variables are globally accessible", "[interpreter][scoping][cache]") {
+    // Regression test: Cache variables were not accessible from functions
+    // because get_variable() didn't check cache_variables_ after searching call_stack_
+    // Fix: Added cache variable lookup in get_variable()
+
+    auto output = run_script(R"(
+        set(CACHE_VAR "cached_value" CACHE STRING "A cache variable")
+
+        function(read_cache)
+            message("CACHE_VAR=${CACHE_VAR}")
+        endfunction()
+
+        function(nested_read)
+            function(deeply_nested)
+                message("Deep CACHE_VAR=${CACHE_VAR}")
+            endfunction()
+            deeply_nested()
+        endfunction()
+
+        read_cache()
+        nested_read()
+        message("Root CACHE_VAR=${CACHE_VAR}")
+    )");
+
+    REQUIRE(output == "CACHE_VAR=cached_value\nDeep CACHE_VAR=cached_value\nRoot CACHE_VAR=cached_value\n");
+}
+
+TEST_CASE("Cache variables don't create local scope variables", "[interpreter][scoping][cache]") {
+    // Regression test: set(VAR value CACHE ...) was creating both a cache variable
+    // AND a local scope variable, causing confusion about which one was accessed
+    // Fix: Only set in cache namespace, not in local scope
+
+    auto output = run_script(R"(
+        function(test_cache_isolation)
+            set(CACHE_VAR "function_local" CACHE STRING "Test")
+            set(LOCAL_VAR "function_local")
+        endfunction()
+
+        set(CACHE_VAR "root_cache" CACHE STRING "Test")
+        set(LOCAL_VAR "root_local")
+
+        message("Before function - CACHE_VAR=${CACHE_VAR} LOCAL_VAR=${LOCAL_VAR}")
+        test_cache_isolation()
+        message("After function - CACHE_VAR=${CACHE_VAR} LOCAL_VAR=${LOCAL_VAR}")
+    )");
+
+    // CACHE_VAR should be updated globally, but LOCAL_VAR should remain in root scope
+    REQUIRE(output == "Before function - CACHE_VAR=root_cache LOCAL_VAR=root_local\nAfter function - CACHE_VAR=function_local LOCAL_VAR=root_local\n");
+}
+
+TEST_CASE("Cache variables vs local variables precedence", "[interpreter][scoping][cache]") {
+    // Test that local variables shadow cache variables when both exist
+
+    auto output = run_script(R"(
+        set(VAR "cache_value" CACHE STRING "Test")
+        message("Cache only: ${VAR}")
+
+        set(VAR "local_value")
+        message("With local: ${VAR}")
+
+        function(test_shadowing)
+            message("Function sees: ${VAR}")
+            set(VAR "function_local")
+            message("Function local: ${VAR}")
+        endfunction()
+
+        test_shadowing()
+        message("After function: ${VAR}")
+    )");
+
+    // Local variables should shadow cache variables at each scope level
+    REQUIRE(output == "Cache only: cache_value\nWith local: local_value\nFunction sees: local_value\nFunction local: function_local\nAfter function: local_value\n");
+}
+
+TEST_CASE("Macro parameters don't leak into nested function calls", "[interpreter][scoping][bugfix]") {
+    // Comprehensive test: Macro calls function which calls another function
+    // None of the functions should see the macro's parameters in their ARGV
+
+    auto output = run_script(R"(
+        function(level2 a b)
+            message("level2 ARGC=${ARGC} ARGV=${ARGV}")
+            message("level2 a=${a} b=${b}")
+        endfunction()
+
+        function(level1 x)
+            message("level1 ARGC=${ARGC} ARGV=${ARGV}")
+            message("level1 x=${x}")
+            level2("L2_A" "L2_B")
+        endfunction()
+
+        macro(caller m1 m2 m3)
+            message("macro m1=${m1} m2=${m2} m3=${m3}")
+            level1("L1_X")
+        endmacro()
+
+        caller("M1" "M2" "M3")
+    )");
+
+    REQUIRE(output == "macro m1=M1 m2=M2 m3=M3\nlevel1 ARGC=1 ARGV=L1_X\nlevel1 x=L1_X\nlevel2 ARGC=2 ARGV=L2_A;L2_B\nlevel2 a=L2_A b=L2_B\n");
+}
+
+TEST_CASE("file(STRINGS) REGEX uses substring matching", "[interpreter][file][regex][bugfix]") {
+    // Regression test: file(STRINGS) with REGEX was using regex_match (full string)
+    // instead of regex_search (substring), causing legitimate matches to fail
+    // Fix: Changed regex_match to regex_search
+
+    // Create a temporary test file
+    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "dmake_test_strings.txt";
+    {
+        std::ofstream out(temp_file);
+        out << "This line contains ERROR message\n";
+        out << "Another line with WARNING text\n";
+        out << "Normal line without keywords\n";
+        out << "Multiple ERROR and WARNING in one line\n";
+    }
+
+    std::string script =
+        "file(STRINGS \"" + temp_file.string() + "\" lines REGEX \"ERROR\")\n"
+        "message(\"ERROR lines: ${lines}\")\n"
+        "\n"
+        "file(STRINGS \"" + temp_file.string() + "\" warn_lines REGEX \"WARNING\")\n"
+        "message(\"WARNING lines: ${warn_lines}\")\n";
+
+    auto output = run_script(script);
+
+    std::filesystem::remove(temp_file);
+
+    // Should find lines containing the regex pattern as a substring
+    REQUIRE(output == "ERROR lines: This line contains ERROR message;Multiple ERROR and WARNING in one line\nWARNING lines: Another line with WARNING text;Multiple ERROR and WARNING in one line\n");
+}
+
+TEST_CASE("file(STRINGS) REGEX sets CMAKE_MATCH_* variables", "[interpreter][file][regex][bugfix]") {
+    // Regression test: file(STRINGS) with REGEX should set CMAKE_MATCH_* variables
+    // for the most recent match (last matching line)
+
+    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "dmake_test_regex_match.txt";
+    {
+        std::ofstream out(temp_file);
+        out << "Version: 1.2.3\n";
+        out << "Version: 4.5.6\n";
+        out << "Version: 7.8.9\n";
+    }
+
+    std::string script =
+        "file(STRINGS \"" + temp_file.string() + "\" lines REGEX \"Version: ([0-9]+)\\\\.([0-9]+)\\\\.([0-9]+)\")\n"
+        "message(\"CMAKE_MATCH_COUNT=${CMAKE_MATCH_COUNT}\")\n"
+        "message(\"CMAKE_MATCH_0=${CMAKE_MATCH_0}\")\n"
+        "message(\"CMAKE_MATCH_1=${CMAKE_MATCH_1}\")\n"
+        "message(\"CMAKE_MATCH_2=${CMAKE_MATCH_2}\")\n"
+        "message(\"CMAKE_MATCH_3=${CMAKE_MATCH_3}\")\n";
+
+    auto output = run_script(script);
+
+    std::filesystem::remove(temp_file);
+
+    // Should have capture groups from the last matching line (7.8.9)
+    REQUIRE(output == "CMAKE_MATCH_COUNT=3\nCMAKE_MATCH_0=Version: 7.8.9\nCMAKE_MATCH_1=7\nCMAKE_MATCH_2=8\nCMAKE_MATCH_3=9\n");
+}
+
+TEST_CASE("Multiple levels of function/macro nesting with PARENT_SCOPE", "[interpreter][scoping][parent_scope]") {
+    // Test that PARENT_SCOPE works correctly through macro/function boundaries
+    // Important: Macros don't create their own scope, so modify_parent()'s parent
+    // scope is the macro's caller scope (root in this case)
+
+    auto output = run_script(R"(
+        function(modify_parent)
+            set(VAR "modified_by_func" PARENT_SCOPE)
+        endfunction()
+
+        macro(call_modifier)
+            set(VAR "before_func")
+            message("Before: ${VAR}")
+            modify_parent()
+            message("After: ${VAR}")
+        endmacro()
+
+        set(VAR "initial")
+        call_modifier()
+        message("Root: ${VAR}")
+    )");
+
+    // Since macros don't create scope, modify_parent() modifies root scope directly
+    // So both "After" and "Root" see the modified value
+    REQUIRE(output == "Before: before_func\nAfter: modified_by_func\nRoot: modified_by_func\n");
+}

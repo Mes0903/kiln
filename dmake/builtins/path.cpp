@@ -56,20 +56,30 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
         std::string filename = path.filename().string();
 
         if (!filename.empty() && filename != "." && filename != "..") {
-            size_t dot_pos = last_only ? filename.find_last_of('.') : filename.find_first_of('.', 1);
-            if (dot_pos != std::string::npos && dot_pos > 0) {
-                result = filename.substr(dot_pos);
+            // Dotfiles (starting with .) have no extension
+            if (filename[0] == '.') {
+                result = "";
+            } else {
+                size_t dot_pos = last_only ? filename.find_last_of('.') : filename.find_first_of('.', 1);
+                if (dot_pos != std::string::npos && dot_pos > 0) {
+                    result = filename.substr(dot_pos);
+                }
             }
         }
     } else if (component_upper == "STEM") {
         std::string filename = path.filename().string();
 
         if (!filename.empty() && filename != "." && filename != "..") {
-            size_t dot_pos = last_only ? filename.find_last_of('.') : filename.find_first_of('.', 1);
-            if (dot_pos != std::string::npos && dot_pos > 0) {
-                result = filename.substr(0, dot_pos);
+            // Dotfiles (starting with .) have empty stem
+            if (filename[0] == '.') {
+                result = "";
             } else {
-                result = filename;
+                size_t dot_pos = last_only ? filename.find_last_of('.') : filename.find_first_of('.', 1);
+                if (dot_pos != std::string::npos && dot_pos > 0) {
+                    result = filename.substr(0, dot_pos);
+                } else {
+                    result = filename;
+                }
             }
         }
     } else if (component_upper == "RELATIVE_PART") {
@@ -115,7 +125,12 @@ void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
     } else if (subcommand_upper == "HAS_RELATIVE_PATH") {
         result = path.has_relative_path();
     } else if (subcommand_upper == "HAS_PARENT_PATH") {
-        result = path.has_parent_path();
+        // Root path (/) has no parent path in CMake
+        if (path == path.root_path() && !path.empty()) {
+            result = false;
+        } else {
+            result = path.has_parent_path();
+        }
     } else {
         interp.set_fatal_error("cmake_path: unknown query '" + args[0] + "'");
         return;
@@ -359,7 +374,10 @@ void handle_remove_extension(Interpreter& interp, const std::vector<std::string>
     std::string stem;
 
     if (!filename.empty() && filename != "." && filename != "..") {
-        if (last_only) {
+        // Dotfiles (starting with .) have no extension, so stem is empty
+        if (filename[0] == '.') {
+            stem = "";
+        } else if (last_only) {
             size_t dot_pos = filename.find_last_of('.');
             stem = (dot_pos != std::string::npos && dot_pos > 0) ? filename.substr(0, dot_pos) : filename;
         } else {
@@ -400,7 +418,10 @@ void handle_replace_extension(Interpreter& interp, const std::vector<std::string
     std::string stem;
 
     if (!filename.empty() && filename != "." && filename != "..") {
-        if (last_only) {
+        // Dotfiles (starting with .) have no extension, so stem is empty
+        if (filename[0] == '.') {
+            stem = "";
+        } else if (last_only) {
             size_t dot_pos = filename.find_last_of('.');
             stem = (dot_pos != std::string::npos && dot_pos > 0) ? filename.substr(0, dot_pos) : filename;
         } else {
@@ -660,31 +681,51 @@ void register_path_builtins(Interpreter& interp) {
             result = path.filename().string();
         } else if (mode == "EXT") {
             std::string name = path.filename().string();
-            size_t first_dot = name.find_first_of('.', 1);
-            if (first_dot != std::string::npos) {
-                result = name.substr(first_dot);
+            // Dotfiles (starting with .) have no extension
+            if (!name.empty() && name[0] == '.') {
+                result = "";
+            } else {
+                size_t first_dot = name.find_first_of('.', 1);
+                if (first_dot != std::string::npos) {
+                    result = name.substr(first_dot);
+                }
             }
         } else if (mode == "NAME_WE") {
             std::string name = path.filename().string();
-            size_t first_dot = name.find_first_of('.', 1);
-            if (first_dot != std::string::npos) {
-                result = name.substr(0, first_dot);
-            } else {
+            // Dotfiles (starting with .) have no extension, so return full name
+            if (!name.empty() && name[0] == '.') {
                 result = name;
+            } else {
+                size_t first_dot = name.find_first_of('.', 1);
+                if (first_dot != std::string::npos) {
+                    result = name.substr(0, first_dot);
+                } else {
+                    result = name;
+                }
             }
         } else if (mode == "LAST_EXT") {
             std::string name = path.filename().string();
-            size_t last_dot = name.find_last_of('.');
-            if (last_dot != std::string::npos && last_dot > 0) {
-                result = name.substr(last_dot);
+            // Dotfiles (starting with .) have no extension
+            if (!name.empty() && name[0] == '.') {
+                result = "";
+            } else {
+                size_t last_dot = name.find_last_of('.');
+                if (last_dot != std::string::npos && last_dot > 0) {
+                    result = name.substr(last_dot);
+                }
             }
         } else if (mode == "NAME_WLE") {
             std::string name = path.filename().string();
-            size_t last_dot = name.find_last_of('.');
-            if (last_dot != std::string::npos && last_dot > 0) {
-                result = name.substr(0, last_dot);
-            } else {
+            // Dotfiles (starting with .) have no extension, so return full name
+            if (!name.empty() && name[0] == '.') {
                 result = name;
+            } else {
+                size_t last_dot = name.find_last_of('.');
+                if (last_dot != std::string::npos && last_dot > 0) {
+                    result = name.substr(0, last_dot);
+                } else {
+                    result = name;
+                }
             }
         } else if (mode == "ABSOLUTE" || mode == "REALPATH") {
             std::filesystem::path abs_path = path;
