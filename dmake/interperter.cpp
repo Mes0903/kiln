@@ -496,6 +496,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             sub_interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
             sub_interp.set_variable("CMAKE_CURRENT_LIST_DIR", path.string());
 
+            // Inherit parent's accumulated directory properties
+            sub_interp.accumulated_directory_properties_ = interp.accumulated_directory_properties_;
+
             // Register this interpreter for its directory
             std::filesystem::path abs_path = std::filesystem::absolute(path).lexically_normal();
             interp.get_directory_interpreters()[abs_path.string()] = &sub_interp;
@@ -505,6 +508,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             if (ast) {
                 auto res = sub_interp.interpret(ast.value());
                 if (!res) interp.set_fatal_error(res.error());
+                else sub_interp.finalize_directory_targets();  // Apply retroactive properties
             } else {
                 interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
             }
@@ -2107,6 +2111,18 @@ void Interpreter::safe_pop_trace_stack(const std::string& context) {
         std::abort();
     }
     root->trace_stack_.pop_back();
+}
+
+void Interpreter::finalize_directory_targets() {
+    // Apply accumulated directory properties to all owned targets
+    for (const auto& target : owned_targets_) {
+        for (const auto& [prop_name, values] : accumulated_directory_properties_) {
+            if (!values.empty()) {
+                // append_property handles duplicates gracefully (just appends again)
+                target->append_property(prop_name, values, PropertyVisibility::PRIVATE);
+            }
+        }
+    }
 }
 
 }

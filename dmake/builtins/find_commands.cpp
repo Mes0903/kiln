@@ -152,7 +152,7 @@ std::optional<SearchResult> search_for_file(
         // NAMES_PER_DIR: Try all names in one directory before moving to next
         for (const auto& search_path : search_paths) {
             for (const auto& suffix : suffixes) {
-                std::filesystem::path check_dir = search_path / suffix;
+                std::filesystem::path check_dir = suffix.empty() ? search_path : search_path / suffix;
 
                 // Check if directory exists using cache
                 auto parent = check_dir.parent_path();
@@ -178,7 +178,7 @@ std::optional<SearchResult> search_for_file(
                             std::error_code ec;
                             return SearchResult{
                                 std::filesystem::canonical(full_path, ec),
-                                search_path  // Return the base search path, not check_dir
+                                check_dir  // Return the directory where the file was found (includes suffix)
                             };
                         }
                     }
@@ -192,7 +192,7 @@ std::optional<SearchResult> search_for_file(
 
             for (const auto& search_path : search_paths) {
                 for (const auto& suffix : suffixes) {
-                    std::filesystem::path check_dir = search_path / suffix;
+                    std::filesystem::path check_dir = suffix.empty() ? search_path : search_path / suffix;
 
                     // DEBUG
 
@@ -218,7 +218,7 @@ std::optional<SearchResult> search_for_file(
                             std::error_code ec;
                             return SearchResult{
                                 std::filesystem::canonical(full_path, ec),
-                                search_path  // Return the base search path, not check_dir
+                                check_dir  // Return the directory where the file was found (includes suffix)
                             };
                         }
                     }

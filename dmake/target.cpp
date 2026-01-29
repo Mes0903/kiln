@@ -35,7 +35,7 @@ const std::vector<std::string>& Target::get_property_list(const std::string& nam
     static const std::vector<std::string> empty;
     auto prop_it = list_properties_.find(name);
     if (prop_it == list_properties_.end()) return empty;
-    
+
     auto vis_it = prop_it->second.find(visibility);
     return (vis_it != prop_it->second.end()) ? vis_it->second : empty;
 }
@@ -135,7 +135,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     auto merge = [](std::vector<std::string>& target, const std::vector<std::string>& source) {
         target.insert(target.end(), source.begin(), source.end());
     };
-    
+
     // Properties to resolve
     // "SOURCES" is purposefully excluded as it is not transitive in the same way
     struct PropInfo {
@@ -188,7 +188,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                 for (const auto& info : props_to_resolve) {
                     merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
                 }
-                
+
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_libs.push_back(dep_path);
                 merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
@@ -199,7 +199,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                 for (const auto& info : props_to_resolve) {
                     merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
                 }
-                
+
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_iface_libs.push_back(dep_path);
                 merge(res_iface_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
@@ -237,7 +237,7 @@ std::string Target::get_output_path() const {
     } else if (type_ == TargetType::STATIC_LIBRARY) {
         path = std::filesystem::path(binary_dir_) / ("lib" + out_name + ".a");
     } else {
-        return ""; 
+        return "";
     }
 
     return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
@@ -260,7 +260,7 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
 
 void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
-                                      bool is_shared) {
+                                      bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
     // Check if this target has any module sources (for module mapper path)
     bool target_has_modules = has_module_sources();
 
@@ -269,7 +269,9 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         auto lang_info = LanguageClassifier::from_path(src);
         if (lang_info.is_header) continue;
         if (lang_info.lang == Language::UNKNOWN) {
-            throw std::runtime_error("No compiler registered for file '" + src + "' in target '" + name_ + "'");
+            // throw std::runtime_error("No compiler registered for file '" + src + "' in target '" + name_ + "'");
+            // CMake ignores unknown files
+            continue;
         }
 
         // Override module interface detection if file is in CXX_MODULES file set
@@ -280,6 +282,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
         if (!compiler) {
             throw std::runtime_error("No compiler available for language " + std::string(lang_info.name) + " in target '" + name_ + "'");
+            continue;
         }
 
         std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
@@ -330,14 +333,29 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             task.inputs.push_back(pch_gch_path);
         }
 
+        // Add manually added dependencies to compile tasks
+        // This ensures custom targets that generate headers run before compilation
+        for (const auto& dep_name : manually_added_dependencies_) {
+            if (all_targets.count(dep_name)) {
+                auto dep_target = all_targets.at(dep_name);
+                std::string dep_out = dep_target->get_output_path();
+                if (!dep_out.empty()) {
+                    task.dependencies.insert(dep_out);
+                } else {
+                    // Utility target - depend on the target name itself
+                    task.dependencies.insert(dep_name);
+                }
+            }
+        }
+
         graph.add_task(std::move(task));
     }
 }
 
 static std::pair<std::string, std::string> generate_pch_task(
-    BuildGraph& graph, 
-    const Toolchain& toolchain, 
-    const Target* target, 
+    BuildGraph& graph,
+    const Toolchain& toolchain,
+    const Target* target,
     bool is_shared,
     const std::vector<std::string>& includes,
     const std::vector<std::string>& definitions,
@@ -351,7 +369,7 @@ static std::pair<std::string, std::string> generate_pch_task(
         return {"", ""};
     }
 
-    Language pch_lang = Language::CXX; 
+    Language pch_lang = Language::CXX;
     const Compiler* compiler = toolchain.get_compiler_ptr(pch_lang);
     if (!compiler) {
         throw std::runtime_error("No compiler available for PCH generation in target '" + target->get_name() + "'");
@@ -397,7 +415,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     ctx.is_shared = is_shared;
     ctx.standard = target->get_language_standard(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
-    ctx.options.push_back("-x"); 
+    ctx.options.push_back("-x");
     ctx.options.push_back("c++-header");
 
     for (const auto& opt : target->get_language_flags(pch_lang)) ctx.options.push_back(opt);
@@ -449,7 +467,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         get_resolved_property("COMPILE_DEFINITIONS"),
         get_resolved_property("COMPILE_OPTIONS"));
 
-    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared);
+    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, all_targets);
 
     // If we have modules, compile tasks need to depend on the collator
     if (has_modules) {
@@ -516,12 +534,26 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         link.inputs.push_back(obj);
         link.dependencies.insert(obj);
     }
-    
+
     for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
          if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
              link.inputs.push_back(lib);
              link.dependencies.insert(lib);
          }
+    }
+
+    // Add manually added dependencies (from add_dependencies command)
+    for (const auto& dep_name : manually_added_dependencies_) {
+        if (all_targets.count(dep_name)) {
+            auto dep_target = all_targets.at(dep_name);
+            std::string dep_out = dep_target->get_output_path();
+            if (!dep_out.empty()) {
+                link.dependencies.insert(dep_out);
+            } else {
+                // Utility target - depend on the target name itself
+                link.dependencies.insert(dep_name);
+            }
+        }
     }
 
     link.outputs.push_back(output_path);
@@ -530,9 +562,9 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
 void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const std::vector<std::string>&, const std::vector<std::string>&) {
     BuildTask task;
-    task.id = name_; 
+    task.id = name_;
     task.parent_target = this;
-    task.always_run = true; 
+    task.always_run = true;
     task.working_dir = binary_dir_;
 
     for (const auto& custom_cmd : custom_commands_) {
@@ -542,6 +574,7 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
         }
     }
 
+    // Handle DEPENDS from add_custom_target
     for (const auto& dep_name : custom_depends_) {
         if (all_targets.count(dep_name)) {
             auto dep_target = all_targets.at(dep_name);
@@ -558,7 +591,20 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
             task.inputs.push_back(p.string());
         }
     }
-    
+
+    // Handle manually added dependencies (from add_dependencies command)
+    for (const auto& dep_name : manually_added_dependencies_) {
+        if (all_targets.count(dep_name)) {
+            auto dep_target = all_targets.at(dep_name);
+            std::string dep_out = dep_target->get_output_path();
+            if (!dep_out.empty()) {
+                task.dependencies.insert(dep_out);
+            } else {
+                task.dependencies.insert(dep_name);
+            }
+        }
+    }
+
     // Support SOURCES in custom targets just in case
     for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
          std::filesystem::path p(src);

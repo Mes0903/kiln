@@ -5,6 +5,7 @@
 #include <sstream>
 #include <fstream>
 #include <filesystem>
+#include <algorithm>
 
 std::string run_script(std::string src) {
     std::stringstream output;
@@ -5347,4 +5348,234 @@ TEST_CASE("Macro replaces function with same name", "[interpreter][function][mac
         test_cmd()
     )");
     REQUIRE(output == "macro version\n");
+}
+
+// Directory-level property commands tests
+
+TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_add_definitions";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_definitions(-DFOO -DBAR=123)
+        add_executable(test test.cpp)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    REQUIRE(result.has_value());
+
+    // Check that definitions were added without -D prefix
+    auto& targets = interp.get_targets();
+    REQUIRE(targets.find("test") != targets.end());
+
+    auto& target = targets["test"];
+    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(defs.size() == 2);
+    REQUIRE(defs[0] == "FOO");
+    REQUIRE(defs[1] == "BAR=123");
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test.cpp");
+}
+
+TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_add_compile_definitions";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_compile_definitions(FOO BAR=456)
+        add_executable(test test.cpp)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    REQUIRE(result.has_value());
+
+    auto& targets = interp.get_targets();
+    auto& target = targets["test"];
+    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(defs.size() == 2);
+    REQUIRE(defs[0] == "FOO");
+    REQUIRE(defs[1] == "BAR=456");
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test.cpp");
+}
+
+TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_add_compile_options";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_compile_options(-Wall -Werror)
+        add_executable(test test.cpp)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    REQUIRE(result.has_value());
+
+    auto& targets = interp.get_targets();
+    auto& target = targets["test"];
+    const auto& opts = target->get_property_list("COMPILE_OPTIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(opts.size() == 2);
+    REQUIRE(opts[0] == "-Wall");
+    REQUIRE(opts[1] == "-Werror");
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test.cpp");
+}
+
+TEST_CASE("add_link_options applies to targets", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_add_link_options";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_link_options(-Wl,--as-needed)
+        add_executable(test test.cpp)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    REQUIRE(result.has_value());
+
+    auto& targets = interp.get_targets();
+    auto& target = targets["test"];
+    const auto& opts = target->get_property_list("LINK_OPTIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(opts.size() == 1);
+    REQUIRE(opts[0] == "-Wl,--as-needed");
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test.cpp");
+}
+
+TEST_CASE("link_libraries applies to targets", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_link_libraries";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
+    { std::ofstream f("lib.cpp"); f << "void lib_func() {}\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_library(mylib STATIC lib.cpp)
+        link_libraries(mylib pthread)
+        add_executable(test test.cpp)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    // Finalize to apply retroactive properties
+    interp.finalize_directory_targets();
+    REQUIRE(result.has_value());
+
+    auto& targets = interp.get_targets();
+    auto& target = targets["test"];
+    const auto& libs = target->get_property_list("LINK_LIBRARIES", dmake::PropertyVisibility::PRIVATE);
+    // Check that required libs are present (may have duplicates due to creation + finalization)
+    REQUIRE(libs.size() >= 2);
+    REQUIRE(std::find(libs.begin(), libs.end(), "mylib") != libs.end());
+    REQUIRE(std::find(libs.begin(), libs.end(), "pthread") != libs.end());
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test.cpp");
+    std::filesystem::remove("lib.cpp");
+}
+
+TEST_CASE("Directory properties apply retroactively", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_retroactive";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("before.cpp"); f << "int main() { return 0; }\n"; }
+    { std::ofstream f("after.cpp"); f << "int main() { return 0; }\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_executable(before before.cpp)
+        add_definitions(-DTEST_VALUE=100)
+        add_executable(after after.cpp)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    REQUIRE(result.has_value());
+
+    // Finalize to apply retroactive properties
+    interp.finalize_directory_targets();
+
+    auto& targets = interp.get_targets();
+
+    // Both targets should have the definition
+    auto& before = targets["before"];
+    const auto& before_defs = before->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(before_defs.size() >= 1);
+    REQUIRE(std::find(before_defs.begin(), before_defs.end(), "TEST_VALUE=100") != before_defs.end());
+
+    auto& after = targets["after"];
+    const auto& after_defs = after->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(after_defs.size() >= 1);
+    REQUIRE(std::find(after_defs.begin(), after_defs.end(), "TEST_VALUE=100") != after_defs.end());
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("before.cpp");
+    std::filesystem::remove("after.cpp");
+}
+
+TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_properties]") {
+    std::string temp_dir = "build_test_accumulate";
+    std::filesystem::create_directories(temp_dir);
+    { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
+
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+
+    dmake::Parser parser(R"(
+        add_definitions(-DFOO=1)
+        add_compile_definitions(BAR=2)
+        add_compile_options(-Wall)
+        add_executable(test test.cpp)
+        add_definitions(-DBAZ=3)
+    )");
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+
+    auto result = interp.interpret(ast.value());
+    REQUIRE(result.has_value());
+
+    // Finalize to apply retroactive properties
+    interp.finalize_directory_targets();
+
+    auto& targets = interp.get_targets();
+    auto& target = targets["test"];
+
+    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(defs.size() >= 3);
+    REQUIRE(std::find(defs.begin(), defs.end(), "FOO=1") != defs.end());
+    REQUIRE(std::find(defs.begin(), defs.end(), "BAR=2") != defs.end());
+    REQUIRE(std::find(defs.begin(), defs.end(), "BAZ=3") != defs.end());
+
+    const auto& opts = target->get_property_list("COMPILE_OPTIONS", dmake::PropertyVisibility::PRIVATE);
+    REQUIRE(opts.size() >= 1);
+    REQUIRE(std::find(opts.begin(), opts.end(), "-Wall") != opts.end());
+
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::remove("test.cpp");
 }

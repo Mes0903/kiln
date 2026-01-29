@@ -211,6 +211,9 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             return std::unexpected("Interpretation error");
         }
 
+        // Apply retroactive directory properties to root-level targets
+        interpreter->finalize_directory_targets();
+
         auto build_result = interpreter->run_build(opt.jobs, targets);
         if (!build_result) {
             std::cerr << "\033[1;31merror:\033[0m " << build_result.error().message << std::endl;

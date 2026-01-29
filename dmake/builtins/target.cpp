@@ -44,13 +44,12 @@ void register_target_builtins(Interpreter& interp) {
         configure_lang(Language::CXX, "CXX");
         configure_lang(Language::C, "C");
 
-        // Inherit accumulated include and link directories
-        auto* root = interp.get_root();
-        if (!root->accumulated_include_directories_.empty())
-            target->append_property("INCLUDE_DIRECTORIES", root->accumulated_include_directories_, PropertyVisibility::PRIVATE);
-        
-        if (!root->accumulated_link_directories_.empty())
-            target->append_property("LINK_DIRECTORIES", root->accumulated_link_directories_, PropertyVisibility::PRIVATE);
+        // Apply all accumulated directory properties from current interpreter
+        for (const auto& [prop_name, values] : interp.accumulated_directory_properties_) {
+            if (!values.empty()) {
+                target->append_property(prop_name, values, PropertyVisibility::PRIVATE);
+            }
+        }
     };
 
     // Helper for adding sources to a target with validation
@@ -120,6 +119,7 @@ void register_target_builtins(Interpreter& interp) {
             if (!add_sources_to_target(interp, target, src_dir, sources)) return;
         }
         interp.get_root()->targets_[name] = target;
+        interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
     });
 
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
@@ -190,6 +190,7 @@ void register_target_builtins(Interpreter& interp) {
             if (!add_sources_to_target(interp, target, src_dir, sources)) return;
         }
         interp.get_root()->targets_[name] = target;
+        interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
     });
 
     interp.add_builtin("add_custom_target", [&](Interpreter& interp, const std::vector<std::string>& args) {
@@ -238,6 +239,7 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         interp.get_root()->targets_[name] = target;
+        interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
     });
 
     auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> std::shared_ptr<Target> {
@@ -581,14 +583,14 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-        auto& root_dirs = interp.get_root()->accumulated_include_directories_;
+        auto& dirs = interp.accumulated_directory_properties_["INCLUDE_DIRECTORIES"];
 
         for (const auto& arg : args) {
             std::string dir = arg;
             std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
                 std::filesystem::path(dir) :
                 std::filesystem::path(src_dir) / dir;
-            root_dirs.push_back(resolved.string());
+            dirs.push_back(resolved.string());
         }
     });
 
@@ -599,14 +601,108 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-        auto& root_dirs = interp.get_root()->accumulated_link_directories_;
+        auto& dirs = interp.accumulated_directory_properties_["LINK_DIRECTORIES"];
 
         for (const auto& arg : args) {
             std::string dir = arg;
             std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
                 std::filesystem::path(dir) :
                 std::filesystem::path(src_dir) / dir;
-            root_dirs.push_back(resolved.string());
+            dirs.push_back(resolved.string());
+        }
+    });
+
+    interp.add_builtin("add_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("add_definitions() requires at least one definition");
+            return;
+        }
+
+        auto& defs = interp.accumulated_directory_properties_["COMPILE_DEFINITIONS"];
+        for (const auto& arg : args) {
+            std::string def = arg;
+            // Strip -D prefix if present (CMake compatibility)
+            if (def.size() >= 2 && def[0] == '-' && def[1] == 'D') {
+                def = def.substr(2);
+            }
+            defs.push_back(def);
+        }
+    });
+
+    interp.add_builtin("add_compile_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("add_compile_definitions() requires at least one definition");
+            return;
+        }
+
+        auto& defs = interp.accumulated_directory_properties_["COMPILE_DEFINITIONS"];
+        // No -D prefix stripping (modern CMake style)
+        defs.insert(defs.end(), args.begin(), args.end());
+    });
+
+    interp.add_builtin("add_compile_options", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("add_compile_options() requires at least one option");
+            return;
+        }
+
+        auto& opts = interp.accumulated_directory_properties_["COMPILE_OPTIONS"];
+        opts.insert(opts.end(), args.begin(), args.end());
+    });
+
+    interp.add_builtin("add_link_options", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("add_link_options() requires at least one option");
+            return;
+        }
+
+        auto& opts = interp.accumulated_directory_properties_["LINK_OPTIONS"];
+        opts.insert(opts.end(), args.begin(), args.end());
+    });
+
+    interp.add_builtin("link_libraries", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("link_libraries() requires at least one library");
+            return;
+        }
+
+        // Resolve target aliases (same as target_link_libraries does)
+        std::vector<std::string> resolved_libs;
+        for (const auto& lib : args) {
+            resolved_libs.push_back(interp.resolve_target_alias(lib));
+        }
+
+        auto& libs = interp.accumulated_directory_properties_["LINK_LIBRARIES"];
+        libs.insert(libs.end(), resolved_libs.begin(), resolved_libs.end());
+    });
+
+    interp.add_builtin("add_dependencies", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("add_dependencies() requires at least a target name");
+            return;
+        }
+
+        std::string target_name = args[0];
+
+        // Resolve alias to real target name
+        std::string resolved_name = interp.resolve_target_alias(target_name);
+
+        auto target = get_target_from_name(interp, resolved_name, "add_dependencies");
+        if (!target) return;
+
+        // Add each dependency (CMake 4.1+ allows no dependencies, so skip if args.size() == 1)
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string dep = interp.resolve_target_alias(args[i]);
+
+            // Verify the dependency target exists
+            auto& targets = interp.get_root()->targets_;
+            if (targets.find(dep) == targets.end()) {
+                interp.set_fatal_error("add_dependencies(): Cannot add dependency on target \"" + args[i] +
+                                      "\" which does not exist");
+                return;
+            }
+
+            target->add_dependency(dep);
         }
     });
 

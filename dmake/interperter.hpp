@@ -158,6 +158,9 @@ public:
     Toolchain& get_toolchain() { return get_root()->toolchain_; }
     CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
+    // Apply accumulated directory properties to all owned targets (retroactive application)
+    void finalize_directory_targets();
+
     std::vector<TestDefinition>& get_tests() { return get_root()->tests_; }
     void enable_testing_globally() { get_root()->testing_enabled_ = true; }
     bool is_testing_enabled() const { return get_root()->get_root()->testing_enabled_; }
@@ -277,9 +280,13 @@ private:
     };
     std::unordered_map<std::string, DirectoryCacheEntry> dir_scan_cache_;  // Key: absolute directory path
 
-    // Directory-scoped accumulated directories (inherited by targets)
-    std::vector<std::string> accumulated_include_directories_;
-    std::vector<std::string> accumulated_link_directories_;
+    // Generic directory-scoped accumulated properties (per interpreter, inherited by children)
+    // Stores lists like: COMPILE_DEFINITIONS, COMPILE_OPTIONS, INCLUDE_DIRECTORIES, LINK_DIRECTORIES, etc.
+    std::map<std::string, std::vector<std::string>> accumulated_directory_properties_;
+
+    // Track targets created by this interpreter (for retroactive property application)
+    std::vector<std::shared_ptr<Target>> owned_targets_;
+
     std::set<std::string> directory_guarded_files_;
 
     // Directory-scoped property values (per interpreter scope)

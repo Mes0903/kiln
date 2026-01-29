@@ -68,6 +68,10 @@ public:
     const std::vector<FileSet>& get_file_sets() const { return file_sets_; }
     bool is_in_cxx_modules_file_set(const std::string& source) const;
 
+    // Manually added dependencies (add_dependencies command)
+    void add_dependency(const std::string& dep) { manually_added_dependencies_.push_back(dep); }
+    const std::vector<std::string>& get_manually_added_dependencies() const { return manually_added_dependencies_; }
+
     // Deprecated helpers for C++ (mapped to generic properties)
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
@@ -92,7 +96,7 @@ protected:
     // Helper methods for task generation
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
-                               bool is_shared);
+                               bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected
@@ -142,6 +146,9 @@ protected:
     // C++20 modules state
     mutable bool modules_detected_ = false;
     mutable bool has_modules_ = false;
+
+    // Manually added dependencies (from add_dependencies command)
+    std::vector<std::string> manually_added_dependencies_;
 };
 
 class CustomTarget : public Target {
