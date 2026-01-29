@@ -107,6 +107,16 @@ const std::string& Target::get_language_standard(Language lang) const {
     return (it != standards_.end()) ? it->second : empty;
 }
 
+void Target::set_language_extensions(Language lang, bool enabled) {
+    extensions_enabled_[lang] = enabled;
+}
+
+bool Target::get_language_extensions(Language lang) const {
+    auto it = extensions_enabled_.find(lang);
+    // Default to true (extensions enabled) to match CMake behavior
+    return (it != extensions_enabled_.end()) ? it->second : true;
+}
+
 void Target::add_language_flags(Language lang, const std::vector<std::string>& flags) {
     auto& target_flags = language_flags_[lang];
     target_flags.insert(target_flags.end(), flags.begin(), flags.end());
@@ -342,6 +352,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.is_shared = is_shared;
         ctx.pch_include = pch_include_arg;
         ctx.standard = get_language_standard(lang_info.lang);
+        ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
         // C++20 modules: if this is a module interface or target has modules,
@@ -461,6 +472,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     ctx.output = pch_gch_path;
     ctx.is_shared = is_shared;
     ctx.standard = target->get_language_standard(pch_lang);
+    ctx.extensions_enabled = target->get_language_extensions(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
     ctx.options.push_back("-x");
     ctx.options.push_back("c++-header");
@@ -556,6 +568,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.objects = obj_files;
         ctx.is_shared = is_shared;
         ctx.standard = get_language_standard(linker_lang);
+        ctx.extensions_enabled = get_language_extensions(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
 
@@ -721,9 +734,12 @@ bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& t
         ctx.source = src_abs.string();
         ctx.output = ddi_path;
         ctx.standard = get_language_standard(lang_info.lang);
+        ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
+        // CMake automatically adds both source and binary directories
         ctx.includes.push_back(source_dir_);
+        ctx.includes.push_back(binary_dir_);
         for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) {
             ctx.includes.push_back(dir);
         }

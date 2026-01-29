@@ -12,6 +12,7 @@ struct CompileContext {
     std::vector<std::string> definitions;
     std::vector<std::string> options;
     std::string standard;
+    bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)
     bool is_shared = false;
     std::string pch_include;
     bool color_diagnostics = false;
@@ -29,6 +30,7 @@ struct ModuleScanContext {
     std::vector<std::string> includes;
     std::vector<std::string> definitions;
     std::string standard;
+    bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)
     bool color_diagnostics = false;
 };
 
@@ -40,6 +42,7 @@ struct LinkContext {
     std::vector<std::string> linker_flags;
     bool is_shared = false;
     std::string standard;
+    bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)
     bool color_diagnostics = false;
 };
 

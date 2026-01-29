@@ -43,7 +43,12 @@ public:
         cmd.push_back(binary_);
 
         if (!ctx.standard.empty()) {
-            cmd.push_back("-std=" + std::string(lang_ == Language::C ? "c" : "c++") + ctx.standard);
+            std::string std_prefix = (lang_ == Language::C ? "c" : "c++");
+            // Use "gnu" prefix if extensions are enabled (gnu11 vs c11)
+            if (ctx.extensions_enabled) {
+                std_prefix = "gnu" + std_prefix.substr(1);  // "c" -> "gnu", "c++" -> "gnu++"
+            }
+            cmd.push_back("-std=" + std_prefix + ctx.standard);
         }
 
         if (ctx.color_diagnostics) {
@@ -66,7 +71,14 @@ public:
         }
 
         for (const auto& opt : ctx.options) cmd.push_back(opt);
-        for (const auto& def : ctx.definitions) cmd.push_back("-D" + def);
+        for (const auto& def : ctx.definitions) {
+            // Strip -D prefix if present (some CMakeLists.txt files include it)
+            std::string clean_def = def;
+            if (clean_def.starts_with("-D")) {
+                clean_def = clean_def.substr(2);
+            }
+            cmd.push_back("-D" + clean_def);
+        }
 
         cmd.push_back("-MMD");
         cmd.push_back("-MF");
@@ -99,7 +111,12 @@ public:
         cmd.push_back(binary_);
 
         if (!ctx.standard.empty()) {
-            cmd.push_back("-std=" + std::string(lang_ == Language::C ? "c" : "c++") + ctx.standard);
+            std::string std_prefix = (lang_ == Language::C ? "c" : "c++");
+            // Use "gnu" prefix if extensions are enabled (gnu11 vs c11)
+            if (ctx.extensions_enabled) {
+                std_prefix = "gnu" + std_prefix.substr(1);  // "c" -> "gnu", "c++" -> "gnu++"
+            }
+            cmd.push_back("-std=" + std_prefix + ctx.standard);
         }
 
         if (ctx.color_diagnostics) {
@@ -165,7 +182,12 @@ public:
 
         // Definitions
         for (const auto& def : ctx.definitions) {
-            cmd.push_back("-D" + def);
+            // Strip -D prefix if present (some CMakeLists.txt files include it)
+            std::string clean_def = def;
+            if (clean_def.starts_with("-D")) {
+                clean_def = clean_def.substr(2);
+            }
+            cmd.push_back("-D" + clean_def);
         }
 
         // Source file

@@ -55,6 +55,10 @@ void fake_cmake_compiler_checks_and_init(
     auto cxx_info = cxx_compiler->detect_platform();
     interp.set_variable("CMAKE_CXX_COMPILER_ID", cxx_info.compiler_id);
     interp.set_variable("CMAKE_CXX_COMPILER_VERSION", cxx_info.compiler_version);
+    // Legacy compatibility variable for GCC
+    if (cxx_info.compiler_id == "GNU") {
+        interp.set_variable("CMAKE_COMPILER_IS_GNUCXX", "1");
+    }
     if (!cxx_info.implicit_includes.empty()) {
         interp.set_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeList(cxx_info.implicit_includes).to_string());
     }
@@ -69,6 +73,10 @@ void fake_cmake_compiler_checks_and_init(
     auto c_info = c_compiler->detect_platform();
     interp.set_variable("CMAKE_C_COMPILER_ID", c_info.compiler_id);
     interp.set_variable("CMAKE_C_COMPILER_VERSION", c_info.compiler_version);
+    // Legacy compatibility variable for GCC
+    if (c_info.compiler_id == "GNU") {
+        interp.set_variable("CMAKE_COMPILER_IS_GNUCC", "1");
+    }
     if (!c_info.implicit_includes.empty()) {
         interp.set_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeList(c_info.implicit_includes).to_string());
     }

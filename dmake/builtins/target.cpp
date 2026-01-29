@@ -20,6 +20,16 @@ void register_target_builtins(Interpreter& interp) {
                 target->set_language_standard(lang, lang_std);
             }
 
+            // Set extensions from CMAKE_<LANG>_EXTENSIONS (default: ON)
+            std::string ext_var = "CMAKE_" + lang_prefix + "_EXTENSIONS";
+            std::string extensions = interp.get_variable(ext_var);
+            if (!extensions.empty()) {
+                // CMake truthiness: anything not explicitly falsy is true
+                bool enabled = !interp.is_falsy(extensions);
+                target->set_language_extensions(lang, enabled);
+            }
+            // else: default to true (handled in get_language_extensions)
+
             // Apply CMAKE_<LANG>_FLAGS and CMAKE_<LANG>_FLAGS_<CONFIG>
             auto get_flags = [&](const std::string& var_name) -> std::vector<std::string> {
                 std::string flags = interp.get_variable(var_name);

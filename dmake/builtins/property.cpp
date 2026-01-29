@@ -317,6 +317,23 @@ void register_property_builtins(Interpreter& interp) {
                         continue;
                     }
 
+                    // Special handling for language standard properties
+                    if (property_name == "C_STANDARD") {
+                        target->set_language_standard(Language::C, value);
+                        continue;
+                    } else if (property_name == "CXX_STANDARD") {
+                        target->set_language_standard(Language::CXX, value);
+                        continue;
+                    } else if (property_name == "C_EXTENSIONS") {
+                        bool enabled = !interp.is_falsy(value);
+                        target->set_language_extensions(Language::C, enabled);
+                        continue;
+                    } else if (property_name == "CXX_EXTENSIONS") {
+                        bool enabled = !interp.is_falsy(value);
+                        target->set_language_extensions(Language::CXX, enabled);
+                        continue;
+                    }
+
                     // Generic property handling
                     if (append || append_string) {
                         std::string old_val = target->get_property(property_name);

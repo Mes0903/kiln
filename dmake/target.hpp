@@ -52,6 +52,9 @@ public:
     void set_language_standard(Language lang, std::string standard);
     const std::string& get_language_standard(Language lang) const;
 
+    void set_language_extensions(Language lang, bool enabled);
+    bool get_language_extensions(Language lang) const;
+
     void add_language_flags(Language lang, const std::vector<std::string>& flags);
     const std::vector<std::string>& get_language_flags(Language lang) const;
 
@@ -119,6 +122,7 @@ protected:
     std::string imported_location_;
 
     std::map<Language, std::string> standards_;
+    std::map<Language, bool> extensions_enabled_;  // Whether GNU extensions are enabled (gnu11 vs c11)
     std::map<Language, std::vector<std::string>> language_flags_;
 
     // Generic Storage
