@@ -456,8 +456,9 @@ void register_find_command(
             // Found it
             std::string result_str;
             if (return_directory) {
-                // find_path returns the directory containing the file
-                result_str = result->file_path.parent_path().string();
+                // find_path returns the base search directory where the file was found
+                // For "fontconfig/fontconfig.h" found in /usr/include, return /usr/include
+                result_str = result->search_dir.string();
             } else {
                 // find_file, find_program, find_library return full path
                 result_str = result->file_path.string();
