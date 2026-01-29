@@ -371,6 +371,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 #ifdef _WIN32
         variables_.set("WIN32", "1");
 #endif
+#ifdef __linux__
+        variables_.set("LINUX", "1");
+#endif
 
         variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
         variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
