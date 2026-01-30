@@ -22,6 +22,7 @@ struct FindOptions {
     std::vector<std::string> paths;
     std::vector<std::string> path_suffixes;
     std::string doc;
+    std::string validator;  // User-provided validator function name
     bool required = false;
     bool no_default_path = false;
     bool no_cache = false;
@@ -202,7 +203,7 @@ SearchResult search_for_file(
     const FindOptions& opts,
     const std::vector<std::filesystem::path>& default_paths,
     std::vector<std::string> (*name_variants)(Interpreter&, const std::string&),
-    bool (*validator)(const std::filesystem::path&),
+    bool (*builtin_validator)(const std::filesystem::path&),
     const std::string& command_name
 ) {
     auto search_paths = build_search_paths(interp, opts, default_paths, command_name);
@@ -244,7 +245,25 @@ SearchResult search_for_file(
                         bool exists = (variant.find('/') != std::string::npos)
                             ? interp.cached_file_exists(full_path)
                             : interp.cached_file_exists(check_dir, variant);
-                        bool valid = exists && validator(full_path);
+                        bool valid = exists && builtin_validator(full_path);
+
+                        // Check user-provided VALIDATOR function if specified
+                        if (valid && !opts.validator.empty()) {
+                            // Set the variable to the candidate path before calling validator
+                            interp.set_variable(opts.var_name, full_path.string());
+
+                            // Call user's validator function with the candidate path as argument
+                            if (!interp.call_user_function(opts.validator, {full_path.string()})) {
+                                // Function doesn't exist or failed - reject candidate
+                                valid = false;
+                            } else {
+                                // Check if the variable was cleared by the validator (CMake convention for invalid)
+                                std::string result = interp.get_variable(opts.var_name);
+                                if (result.empty()) {
+                                    valid = false;
+                                }
+                            }
+                        }
 
                         // DEBUG: Uncomment to trace search
 
@@ -294,7 +313,27 @@ SearchResult search_for_file(
                         bool exists = (variant.find('/') != std::string::npos)
                             ? interp.cached_file_exists(full_path)
                             : interp.cached_file_exists(check_dir, variant);
-                        if (exists && validator(full_path)) {
+                        bool valid = exists && builtin_validator(full_path);
+
+                        // Check user-provided VALIDATOR function if specified
+                        if (valid && !opts.validator.empty()) {
+                            // Set the variable to the candidate path before calling validator
+                            interp.set_variable(opts.var_name, full_path.string());
+
+                            // Call user's validator function with the candidate path as argument
+                            if (!interp.call_user_function(opts.validator, {full_path.string()})) {
+                                // Function doesn't exist or failed - reject candidate
+                                valid = false;
+                            } else {
+                                // Check if the variable was cleared by the validator (CMake convention for invalid)
+                                std::string result = interp.get_variable(opts.var_name);
+                                if (result.empty()) {
+                                    valid = false;
+                                }
+                            }
+                        }
+
+                        if (valid) {
                             std::error_code ec;
                             return SearchResult{
                                 true,  // found
@@ -506,6 +545,7 @@ void register_find_command(
         parser.list("PATHS", opts.paths);
         parser.list("PATH_SUFFIXES", opts.path_suffixes);
         parser.value("DOC", opts.doc);
+        parser.value("VALIDATOR", opts.validator);
         parser.flag("REQUIRED", opts.required);
         parser.flag("NO_DEFAULT_PATH", opts.no_default_path);
         parser.flag("NO_CACHE", opts.no_cache);

@@ -664,6 +664,11 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
 std::expected<void, InterpreterError> Interpreter::include_file(const std::string& file_path, bool optional) {
     std::filesystem::path path = std::filesystem::path(file_path);
 
+    if(file_path.ends_with("CPack") || file_path.ends_with("CPack.cmake")) {
+        print_message("WARNING", "dmake does not support cpack (yet). Ignoring..");
+        return {};
+    }
+
     // Helper to check if a path exists, trying with and without .cmake extension
     auto try_path = [this](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
         if (cached_file_exists(p)) {
@@ -1401,6 +1406,25 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     current_file_ = saved_file;
     macro_substitutions_ = saved_macro_substitutions;
     return res;
+}
+
+bool Interpreter::call_user_function(const std::string& name, const std::vector<std::string>& args) {
+    // Normalize to lowercase for lookup
+    std::string lower_name = name;
+    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                  [](unsigned char c){ return std::tolower(c); });
+
+    // Look up function in root interpreter
+    auto* root = get_root();
+    auto it = root->user_functions_.find(lower_name);
+    if (it == root->user_functions_.end()) {
+        // Function doesn't exist - return false
+        return false;
+    }
+
+    // Call the function
+    auto result = invoke_user_function(*it->second, args);
+    return result.has_value();
 }
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const MacroBlock& macro, const std::vector<std::string>& args) {

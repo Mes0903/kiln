@@ -333,6 +333,8 @@ public:
     void check_invariants() const;
     void safe_pop_trace_stack(const std::string& context);
 
+    // Call a user-defined function by name (returns false if function doesn't exist or execution failed)
+    bool call_user_function(const std::string& name, const std::vector<std::string>& args);
 
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);

@@ -913,27 +913,57 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
             start_pos = pos_;
             continue;
         }
-        if (content_[pos_] == '$' && pos_ + 1 < content_.length() &&
-            (content_[pos_ + 1] == '{' || std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_')) {
-            // Save accumulated text (from both unescaped and escaped content)
-            if (start_pos < pos_) {
-                current_literal += content_.substr(start_pos, pos_ - start_pos);
+        // Check for variable reference: ${VAR}, $ENV{VAR}, or $CACHE{VAR}
+        if (content_[pos_] == '$' && pos_ + 1 < content_.length()) {
+            bool is_var_ref = false;
+
+            // Check for ${
+            if (content_[pos_ + 1] == '{') {
+                is_var_ref = true;
             }
-            if (!current_literal.empty()) {
-                parts.emplace_back(std::move(current_literal));
-                current_literal.clear();
+            // Check for $ENV{ or $CACHE{
+            else if (std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_') {
+                // Peek ahead to see if this is ENV{ or CACHE{
+                size_t peek_pos = pos_ + 1;
+                while (peek_pos < content_.length() &&
+                       (std::isalnum(content_[peek_pos]) || content_[peek_pos] == '_')) {
+                    peek_pos++;
+                }
+
+                // Check if the identifier is followed by '{'
+                if (peek_pos < content_.length() && content_[peek_pos] == '{') {
+                    // Extract the identifier and check if it's ENV or CACHE
+                    std::string prefix(content_.substr(pos_ + 1, peek_pos - pos_ - 1));
+                    std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                                  [](unsigned char c){ return std::toupper(c); });
+
+                    if (prefix == "ENV" || prefix == "CACHE") {
+                        is_var_ref = true;
+                    }
+                }
             }
 
-            pos_++; // Move past '$'
-            col_++;
+            if (is_var_ref) {
+                // Save accumulated text (from both unescaped and escaped content)
+                if (start_pos < pos_) {
+                    current_literal += content_.substr(start_pos, pos_ - start_pos);
+                }
+                if (!current_literal.empty()) {
+                    parts.emplace_back(std::move(current_literal));
+                    current_literal.clear();
+                }
 
-            auto var_ref = parse_variable_reference(false);
-            if (!var_ref) {
-                return std::unexpected(var_ref.error());
+                pos_++; // Move past '$'
+                col_++;
+
+                auto var_ref = parse_variable_reference(false);
+                if (!var_ref) {
+                    return std::unexpected(var_ref.error());
+                }
+                parts.emplace_back(std::move(var_ref.value()));
+                start_pos = pos_;
+                continue;
             }
-            parts.emplace_back(std::move(var_ref.value()));
-            start_pos = pos_;
-            continue;
         }
 
         // Track generator expression nesting for balanced parsing
@@ -1019,22 +1049,52 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
             }
             return parts;
         }
-        if (current == '$' && pos_ + 1 < content_.length() &&
-            (content_[pos_ + 1] == '{' || std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_')) {
-            if (!current_literal.empty()) {
-                parts.emplace_back(current_literal);
-                current_literal.clear();
+        // Check for variable reference: ${VAR}, $ENV{VAR}, or $CACHE{VAR}
+        if (current == '$' && pos_ + 1 < content_.length()) {
+            bool is_var_ref = false;
+
+            // Check for ${
+            if (content_[pos_ + 1] == '{') {
+                is_var_ref = true;
+            }
+            // Check for $ENV{ or $CACHE{
+            else if (std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_') {
+                // Peek ahead to see if this is ENV{ or CACHE{
+                size_t peek_pos = pos_ + 1;
+                while (peek_pos < content_.length() &&
+                       (std::isalnum(content_[peek_pos]) || content_[peek_pos] == '_')) {
+                    peek_pos++;
+                }
+
+                // Check if the identifier is followed by '{'
+                if (peek_pos < content_.length() && content_[peek_pos] == '{') {
+                    // Extract the identifier and check if it's ENV or CACHE
+                    std::string prefix(content_.substr(pos_ + 1, peek_pos - pos_ - 1));
+                    std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                                  [](unsigned char c){ return std::toupper(c); });
+
+                    if (prefix == "ENV" || prefix == "CACHE") {
+                        is_var_ref = true;
+                    }
+                }
             }
 
-            pos_++; // Move past '$'
-            col_++;
+            if (is_var_ref) {
+                if (!current_literal.empty()) {
+                    parts.emplace_back(current_literal);
+                    current_literal.clear();
+                }
 
-            auto var_ref = parse_variable_reference(true);
-            if (!var_ref) {
-                return std::unexpected(var_ref.error());
+                pos_++; // Move past '$'
+                col_++;
+
+                auto var_ref = parse_variable_reference(true);
+                if (!var_ref) {
+                    return std::unexpected(var_ref.error());
+                }
+                parts.emplace_back(std::move(var_ref.value()));
+                continue;
             }
-            parts.emplace_back(std::move(var_ref.value()));
-            continue;
         }
         
         current_literal += current;
