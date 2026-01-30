@@ -189,6 +189,7 @@ std::string convert_newlines(const std::string& content, const std::string& styl
 
 void register_project_builtins(Interpreter& interp) {
     interp.add_builtin("cmake_minimum_required", [](Interpreter&, const std::vector<std::string>&) {});
+    interp.add_builtin("source_group", [](Interpreter&, const std::vector<std::string>&) {});
 
     interp.add_builtin("project", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
@@ -199,6 +200,7 @@ void register_project_builtins(Interpreter& interp) {
         std::string project_name = args[0];
         interp.set_variable("PROJECT_NAME", project_name);
         interp.set_variable("PROJECT_SOURCE_DIR", interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
+        interp.set_variable("PROJECT_BINARY_DIR", interp.get_variable("CMAKE_CURRENT_BINARY_DIR"));
 
         std::vector<std::string> languages;
         std::string version;

@@ -807,9 +807,17 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     }
 
     std::string current_literal;
-    while (pos_ < content_.length() && !std::isspace(content_[pos_]) &&
-           content_[pos_] != '(' && content_[pos_] != ')' &&
-           content_[pos_] != '#') {
+    int genex_depth = 0;  // Track generator expression nesting: $< ... >
+
+    while (pos_ < content_.length()) {
+        char current = content_[pos_];
+
+        // Stop at whitespace, parens, or comments, but only if not inside a genex
+        if (genex_depth == 0 && (std::isspace(current) || current == '(' || current == ')' || current == '#')) {
+            break;
+        }
+
+        // Continue with normal parsing logic for special constructs
         // Handle embedded quoted strings within unquoted arguments
         // E.g., LAGRANGE_APP_VERSION="${PROJECT_VERSION}" is one argument
         if (content_[pos_] == '"') {
@@ -927,8 +935,28 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
             start_pos = pos_;
             continue;
         }
-        pos_++;
-        col_++;
+
+        // Track generator expression nesting for balanced parsing
+        if (content_[pos_] == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '<') {
+            genex_depth++;
+            pos_++; // Skip '$'
+            col_++;
+            pos_++; // Skip '<'
+            col_++;
+        } else if (content_[pos_] == '>' && genex_depth > 0) {
+            genex_depth--;
+            pos_++;
+            col_++;
+        } else {
+            // Handle newlines in position tracking
+            if (content_[pos_] == '\n') {
+                row_++;
+                col_ = 1;
+            } else {
+                col_++;
+            }
+            pos_++;
+        }
     }
 
     // Collect any remaining text

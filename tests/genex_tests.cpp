@@ -390,3 +390,41 @@ TEST_CASE("GenexEvaluator - evaluate_link_library with complex genex", "[genex][
     REQUIRE(result->value == "mylib");
     REQUIRE(result->link_only == true);
 }
+
+TEST_CASE("GenexParser - Multi-line genex in unquoted arguments", "[genex][parser][multiline]") {
+    // This tests that the CMake parser correctly handles genex that span multiple lines
+    // The parser should track genex depth and not stop at whitespace/newlines inside genex
+    std::string input = R"($<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:
+        -Wall -Wextra -Wpedantic -Werror>)";
+
+    GenexParser parser;
+    auto result = parser.parse(input);
+
+    // Should parse successfully without "Unmatched '<'" error
+    REQUIRE(result.has_value());
+    REQUIRE(result->has_genex == true);
+
+    // The entire thing should be parsed as one genex node (the outer conditional)
+    REQUIRE(result->nodes.size() == 1);
+    REQUIRE(result->nodes[0]->type == GenexNodeType::CONDITIONAL);
+}
+
+TEST_CASE("GenexParser - Complex multi-line genex from real usage", "[genex][parser][multiline]") {
+    // Real-world example: multi-compiler warning flags spanning multiple lines
+    std::string input = R"($<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wall -Wextra>)";
+
+    GenexParser parser;
+    auto result = parser.parse(input);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->has_genex == true);
+
+    // Validate that it can be evaluated
+    GenexEvaluationContext ctx;
+    ctx.cxx_compiler_id = "GNU";
+    GenexEvaluator eval(ctx);
+
+    auto eval_result = eval.evaluate(input);
+    REQUIRE(eval_result.has_value());
+    REQUIRE(*eval_result == "-Wall -Wextra");
+}

@@ -33,6 +33,11 @@ void Target::append_property(const std::string& name, const std::vector<std::str
     list.insert(list.end(), values.begin(), values.end());
 }
 
+void Target::prepend_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {
+    auto& list = list_properties_[name][visibility];
+    list.insert(list.begin(), values.begin(), values.end());
+}
+
 const std::vector<std::string>& Target::get_property_list(const std::string& name, PropertyVisibility visibility) const {
     static const std::vector<std::string> empty;
     auto prop_it = list_properties_.find(name);
@@ -159,6 +164,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         {"COMPILE_DEFINITIONS", false},
         {"COMPILE_OPTIONS", false},
         {"LINK_DIRECTORIES", true},
+        {"LINK_OPTIONS", false},
         {"PRECOMPILE_HEADERS", false} // Note: PCH logic might need specialized handling, but we carry it for now
     };
 
@@ -694,6 +700,11 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.extensions_enabled = get_language_extensions(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
+
+        // Add target-specific link options (from target_link_options)
+        for (const auto& opt : get_resolved_property("LINK_OPTIONS")) {
+            ctx.linker_flags.push_back(opt);
+        }
 
         // Use pre-resolved link libraries
         for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {

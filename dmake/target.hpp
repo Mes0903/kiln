@@ -64,6 +64,7 @@ public:
 
     // Generic List Property Access (for properties that accumulate like SOURCES, DEFINITIONS)
     void append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
+    void prepend_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
     const std::vector<std::string>& get_property_list(const std::string& name, PropertyVisibility visibility) const;
 
     // File Set Support

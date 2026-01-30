@@ -505,6 +505,51 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("target_compile_options", make_target_command("target_compile_options", "COMPILE_OPTIONS"));
     interp.add_builtin("target_precompile_headers", make_target_command("target_precompile_headers", "PRECOMPILE_HEADERS"));
 
+    // target_link_options - similar to other target_* commands but with BEFORE support
+    interp.add_builtin("target_link_options", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_link_options");
+        std::string name;
+        bool before = false;
+        std::vector<std::string> pub, priv, inter;
+
+        parser.add_positional(name, "target name");
+        parser.add_flag("BEFORE", before);
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_link_options");
+        if (!target) return;
+
+        // EARLY VALIDATION (Layer 1) - validate genex support before storing
+        auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
+            for (const auto& value : values) {
+                auto validation = GenexParser::validate_genex_support(value);
+                if (!validation) {
+                    interp.set_fatal_error("target_link_options: " + validation.error() + " in " + visibility + " scope");
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!pub.empty() && !validate_values(pub, "PUBLIC")) return;
+        if (!priv.empty() && !validate_values(priv, "PRIVATE")) return;
+        if (!inter.empty() && !validate_values(inter, "INTERFACE")) return;
+
+        // Store validated values (prepend if BEFORE is specified)
+        if (before) {
+            if (!pub.empty()) target->prepend_property("LINK_OPTIONS", pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->prepend_property("LINK_OPTIONS", priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->prepend_property("LINK_OPTIONS", inter, PropertyVisibility::INTERFACE);
+        } else {
+            if (!pub.empty()) target->append_property("LINK_OPTIONS", pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->append_property("LINK_OPTIONS", priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->append_property("LINK_OPTIONS", inter, PropertyVisibility::INTERFACE);
+        }
+    });
+
     interp.add_builtin("target_sources", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
             interp.set_fatal_error("target_sources() requires at least a target name");
@@ -1013,7 +1058,7 @@ void register_target_builtins(Interpreter& interp) {
         std::vector<std::string> prop_names = {
             "SOURCES", "INCLUDE_DIRECTORIES", "COMPILE_DEFINITIONS",
             "COMPILE_OPTIONS", "LINK_LIBRARIES", "LINK_DIRECTORIES",
-            "PRECOMPILE_HEADERS"
+            "LINK_OPTIONS", "PRECOMPILE_HEADERS"
         };
 
         output += "--- Unresolved Properties ---\n";

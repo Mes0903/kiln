@@ -182,7 +182,7 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         std::ifstream file(cmake_lists);
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-        dmake::Parser parser(content);
+        dmake::Parser parser(content, cmake_lists.string());
         auto ast_or_error = parser.parse();
         if (!ast_or_error) {
             const auto& error = ast_or_error.error();
@@ -443,7 +443,7 @@ int main(int argc, char* argv[]) {
             std::ifstream file(script_abs);
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-            dmake::Parser parser(content);
+            dmake::Parser parser(content, script_abs.string());
             auto ast_or_error = parser.parse();
             if (!ast_or_error) {
                 print_error_context(script_abs.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
