@@ -1876,14 +1876,6 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             return !is_falsy(token_str);
         }
 
-        // Special case: if the argument is ENTIRELY a single variable reference (e.g., ${VAR}),
-        // use its expanded value directly without dereferencing again.
-        // Example: if(${VAR}) where VAR="ON" should evaluate "ON" for truthiness, not dereference ON
-        bool is_single_var_ref = (arg.parts.size() == 1 && std::holds_alternative<VariableReference>(arg.parts[0]));
-        if (is_single_var_ref) {
-            return !is_falsy(token_str);
-        }
-
         // For all other cases (plain literals or concatenations like Prefix_${Suffix}),
         // dereference the result as a variable name
         // Example: if(VAR) should look up the value of variable VAR
