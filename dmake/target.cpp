@@ -261,8 +261,14 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_libs.push_back(dep_path);
 
-                // Still need transitive link libraries even with link_only
-                merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
+                // For static libraries, we need ALL their link dependencies (including PRIVATE)
+                // because static libs are just .o archives with unresolved symbols.
+                // For shared libraries, only INTERFACE deps propagate (shared libs resolve their own symbols).
+                if (dep->get_type() == TargetType::STATIC_LIBRARY) {
+                    merge(res_libs, dep->get_resolved_property("LINK_LIBRARIES"));
+                } else {
+                    merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
+                }
             }
 
             // Propagate to Dependents (from dep's INTERFACE)
@@ -274,7 +280,13 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
 
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_iface_libs.push_back(dep_path);
-                merge(res_iface_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
+
+                // Same logic: static libs need full deps propagated
+                if (dep->get_type() == TargetType::STATIC_LIBRARY) {
+                    merge(res_iface_libs, dep->get_resolved_property("LINK_LIBRARIES"));
+                } else {
+                    merge(res_iface_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
+                }
             }
         } else {
              // System library or raw file

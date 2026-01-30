@@ -158,27 +158,15 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Determine which targets to build
     std::set<std::string> targets_to_build;
     if (requested_targets.empty()) {
-        bool any_all = false;
         for (const auto& [name, target] : targets_) {
             auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-            if (custom && custom->is_build_by_default()) {
-                any_all = true;
-                break;
-            }
-        }
-
-        for (const auto& [name, target] : targets_) {
-            if (any_all) {
-                auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-                if (custom && custom->is_build_by_default()) {
-                    targets_to_build.insert(name);
-                }
-                // Executables and libraries are usually "ALL" in CMake by default unless EXCLUDE_FROM_ALL is set
-                // In dmake we currently treat them as ALL.
-                if (target->get_type() != TargetType::CUSTOM) {
+            if (custom) {
+                // Custom targets only build by default if they have ALL flag
+                if (custom->is_build_by_default()) {
                     targets_to_build.insert(name);
                 }
             } else {
+                // Executables and libraries are "ALL" by default unless EXCLUDE_FROM_ALL is set
                 targets_to_build.insert(name);
             }
         }

@@ -403,6 +403,64 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return (lang_upper == current_lang) ? "1" : "0";
         }
 
+        case GenexNodeType::COMPILE_LANG_AND_ID: {
+            // $<COMPILE_LANG_AND_ID:language,compiler_id1,compiler_id2,...>
+            // Returns 1 if:
+            //   - compilation language matches the first argument
+            //   - AND compiler ID for that language matches any of the remaining arguments
+            if (ctx_.allow_deferred_compile_language && !ctx_.compile_language) {
+                // Return original expression for deferred evaluation
+                return "$<COMPILE_LANG_AND_ID:" + node.raw_content + ">";
+            }
+
+            if (!ctx_.compile_language) {
+                return std::unexpected("COMPILE_LANG_AND_ID requires compile_language context");
+            }
+
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() < 2) {
+                return std::unexpected("$<COMPILE_LANG_AND_ID:...> requires at least 2 arguments (language,compiler_id)");
+            }
+
+            // First argument is the language
+            std::string lang_upper = args[0];
+            std::transform(lang_upper.begin(), lang_upper.end(), lang_upper.begin(),
+                         [](unsigned char c) { return std::toupper(c); });
+
+            std::string current_lang;
+            switch (*ctx_.compile_language) {
+                case Language::C: current_lang = "C"; break;
+                case Language::CXX: current_lang = "CXX"; break;
+                case Language::CUDA: current_lang = "CUDA"; break;
+                default: current_lang = "UNKNOWN"; break;
+            }
+
+            // If language doesn't match, return 0
+            if (lang_upper != current_lang) {
+                return "0";
+            }
+
+            // Get the compiler ID for the matched language
+            std::string compiler_id;
+            if (current_lang == "C") {
+                compiler_id = ctx_.c_compiler_id;
+            } else if (current_lang == "CXX") {
+                compiler_id = ctx_.cxx_compiler_id;
+            } else {
+                // For other languages, we don't have compiler ID in context yet
+                return "0";
+            }
+
+            // Check if compiler ID matches any of the provided IDs
+            for (size_t i = 1; i < args.size(); ++i) {
+                if (args[i] == compiler_id) {
+                    return "1";
+                }
+            }
+
+            return "0";
+        }
+
         case GenexNodeType::PLATFORM_ID: {
             // $<PLATFORM_ID:platform> returns 1 if CMAKE_SYSTEM_NAME matches
             return (node.raw_content == ctx_.system_name) ? "1" : "0";

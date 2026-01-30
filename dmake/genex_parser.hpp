@@ -32,6 +32,7 @@ enum class GenexNodeType {
     TARGET_FILE_DIR,      // $<TARGET_FILE_DIR:target> - directory of target output
     TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>
+    COMPILE_LANG_AND_ID,  // $<COMPILE_LANG_AND_ID:lang,id1,id2,...>
     PLATFORM_ID,          // $<PLATFORM_ID:platform>
     CXX_COMPILER_ID,      // $<CXX_COMPILER_ID:id>
     C_COMPILER_ID,        // $<C_COMPILER_ID:id>

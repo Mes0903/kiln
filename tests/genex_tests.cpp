@@ -272,6 +272,79 @@ TEST_CASE("GenexEvaluator - COMPILE_LANGUAGE", "[genex][evaluator]") {
     REQUIRE(eval2.evaluate("$<COMPILE_LANGUAGE:CXX>").value() == "0");
 }
 
+TEST_CASE("GenexEvaluator - COMPILE_LANG_AND_ID", "[genex][evaluator]") {
+    SECTION("CXX language with matching compiler ID") {
+        GenexEvaluationContext ctx;
+        ctx.compile_language = Language::CXX;
+        ctx.cxx_compiler_id = "GNU";
+        GenexEvaluator eval(ctx);
+
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:CXX,GNU>").value() == "1");
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:CXX,Clang>").value() == "0");
+    }
+
+    SECTION("CXX language with multiple compiler IDs") {
+        GenexEvaluationContext ctx;
+        ctx.compile_language = Language::CXX;
+        ctx.cxx_compiler_id = "Clang";
+        GenexEvaluator eval(ctx);
+
+        // Should match Clang in the list
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>").value() == "1");
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:CXX,GNU,MSVC>").value() == "0");
+    }
+
+    SECTION("C language with matching compiler ID") {
+        GenexEvaluationContext ctx;
+        ctx.compile_language = Language::C;
+        ctx.c_compiler_id = "GNU";
+        GenexEvaluator eval(ctx);
+
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:C,GNU>").value() == "1");
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:C,Clang>").value() == "0");
+    }
+
+    SECTION("Language mismatch returns 0") {
+        GenexEvaluationContext ctx;
+        ctx.compile_language = Language::C;
+        ctx.c_compiler_id = "GNU";
+        ctx.cxx_compiler_id = "GNU";
+        GenexEvaluator eval(ctx);
+
+        // Compiling C, but asking for CXX - should be 0
+        REQUIRE(eval.evaluate("$<COMPILE_LANG_AND_ID:CXX,GNU>").value() == "0");
+    }
+
+    SECTION("Used in conditional expression") {
+        GenexEvaluationContext ctx;
+        ctx.compile_language = Language::CXX;
+        ctx.cxx_compiler_id = "Clang";
+        GenexEvaluator eval(ctx);
+
+        auto result = eval.evaluate("$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>:COMPILING_CXX_WITH_CLANG>");
+        REQUIRE(result.has_value());
+        REQUIRE(*result == "COMPILING_CXX_WITH_CLANG");
+
+        // Change to Intel, should not match
+        ctx.cxx_compiler_id = "Intel";
+        GenexEvaluator eval2(ctx);
+        result = eval2.evaluate("$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>:COMPILING_CXX_WITH_CLANG>");
+        REQUIRE(result.has_value());
+        REQUIRE(*result == "");
+    }
+
+    SECTION("Deferred evaluation when no compile language") {
+        GenexEvaluationContext ctx;
+        ctx.allow_deferred_compile_language = true;
+        // No compile_language set
+        GenexEvaluator eval(ctx);
+
+        auto result = eval.evaluate("$<COMPILE_LANG_AND_ID:CXX,GNU>");
+        REQUIRE(result.has_value());
+        REQUIRE(*result == "$<COMPILE_LANG_AND_ID:CXX,GNU>");  // Returned as-is for deferred evaluation
+    }
+}
+
 TEST_CASE("GenexEvaluator - PLATFORM_ID", "[genex][evaluator]") {
     GenexEvaluationContext ctx;
     ctx.system_name = "Linux";
