@@ -41,10 +41,11 @@ void parse_install_targets(
 
     // Parse target list (all positional args before first keyword)
     size_t i = 0;
+    std::string export_name;
     while (i < parse_args.size()) {
         const auto& arg = parse_args[i];
         // Stop at first keyword
-        if (arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
+        if (arg == "EXPORT" || arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
             arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER" ||
             arg == "DESTINATION" || arg == "PERMISSIONS" || arg == "CONFIGURATIONS" ||
             arg == "COMPONENT" || arg == "OPTIONAL" || arg == "EXCLUDE_FROM_ALL") {
@@ -80,7 +81,15 @@ void parse_install_targets(
     while (i < remaining_args.size()) {
         const auto& arg = remaining_args[i];
 
-        if (arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
+        if (arg == "EXPORT") {
+            // Handle EXPORT keyword - consume it and its value
+            if (i + 1 >= remaining_args.size()) {
+                interp.set_fatal_error("install(TARGETS) EXPORT requires a value");
+                return;
+            }
+            export_name = remaining_args[i + 1];
+            i += 2;
+        } else if (arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
             arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER") {
             current_dest_type = arg;
             if (arg == "ARCHIVE") current_dest = &rule->archive_dest;
@@ -109,11 +118,12 @@ void parse_install_targets(
         } else if (arg == "CONFIGURATIONS" && current_dest) {
             ++i;
             while (i < remaining_args.size() &&
-                   remaining_args[i] != "ARCHIVE" && remaining_args[i] != "LIBRARY" &&
-                   remaining_args[i] != "RUNTIME" && remaining_args[i] != "PUBLIC_HEADER" &&
-                   remaining_args[i] != "PRIVATE_HEADER" && remaining_args[i] != "DESTINATION" &&
-                   remaining_args[i] != "PERMISSIONS" && remaining_args[i] != "COMPONENT" &&
-                   remaining_args[i] != "OPTIONAL" && remaining_args[i] != "EXCLUDE_FROM_ALL") {
+                   remaining_args[i] != "EXPORT" && remaining_args[i] != "ARCHIVE" &&
+                   remaining_args[i] != "LIBRARY" && remaining_args[i] != "RUNTIME" &&
+                   remaining_args[i] != "PUBLIC_HEADER" && remaining_args[i] != "PRIVATE_HEADER" &&
+                   remaining_args[i] != "DESTINATION" && remaining_args[i] != "PERMISSIONS" &&
+                   remaining_args[i] != "COMPONENT" && remaining_args[i] != "OPTIONAL" &&
+                   remaining_args[i] != "EXCLUDE_FROM_ALL") {
                 current_dest->configurations.push_back(remaining_args[i]);
                 ++i;
             }
@@ -133,6 +143,13 @@ void parse_install_targets(
         } else {
             ++i;
         }
+    }
+
+    // Warn if EXPORT was specified
+    if (!export_name.empty()) {
+        interp.print_message("WARNING",
+            "install(TARGETS ... EXPORT) is not yet supported - export set '" + export_name +
+            "' will be ignored");
     }
 
     // Create install rule
@@ -408,6 +425,53 @@ void parse_install_script(
     interp.get_install_rules().push_back(install_rule);
 }
 
+// Parse install(EXPORT ...)
+void parse_install_export(
+    Interpreter& interp,
+    const std::vector<std::string>& args,
+    const std::string& src_dir,
+    const std::string& bin_dir
+) {
+    if (args.size() < 2) {
+        interp.set_fatal_error("install(EXPORT) requires an export name");
+        return;
+    }
+
+    auto rule = std::make_shared<InstallExportRule>();
+    rule->export_name = args[1];
+
+    // Parse remaining arguments
+    for (size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "FILE" && i + 1 < args.size()) {
+            rule->file_name = args[i + 1];
+            ++i;
+        } else if (args[i] == "NAMESPACE" && i + 1 < args.size()) {
+            rule->namespace_prefix = args[i + 1];
+            ++i;
+        } else if (args[i] == "DESTINATION" && i + 1 < args.size()) {
+            rule->destination = args[i + 1];
+            ++i;
+        } else if (args[i] == "COMPONENT" && i + 1 < args.size()) {
+            rule->component = args[i + 1];
+            ++i;
+        }
+    }
+
+    // Print warning immediately during script interpretation
+    interp.print_message("WARNING",
+        "install(EXPORT) is not yet supported - export set '" + rule->export_name +
+        "' will not generate CMake target files");
+
+    // Create install rule (as no-op for now)
+    auto install_rule = std::make_shared<InstallRule>();
+    install_rule->type = InstallRuleType::EXPORT;
+    install_rule->source_dir = src_dir;
+    install_rule->binary_dir = bin_dir;
+    install_rule->export_rule = rule;
+
+    interp.get_install_rules().push_back(install_rule);
+}
+
 } // anonymous namespace
 
 void register_install_builtins(Interpreter& interp) {
@@ -433,8 +497,10 @@ void register_install_builtins(Interpreter& interp) {
             parse_install_script(interp, args, src_dir, bin_dir, true);
         } else if (mode == "CODE") {
             parse_install_script(interp, args, src_dir, bin_dir, false);
+        } else if (mode == "EXPORT") {
+            parse_install_export(interp, args, src_dir, bin_dir);
         } else {
-            interp.set_fatal_error("install() first argument must be TARGETS, FILES, PROGRAMS, DIRECTORY, SCRIPT, or CODE");
+            interp.set_fatal_error("install() first argument must be TARGETS, FILES, PROGRAMS, DIRECTORY, SCRIPT, CODE, or EXPORT");
         }
     });
 }

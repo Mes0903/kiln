@@ -66,7 +66,8 @@ enum class InstallRuleType {
     PROGRAMS,
     DIRECTORY,
     SCRIPT,
-    CODE
+    CODE,
+    EXPORT
 };
 
 struct InstallDestination {
@@ -107,6 +108,14 @@ struct InstallScriptRule {
     std::string component = "Unspecified";
 };
 
+struct InstallExportRule {
+    std::string export_name;                // Name of the export set
+    std::string file_name;                  // Output file name (e.g., MyProjectTargets.cmake)
+    std::string namespace_prefix;           // Namespace for imported targets
+    std::string destination;                // Install destination
+    std::string component = "Unspecified";
+};
+
 struct InstallRule {
     InstallRuleType type;
     std::string source_dir;  // CMAKE_CURRENT_SOURCE_DIR when defined
@@ -117,6 +126,7 @@ struct InstallRule {
     std::shared_ptr<InstallFilesRule> files_rule;
     std::shared_ptr<InstallDirectoryRule> directory_rule;
     std::shared_ptr<InstallScriptRule> script_rule;
+    std::shared_ptr<InstallExportRule> export_rule;
 };
 
 // ANSI escape codes for colors

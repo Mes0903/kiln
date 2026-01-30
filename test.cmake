@@ -1,1 +1,2 @@
-find_package(Botan)
+include(GNUInstallDirs)
+message("CMAKE_INSTALL_FULL_LIBDIR: ${CMAKE_INSTALL_FULL_LIBDIR}")

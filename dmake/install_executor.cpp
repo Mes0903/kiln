@@ -440,6 +440,23 @@ std::expected<void, std::string> execute_script_rule(
     return {};
 }
 
+// Execute install(EXPORT ...) rule
+std::expected<void, std::string> execute_export_rule(
+    Interpreter* interp,
+    const InstallExportRule& rule,
+    const std::string& install_prefix,
+    const std::string& component_filter,
+    std::ostream& out
+) {
+    // Check component filter
+    if (!component_filter.empty() && rule.component != component_filter) {
+        return {};
+    }
+
+    // No-op - warning already printed during script interpretation
+    return {};
+}
+
 } // anonymous namespace
 
 std::expected<void, std::string> execute_install_rules(
@@ -503,6 +520,19 @@ std::expected<void, std::string> execute_install_rules(
                     auto res = execute_script_rule(
                         interp,
                         *rule->script_rule,
+                        install_prefix,
+                        component_filter,
+                        out
+                    );
+                    if (!res) return res;
+                }
+                break;
+
+            case InstallRuleType::EXPORT:
+                {
+                    auto res = execute_export_rule(
+                        interp,
+                        *rule->export_rule,
                         install_prefix,
                         component_filter,
                         out
