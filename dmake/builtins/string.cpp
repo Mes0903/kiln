@@ -1011,8 +1011,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "SHA256");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
             parser.add_positional(out_var, "output variable");
+            parser.add_positional(input, "input string");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, sha256(input).to_string());
@@ -1021,8 +1021,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "BLAKE2B");
             std::string input, out_var, key;
 
-            parser.add_positional(input, "input string");
             parser.add_positional(out_var, "output variable");
+            parser.add_positional(input, "input string");
             parser.add_positional(key, "key", false);
 
             PARSE_OR_RETURN(parser, interp, sub_args);

@@ -968,11 +968,27 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
     // Look up user functions/macros at root - CMake functions are globally visible
     auto fit = root->user_functions_.find(lower_identifier);
     if (fit != root->user_functions_.end()) {
-        return invoke_user_function(*fit->second, args);
+        // Move the unique_ptr out to keep the FunctionBlock alive if it gets redefined during execution
+        auto func_ptr = std::move(fit->second);
+        root->user_functions_.erase(fit);
+        auto result = invoke_user_function(*func_ptr, args);
+        // Put it back if not replaced by a new definition
+        if (root->user_functions_.find(lower_identifier) == root->user_functions_.end()) {
+            root->user_functions_[lower_identifier] = std::move(func_ptr);
+        }
+        return result;
     }
     auto mit = root->user_macros_.find(lower_identifier);
     if (mit != root->user_macros_.end()) {
-        return invoke_user_macro(*mit->second, args);
+        // Move the unique_ptr out to keep the MacroBlock alive if it gets redefined during execution
+        auto macro_ptr = std::move(mit->second);
+        root->user_macros_.erase(mit);
+        auto result = invoke_user_macro(*macro_ptr, args);
+        // Put it back if not replaced by a new definition
+        if (root->user_macros_.find(lower_identifier) == root->user_macros_.end()) {
+            root->user_macros_[lower_identifier] = std::move(macro_ptr);
+        }
+        return result;
     }
 
     set_fatal_error("Unknown command: " + identifier);
