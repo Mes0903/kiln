@@ -242,6 +242,7 @@ void register_target_builtins(Interpreter& interp) {
             std::vector<std::vector<std::string>> commands;
             std::vector<std::string> depends;
             std::vector<std::string> byproducts;
+            std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
             std::string comment;
             bool append = false;
@@ -249,6 +250,7 @@ void register_target_builtins(Interpreter& interp) {
 
             parser.list("OUTPUT", outputs);
             parser.multi_list("COMMAND", commands);
+            parser.list("ARGS", cmd_args);  // Deprecated, appends to last COMMAND
             parser.list("DEPENDS", depends);
             parser.list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
             parser.value("WORKING_DIRECTORY", working_dir);
@@ -256,6 +258,11 @@ void register_target_builtins(Interpreter& interp) {
             parser.flag("APPEND", append);
             parser.flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
             PARSE_OR_RETURN(parser, interp, args);
+
+            // Handle deprecated ARGS keyword - append to last COMMAND
+            if (!cmd_args.empty() && !commands.empty()) {
+                commands.back().insert(commands.back().end(), cmd_args.begin(), cmd_args.end());
+            }
 
             if (outputs.empty()) {
                 interp.set_fatal_error("add_custom_command(OUTPUT) requires at least one output file");
@@ -365,11 +372,13 @@ void register_target_builtins(Interpreter& interp) {
             // Parse remaining arguments
             CommandParser parser("add_custom_command");
             std::vector<std::vector<std::string>> commands;
+            std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
             std::string comment;
             bool verbatim = false;
 
             parser.multi_list("COMMAND", commands);
+            parser.list("ARGS", cmd_args);  // Deprecated, appends to last COMMAND
             parser.value("WORKING_DIRECTORY", working_dir);
             parser.value("COMMENT", comment);
             parser.flag("VERBATIM", verbatim);
@@ -377,6 +386,11 @@ void register_target_builtins(Interpreter& interp) {
             // Parse from index 3 onwards (skip TARGET <name> <timing>)
             std::vector<std::string> remaining_args(args.begin() + 3, args.end());
             PARSE_OR_RETURN(parser, interp, remaining_args);
+
+            // Handle deprecated ARGS keyword - append to last COMMAND
+            if (!cmd_args.empty() && !commands.empty()) {
+                commands.back().insert(commands.back().end(), cmd_args.begin(), cmd_args.end());
+            }
 
             if (commands.empty()) {
                 interp.set_fatal_error("add_custom_command(TARGET) requires at least one COMMAND");
