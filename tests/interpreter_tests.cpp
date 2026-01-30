@@ -4286,6 +4286,110 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
     std::filesystem::remove_all(temp_dir);
 }
 
+TEST_CASE("enable_language() updates ENABLED_LANGUAGES", "[interpreter][language]") {
+    std::string temp_dir = "build_test_enable_language";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+
+    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+        for (const auto& arg : args) output << arg;
+        output << std::endl;
+    });
+
+    // Test enable_language() adds languages to ENABLED_LANGUAGES
+    std::string script = R"(
+        get_property(BEFORE GLOBAL PROPERTY ENABLED_LANGUAGES)
+        message("before=${BEFORE}")
+
+        # Reset to empty for testing
+        set_property(GLOBAL PROPERTY ENABLED_LANGUAGES "")
+
+        enable_language(C)
+        get_property(AFTER_C GLOBAL PROPERTY ENABLED_LANGUAGES)
+        message("after_c=${AFTER_C}")
+
+        enable_language(CXX)
+        get_property(AFTER_CXX GLOBAL PROPERTY ENABLED_LANGUAGES)
+        message("after_cxx=${AFTER_CXX}")
+
+        # Try to enable C again - should not duplicate
+        enable_language(C)
+        get_property(FINAL GLOBAL PROPERTY ENABLED_LANGUAGES)
+        message("final=${FINAL}")
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    std::string out = output.str();
+    REQUIRE(out.find("after_c=C") != std::string::npos);
+    REQUIRE(out.find("after_cxx=C;CXX") != std::string::npos);
+    REQUIRE(out.find("final=C;CXX") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("enable_language() with OPTIONAL", "[interpreter][language]") {
+    std::string temp_dir = "build_test_enable_language_optional";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+
+    // Test OPTIONAL flag - unsupported language should not error
+    std::string script = R"(
+        set_property(GLOBAL PROPERTY ENABLED_LANGUAGES "")
+        enable_language(Fortran OPTIONAL)
+        enable_language(C CXX)
+        get_property(LANGS GLOBAL PROPERTY ENABLED_LANGUAGES)
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE(result.has_value());
+
+    // Verify only C and CXX were enabled
+    std::string langs = interp.get_global_properties()["ENABLED_LANGUAGES"];
+    REQUIRE(langs == "C;CXX");
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("enable_language() error on unsupported language", "[interpreter][language]") {
+    std::string temp_dir = "build_test_enable_language_error";
+    std::filesystem::create_directories(temp_dir);
+
+    std::stringstream output;
+    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+
+    // Test error on unsupported language without OPTIONAL
+    std::string script = R"(
+        enable_language(Fortran)
+    )";
+
+    dmake::Parser parser(script);
+    auto ast_or_error = parser.parse();
+    REQUIRE(ast_or_error.has_value());
+
+    auto result = interp.interpret(ast_or_error.value());
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().message.find("unsupported language") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
+}
+
 TEST_CASE("if condition: unquoted variable reference in STREQUAL", "[interpreter][if][bugfix]") {
     // When using ${VAR} (unquoted) in a STREQUAL comparison, the expanded value
     // should be compared directly, NOT dereferenced again as a variable name.

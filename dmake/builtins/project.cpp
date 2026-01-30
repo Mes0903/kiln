@@ -298,6 +298,60 @@ void register_project_builtins(Interpreter& interp) {
     interp.add_builtin("cmake_policy", [](Interpreter&, const std::vector<std::string>&) {});
     interp.add_builtin("mark_as_advanced", [](Interpreter&, const std::vector<std::string>&) {});
 
+    interp.add_builtin("enable_language", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("enable_language() requires at least one language argument");
+            return;
+        }
+
+        // Parse arguments - look for OPTIONAL flag
+        bool optional = false;
+        std::vector<std::string> languages;
+
+        for (const auto& arg : args) {
+            if (arg == "OPTIONAL") {
+                optional = true;
+            } else {
+                languages.push_back(arg);
+            }
+        }
+
+        if (languages.empty()) {
+            interp.set_fatal_error("enable_language() requires at least one language");
+            return;
+        }
+
+        // Validate languages - we only support C and CXX
+        for (const auto& lang : languages) {
+            if (lang != "C" && lang != "CXX") {
+                if (optional) {
+                    // Silently ignore unsupported optional languages
+                    continue;
+                } else {
+                    interp.set_fatal_error("enable_language() unsupported language: " + lang +
+                                         " (only C and CXX are supported)");
+                    return;
+                }
+            }
+        }
+
+        // Get current enabled languages
+        std::string current = interp.get_global_properties()["ENABLED_LANGUAGES"];
+        CMakeList enabled_langs(current);
+
+        // Add new languages (avoid duplicates)
+        for (const auto& lang : languages) {
+            if (lang == "C" || lang == "CXX") {
+                if (!enabled_langs.contains(lang)) {
+                    enabled_langs.append(lang);
+                }
+            }
+        }
+
+        // Update global property
+        interp.get_global_properties()["ENABLED_LANGUAGES"] = enabled_langs.to_string();
+    });
+
     interp.add_builtin("configure_file", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 2) {
             interp.set_fatal_error("configure_file() requires input and output arguments");
