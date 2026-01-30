@@ -2,6 +2,7 @@
 #include "../dmake/genex_parser.hpp"
 #include "../dmake/genex_evaluator.hpp"
 #include "../dmake/target.hpp"
+#include "../dmake/build_system.hpp"
 #include <map>
 #include <memory>
 
@@ -71,7 +72,7 @@ TEST_CASE("GenexParser - Validation - supported genex", "[genex][parser][validat
 }
 
 TEST_CASE("GenexParser - Validation - unsupported genex", "[genex][parser][validation]") {
-    auto result = GenexParser::validate_genex_support("$<TARGET_FILE:foo>");
+    auto result = GenexParser::validate_genex_support("$<THIS_GENEX_DOES_NOT_EXIST:foo>");
     REQUIRE(!result.has_value());
     REQUIRE(result.error().find("Unsupported") != std::string::npos);
 }
@@ -225,6 +226,36 @@ TEST_CASE("GenexEvaluator - TARGET_EXISTS", "[genex][evaluator]") {
 
     REQUIRE(eval.evaluate("$<TARGET_EXISTS:mylib>").value() == "1");
     REQUIRE(eval.evaluate("$<TARGET_EXISTS:notexist>").value() == "0");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_FILE", "[genex][evaluator]") {
+    std::map<std::string, std::shared_ptr<Target>> targets;
+    targets["myexe"] = std::make_shared<Target>("myexe", TargetType::EXECUTABLE, "/src", "/build");
+    targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    GenexEvaluator eval(ctx);
+
+    // TARGET_FILE returns full path
+    auto exe_path = eval.evaluate("$<TARGET_FILE:myexe>");
+    REQUIRE(exe_path.has_value());
+    REQUIRE(exe_path->find("myexe") != std::string::npos);
+
+    // TARGET_FILE_NAME returns just the filename
+    auto exe_name = eval.evaluate("$<TARGET_FILE_NAME:myexe>");
+    REQUIRE(exe_name.has_value());
+    REQUIRE(*exe_name == "myexe");
+
+    // TARGET_FILE_DIR returns the directory
+    auto exe_dir = eval.evaluate("$<TARGET_FILE_DIR:myexe>");
+    REQUIRE(exe_dir.has_value());
+    REQUIRE(exe_dir->find("/build") != std::string::npos);
+
+    // Error for non-existent target
+    auto bad = eval.evaluate("$<TARGET_FILE:notexist>");
+    REQUIRE(!bad.has_value());
+    REQUIRE(bad.error().find("not found") != std::string::npos);
 }
 
 TEST_CASE("GenexEvaluator - COMPILE_LANGUAGE", "[genex][evaluator]") {
@@ -495,5 +526,138 @@ TEST_CASE("GenexEvaluator - Pure genex whitespace splitting", "[genex][evaluator
         // Only the second one should be present
         REQUIRE(result->size() == 1);
         REQUIRE((*result)[0] == "-pedantic");
+    }
+}
+
+// ============================================================================
+// BuildGraph::finalize() Tests
+// ============================================================================
+
+TEST_CASE("BuildGraph::finalize evaluates genex in commands", "[genex][finalize]") {
+    BuildGraph graph;
+
+    SECTION("CONFIG genex in command arguments") {
+        BuildTask task;
+        task.id = "test_task";
+        // $<CONFIG:Debug> returns "1" if config is Debug, "0" otherwise
+        // $<$<CONFIG:Debug>:DEBUG_MODE> returns "DEBUG_MODE" if Debug, empty otherwise
+        task.commands = {{"echo", "Config: $<CONFIG:Debug>", "$<$<CONFIG:Debug>:DEBUG_MODE>"}};
+
+        graph.add_task(std::move(task));
+
+        GenexEvaluationContext ctx;
+        ctx.build_type = "Debug";
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.finalize(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.commands.size() == 1);
+        REQUIRE(finalized.commands[0].size() == 3);
+        REQUIRE(finalized.commands[0][0] == "echo");
+        REQUIRE(finalized.commands[0][1] == "Config: 1");  // $<CONFIG:Debug> evaluates to "1"
+        REQUIRE(finalized.commands[0][2] == "DEBUG_MODE");
+    }
+
+    SECTION("Empty genex results are omitted") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"echo", "$<$<CONFIG:Release>:RELEASE_MODE>", "always"}};
+
+        graph.add_task(std::move(task));
+
+        GenexEvaluationContext ctx;
+        ctx.build_type = "Debug";  // Not Release, so genex evaluates to empty
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.finalize(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.commands.size() == 1);
+        REQUIRE(finalized.commands[0].size() == 2);  // Empty argument omitted
+        REQUIRE(finalized.commands[0][0] == "echo");
+        REQUIRE(finalized.commands[0][1] == "always");
+    }
+
+    SECTION("working_dir genex evaluation") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"ls"}};
+        // Use $<$<CONFIG:Debug>:debug> to produce "debug" if Debug config, empty otherwise
+        task.working_dir = "/build/$<$<CONFIG:Debug>:debug>";
+
+        graph.add_task(std::move(task));
+
+        GenexEvaluationContext ctx;
+        ctx.build_type = "Debug";
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.finalize(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.working_dir == "/build/debug");
+    }
+
+    SECTION("COMPILE_LANGUAGE genex with task-specific language") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"g++", "$<$<COMPILE_LANGUAGE:CXX>:-std=c++17>", "file.cpp"}};
+        task.compile_language = Language::CXX;
+
+        graph.add_task(std::move(task));
+
+        GenexEvaluationContext ctx;
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.finalize(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.commands.size() == 1);
+        REQUIRE(finalized.commands[0].size() == 3);
+        REQUIRE(finalized.commands[0][1] == "-std=c++17");
+    }
+
+    SECTION("Fast path - strings without genex are unchanged") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"g++", "-O2", "-Wall", "file.cpp"}};
+
+        graph.add_task(std::move(task));
+
+        GenexEvaluationContext ctx;
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.finalize(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.commands[0] == std::vector<std::string>{"g++", "-O2", "-Wall", "file.cpp"});
+    }
+
+    SECTION("Multiple commands are all evaluated") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {
+            {"echo", "$<$<CONFIG:Debug>:cmd1>"},
+            {"echo", "$<$<CONFIG:Debug>:cmd2>"}
+        };
+
+        graph.add_task(std::move(task));
+
+        GenexEvaluationContext ctx;
+        ctx.build_type = "Debug";
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.finalize(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.commands.size() == 2);
+        REQUIRE(finalized.commands[0][1] == "cmd1");
+        REQUIRE(finalized.commands[1][1] == "cmd2");
     }
 }

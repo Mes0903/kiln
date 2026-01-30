@@ -27,6 +27,9 @@ enum class GenexNodeType {
     VERSION_LESS_EQUAL,   // $<VERSION_LESS_EQUAL:v1,v2>
     VERSION_GREATER_EQUAL, // $<VERSION_GREATER_EQUAL:v1,v2>
     TARGET_EXISTS,        // $<TARGET_EXISTS:target>
+    TARGET_FILE,          // $<TARGET_FILE:target> - full path to target output
+    TARGET_FILE_NAME,     // $<TARGET_FILE_NAME:target> - filename of target output
+    TARGET_FILE_DIR,      // $<TARGET_FILE_DIR:target> - directory of target output
     TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>
     PLATFORM_ID,          // $<PLATFORM_ID:platform>

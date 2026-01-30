@@ -3,6 +3,7 @@
 #include "target.hpp"
 #include "build_system.hpp"
 #include "gnu_compiler.hpp"
+#include "genex_evaluator.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -291,6 +292,22 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
                  // The link command already has these from Target::generate_tasks
                  // but we need them as inputs for the graph.
             }
+        }
+    }
+
+    // 2b. Finalize - evaluate all generator expressions in all tasks
+    {
+        GenexEvaluationContext genex_ctx;
+        genex_ctx.build_type = get_variable("CMAKE_BUILD_TYPE");
+        genex_ctx.system_name = get_variable("CMAKE_SYSTEM_NAME");
+        genex_ctx.cxx_compiler_id = get_variable("CMAKE_CXX_COMPILER_ID");
+        genex_ctx.c_compiler_id = get_variable("CMAKE_C_COMPILER_ID");
+        genex_ctx.all_targets = &targets_;
+        genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto finalize_result = graph.finalize(genex_ctx);
+        if (!finalize_result) {
+            return std::unexpected(BuildError{current_file_, finalize_result.error()});
         }
     }
 

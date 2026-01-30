@@ -531,6 +531,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         task.outputs.push_back(obj + ".d");
         task.is_compilation = true;
         task.source_file = src_abs.string();
+        task.compile_language = lang_info.lang;  // For COMPILE_LANGUAGE genex
 
         // Mark as module source if it's a module interface file
         if (lang_info.is_module_interface) {

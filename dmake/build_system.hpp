@@ -9,10 +9,12 @@
 #include <filesystem>
 #include <mutex>
 #include "utils.hpp"
+#include "language.hpp"
 
 namespace dmake {
 
 class Target;
+struct GenexEvaluationContext;
 
 struct BuildTask {
     std::string id;              // Unique identifier (usually the primary output file)
@@ -34,6 +36,9 @@ struct BuildTask {
     std::string module_provides;       // Module name this source provides (if any)
     std::vector<std::string> module_requires;  // Module names this source requires
 
+    // For COMPILE_LANGUAGE genex support
+    std::optional<Language> compile_language;  // Language being compiled (for $<COMPILE_LANGUAGE:...>)
+
     // For graph execution
     std::set<std::string> dependencies; // Task IDs we depend on
     std::set<std::string> dependents;   // Task IDs that depend on us
@@ -50,6 +55,10 @@ public:
     std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
 
     std::expected<void, std::string> generate_compile_commands(const std::string& build_dir);
+
+    // Finalize the build graph: evaluate all generator expressions in all tasks.
+    // Call after generate_tasks() and before execute().
+    std::expected<void, std::string> finalize(const GenexEvaluationContext& ctx);
 
     // Helpers for target task generation
     bool has_task(const std::string& id) const { return tasks_.count(id); }

@@ -2,6 +2,7 @@
 #include "target.hpp"
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <sstream>
 
 namespace dmake {
@@ -271,6 +272,44 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return std::unexpected("TARGET_EXISTS requires all_targets context");
             }
             return (ctx_.all_targets->find(node.raw_content) != ctx_.all_targets->end()) ? "1" : "0";
+        }
+
+        case GenexNodeType::TARGET_FILE: {
+            // $<TARGET_FILE:target> returns full path to target output
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_FILE requires all_targets context");
+            }
+            auto target_it = ctx_.all_targets->find(node.raw_content);
+            if (target_it == ctx_.all_targets->end()) {
+                return std::unexpected("TARGET_FILE: target '" + node.raw_content + "' not found");
+            }
+            return target_it->second->get_output_path();
+        }
+
+        case GenexNodeType::TARGET_FILE_NAME: {
+            // $<TARGET_FILE_NAME:target> returns filename of target output
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_FILE_NAME requires all_targets context");
+            }
+            auto target_it = ctx_.all_targets->find(node.raw_content);
+            if (target_it == ctx_.all_targets->end()) {
+                return std::unexpected("TARGET_FILE_NAME: target '" + node.raw_content + "' not found");
+            }
+            std::filesystem::path output_path(target_it->second->get_output_path());
+            return output_path.filename().string();
+        }
+
+        case GenexNodeType::TARGET_FILE_DIR: {
+            // $<TARGET_FILE_DIR:target> returns directory of target output
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_FILE_DIR requires all_targets context");
+            }
+            auto target_it = ctx_.all_targets->find(node.raw_content);
+            if (target_it == ctx_.all_targets->end()) {
+                return std::unexpected("TARGET_FILE_DIR: target '" + node.raw_content + "' not found");
+            }
+            std::filesystem::path output_path(target_it->second->get_output_path());
+            return output_path.parent_path().string();
         }
 
         case GenexNodeType::TARGET_PROPERTY: {

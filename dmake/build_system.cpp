@@ -2,6 +2,7 @@
 #include "target.hpp"
 #include "utils.hpp"
 #include "module_scanner.hpp"
+#include "genex_evaluator.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -51,6 +52,56 @@ std::expected<void, std::string> BuildGraph::generate_compile_commands(const std
     }
     else {
         return std::unexpected<std::string>("Failed to create compile_commands.json for writing");
+    }
+    return {};
+}
+
+std::expected<void, std::string> BuildGraph::finalize(const GenexEvaluationContext& ctx) {
+    for (auto& [id, task] : tasks_) {
+        // Create per-task context with compile_language if set
+        GenexEvaluationContext task_ctx = ctx;
+        if (task.compile_language) {
+            task_ctx.compile_language = task.compile_language;
+        }
+        GenexEvaluator evaluator(task_ctx);
+
+        // Evaluate all command arguments
+        std::vector<std::vector<std::string>> evaluated_commands;
+        for (const auto& cmd : task.commands) {
+            std::vector<std::string> evaluated_cmd;
+            for (const auto& arg : cmd) {
+                // Fast path: no genex
+                if (arg.find("$<") == std::string::npos) {
+                    evaluated_cmd.push_back(arg);
+                    continue;
+                }
+                auto eval = evaluator.evaluate(arg);
+                if (!eval) {
+                    std::string target_name = task.parent_target ? task.parent_target->get_name() : "<unknown>";
+                    return std::unexpected(
+                        "Generator expression error in task '" + id + "' (target '" + target_name + "')\n"
+                        "  Argument: '" + arg + "'\n"
+                        "  Error: " + eval.error());
+                }
+                // Only add non-empty results (genex can evaluate to empty string)
+                if (!eval->empty()) {
+                    evaluated_cmd.push_back(*eval);
+                }
+            }
+            if (!evaluated_cmd.empty()) {
+                evaluated_commands.push_back(std::move(evaluated_cmd));
+            }
+        }
+        task.commands = std::move(evaluated_commands);
+
+        // Evaluate working_dir if it contains genex
+        if (!task.working_dir.empty() && task.working_dir.find("$<") != std::string::npos) {
+            auto result = evaluator.evaluate(task.working_dir);
+            if (!result) {
+                return std::unexpected("Generator expression error in working_dir for task '" + id + "': " + result.error());
+            }
+            task.working_dir = *result;
+        }
     }
     return {};
 }
