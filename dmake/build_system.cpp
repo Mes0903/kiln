@@ -639,10 +639,12 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
     }
 
     // 2. Header dependencies from .d files (fast path)
+    // .d files are generated alongside .o files with the pattern <output>.d
     bool found_deps = false;
     for (const auto& out : task.outputs) {
-        if (out.ends_with(".d") && std::filesystem::exists(out)) {
-            auto deps = parse_deps_file(out);
+        std::string deps_file = out + ".d";
+        if (std::filesystem::exists(deps_file)) {
+            auto deps = parse_deps_file(deps_file);
             for (const auto& dep : deps) {
                 if (std::filesystem::exists(dep)) {
                     oss << "dep:" << dep << ":" << get_file_time(dep).time_since_epoch().count() << "|";

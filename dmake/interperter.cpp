@@ -2018,53 +2018,7 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
 }
 
 std::string Interpreter::get_variable(const std::string& name) const {
-    if (frame_stack_.empty()) {
-        std::cerr << "FATAL: get_variable('" << name << "') called with empty frame_stack_\n";
-        std::abort();
-    }
-
-    // Check macro substitutions first (macro parameters take precedence)
-    auto macro_it = macro_substitutions_.find(name);
-    if (macro_it != macro_substitutions_.end()) {
-        return macro_it->second;
-    }
-
-    // Function-scoped special variables (lazy evaluation - check current frame only)
-    if (name == "CMAKE_CURRENT_FUNCTION" ||
-        name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
-        name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") {
-
-        // Check current frame only - O(1) lookup
-        const auto* fb = frame_stack_.front().function_block;
-        if (fb != nullptr) {
-            if (name == "CMAKE_CURRENT_FUNCTION") return fb->name;
-            if (name == "CMAKE_CURRENT_FUNCTION_LIST_FILE") return fb->definition_file;
-            if (name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") return fb->definition_dir;
-        }
-        return "";  // Not in a function
-    }
-
-    // Check local variables (O(1) via ShadowMap)
-    std::string value = variables_.get(name);
-    if (!value.empty()) {
-        return value;
-    }
-
-    // Check parent interpreter (subdirectory scope)
-    if (parent_) {
-        value = parent_->get_variable(name);
-        if (!value.empty()) {
-            return value;
-        }
-    }
-
-    // Check cache variables (CACHE variables are globally accessible)
-    auto cache_it = get_root()->cache_variables_.find(name);
-    if (cache_it != get_root()->cache_variables_.end()) {
-        return cache_it->second;
-    }
-
-    return "";
+    return get_optional_variable(name).value_or("");
 }
 
 void Interpreter::set_variable(const std::string& name, const std::string& val) {
@@ -2098,6 +2052,54 @@ bool Interpreter::is_variable_set(const std::string& name) const {
 
     // Check cache variables
     return get_root()->cache_variables_.contains(name);
+}
+
+std::optional<std::string> Interpreter::get_optional_variable(const std::string& name) const {
+    if (frame_stack_.empty()) {
+        std::cerr << "FATAL: get_optional_variable('" << name << "') called with empty frame_stack_\n";
+        std::abort();
+    }
+
+    // Check macro substitutions first (macro parameters take precedence)
+    auto macro_it = macro_substitutions_.find(name);
+    if (macro_it != macro_substitutions_.end()) {
+        return macro_it->second;
+    }
+
+    // Function-scoped special variables (lazy evaluation - check current frame only)
+    if (name == "CMAKE_CURRENT_FUNCTION" ||
+        name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
+        name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") {
+
+        const auto* fb = frame_stack_.front().function_block;
+        if (fb != nullptr) {
+            if (name == "CMAKE_CURRENT_FUNCTION") return fb->name;
+            if (name == "CMAKE_CURRENT_FUNCTION_LIST_FILE") return fb->definition_file;
+            if (name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") return fb->definition_dir;
+        }
+        return std::nullopt;  // Not in a function
+    }
+
+    // Check local variables (use is_defined to distinguish "not set" from "set to empty")
+    if (variables_.is_defined(name)) {
+        return variables_.get(name);
+    }
+
+    // Check parent interpreter (subdirectory scope)
+    if (parent_) {
+        auto parent_value = parent_->get_optional_variable(name);
+        if (parent_value.has_value()) {
+            return parent_value;
+        }
+    }
+
+    // Check cache variables (CACHE variables are globally accessible)
+    auto cache_it = get_root()->cache_variables_.find(name);
+    if (cache_it != get_root()->cache_variables_.end()) {
+        return cache_it->second;
+    }
+
+    return std::nullopt;
 }
 
 void Interpreter::print_message(const std::string& mode, const std::string& msg, bool is_err) {

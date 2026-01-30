@@ -5,7 +5,7 @@ set -e
 "$1" .
 
 BINARY="build/debug/pch_test"
-OBJ="build/debug/objs/main.cpp.o"
+OBJ="build/debug/objs/pch_test/main.cpp.o"
 
 if [ ! -f "$BINARY" ]; then
     echo "Binary not found after first build"

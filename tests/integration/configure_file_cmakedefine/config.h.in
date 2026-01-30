@@ -1,0 +1,19 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// Test #cmakedefine with compiler flags (starts with -)
+#cmakedefine COMPILATION_FLAGS "@COMPILATION_FLAGS@"
+
+// Test with adjacent variable references
+#cmakedefine CXX_STANDARD "@COMPILATION_FLAGS@@CXX_STANDARD@"
+
+// Test with numeric value
+#cmakedefine CXX_STANDARD_NUM @CXX_STANDARD@
+
+// Test with empty variable (empty is falsy, should undef)
+#cmakedefine EMPTY_VAR "@EMPTY_VAR@"
+
+// Test with undefined variable
+#cmakedefine UNDEFINED_VAR "@UNDEFINED_VAR@"
+
+#endif // CONFIG_H

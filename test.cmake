@@ -1,8 +1,8 @@
-find_package(MySQL)
-if(MySQL_FOUND)
-    message(STATUS "MySQL found: ${MySQL_INCLUDE_DIRS}")
-    include_directories(${MySQL_INCLUDE_DIRS})
-    target_link_libraries(your_target_name ${MySQL_LIBRARIES})
-else()
-    message(STATUS "MySQL not found. Please install MySQL development libraries.")
-endif()
+
+set(COMPILATION_FLAGS "-Wall -Wextra -Werror -pedantic")
+set(DROGON_CXX_STANDARD 17)
+configure_file(
+    "DrogonConfig.cmake.in"
+    "DrogonConfig.cmake"
+    @ONLY
+)

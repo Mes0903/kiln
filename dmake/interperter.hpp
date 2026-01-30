@@ -194,6 +194,7 @@ public:
     void set_fatal_error(const InterpreterError& error);
 
     std::string get_variable(const std::string& var_name) const;
+    std::optional<std::string> get_optional_variable(const std::string& var_name) const;
     void set_variable(const std::string& var_name, const std::string& value);
     bool unset_variable(const std::string& var_name);
     bool is_variable_set(const std::string& var_name) const;

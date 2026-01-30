@@ -15,6 +15,25 @@ namespace dmake {
 
 namespace {
 
+// Check if a value is falsy for #cmakedefine purposes
+// This is simpler than Interpreter::is_falsy - it only checks known false constants,
+// without the buggy "invalid number" logic that treats "-Wall" as falsy
+bool is_falsy_for_cmakedefine(const std::string& val) {
+    if (val.empty()) return true;
+
+    std::string upper_val = val;
+    std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
+
+    // False constants (case-insensitive)
+    if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
+        upper_val == "FALSE" || upper_val == "N" || upper_val == "IGNORE" ||
+        upper_val == "NOTFOUND" || upper_val.ends_with("-NOTFOUND")) {
+        return true;
+    }
+
+    return false;
+}
+
 // Substitute @VAR@ patterns in content
 std::string substitute_at_vars(Interpreter& interp, const std::string& content, bool escape_quotes) {
     std::string result;
@@ -123,7 +142,7 @@ std::string process_cmakedefine(Interpreter& interp, const std::string& content)
             std::string var_name = match[3].str();
 
             std::string value = interp.get_variable(var_name);
-            bool is_true = !Interpreter::is_falsy(value);
+            bool is_true = !is_falsy_for_cmakedefine(value);
 
             result << leading << "#" << hash_space << "define " << var_name
                    << " " << (is_true ? "1" : "0");
@@ -134,8 +153,10 @@ std::string process_cmakedefine(Interpreter& interp, const std::string& content)
             std::string var_name = match[3].str();
             std::string rest = match[4].str();
 
-            std::string value = interp.get_variable(var_name);
-            bool is_defined = !Interpreter::is_falsy(value);
+            auto opt_value = interp.get_optional_variable(var_name);
+            std::string value = opt_value.value_or("");
+            // Variable is "defined" for #cmakedefine if it exists AND is truthy
+            bool is_defined = opt_value.has_value() && !is_falsy_for_cmakedefine(value);
 
             if (is_defined) {
                 if (rest.empty() || rest.find_first_not_of(" \t") == std::string::npos) {
