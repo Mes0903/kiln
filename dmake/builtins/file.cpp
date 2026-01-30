@@ -184,8 +184,8 @@ void register_file_builtins(Interpreter& interp) {
         } else if (operation == "READ") {
             CommandParser parser("file", "READ");
             std::string filename, var;
-            parser.add_positional(filename, "filename");
-            parser.add_positional(var, "variable");
+            parser.positional(filename, "filename");
+            parser.positional(var, "variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path path = filename;
@@ -224,9 +224,9 @@ void register_file_builtins(Interpreter& interp) {
         } else if (operation == "REAL_PATH") {
             CommandParser parser("file", "REAL_PATH");
             std::string input_path, out_var, base_dir;
-            parser.add_positional(input_path, "input path");
-            parser.add_positional(out_var, "output variable");
-            parser.add_value("BASE_DIRECTORY", base_dir);
+            parser.positional(input_path, "input path");
+            parser.positional(out_var, "output variable");
+            parser.value("BASE_DIRECTORY", base_dir);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path p = input_path;
@@ -276,17 +276,17 @@ void register_file_builtins(Interpreter& interp) {
             bool newline_consume = false;
             bool no_hex_conversion = false;
 
-            parser.add_positional(filename, "filename");
-            parser.add_positional(var, "variable");
-            parser.add_value("LENGTH_MINIMUM", length_min_str);
-            parser.add_value("LENGTH_MAXIMUM", length_max_str);
-            parser.add_value("LIMIT_COUNT", limit_count_str);
-            parser.add_value("LIMIT_INPUT", limit_input_str);
-            parser.add_value("LIMIT_OUTPUT", limit_output_str);
-            parser.add_value("REGEX", regex_pattern);
-            parser.add_value("ENCODING", encoding);
-            parser.add_flag("NEWLINE_CONSUME", newline_consume);
-            parser.add_flag("NO_HEX_CONVERSION", no_hex_conversion);
+            parser.positional(filename, "filename");
+            parser.positional(var, "variable");
+            parser.value("LENGTH_MINIMUM", length_min_str);
+            parser.value("LENGTH_MAXIMUM", length_max_str);
+            parser.value("LIMIT_COUNT", limit_count_str);
+            parser.value("LIMIT_INPUT", limit_input_str);
+            parser.value("LIMIT_OUTPUT", limit_output_str);
+            parser.value("REGEX", regex_pattern);
+            parser.value("ENCODING", encoding);
+            parser.flag("NEWLINE_CONSUME", newline_consume);
+            parser.flag("NO_HEX_CONVERSION", no_hex_conversion);
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -580,10 +580,10 @@ void register_file_builtins(Interpreter& interp) {
             CommandParser parser("file", "RENAME");
             std::string oldname, newname, result_var;
             bool no_replace = false;
-            parser.add_positional(oldname, "old name");
-            parser.add_positional(newname, "new name");
-            parser.add_value("RESULT", result_var);
-            parser.add_flag("NO_REPLACE", no_replace);
+            parser.positional(oldname, "old name");
+            parser.positional(newname, "new name");
+            parser.value("RESULT", result_var);
+            parser.flag("NO_REPLACE", no_replace);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path old_path = oldname;
@@ -622,10 +622,10 @@ void register_file_builtins(Interpreter& interp) {
             CommandParser parser("file", "COPY_FILE");
             std::string oldname, newname, result_var;
             bool only_if_different = false;
-            parser.add_positional(oldname, "source file");
-            parser.add_positional(newname, "destination file");
-            parser.add_value("RESULT", result_var);
-            parser.add_flag("ONLY_IF_DIFFERENT", only_if_different);
+            parser.positional(oldname, "source file");
+            parser.positional(newname, "destination file");
+            parser.value("RESULT", result_var);
+            parser.flag("ONLY_IF_DIFFERENT", only_if_different);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path src_path = oldname;
@@ -681,8 +681,8 @@ void register_file_builtins(Interpreter& interp) {
             // file(SIZE <filename> <variable>)
             CommandParser parser("file", "SIZE");
             std::string filename, var;
-            parser.add_positional(filename, "filename");
-            parser.add_positional(var, "variable");
+            parser.positional(filename, "filename");
+            parser.positional(var, "variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path path = filename;
@@ -701,8 +701,8 @@ void register_file_builtins(Interpreter& interp) {
             // file(READ_SYMLINK <linkname> <variable>)
             CommandParser parser("file", "READ_SYMLINK");
             std::string linkname, var;
-            parser.add_positional(linkname, "link name");
-            parser.add_positional(var, "variable");
+            parser.positional(linkname, "link name");
+            parser.positional(var, "variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path path = linkname;
@@ -722,11 +722,11 @@ void register_file_builtins(Interpreter& interp) {
             CommandParser parser("file", "CREATE_LINK");
             std::string original, linkname, result_var;
             bool copy_on_error = false, symbolic = false;
-            parser.add_positional(original, "original");
-            parser.add_positional(linkname, "link name");
-            parser.add_value("RESULT", result_var);
-            parser.add_flag("COPY_ON_ERROR", copy_on_error);
-            parser.add_flag("SYMBOLIC", symbolic);
+            parser.positional(original, "original");
+            parser.positional(linkname, "link name");
+            parser.value("RESULT", result_var);
+            parser.flag("COPY_ON_ERROR", copy_on_error);
+            parser.flag("SYMBOLIC", symbolic);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path orig_path = original;
@@ -778,9 +778,9 @@ void register_file_builtins(Interpreter& interp) {
             // file(RELATIVE_PATH <variable> <directory> <file>)
             CommandParser parser("file", "RELATIVE_PATH");
             std::string var, directory, file_path;
-            parser.add_positional(var, "variable");
-            parser.add_positional(directory, "directory");
-            parser.add_positional(file_path, "file");
+            parser.positional(var, "variable");
+            parser.positional(directory, "directory");
+            parser.positional(file_path, "file");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path dir_p = directory;
@@ -1064,11 +1064,11 @@ void register_file_builtins(Interpreter& interp) {
             CommandParser parser("file", "CONFIGURE");
             std::string output_file, content, newline_style;
             bool escape_quotes = false, at_only = false;
-            parser.add_value("OUTPUT", output_file);
-            parser.add_value("CONTENT", content);
-            parser.add_value("NEWLINE_STYLE", newline_style);
-            parser.add_flag("ESCAPE_QUOTES", escape_quotes);
-            parser.add_flag("@ONLY", at_only);
+            parser.value("OUTPUT", output_file);
+            parser.value("CONTENT", content);
+            parser.value("NEWLINE_STYLE", newline_style);
+            parser.flag("ESCAPE_QUOTES", escape_quotes);
+            parser.flag("@ONLY", at_only);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             if (output_file.empty()) {
@@ -1195,12 +1195,12 @@ void register_file_builtins(Interpreter& interp) {
             // Simplified implementation - doesn't support all generator expressions
             CommandParser parser("file", "GENERATE");
             std::string output_file, input_file, content, condition, target_name, newline_style;
-            parser.add_value("OUTPUT", output_file);
-            parser.add_value("INPUT", input_file);
-            parser.add_value("CONTENT", content);
-            parser.add_value("CONDITION", condition);
-            parser.add_value("TARGET", target_name);
-            parser.add_value("NEWLINE_STYLE", newline_style);
+            parser.value("OUTPUT", output_file);
+            parser.value("INPUT", input_file);
+            parser.value("CONTENT", content);
+            parser.value("CONDITION", condition);
+            parser.value("TARGET", target_name);
+            parser.value("NEWLINE_STYLE", newline_style);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             if (output_file.empty()) {
@@ -1248,12 +1248,12 @@ void register_file_builtins(Interpreter& interp) {
             CommandParser parser("file", "LOCK");
             std::string path, guard, result_var, timeout_str;
             bool directory = false, release = false;
-            parser.add_positional(path, "path");
-            parser.add_flag("DIRECTORY", directory);
-            parser.add_flag("RELEASE", release);
-            parser.add_value("GUARD", guard);
-            parser.add_value("RESULT_VARIABLE", result_var);
-            parser.add_value("TIMEOUT", timeout_str);
+            parser.positional(path, "path");
+            parser.flag("DIRECTORY", directory);
+            parser.flag("RELEASE", release);
+            parser.value("GUARD", guard);
+            parser.value("RESULT_VARIABLE", result_var);
+            parser.value("TIMEOUT", timeout_str);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             // For now, just acknowledge the lock request without actual locking

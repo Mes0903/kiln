@@ -188,10 +188,10 @@ void register_math_builtins(Interpreter& interp) {
         std::string expression;
         std::string output_format;
 
-        parser.add_positional(mode, "mode (EXPR)");
-        parser.add_positional(var_name, "variable name");
-        parser.add_positional(expression, "expression");
-        parser.add_value("OUTPUT_FORMAT", output_format);
+        parser.positional(mode, "mode (EXPR)");
+        parser.positional(var_name, "variable name");
+        parser.positional(expression, "expression");
+        parser.value("OUTPUT_FORMAT", output_format);
 
         PARSE_OR_RETURN(parser, interp, args);
 

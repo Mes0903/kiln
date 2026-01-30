@@ -67,14 +67,14 @@ void register_find_package_builtins(Interpreter& interp) {
         std::vector<std::string> components;
         std::vector<std::string> optional_components;
 
-        parser.add_positional(package_name, "package name", true);
-        parser.add_positional(version, "version", false);
-        parser.add_flag("REQUIRED", required);
-        parser.add_flag("CONFIG", config);
-        parser.add_flag("NO_MODULE", no_module);
-        parser.add_flag("QUIET", quiet);
-        parser.add_list("COMPONENTS", components);
-        parser.add_list("OPTIONAL_COMPONENTS", optional_components);
+        parser.positional(package_name, "package name", true);
+        parser.positional(version, "version", false);
+        parser.flag("REQUIRED", required);
+        parser.flag("CONFIG", config);
+        parser.flag("NO_MODULE", no_module);
+        parser.flag("QUIET", quiet);
+        parser.list("COMPONENTS", components);
+        parser.list("OPTIONAL_COMPONENTS", optional_components);
 
         PARSE_OR_RETURN(parser, interp, args);
 

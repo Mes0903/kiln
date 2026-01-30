@@ -2,86 +2,109 @@
 
 namespace dmake {
 
+CommandParser::CommandParser(std::string cmd_name)
+    : cmd_name_(std::move(cmd_name)) {}
+
 CommandParser::CommandParser(std::string cmd_name, std::string subcommand)
     : cmd_name_(std::move(cmd_name)), subcommand_(std::move(subcommand)) {}
 
-void CommandParser::add_positional(std::string& var, std::string label, bool required) {
-    positionals_.push_back({&var, std::move(label), required});
+void CommandParser::positional(std::string& var, std::string label, bool required) {
+    single_positionals_.push_back({&var, std::move(label), required, false});
 }
 
-void CommandParser::add_flag(std::string keyword, bool& var) {
-    keywords_[keyword] = {ArgType::FLAG, &var, keyword};
-    var = false; // Initialize to false
+void CommandParser::positionals(std::vector<std::string>& var, std::string label, bool required) {
+    positional_list_ = PositionalList{&var, std::move(label), required};
 }
 
-void CommandParser::add_value(std::string keyword, std::string& var) {
-    keywords_[keyword] = {ArgType::VALUE, &var, keyword};
+void CommandParser::flag(std::string keyword, bool& var) {
+    keywords_[keyword] = {KeywordType::FLAG, &var, keyword};
+    var = false;
 }
 
-void CommandParser::add_list(std::string keyword, std::vector<std::string>& var) {
-    keywords_[keyword] = {ArgType::LIST, &var, keyword};
+void CommandParser::value(std::string keyword, std::string& var) {
+    keywords_[keyword] = {KeywordType::VALUE, &var, keyword};
 }
 
-void CommandParser::add_multi_list(std::string keyword, std::vector<std::vector<std::string>>& var) {
-    keywords_[keyword] = {ArgType::MULTI_LIST, &var, keyword};
+void CommandParser::list(std::string keyword, std::vector<std::string>& var) {
+    keywords_[keyword] = {KeywordType::LIST, &var, keyword};
 }
 
-void CommandParser::add_default_list(std::vector<std::string>& var) {
-    default_list_ = &var;
+void CommandParser::multi_list(std::string keyword, std::vector<std::vector<std::string>>& var) {
+    keywords_[keyword] = {KeywordType::MULTI_LIST, &var, keyword};
 }
 
 std::expected<void, std::string> CommandParser::parse(std::span<const std::string> args) {
-    size_t pos_idx = 0;
-    KeywordInfo* active_kw = nullptr;
+    // Build error prefix: "cmd(subcmd)" or "cmd"
+    std::string error_prefix = cmd_name_;
+    if (!subcommand_.empty()) {
+        error_prefix += "(" + subcommand_ + ")";
+    } else {
+        error_prefix += "()";
+    }
+
+    size_t single_pos_idx = 0;
+    KeywordInfo* active_keyword = nullptr;
 
     for (const auto& arg : args) {
+        // Check if this is a keyword
         auto it = keywords_.find(arg);
         if (it != keywords_.end()) {
-            if (it->second.type == ArgType::FLAG) {
+            if (it->second.type == KeywordType::FLAG) {
                 *static_cast<bool*>(it->second.target) = true;
-                // Flags don't change the active keyword state
+                // Flags don't become active (they take no arguments)
             } else {
-                active_kw = &it->second;
-                if (active_kw->type == ArgType::MULTI_LIST) {
-                    auto* vec = static_cast<std::vector<std::vector<std::string>>*>(active_kw->target);
+                active_keyword = &it->second;
+                if (active_keyword->type == KeywordType::MULTI_LIST) {
+                    auto* vec = static_cast<std::vector<std::vector<std::string>>*>(active_keyword->target);
                     vec->emplace_back();
                 }
             }
             continue;
         }
 
-        // Not a keyword
-        if (pos_idx < positionals_.size() && !active_kw) {
-            *positionals_[pos_idx].var = arg;
-            positionals_[pos_idx].set = true;
-            pos_idx++;
-        } else if (active_kw) {
-            if (active_kw->type == ArgType::VALUE) {
-                auto* val = static_cast<std::string*>(active_kw->target);
+        // Not a keyword - determine where this argument goes
+        if (!active_keyword) {
+            // Still in positional territory
+            if (single_pos_idx < single_positionals_.size()) {
+                // Fill single positionals first
+                *single_positionals_[single_pos_idx].var = arg;
+                single_positionals_[single_pos_idx].filled = true;
+                single_pos_idx++;
+            } else if (positional_list_) {
+                // Then fill the positional list
+                positional_list_->var->push_back(arg);
+            } else {
+                return std::unexpected(error_prefix + ": unexpected argument '" + arg + "'");
+            }
+        } else {
+            // In keyword territory
+            if (active_keyword->type == KeywordType::VALUE) {
+                auto* val = static_cast<std::string*>(active_keyword->target);
                 if (!val->empty()) {
-                    return std::unexpected(cmd_name_ + "() keyword " + active_kw->keyword + " given multiple values");
+                    return std::unexpected(error_prefix + ": keyword " + active_keyword->keyword + " given multiple values");
                 }
                 *val = arg;
-            } else if (active_kw->type == ArgType::LIST) {
-                auto* vec = static_cast<std::vector<std::string>*>(active_kw->target);
+            } else if (active_keyword->type == KeywordType::LIST) {
+                auto* vec = static_cast<std::vector<std::string>*>(active_keyword->target);
                 vec->push_back(arg);
-            } else if (active_kw->type == ArgType::MULTI_LIST) {
-                auto* vec = static_cast<std::vector<std::vector<std::string>>*>(active_kw->target);
-                if (vec->empty()) vec->emplace_back(); // Should not happen with current logic but for safety
+            } else if (active_keyword->type == KeywordType::MULTI_LIST) {
+                auto* vec = static_cast<std::vector<std::vector<std::string>>*>(active_keyword->target);
+                if (vec->empty()) vec->emplace_back();
                 vec->back().push_back(arg);
             }
-        } else if (default_list_) {
-            default_list_->push_back(arg);
-        } else {
-            return std::unexpected(cmd_name_ + "() given unknown argument: " + arg);
         }
     }
 
-    // Validation
-    for (const auto& pos : positionals_) {
-        if (pos.required && !pos.set) {
-            return std::unexpected(cmd_name_ + "() missing required positional argument: " + pos.label);
+    // Validate required single positionals are filled
+    for (const auto& pos : single_positionals_) {
+        if (pos.required && !pos.filled) {
+            return std::unexpected(error_prefix + ": missing required argument <" + pos.label + ">");
         }
+    }
+
+    // Validate positional list if required
+    if (positional_list_ && positional_list_->required && positional_list_->var->empty()) {
+        return std::unexpected(error_prefix + ": requires at least one <" + positional_list_->label + ">");
     }
 
     return {};
@@ -91,12 +114,14 @@ std::string CommandParser::get_syntax() const {
     std::string syntax = cmd_name_ + "(";
     bool first = true;
 
+    // Subcommand comes first if present
     if (!subcommand_.empty()) {
         syntax += subcommand_;
         first = false;
     }
 
-    for (const auto& pos : positionals_) {
+    // Single positionals
+    for (const auto& pos : single_positionals_) {
         if (!first) syntax += " ";
         if (!pos.required) syntax += "[";
         syntax += "<" + pos.label + ">";
@@ -104,18 +129,26 @@ std::string CommandParser::get_syntax() const {
         first = false;
     }
 
-    for (const auto& [kw, info] : keywords_) {
+    // Positional list
+    if (positional_list_) {
         if (!first) syntax += " ";
-        syntax += "[" + kw;
-        if (info.type == ArgType::VALUE) syntax += " <val>";
-        else if (info.type == ArgType::LIST || info.type == ArgType::MULTI_LIST) syntax += " <args>...";
-        syntax += "]";
+        if (!positional_list_->required) syntax += "[";
+        syntax += "<" + positional_list_->label + ">...";
+        if (!positional_list_->required) syntax += "]";
         first = false;
     }
 
-    if (default_list_) {
+    // Keywords
+    for (const auto& [kw, info] : keywords_) {
         if (!first) syntax += " ";
-        syntax += "[<args>...]";
+        syntax += "[" + kw;
+        if (info.type == KeywordType::VALUE) {
+            syntax += " <value>";
+        } else if (info.type == KeywordType::LIST || info.type == KeywordType::MULTI_LIST) {
+            syntax += " <args>...";
+        }
+        syntax += "]";
+        first = false;
     }
 
     syntax += ")";

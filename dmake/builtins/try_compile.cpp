@@ -364,22 +364,22 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string copy_file_error;
         std::vector<std::string> cmake_flags;
 
-        parser.add_positional(result_var, "result variable");
-        parser.add_positional(bindir, "binary directory", false);  // Optional
-        parser.add_positional(old_style_srcfile, "source file (old syntax)", false);  // Optional
-        parser.add_list("SOURCES", sources);
-        parser.add_list("SOURCE_FROM_CONTENT", source_from_content);
-        parser.add_list("SOURCE_FROM_VAR", source_from_var);
-        parser.add_list("SOURCE_FROM_FILE", source_from_file);
-        parser.add_list("COMPILE_DEFINITIONS", compile_definitions);
-        parser.add_list("LINK_LIBRARIES", link_libraries);
-        parser.add_list("LINK_OPTIONS", link_options);
-        parser.add_list("CMAKE_FLAGS", cmake_flags);
-        parser.add_value("CXX_STANDARD", cxx_standard);
-        parser.add_value("C_STANDARD", c_standard);
-        parser.add_value("OUTPUT_VARIABLE", output_variable);
-        parser.add_value("COPY_FILE", copy_file);
-        parser.add_value("COPY_FILE_ERROR", copy_file_error);
+        parser.positional(result_var, "result variable");
+        parser.positional(bindir, "binary directory", false);  // Optional
+        parser.positional(old_style_srcfile, "source file (old syntax)", false);  // Optional
+        parser.list("SOURCES", sources);
+        parser.list("SOURCE_FROM_CONTENT", source_from_content);
+        parser.list("SOURCE_FROM_VAR", source_from_var);
+        parser.list("SOURCE_FROM_FILE", source_from_file);
+        parser.list("COMPILE_DEFINITIONS", compile_definitions);
+        parser.list("LINK_LIBRARIES", link_libraries);
+        parser.list("LINK_OPTIONS", link_options);
+        parser.list("CMAKE_FLAGS", cmake_flags);
+        parser.value("CXX_STANDARD", cxx_standard);
+        parser.value("C_STANDARD", c_standard);
+        parser.value("OUTPUT_VARIABLE", output_variable);
+        parser.value("COPY_FILE", copy_file);
+        parser.value("COPY_FILE_ERROR", copy_file_error);
 
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -767,26 +767,26 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::vector<std::string> run_args;
         std::vector<std::string> cmake_flags;
 
-        parser.add_positional(run_result_var, "run result variable");
-        parser.add_positional(compile_result_var, "compile result variable");
-        parser.add_positional(bindir, "binary directory", false);
-        parser.add_positional(old_style_srcfile, "source file (old syntax)", false);
-        parser.add_list("SOURCES", sources);
-        parser.add_list("SOURCE_FROM_CONTENT", source_from_content);
-        parser.add_list("SOURCE_FROM_VAR", source_from_var);
-        parser.add_list("SOURCE_FROM_FILE", source_from_file);
-        parser.add_list("COMPILE_DEFINITIONS", compile_definitions);
-        parser.add_list("LINK_LIBRARIES", link_libraries);
-        parser.add_list("LINK_OPTIONS", link_options);
-        parser.add_list("CMAKE_FLAGS", cmake_flags);
-        parser.add_list("ARGS", run_args);
-        parser.add_value("CXX_STANDARD", cxx_standard);
-        parser.add_value("C_STANDARD", c_standard);
-        parser.add_value("COMPILE_OUTPUT_VARIABLE", compile_output_variable);
-        parser.add_value("RUN_OUTPUT_VARIABLE", run_output_variable);
-        parser.add_value("RUN_OUTPUT_STDOUT_VARIABLE", run_output_stdout_variable);
-        parser.add_value("RUN_OUTPUT_STDERR_VARIABLE", run_output_stderr_variable);
-        parser.add_value("WORKING_DIRECTORY", working_directory);
+        parser.positional(run_result_var, "run result variable");
+        parser.positional(compile_result_var, "compile result variable");
+        parser.positional(bindir, "binary directory", false);
+        parser.positional(old_style_srcfile, "source file (old syntax)", false);
+        parser.list("SOURCES", sources);
+        parser.list("SOURCE_FROM_CONTENT", source_from_content);
+        parser.list("SOURCE_FROM_VAR", source_from_var);
+        parser.list("SOURCE_FROM_FILE", source_from_file);
+        parser.list("COMPILE_DEFINITIONS", compile_definitions);
+        parser.list("LINK_LIBRARIES", link_libraries);
+        parser.list("LINK_OPTIONS", link_options);
+        parser.list("CMAKE_FLAGS", cmake_flags);
+        parser.list("ARGS", run_args);
+        parser.value("CXX_STANDARD", cxx_standard);
+        parser.value("C_STANDARD", c_standard);
+        parser.value("COMPILE_OUTPUT_VARIABLE", compile_output_variable);
+        parser.value("RUN_OUTPUT_VARIABLE", run_output_variable);
+        parser.value("RUN_OUTPUT_STDOUT_VARIABLE", run_output_stdout_variable);
+        parser.value("RUN_OUTPUT_STDERR_VARIABLE", run_output_stderr_variable);
+        parser.value("WORKING_DIRECTORY", working_directory);
 
         PARSE_OR_RETURN(parser, interp, args);
 

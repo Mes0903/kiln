@@ -664,11 +664,11 @@ void register_path_builtins(Interpreter& interp) {
         std::string base_dir;
         bool cache = false;
 
-        parser.add_positional(var_name, "variable name");
-        parser.add_positional(filename, "filename");
-        parser.add_positional(mode, "mode");
-        parser.add_value("BASE_DIR", base_dir);
-        parser.add_flag("CACHE", cache);
+        parser.positional(var_name, "variable name");
+        parser.positional(filename, "filename");
+        parser.positional(mode, "mode");
+        parser.value("BASE_DIR", base_dir);
+        parser.flag("CACHE", cache);
 
         PARSE_OR_RETURN(parser, interp, args);
 

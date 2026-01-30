@@ -193,9 +193,9 @@ void register_variable_builtins(Interpreter& interp) {
         std::string option_name;
         std::string help_message;
         std::string initial_value;
-        parser.add_positional(option_name, "option name");
-        parser.add_positional(help_message, "help message");
-        parser.add_positional(initial_value, "initial value", false);
+        parser.positional(option_name, "option name");
+        parser.positional(help_message, "help message");
+        parser.positional(initial_value, "initial value", false);
         PARSE_OR_RETURN(parser, interp, args);
 
         std::string value = initial_value.empty() ? "OFF" : initial_value;

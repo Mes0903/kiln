@@ -93,10 +93,10 @@ void register_target_builtins(Interpreter& interp) {
         bool imported = false;
         bool is_alias = false;
         std::vector<std::string> sources;
-        parser.add_positional(name, "target name");
-        parser.add_flag("IMPORTED", imported);
-        parser.add_flag("ALIAS", is_alias);
-        parser.add_default_list(sources);
+        parser.positional(name, "target name");
+        parser.flag("IMPORTED", imported);
+        parser.flag("ALIAS", is_alias);
+        parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
 
         // Handle ALIAS targets
@@ -147,14 +147,14 @@ void register_target_builtins(Interpreter& interp) {
         bool shared = false, static_lib = false, object_lib = false, interface_lib = false, imported = false, is_alias = false;
         std::vector<std::string> sources;
 
-        parser.add_positional(name, "target name");
-        parser.add_flag("SHARED", shared);
-        parser.add_flag("STATIC", static_lib);
-        parser.add_flag("OBJECT", object_lib);
-        parser.add_flag("INTERFACE", interface_lib);
-        parser.add_flag("IMPORTED", imported);
-        parser.add_flag("ALIAS", is_alias);
-        parser.add_default_list(sources);
+        parser.positional(name, "target name");
+        parser.flag("SHARED", shared);
+        parser.flag("STATIC", static_lib);
+        parser.flag("OBJECT", object_lib);
+        parser.flag("INTERFACE", interface_lib);
+        parser.flag("IMPORTED", imported);
+        parser.flag("ALIAS", is_alias);
+        parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
 
         // Handle ALIAS targets
@@ -237,14 +237,14 @@ void register_target_builtins(Interpreter& interp) {
             bool append = false;
             bool verbatim = false;
 
-            parser.add_list("OUTPUT", outputs);
-            parser.add_multi_list("COMMAND", commands);
-            parser.add_list("DEPENDS", depends);
-            parser.add_list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
-            parser.add_value("WORKING_DIRECTORY", working_dir);
-            parser.add_value("COMMENT", comment);
-            parser.add_flag("APPEND", append);
-            parser.add_flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
+            parser.list("OUTPUT", outputs);
+            parser.multi_list("COMMAND", commands);
+            parser.list("DEPENDS", depends);
+            parser.list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
+            parser.value("WORKING_DIRECTORY", working_dir);
+            parser.value("COMMENT", comment);
+            parser.flag("APPEND", append);
+            parser.flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
             PARSE_OR_RETURN(parser, interp, args);
 
             if (outputs.empty()) {
@@ -359,10 +359,10 @@ void register_target_builtins(Interpreter& interp) {
             std::string comment;
             bool verbatim = false;
 
-            parser.add_multi_list("COMMAND", commands);
-            parser.add_value("WORKING_DIRECTORY", working_dir);
-            parser.add_value("COMMENT", comment);
-            parser.add_flag("VERBATIM", verbatim);
+            parser.multi_list("COMMAND", commands);
+            parser.value("WORKING_DIRECTORY", working_dir);
+            parser.value("COMMENT", comment);
+            parser.flag("VERBATIM", verbatim);
 
             // Parse from index 3 onwards (skip TARGET <name> <timing>)
             std::vector<std::string> remaining_args(args.begin() + 3, args.end());
@@ -411,13 +411,13 @@ void register_target_builtins(Interpreter& interp) {
         std::string comment;
         std::vector<std::string> sources;
 
-        parser.add_positional(name, "target name");
-        parser.add_flag("ALL", all);
-        parser.add_multi_list("COMMAND", commands);
-        parser.add_list("DEPENDS", depends);
-        parser.add_value("WORKING_DIRECTORY", working_dir);
-        parser.add_value("COMMENT", comment);
-        parser.add_list("SOURCES", sources);
+        parser.positional(name, "target name");
+        parser.flag("ALL", all);
+        parser.multi_list("COMMAND", commands);
+        parser.list("DEPENDS", depends);
+        parser.value("WORKING_DIRECTORY", working_dir);
+        parser.value("COMMENT", comment);
+        parser.list("SOURCES", sources);
         // Note: VERBATIM is ignored as we currently use shell execution via popen
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -469,10 +469,10 @@ void register_target_builtins(Interpreter& interp) {
             CommandParser parser(cmd_name);
             std::string name;
             std::vector<std::string> pub, priv, inter;
-            parser.add_positional(name, "target name");
-            parser.add_list("PUBLIC", pub);
-            parser.add_list("PRIVATE", priv);
-            parser.add_list("INTERFACE", inter);
+            parser.positional(name, "target name");
+            parser.list("PUBLIC", pub);
+            parser.list("PRIVATE", priv);
+            parser.list("INTERFACE", inter);
             PARSE_OR_RETURN(parser, interp, args);
 
             auto target = get_target_from_name(interp, name, cmd_name);
@@ -511,10 +511,10 @@ void register_target_builtins(Interpreter& interp) {
         CommandParser parser("target_compile_features");
         std::string name;
         std::vector<std::string> pub, priv, inter;
-        parser.add_positional(name, "target name");
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
+        parser.positional(name, "target name");
+        parser.list("PUBLIC", pub);
+        parser.list("PRIVATE", priv);
+        parser.list("INTERFACE", inter);
         PARSE_OR_RETURN(parser, interp, args);
 
         auto target = get_target_from_name(interp, name, "target_compile_features");
@@ -550,11 +550,11 @@ void register_target_builtins(Interpreter& interp) {
         bool before = false;
         std::vector<std::string> pub, priv, inter;
 
-        parser.add_positional(name, "target name");
-        parser.add_flag("BEFORE", before);
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
+        parser.positional(name, "target name");
+        parser.flag("BEFORE", before);
+        parser.list("PUBLIC", pub);
+        parser.list("PRIVATE", priv);
+        parser.list("INTERFACE", inter);
         PARSE_OR_RETURN(parser, interp, args);
 
         auto target = get_target_from_name(interp, name, "target_link_options");
@@ -750,11 +750,11 @@ void register_target_builtins(Interpreter& interp) {
         CommandParser parser("target_link_libraries");
         std::string name;
         std::vector<std::string> pub, priv, inter, def;
-        parser.add_positional(name, "target name");
-        parser.add_list("PUBLIC", pub);
-        parser.add_list("PRIVATE", priv);
-        parser.add_list("INTERFACE", inter);
-        parser.add_default_list(def);
+        parser.positional(name, "target name");
+        parser.list("PUBLIC", pub);
+        parser.list("PRIVATE", priv);
+        parser.list("INTERFACE", inter);
+        parser.positionals(def, "libraries");
         PARSE_OR_RETURN(parser, interp, args);
 
         auto target = get_target_from_name(interp, name, "target_link_libraries");
@@ -801,8 +801,8 @@ void register_target_builtins(Interpreter& interp) {
         CommandParser parser("set_target_properties");
         std::string name;
         std::vector<std::string> props;
-        parser.add_positional(name, "target name");
-        parser.add_list("PROPERTIES", props);
+        parser.positional(name, "target name");
+        parser.list("PROPERTIES", props);
         PARSE_OR_RETURN(parser, interp, args);
 
         auto target = get_target_from_name(interp, name, "set_target_properties");
@@ -1055,7 +1055,7 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("cmake_dump_target_info", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("cmake_dump_target_info");
         std::string name;
-        parser.add_positional(name, "target name", true);
+        parser.positional(name, "target name", true);
         PARSE_OR_RETURN(parser, interp, args);
 
         auto target = get_target_from_name(interp, name, "cmake_dump_target_info");

@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <optional>
 #include <expected>
 #include <span>
 
@@ -11,50 +12,51 @@ class Interpreter;
 
 /**
  * @brief Helper to parse CMake command arguments.
- * 
- * Supports positional arguments, flags, single values, lists, and multi-lists.
- * Handles error reporting via return value.
+ *
+ * CMake commands follow the pattern:
+ *   command(positionals... [KEYWORD values...] [FLAG] ...)
+ *
+ * Positionals are collected until the first keyword is encountered.
+ * Keywords can be flags (no values), single values, or lists.
  */
 class CommandParser {
 public:
-    explicit CommandParser(std::string cmd_name, std::string subcommand = "");
+    explicit CommandParser(std::string cmd_name);
+    CommandParser(std::string cmd_name, std::string subcommand);
 
     /**
-     * @brief Add a positional argument. Must be called in order.
-     * @param var Target string to store the value.
-     * @param label Name of the argument for error messages.
-     * @param required If true, parse() fails if this argument is missing.
+     * @brief Add a single positional argument (filled in order before keywords).
+     * @param required If false, this positional is optional.
      */
-    void add_positional(std::string& var, std::string label, bool required = true);
+    void positional(std::string& var, std::string label, bool required = true);
 
     /**
-     * @brief Add a boolean flag (e.g., VERBATIM).
+     * @brief Add a positional list (collects remaining args until first keyword).
+     * @param required If true, parse() fails if the list is empty.
      */
-    void add_flag(std::string keyword, bool& var);
+    void positionals(std::vector<std::string>& var, std::string label, bool required = false);
 
     /**
-     * @brief Add a single value keyword (e.g., WORKING_DIRECTORY <dir>).
+     * @brief Add a boolean flag keyword (e.g., VERBATIM).
      */
-    void add_value(std::string keyword, std::string& var);
+    void flag(std::string keyword, bool& var);
 
     /**
-     * @brief Add a list keyword (e.g., OUTPUT <file1> <file2>).
-     * Subsequent occurrences of the same keyword append to the same list.
+     * @brief Add a single-value keyword (e.g., WORKING_DIRECTORY <dir>).
      */
-    void add_list(std::string keyword, std::vector<std::string>& var);
+    void value(std::string keyword, std::string& var);
+
+    /**
+     * @brief Add a list keyword (e.g., DEPENDS <dep1> <dep2>).
+     * Values are collected until the next keyword.
+     */
+    void list(std::string keyword, std::vector<std::string>& var);
 
     /**
      * @brief Add a multi-list keyword (e.g., COMMAND <cmd1> COMMAND <cmd2>).
      * Each occurrence of the keyword starts a new sub-vector.
      */
-    void add_multi_list(std::string keyword, std::vector<std::vector<std::string>>& var);
-
-    /**
-     * @brief Add a target for arguments not associated with any keyword.
-     * These are arguments seen after positionals but before any keyword,
-     * or arguments seen after positionals if no keyword is ever active.
-     */
-    void add_default_list(std::vector<std::string>& var);
+    void multi_list(std::string keyword, std::vector<std::vector<std::string>>& var);
 
     /**
      * @brief Parse the arguments.
@@ -68,25 +70,32 @@ public:
     std::string get_syntax() const;
 
 private:
-    enum class ArgType { FLAG, VALUE, LIST, MULTI_LIST };
+    enum class KeywordType { FLAG, VALUE, LIST, MULTI_LIST };
+
     struct KeywordInfo {
-        ArgType type;
+        KeywordType type;
         void* target;
         std::string keyword;
     };
 
-    struct Positional {
+    struct SinglePositional {
         std::string* var;
         std::string label;
         bool required;
-        bool set = false;
+        bool filled = false;
+    };
+
+    struct PositionalList {
+        std::vector<std::string>* var;
+        std::string label;
+        bool required;
     };
 
     std::string cmd_name_;
     std::string subcommand_;
-    std::vector<Positional> positionals_;
+    std::vector<SinglePositional> single_positionals_;
+    std::optional<PositionalList> positional_list_;
     std::map<std::string, KeywordInfo> keywords_;
-    std::vector<std::string>* default_list_ = nullptr;
 };
 
 #define PARSE_OR_RETURN(parser, interp, args) \

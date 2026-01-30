@@ -392,10 +392,10 @@ void register_string_builtins(Interpreter& interp) {
             std::string input, substring, out_var;
             bool reverse = false;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(substring, "substring");
-            parser.add_positional(out_var, "output variable");
-            parser.add_flag("REVERSE", reverse);
+            parser.positional(input, "input string");
+            parser.positional(substring, "substring");
+            parser.positional(out_var, "output variable");
+            parser.flag("REVERSE", reverse);
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -413,10 +413,10 @@ void register_string_builtins(Interpreter& interp) {
             std::string match_str, replace_str, out_var;
             std::vector<std::string> inputs;
 
-            parser.add_positional(match_str, "match string");
-            parser.add_positional(replace_str, "replace string");
-            parser.add_positional(out_var, "output variable");
-            parser.add_default_list(inputs);
+            parser.positional(match_str, "match string");
+            parser.positional(replace_str, "replace string");
+            parser.positional(out_var, "output variable");
+            parser.positionals(inputs, "inputs");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -455,9 +455,9 @@ void register_string_builtins(Interpreter& interp) {
                 std::string pattern, out_var;
                 std::vector<std::string> inputs;
 
-                parser.add_positional(pattern, "regex pattern");
-                parser.add_positional(out_var, "output variable");
-                parser.add_default_list(inputs);
+                parser.positional(pattern, "regex pattern");
+                parser.positional(out_var, "output variable");
+                parser.positionals(inputs, "inputs");
 
                 PARSE_OR_RETURN(parser, interp, regex_args);
 
@@ -491,9 +491,9 @@ void register_string_builtins(Interpreter& interp) {
                 std::string pattern, out_var;
                 std::vector<std::string> inputs;
 
-                parser.add_positional(pattern, "regex pattern");
-                parser.add_positional(out_var, "output variable");
-                parser.add_default_list(inputs);
+                parser.positional(pattern, "regex pattern");
+                parser.positional(out_var, "output variable");
+                parser.positionals(inputs, "inputs");
 
                 PARSE_OR_RETURN(parser, interp, regex_args);
 
@@ -530,10 +530,10 @@ void register_string_builtins(Interpreter& interp) {
                 std::string pattern, replacement, out_var;
                 std::vector<std::string> inputs;
 
-                parser.add_positional(pattern, "regex pattern");
-                parser.add_positional(replacement, "replacement expression");
-                parser.add_positional(out_var, "output variable");
-                parser.add_default_list(inputs);
+                parser.positional(pattern, "regex pattern");
+                parser.positional(replacement, "replacement expression");
+                parser.positional(out_var, "output variable");
+                parser.positionals(inputs, "inputs");
 
                 PARSE_OR_RETURN(parser, interp, regex_args);
 
@@ -559,8 +559,8 @@ void register_string_builtins(Interpreter& interp) {
                 std::string out_var;
                 std::vector<std::string> inputs;
 
-                parser.add_positional(out_var, "output variable");
-                parser.add_default_list(inputs);
+                parser.positional(out_var, "output variable");
+                parser.positionals(inputs, "inputs");
 
                 PARSE_OR_RETURN(parser, interp, regex_args);
 
@@ -584,8 +584,8 @@ void register_string_builtins(Interpreter& interp) {
             std::string var_name;
             std::vector<std::string> inputs;
 
-            parser.add_positional(var_name, "variable name");
-            parser.add_default_list(inputs);
+            parser.positional(var_name, "variable name");
+            parser.positionals(inputs, "inputs");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -601,8 +601,8 @@ void register_string_builtins(Interpreter& interp) {
             std::string var_name;
             std::vector<std::string> inputs;
 
-            parser.add_positional(var_name, "variable name");
-            parser.add_default_list(inputs);
+            parser.positional(var_name, "variable name");
+            parser.positionals(inputs, "inputs");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -619,8 +619,8 @@ void register_string_builtins(Interpreter& interp) {
             std::string out_var;
             std::vector<std::string> inputs;
 
-            parser.add_positional(out_var, "output variable");
-            parser.add_default_list(inputs);
+            parser.positional(out_var, "output variable");
+            parser.positionals(inputs, "inputs");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -636,9 +636,9 @@ void register_string_builtins(Interpreter& interp) {
             std::string glue, out_var;
             std::vector<std::string> inputs;
 
-            parser.add_positional(glue, "glue string");
-            parser.add_positional(out_var, "output variable");
-            parser.add_default_list(inputs);
+            parser.positional(glue, "glue string");
+            parser.positional(out_var, "output variable");
+            parser.positionals(inputs, "inputs");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -654,8 +654,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "TOLOWER");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -665,8 +665,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "TOUPPER");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -676,8 +676,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "LENGTH");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -687,10 +687,10 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "SUBSTRING");
             std::string input, begin_str, length_str, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(begin_str, "begin index");
-            parser.add_positional(length_str, "length");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(begin_str, "begin index");
+            parser.positional(length_str, "length");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -721,8 +721,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "STRIP");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -732,8 +732,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "GENEX_STRIP");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -743,9 +743,9 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "REPEAT");
             std::string input, count_str, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(count_str, "repeat count");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(count_str, "repeat count");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -781,9 +781,9 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "COMPARE " + op);
             std::string str1, str2, out_var;
 
-            parser.add_positional(str1, "string1");
-            parser.add_positional(str2, "string2");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(str1, "string1");
+            parser.positional(str2, "string2");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, cmp_args);
 
@@ -815,7 +815,7 @@ void register_string_builtins(Interpreter& interp) {
             std::string out_var;
             std::vector<std::string> codes;
 
-            parser.add_default_list(codes);
+            parser.positionals(codes, "codes");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -849,8 +849,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "HEX");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -867,10 +867,10 @@ void register_string_builtins(Interpreter& interp) {
             bool at_only = false;
             bool escape_quotes = false;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
-            parser.add_flag("@ONLY", at_only);
-            parser.add_flag("ESCAPE_QUOTES", escape_quotes);
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
+            parser.flag("@ONLY", at_only);
+            parser.flag("ESCAPE_QUOTES", escape_quotes);
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -881,8 +881,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "MAKE_C_IDENTIFIER");
             std::string input, out_var;
 
-            parser.add_positional(input, "input string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(out_var, "output variable");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -968,9 +968,9 @@ void register_string_builtins(Interpreter& interp) {
             bool utc = false;
             std::vector<std::string> remaining_args;
 
-            parser.add_positional(out_var, "output variable");
-            parser.add_default_list(remaining_args); // For format string
-            parser.add_flag("UTC", utc);
+            parser.positional(out_var, "output variable");
+            parser.positionals(remaining_args, "args"); // For format string
+            parser.flag("UTC", utc);
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
@@ -1011,8 +1011,8 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "SHA256");
             std::string input, out_var;
 
-            parser.add_positional(out_var, "output variable");
-            parser.add_positional(input, "input string");
+            parser.positional(out_var, "output variable");
+            parser.positional(input, "input string");
 
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, sha256(input).to_string());
@@ -1021,9 +1021,9 @@ void register_string_builtins(Interpreter& interp) {
             CommandParser parser("string", "BLAKE2B");
             std::string input, out_var, key;
 
-            parser.add_positional(out_var, "output variable");
-            parser.add_positional(input, "input string");
-            parser.add_positional(key, "key", false);
+            parser.positional(out_var, "output variable");
+            parser.positional(input, "input string");
+            parser.positional(key, "key", false);
 
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, blake2b(input, key).to_string());

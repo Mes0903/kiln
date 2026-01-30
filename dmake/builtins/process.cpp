@@ -176,25 +176,25 @@ void register_process_builtins(Interpreter& interp) {
         bool echo_error_variable = false;
         bool command_error_is_fatal = false;
 
-        parser.add_multi_list("COMMAND", commands);
-        parser.add_value("WORKING_DIRECTORY", working_dir);
-        parser.add_value("TIMEOUT", timeout);
-        parser.add_value("RESULT_VARIABLE", result_variable);
-        parser.add_value("RESULTS_VARIABLE", results_variable);
-        parser.add_value("OUTPUT_VARIABLE", output_variable);
-        parser.add_value("ERROR_VARIABLE", error_variable);
-        parser.add_value("INPUT_FILE", input_file);
-        parser.add_value("OUTPUT_FILE", output_file);
-        parser.add_value("ERROR_FILE", error_file);
-        parser.add_value("COMMAND_ECHO", command_echo);
-        parser.add_value("ENCODING", encoding);
-        parser.add_flag("OUTPUT_QUIET", output_quiet);
-        parser.add_flag("ERROR_QUIET", error_quiet);
-        parser.add_flag("OUTPUT_STRIP_TRAILING_WHITESPACE", output_strip_trailing_whitespace);
-        parser.add_flag("ERROR_STRIP_TRAILING_WHITESPACE", error_strip_trailing_whitespace);
-        parser.add_flag("ECHO_OUTPUT_VARIABLE", echo_output_variable);
-        parser.add_flag("ECHO_ERROR_VARIABLE", echo_error_variable);
-        parser.add_flag("COMMAND_ERROR_IS_FATAL", command_error_is_fatal);
+        parser.multi_list("COMMAND", commands);
+        parser.value("WORKING_DIRECTORY", working_dir);
+        parser.value("TIMEOUT", timeout);
+        parser.value("RESULT_VARIABLE", result_variable);
+        parser.value("RESULTS_VARIABLE", results_variable);
+        parser.value("OUTPUT_VARIABLE", output_variable);
+        parser.value("ERROR_VARIABLE", error_variable);
+        parser.value("INPUT_FILE", input_file);
+        parser.value("OUTPUT_FILE", output_file);
+        parser.value("ERROR_FILE", error_file);
+        parser.value("COMMAND_ECHO", command_echo);
+        parser.value("ENCODING", encoding);
+        parser.flag("OUTPUT_QUIET", output_quiet);
+        parser.flag("ERROR_QUIET", error_quiet);
+        parser.flag("OUTPUT_STRIP_TRAILING_WHITESPACE", output_strip_trailing_whitespace);
+        parser.flag("ERROR_STRIP_TRAILING_WHITESPACE", error_strip_trailing_whitespace);
+        parser.flag("ECHO_OUTPUT_VARIABLE", echo_output_variable);
+        parser.flag("ECHO_ERROR_VARIABLE", echo_error_variable);
+        parser.flag("COMMAND_ERROR_IS_FATAL", command_error_is_fatal);
 
         PARSE_OR_RETURN(parser, interp, args);
 

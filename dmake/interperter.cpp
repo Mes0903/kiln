@@ -457,9 +457,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             std::string working_dir;
             std::vector<std::string> raw_cmd;
 
-            parser.add_value("NAME", name);
-            parser.add_list("COMMAND", raw_cmd);
-            parser.add_value("WORKING_DIRECTORY", working_dir);
+            parser.value("NAME", name);
+            parser.list("COMMAND", raw_cmd);
+            parser.value("WORKING_DIRECTORY", working_dir);
 
             auto parse_res = parser.parse(args);
             if (!parse_res) {

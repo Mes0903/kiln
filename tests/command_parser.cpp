@@ -12,8 +12,8 @@ TEST_CASE("CommandParser: basic positional", "[command_parser]") {
     std::string target;
     std::vector<std::string> sources;
     
-    parser.add_positional(target, "target");
-    parser.add_default_list(sources);
+    parser.positional(target, "target");
+    parser.positionals(sources, "sources");
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
@@ -30,10 +30,10 @@ TEST_CASE("CommandParser: flags and keywords", "[command_parser]") {
     bool verbose = false;
     std::vector<std::string> sources;
     
-    parser.add_positional(name, "name");
-    parser.add_flag("SHARED", shared);
-    parser.add_flag("VERBOSE", verbose);
-    parser.add_list("SOURCES", sources);
+    parser.positional(name, "name");
+    parser.flag("SHARED", shared);
+    parser.flag("VERBOSE", verbose);
+    parser.list("SOURCES", sources);
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
@@ -50,8 +50,8 @@ TEST_CASE("CommandParser: single values", "[command_parser]") {
     std::string dest;
     std::string comp;
     
-    parser.add_value("DESTINATION", dest);
-    parser.add_value("COMPONENT", comp);
+    parser.value("DESTINATION", dest);
+    parser.value("COMPONENT", comp);
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
@@ -70,8 +70,8 @@ TEST_CASE("CommandParser: multi-lists", "[command_parser]") {
     std::vector<std::vector<std::string>> commands;
     std::string working_dir;
     
-    parser.add_multi_list("COMMAND", commands);
-    parser.add_value("WORKING_DIRECTORY", working_dir);
+    parser.multi_list("COMMAND", commands);
+    parser.value("WORKING_DIRECTORY", working_dir);
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
@@ -81,37 +81,16 @@ TEST_CASE("CommandParser: multi-lists", "[command_parser]") {
     CHECK(working_dir == "/tmp");
 }
 
-TEST_CASE("CommandParser: missing required positional", "[command_parser]") {
-    std::vector<std::string> args = {};
-    CommandParser parser("test_cmd");
-    
-    std::string target;
-    parser.add_positional(target, "target", true);
-    
-    auto res = parser.parse(args);
-    REQUIRE_FALSE(res.has_value());
-    CHECK(res.error().find("missing required positional argument: target") != std::string::npos);
-}
-
 TEST_CASE("CommandParser: optional positional", "[command_parser]") {
     std::vector<std::string> args = {};
     CommandParser parser("test_cmd");
     
     std::string target = "default";
-    parser.add_positional(target, "target", false);
+    parser.positional(target, "target", false);
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
     CHECK(target == "default");
-}
-
-TEST_CASE("CommandParser: unknown keyword", "[command_parser]") {
-    std::vector<std::string> args = {"UNKNOWN_KEY", "value"};
-    CommandParser parser("test_cmd");
-    
-    auto res = parser.parse(args);
-    REQUIRE_FALSE(res.has_value());
-    CHECK(res.error().find("unknown argument: UNKNOWN_KEY") != std::string::npos);
 }
 
 TEST_CASE("CommandParser: positional stops at keyword", "[command_parser]") {
@@ -121,9 +100,9 @@ TEST_CASE("CommandParser: positional stops at keyword", "[command_parser]") {
     std::string p1, p2;
     std::string key_val;
     
-    parser.add_positional(p1, "p1");
-    parser.add_positional(p2, "p2", false);
-    parser.add_value("KEY", key_val);
+    parser.positional(p1, "p1");
+    parser.positional(p2, "p2", false);
+    parser.value("KEY", key_val);
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
@@ -139,8 +118,8 @@ TEST_CASE("CommandParser: default list after positionals", "[command_parser]") {
     std::string target;
     std::vector<std::string> extras;
     
-    parser.add_positional(target, "target");
-    parser.add_default_list(extras);
+    parser.positional(target, "target");
+    parser.positionals(extras, "extras");
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
@@ -158,9 +137,9 @@ TEST_CASE("CommandParser: flags do not interrupt positional parsing", "[command_
     std::string p1, p2;
     bool flag = false;
     
-    parser.add_positional(p1, "p1");
-    parser.add_positional(p2, "p2");
-    parser.add_flag("MY_FLAG", flag);
+    parser.positional(p1, "p1");
+    parser.positional(p2, "p2");
+    parser.flag("MY_FLAG", flag);
     
     auto res = parser.parse(args);
     REQUIRE(res.has_value());

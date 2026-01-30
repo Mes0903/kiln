@@ -44,8 +44,8 @@ void register_list_builtins(Interpreter& interp) {
         if (operation == "LENGTH") {
             CommandParser parser("list", "LENGTH");
             std::string list_var, out_var;
-            parser.add_positional(list_var, "list variable");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(list_var, "list variable");
+            parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -54,8 +54,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "GET");
             std::string list_var, out_var;
             std::vector<std::string> indices;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(indices);
+            parser.positional(list_var, "list variable");
+            parser.positionals(indices, "indices");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             if (indices.empty()) {
@@ -94,9 +94,9 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "JOIN") {
             CommandParser parser("list", "JOIN");
             std::string list_var, glue, out_var;
-            parser.add_positional(list_var, "list variable");
-            parser.add_positional(glue, "glue string");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(list_var, "list variable");
+            parser.positional(glue, "glue string");
+            parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -110,8 +110,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "APPEND");
             std::string list_var;
             std::vector<std::string> items;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(items);
+            parser.positional(list_var, "list variable");
+            parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -121,8 +121,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "PREPEND");
             std::string list_var;
             std::vector<std::string> items;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(items);
+            parser.positional(list_var, "list variable");
+            parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -133,8 +133,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "POP_BACK");
             std::string list_var;
             std::vector<std::string> out_vars;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(out_vars);
+            parser.positional(list_var, "list variable");
+            parser.positionals(out_vars, "output variables");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -168,8 +168,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "POP_FRONT");
             std::string list_var;
             std::vector<std::string> out_vars;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(out_vars);
+            parser.positional(list_var, "list variable");
+            parser.positionals(out_vars, "output variables");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -202,9 +202,9 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "INSERT");
             std::string list_var, index_str;
             std::vector<std::string> items;
-            parser.add_positional(list_var, "list variable");
-            parser.add_positional(index_str, "index");
-            parser.add_default_list(items);
+            parser.positional(list_var, "list variable");
+            parser.positional(index_str, "index");
+            parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -226,7 +226,7 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "REVERSE") {
             CommandParser parser("list", "REVERSE");
             std::string list_var;
-            parser.add_positional(list_var, "list variable");
+            parser.positional(list_var, "list variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -236,10 +236,10 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "SORT");
             std::string list_var;
             std::string compare_mode, case_mode, order_mode;
-            parser.add_positional(list_var, "list variable");
-            parser.add_value("COMPARE", compare_mode);
-            parser.add_value("CASE", case_mode);
-            parser.add_value("ORDER", order_mode);
+            parser.positional(list_var, "list variable");
+            parser.value("COMPARE", compare_mode);
+            parser.value("CASE", case_mode);
+            parser.value("ORDER", order_mode);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             bool natural = false;
@@ -294,7 +294,7 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "REMOVE_DUPLICATES") {
             CommandParser parser("list", "REMOVE_DUPLICATES");
             std::string list_var;
-            parser.add_positional(list_var, "list variable");
+            parser.positional(list_var, "list variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -303,10 +303,10 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "SUBLIST") {
             CommandParser parser("list", "SUBLIST");
             std::string list_var, out_var, start_str, length_str;
-            parser.add_positional(list_var, "list variable");
-            parser.add_positional(start_str, "start index");
-            parser.add_positional(length_str, "length");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(list_var, "list variable");
+            parser.positional(start_str, "start index");
+            parser.positional(length_str, "length");
+            parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -331,9 +331,9 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "FIND") {
             CommandParser parser("list", "FIND");
             std::string list_var, value, out_var;
-            parser.add_positional(list_var, "list variable");
-            parser.add_positional(value, "value to find");
-            parser.add_positional(out_var, "output variable");
+            parser.positional(list_var, "list variable");
+            parser.positional(value, "value to find");
+            parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -349,8 +349,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "REMOVE_ITEM");
             std::string list_var;
             std::vector<std::string> items;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(items);
+            parser.positional(list_var, "list variable");
+            parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -370,8 +370,8 @@ void register_list_builtins(Interpreter& interp) {
             CommandParser parser("list", "REMOVE_AT");
             std::string list_var;
             std::vector<std::string> indices;
-            parser.add_positional(list_var, "list variable");
-            parser.add_default_list(indices);
+            parser.positional(list_var, "list variable");
+            parser.positionals(indices, "indices");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeList list(interp.get_variable(list_var));
@@ -402,10 +402,10 @@ void register_list_builtins(Interpreter& interp) {
         } else if (operation == "FILTER") {
             CommandParser parser("list", "FILTER");
             std::string list_var, mode, regex_mode, pattern;
-            parser.add_positional(list_var, "list variable");
-            parser.add_positional(mode, "mode (INCLUDE/EXCLUDE)");
-            parser.add_positional(regex_mode, "REGEX keyword");
-            parser.add_positional(pattern, "regex pattern");
+            parser.positional(list_var, "list variable");
+            parser.positional(mode, "mode (INCLUDE/EXCLUDE)");
+            parser.positional(regex_mode, "REGEX keyword");
+            parser.positional(pattern, "regex pattern");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c){ return std::toupper(c); });

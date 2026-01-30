@@ -17,12 +17,12 @@ void parse_destination_properties(
     std::string dest_keyword = keyword_prefix.empty() ? "DESTINATION" : keyword_prefix + "_DESTINATION";
     std::string perm_keyword = keyword_prefix.empty() ? "PERMISSIONS" : keyword_prefix + "_PERMISSIONS";
 
-    parser.add_value(dest_keyword, dest.destination);
-    parser.add_list(perm_keyword, dest.permissions);
-    parser.add_value("COMPONENT", dest.component);
-    parser.add_list("CONFIGURATIONS", dest.configurations);
-    parser.add_flag("OPTIONAL", dest.optional);
-    parser.add_flag("EXCLUDE_FROM_ALL", dest.exclude_from_all);
+    parser.value(dest_keyword, dest.destination);
+    parser.list(perm_keyword, dest.permissions);
+    parser.value("COMPONENT", dest.component);
+    parser.list("CONFIGURATIONS", dest.configurations);
+    parser.flag("OPTIONAL", dest.optional);
+    parser.flag("EXCLUDE_FROM_ALL", dest.exclude_from_all);
 }
 
 // Parse install(TARGETS ...) command

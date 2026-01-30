@@ -499,17 +499,17 @@ void register_find_command(
         FindOptions opts;
         std::vector<std::string> default_args;
 
-        parser.add_positional(opts.var_name, "variable name", true);
-        parser.add_default_list(default_args);
-        parser.add_list("NAMES", opts.names);
-        parser.add_list("HINTS", opts.hints);
-        parser.add_list("PATHS", opts.paths);
-        parser.add_list("PATH_SUFFIXES", opts.path_suffixes);
-        parser.add_value("DOC", opts.doc);
-        parser.add_flag("REQUIRED", opts.required);
-        parser.add_flag("NO_DEFAULT_PATH", opts.no_default_path);
-        parser.add_flag("NO_CACHE", opts.no_cache);
-        parser.add_flag("NAMES_PER_DIR", opts.names_per_dir);
+        parser.positional(opts.var_name, "variable name", true);
+        parser.positionals(default_args, "args");
+        parser.list("NAMES", opts.names);
+        parser.list("HINTS", opts.hints);
+        parser.list("PATHS", opts.paths);
+        parser.list("PATH_SUFFIXES", opts.path_suffixes);
+        parser.value("DOC", opts.doc);
+        parser.flag("REQUIRED", opts.required);
+        parser.flag("NO_DEFAULT_PATH", opts.no_default_path);
+        parser.flag("NO_CACHE", opts.no_cache);
+        parser.flag("NAMES_PER_DIR", opts.names_per_dir);
 
         PARSE_OR_RETURN(parser, interp, args);
 
