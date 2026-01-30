@@ -1028,7 +1028,35 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
 
-    auto cond_result = evaluate_condition(if_block.condition, if_block.row, if_block.col, if_block.offset, if_block.length);
+    // CMake argument elision: Remove arguments that evaluate to empty strings
+    // when they contain variable references (unquoted arguments with ${...})
+    auto filter_empty_args = [&](const std::vector<Argument>& args) -> std::vector<Argument> {
+        std::vector<Argument> filtered;
+        for (const auto& arg : args) {
+            // Check if argument contains variable references
+            bool has_var_ref = false;
+            for (const auto& part : arg.parts) {
+                if (std::holds_alternative<VariableReference>(part)) {
+                    has_var_ref = true;
+                    break;
+                }
+            }
+
+            // If it has variable references, evaluate it and check if empty
+            if (has_var_ref && !arg.quoted) {
+                std::string val = evaluate_argument(arg);
+                if (val.empty()) {
+                    continue;  // Skip this argument (elision)
+                }
+            }
+
+            filtered.push_back(arg);
+        }
+        return filtered;
+    };
+
+    auto filtered_condition = filter_empty_args(if_block.condition);
+    auto cond_result = evaluate_condition(filtered_condition, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
         set_fatal_error(cond_result.error());
         safe_pop_trace_stack("if block condition error");
@@ -1043,7 +1071,8 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     }
 
     for (const auto& elseif : if_block.elseif_branches) {
-        auto elseif_cond = evaluate_condition(elseif.condition, elseif.row, elseif.col, elseif.offset, elseif.length);
+        auto filtered_elseif_cond = filter_empty_args(elseif.condition);
+        auto elseif_cond = evaluate_condition(filtered_elseif_cond, elseif.row, elseif.col, elseif.offset, elseif.length);
         if (!elseif_cond) {
             set_fatal_error(elseif_cond.error());
             safe_pop_trace_stack("elseif block condition error");
@@ -1910,15 +1939,41 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         return std::unexpected(*get_fatal_error());
     }
 
-    // Error if we didn't consume all tokens (indicates malformed condition)
+    // Lenient handling of leftover tokens (CMake compatibility)
+    // CMake returns FALSE for malformed conditions instead of erroring
     if (pos < condition.size()) {
         std::string remaining;
         for (size_t i = pos; i < condition.size(); ++i) {
             if (!remaining.empty()) remaining += " ";
             remaining += get_token_string(condition[i]);
         }
-        set_fatal_error("Unexpected tokens in if() condition: " + remaining);
-        return std::unexpected(*get_fatal_error());
+
+        // Trim whitespace (space, tab, CR, LF)
+        auto is_whitespace = [](char ch) {
+            return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+        };
+
+        // Trim leading whitespace
+        size_t start = 0;
+        while (start < remaining.size() && is_whitespace(remaining[start])) {
+            ++start;
+        }
+
+        // Trim trailing whitespace
+        size_t end = remaining.size();
+        while (end > start && is_whitespace(remaining[end - 1])) {
+            --end;
+        }
+
+        remaining = remaining.substr(start, end - start);
+
+        // Only warn if there are actual non-whitespace tokens
+        if (!remaining.empty()) {
+            print_message("AUTHOR_WARNING",
+                          "Malformed if() condition - unexpected tokens: " + remaining +
+                          "\n  Condition evaluates to FALSE (CMake compatibility mode)");
+        }
+        return false;
     }
 
     return result;

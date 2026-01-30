@@ -15,6 +15,7 @@
 #include <functional>
 #include <glaze/glaze.hpp>
 #include <type_traits>
+#include <unordered_map>
 
 namespace dmake {
 
@@ -57,6 +58,15 @@ std::expected<void, std::string> BuildGraph::generate_compile_commands(const std
 }
 
 std::expected<void, std::string> BuildGraph::finalize(const GenexEvaluationContext& ctx) {
+    // Build map of outputs to task IDs for dependency inference
+    // Use unordered_map for O(1) lookups
+    std::unordered_map<std::string, std::string> file_to_task;
+    for (const auto& [id, task] : tasks_) {
+        for (const auto& out : task.outputs) {
+            file_to_task[out] = id;
+        }
+    }
+
     for (auto& [id, task] : tasks_) {
         // Create per-task context with compile_language if set
         GenexEvaluationContext task_ctx = ctx;
@@ -93,6 +103,24 @@ std::expected<void, std::string> BuildGraph::finalize(const GenexEvaluationConte
             }
         }
         task.commands = std::move(evaluated_commands);
+
+        // Infer dependencies from command arguments that reference target outputs
+        // After genex expansion (e.g., $<TARGET_FILE:foo> → /path/to/foo),
+        // check if any argument is an output of another task
+        for (const auto& cmd : task.commands) {
+            for (const auto& arg : cmd) {
+                // Skip non-file arguments - most args are flags like -I, -D, etc.
+                // $<TARGET_FILE:...> always returns absolute paths starting with /
+                if (arg.empty() || arg[0] != '/') continue;
+
+                // O(1) lookup - check if this path is produced by another task
+                auto it = file_to_task.find(arg);
+                if (it != file_to_task.end() && it->second != id) {
+                    // Add as input - execute() will convert to dependency
+                    task.inputs.push_back(arg);
+                }
+            }
+        }
 
         // Evaluate working_dir if it contains genex
         if (!task.working_dir.empty() && task.working_dir.find("$<") != std::string::npos) {

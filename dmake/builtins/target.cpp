@@ -57,12 +57,10 @@ void register_target_builtins(Interpreter& interp) {
         configure_lang(Language::CXX, "CXX");
         configure_lang(Language::C, "C");
 
-        // Apply all accumulated directory properties from current interpreter
-        for (const auto& [prop_name, values] : interp.accumulated_directory_properties_) {
-            if (!values.empty()) {
-                target->append_property(prop_name, values, PropertyVisibility::PRIVATE);
-            }
-        }
+        // Note: Accumulated directory properties are applied retroactively via
+        // finalize_directory_targets() to match CMake's behavior where directory-level
+        // commands like add_definitions() affect all targets in the directory,
+        // including those created before the command was executed.
     };
 
     // Helper for adding sources to a target with validation
