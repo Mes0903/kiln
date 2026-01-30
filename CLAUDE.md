@@ -135,6 +135,30 @@ dmake consists of four main layers:
 - Custom targets only support PRIVATE scope
 - Files are validated for existence before being added
 
+**target_compile_features() Command:**
+- Syntax: `target_compile_features(target PRIVATE/PUBLIC/INTERFACE features...)`
+- Specifies compiler features required when compiling a target
+- Automatically sets the minimum required language standard based on features
+- Supports both meta-features (e.g., `cxx_std_17`, `c_std_99`) and individual features (e.g., `cxx_lambdas`)
+- Features are validated against the known features database
+- PUBLIC/INTERFACE features propagate to dependent targets
+
+**Supported C++ Features:**
+- Meta-features: `cxx_std_98`, `cxx_std_11`, `cxx_std_14`, `cxx_std_17`, `cxx_std_20`, `cxx_std_23`, `cxx_std_26`
+- C++11 features (41 total): `cxx_lambdas`, `cxx_nullptr`, `cxx_auto_type`, `cxx_variadic_templates`, `cxx_static_assert`, `cxx_constexpr`, `cxx_decltype`, `cxx_override`, `cxx_final`, etc.
+- C++14 features (11 total): `cxx_generic_lambdas`, `cxx_lambda_init_captures`, `cxx_decltype_auto`, `cxx_return_type_deduction`, `cxx_variable_templates`, etc.
+- No individual features for C++17+ (use meta-features)
+
+**Supported C Features:**
+- Meta-features: `c_std_90`, `c_std_99`, `c_std_11`, `c_std_17`, `c_std_23`
+- Individual features: `c_function_prototypes`, `c_restrict`, `c_variadic_macros`, `c_static_assert`
+
+**Standard Resolution:**
+- The highest required standard from all features is automatically applied
+- Feature requirements override explicitly set `CXX_STANDARD`/`C_STANDARD` if higher
+- Example: `cxx_lambdas` requires C++11, `cxx_generic_lambdas` requires C++14
+- Proper chronological ordering for C standards (C99 < C11 < C17 < C23)
+
 ### Build System
 
 - **Signature-Based Caching**: Task signatures include command, compiler version, dmake version, and all input file timestamps (including discovered headers).
@@ -227,6 +251,7 @@ The parser is a **recursive descent parser** supporting:
 - `add_custom_target()` - Custom targets with COMMAND/DEPENDS/ALL
 - `target_sources()` - Add sources to targets with FILE_SET support (HEADERS, CXX_MODULES)
 - `target_include_directories()`, `target_compile_definitions()`, `target_compile_options()`
+- `target_compile_features()` - Specify required compiler features (C++11/14/17/20/23/26, C99/11/17/23)
 - `target_link_libraries()`, `target_link_directories()`
 - `target_precompile_headers()` - PCH support
 - `set_target_properties()`, `get_target_property()`
@@ -726,6 +751,33 @@ The project can self host. Once you have an initial `dmake` binary:
 ./build/dmake
 ```
 The resulting binary will be in `build/debug/dmake`.
+
+## Compile Features System
+
+The compile features system (`dmake/compile_features.hpp/cpp`) provides CMake-compatible compiler feature detection and automatic standard selection.
+
+**Architecture:**
+- **Singleton Database**: `CompileFeatures::instance()` provides access to all known C and C++ features
+- **Feature Types**: Meta-features (e.g., `cxx_std_17`) and individual features (e.g., `cxx_lambdas`)
+- **Automatic Standard Deduction**: Features specify their required language standard (e.g., lambdas → C++11)
+- **Chronological Ordering**: Properly handles C standard version ordering (C90 < C99 < C11 < C17 < C23)
+
+**Feature Database:**
+- **C++ Features**: 7 meta-features (C++98-C++26), 52 individual features (C++11-C++14)
+- **C Features**: 5 meta-features (C90-C23), 4 individual features
+- **Fast Lookup**: `O(1)` feature validation via `std::map`
+
+**Integration Points:**
+- `target_compile_features()` builtin validates and stores features in `COMPILE_FEATURES` property
+- `Target::resolve()` includes `COMPILE_FEATURES` in transitive resolution
+- Compilation tasks (`generate_object_tasks`, PCH, modules) query features to determine minimum standard
+- Standard selection: `max(explicit_standard, feature_required_standard)`
+
+**Implementation Notes:**
+- Feature requirements are evaluated at task generation time, not parse time
+- PUBLIC/INTERFACE features propagate through dependency graph
+- Works alongside explicit `CXX_STANDARD`/`C_STANDARD` settings (takes maximum)
+- No runtime feature detection - purely declarative requirements
 
 ## Code Locations
 

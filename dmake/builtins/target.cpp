@@ -3,6 +3,7 @@
 #include "../target.hpp"
 #include "../command_parser.hpp"
 #include "../genex_parser.hpp"
+#include "../compile_features.hpp"
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
@@ -504,6 +505,43 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("target_compile_definitions", make_target_command("target_compile_definitions", "COMPILE_DEFINITIONS"));
     interp.add_builtin("target_compile_options", make_target_command("target_compile_options", "COMPILE_OPTIONS"));
     interp.add_builtin("target_precompile_headers", make_target_command("target_precompile_headers", "PRECOMPILE_HEADERS"));
+
+    // target_compile_features - specify compiler features required for a target
+    interp.add_builtin("target_compile_features", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_compile_features");
+        std::string name;
+        std::vector<std::string> pub, priv, inter;
+        parser.add_positional(name, "target name");
+        parser.add_list("PUBLIC", pub);
+        parser.add_list("PRIVATE", priv);
+        parser.add_list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_compile_features");
+        if (!target) return;
+
+        // Validate features against known list
+        const auto& features_db = CompileFeatures::instance();
+        auto validate_features = [&](const std::vector<std::string>& features, const char* visibility) -> bool {
+            for (const auto& feature : features) {
+                if (!features_db.is_known_feature(feature)) {
+                    interp.set_fatal_error("target_compile_features: Unknown compile feature '" + feature +
+                                          "' in " + visibility + " scope for target '" + name + "'");
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!pub.empty() && !validate_features(pub, "PUBLIC")) return;
+        if (!priv.empty() && !validate_features(priv, "PRIVATE")) return;
+        if (!inter.empty() && !validate_features(inter, "INTERFACE")) return;
+
+        // Store validated features
+        if (!pub.empty()) target->append_property("COMPILE_FEATURES", pub, PropertyVisibility::PUBLIC);
+        if (!priv.empty()) target->append_property("COMPILE_FEATURES", priv, PropertyVisibility::PRIVATE);
+        if (!inter.empty()) target->append_property("COMPILE_FEATURES", inter, PropertyVisibility::INTERFACE);
+    });
 
     // target_link_options - similar to other target_* commands but with BEFORE support
     interp.add_builtin("target_link_options", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {

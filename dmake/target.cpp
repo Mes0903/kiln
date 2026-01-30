@@ -5,6 +5,7 @@
 #include "module_scanner.hpp"
 #include "genex_evaluator.hpp"
 #include "interperter.hpp"
+#include "compile_features.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -163,6 +164,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         {"INCLUDE_DIRECTORIES", true},
         {"COMPILE_DEFINITIONS", false},
         {"COMPILE_OPTIONS", false},
+        {"COMPILE_FEATURES", false},
         {"LINK_DIRECTORIES", true},
         {"LINK_OPTIONS", false},
         {"PRECOMPILE_HEADERS", false} // Note: PCH logic might need specialized handling, but we carry it for now
@@ -377,7 +379,21 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.output = obj;
         ctx.is_shared = is_shared;
         ctx.pch_include = pch_include_arg;
-        ctx.standard = get_language_standard(lang_info.lang);
+
+        // Determine standard: use highest of explicit standard or required by compile features
+        std::string base_standard = get_language_standard(lang_info.lang);
+        const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
+        if (!compile_features.empty()) {
+            const auto& features_db = CompileFeatures::instance();
+            int required_std = features_db.get_required_standard(compile_features, lang_info.lang);
+            if (required_std > 0) {
+                int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
+                if (required_std > current_std) {
+                    base_standard = std::to_string(required_std);
+                }
+            }
+        }
+        ctx.standard = base_standard;
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
@@ -497,7 +513,21 @@ static std::pair<std::string, std::string> generate_pch_task(
     ctx.source = pch_wrapper;
     ctx.output = pch_gch_path;
     ctx.is_shared = is_shared;
-    ctx.standard = target->get_language_standard(pch_lang);
+
+    // Determine standard: use highest of explicit standard or required by compile features
+    std::string base_standard = target->get_language_standard(pch_lang);
+    const auto& compile_features = target->get_resolved_property("COMPILE_FEATURES");
+    if (!compile_features.empty()) {
+        const auto& features_db = CompileFeatures::instance();
+        int required_std = features_db.get_required_standard(compile_features, pch_lang);
+        if (required_std > 0) {
+            int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
+            if (required_std > current_std) {
+                base_standard = std::to_string(required_std);
+            }
+        }
+    }
+    ctx.standard = base_standard;
     ctx.extensions_enabled = target->get_language_extensions(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
     ctx.options.push_back("-x");
@@ -696,7 +726,21 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.output = output_path;
         ctx.objects = obj_files;
         ctx.is_shared = is_shared;
-        ctx.standard = get_language_standard(linker_lang);
+
+        // Determine standard: use highest of explicit standard or required by compile features
+        std::string base_standard = get_language_standard(linker_lang);
+        const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
+        if (!compile_features.empty()) {
+            const auto& features_db = CompileFeatures::instance();
+            int required_std = features_db.get_required_standard(compile_features, linker_lang);
+            if (required_std > 0) {
+                int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
+                if (required_std > current_std) {
+                    base_standard = std::to_string(required_std);
+                }
+            }
+        }
+        ctx.standard = base_standard;
         ctx.extensions_enabled = get_language_extensions(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
@@ -907,7 +951,21 @@ bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& t
         ModuleScanContext ctx;
         ctx.source = src_abs.string();
         ctx.output = ddi_path;
-        ctx.standard = get_language_standard(lang_info.lang);
+
+        // Determine standard: use highest of explicit standard or required by compile features
+        std::string base_standard = get_language_standard(lang_info.lang);
+        const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
+        if (!compile_features.empty()) {
+            const auto& features_db = CompileFeatures::instance();
+            int required_std = features_db.get_required_standard(compile_features, lang_info.lang);
+            if (required_std > 0) {
+                int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
+                if (required_std > current_std) {
+                    base_standard = std::to_string(required_std);
+                }
+            }
+        }
+        ctx.standard = base_standard;
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 
