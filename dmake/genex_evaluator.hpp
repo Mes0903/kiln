@@ -67,6 +67,9 @@ private:
 
     // Helper: Normalize case for case-insensitive comparisons
     std::string to_lower(const std::string& str) const;
+
+    // Helper: Compare versions (-1 if v1 < v2, 0 if equal, 1 if v1 > v2)
+    int compare_versions(const std::string& v1, const std::string& v2) const;
 };
 
 } // namespace dmake

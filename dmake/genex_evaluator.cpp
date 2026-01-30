@@ -13,6 +13,15 @@ std::string GenexEvaluator::to_lower(const std::string& str) const {
     return result;
 }
 
+// Helper function for version comparison
+// Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+// Note: This uses simplified lexicographic comparison
+// Real CMake splits on '.' and compares components numerically
+int GenexEvaluator::compare_versions(const std::string& v1, const std::string& v2) const {
+    if (v1 == v2) return 0;
+    return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end()) ? -1 : 1;
+}
+
 bool GenexEvaluator::is_truthy(const std::string& value) const {
     // CMake truthiness: falsy values are empty string, 0, OFF, NO, FALSE, N, IGNORE, NOTFOUND, *-NOTFOUND
     if (value.empty()) return false;
@@ -208,12 +217,125 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return (*arg1_val == *arg2_val) ? "1" : "0";
         }
 
+        case GenexNodeType::VERSION_LESS:
+        case GenexNodeType::VERSION_GREATER:
+        case GenexNodeType::VERSION_EQUAL:
+        case GenexNodeType::VERSION_LESS_EQUAL:
+        case GenexNodeType::VERSION_GREATER_EQUAL: {
+            // Version comparison operators: $<VERSION_LESS:v1,v2> etc.
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 2) {
+                return std::unexpected("Version comparison requires exactly 2 arguments");
+            }
+
+            GenexParser parser;
+            auto arg1_result = parser.parse(args[0]);
+            if (!arg1_result) {
+                return std::unexpected(arg1_result.error());
+            }
+            auto arg1_val = evaluate_nodes(arg1_result->nodes);
+            if (!arg1_val) {
+                return arg1_val;
+            }
+
+            auto arg2_result = parser.parse(args[1]);
+            if (!arg2_result) {
+                return std::unexpected(arg2_result.error());
+            }
+            auto arg2_val = evaluate_nodes(arg2_result->nodes);
+            if (!arg2_val) {
+                return arg2_val;
+            }
+
+            int cmp = compare_versions(*arg1_val, *arg2_val);
+
+            switch (node.type) {
+                case GenexNodeType::VERSION_LESS:
+                    return (cmp < 0) ? "1" : "0";
+                case GenexNodeType::VERSION_GREATER:
+                    return (cmp > 0) ? "1" : "0";
+                case GenexNodeType::VERSION_EQUAL:
+                    return (cmp == 0) ? "1" : "0";
+                case GenexNodeType::VERSION_LESS_EQUAL:
+                    return (cmp <= 0) ? "1" : "0";
+                case GenexNodeType::VERSION_GREATER_EQUAL:
+                    return (cmp >= 0) ? "1" : "0";
+                default:
+                    return std::unexpected("Unknown version comparison operator");
+            }
+        }
+
         case GenexNodeType::TARGET_EXISTS: {
             // $<TARGET_EXISTS:target> returns 1 if target exists, 0 otherwise
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_EXISTS requires all_targets context");
             }
             return (ctx_.all_targets->find(node.raw_content) != ctx_.all_targets->end()) ? "1" : "0";
+        }
+
+        case GenexNodeType::TARGET_PROPERTY: {
+            // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 1 && args.size() != 2) {
+                return std::unexpected("$<TARGET_PROPERTY:...> requires 1 or 2 arguments");
+            }
+
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_PROPERTY requires all_targets context");
+            }
+
+            GenexParser parser;
+            std::string target_name;
+            std::string property_name;
+
+            if (args.size() == 1) {
+                // Single argument: property name, use current target
+                if (!ctx_.current_target) {
+                    return std::unexpected("TARGET_PROPERTY with 1 argument requires current_target context");
+                }
+                target_name = ctx_.current_target->get_name();
+
+                auto prop_result = parser.parse(args[0]);
+                if (!prop_result) {
+                    return std::unexpected(prop_result.error());
+                }
+                auto prop_val = evaluate_nodes(prop_result->nodes);
+                if (!prop_val) {
+                    return prop_val;
+                }
+                property_name = *prop_val;
+            } else {
+                // Two arguments: target name, property name
+                auto tgt_result = parser.parse(args[0]);
+                if (!tgt_result) {
+                    return std::unexpected(tgt_result.error());
+                }
+                auto tgt_val = evaluate_nodes(tgt_result->nodes);
+                if (!tgt_val) {
+                    return tgt_val;
+                }
+                target_name = *tgt_val;
+
+                auto prop_result = parser.parse(args[1]);
+                if (!prop_result) {
+                    return std::unexpected(prop_result.error());
+                }
+                auto prop_val = evaluate_nodes(prop_result->nodes);
+                if (!prop_val) {
+                    return prop_val;
+                }
+                property_name = *prop_val;
+            }
+
+            // Look up the target
+            auto target_it = ctx_.all_targets->find(target_name);
+            if (target_it == ctx_.all_targets->end()) {
+                return std::unexpected("TARGET_PROPERTY: target '" + target_name + "' not found");
+            }
+
+            // Get the property value
+            std::string prop_value = target_it->second->get_property(property_name);
+            return prop_value;
         }
 
         case GenexNodeType::COMPILE_LANGUAGE: {

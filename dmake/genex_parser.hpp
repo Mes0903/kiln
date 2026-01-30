@@ -21,7 +21,13 @@ enum class GenexNodeType {
     OR,                   // $<OR:...>
     NOT,                  // $<NOT:...>
     STREQUAL,             // $<STREQUAL:a,b>
+    VERSION_LESS,         // $<VERSION_LESS:v1,v2>
+    VERSION_GREATER,      // $<VERSION_GREATER:v1,v2>
+    VERSION_EQUAL,        // $<VERSION_EQUAL:v1,v2>
+    VERSION_LESS_EQUAL,   // $<VERSION_LESS_EQUAL:v1,v2>
+    VERSION_GREATER_EQUAL, // $<VERSION_GREATER_EQUAL:v1,v2>
     TARGET_EXISTS,        // $<TARGET_EXISTS:target>
+    TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>
     PLATFORM_ID,          // $<PLATFORM_ID:platform>
     CXX_COMPILER_ID,      // $<CXX_COMPILER_ID:id>

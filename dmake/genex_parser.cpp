@@ -21,7 +21,13 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "OR") return GenexNodeType::OR;
     if (keyword == "NOT") return GenexNodeType::NOT;
     if (keyword == "STREQUAL") return GenexNodeType::STREQUAL;
+    if (keyword == "VERSION_LESS") return GenexNodeType::VERSION_LESS;
+    if (keyword == "VERSION_GREATER") return GenexNodeType::VERSION_GREATER;
+    if (keyword == "VERSION_EQUAL") return GenexNodeType::VERSION_EQUAL;
+    if (keyword == "VERSION_LESS_EQUAL") return GenexNodeType::VERSION_LESS_EQUAL;
+    if (keyword == "VERSION_GREATER_EQUAL") return GenexNodeType::VERSION_GREATER_EQUAL;
     if (keyword == "TARGET_EXISTS") return GenexNodeType::TARGET_EXISTS;
+    if (keyword == "TARGET_PROPERTY") return GenexNodeType::TARGET_PROPERTY;
     if (keyword == "COMPILE_LANGUAGE") return GenexNodeType::COMPILE_LANGUAGE;
     if (keyword == "PLATFORM_ID") return GenexNodeType::PLATFORM_ID;
     if (keyword == "CXX_COMPILER_ID") return GenexNodeType::CXX_COMPILER_ID;
@@ -249,11 +255,40 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
                                     inner_result->nodes.begin(),
                                     inner_result->nodes.end());
             }
-        } else if (type == GenexNodeType::STREQUAL) {
+        } else if (type == GenexNodeType::STREQUAL ||
+                   type == GenexNodeType::VERSION_LESS ||
+                   type == GenexNodeType::VERSION_GREATER ||
+                   type == GenexNodeType::VERSION_EQUAL ||
+                   type == GenexNodeType::VERSION_LESS_EQUAL ||
+                   type == GenexNodeType::VERSION_GREATER_EQUAL) {
             // Two comma-separated arguments
             auto args = split_genex_args(content);
             if (args.size() != 2) {
-                return std::unexpected("$<STREQUAL:...> requires exactly 2 arguments");
+                std::string genex_name;
+                if (type == GenexNodeType::STREQUAL) genex_name = "STREQUAL";
+                else if (type == GenexNodeType::VERSION_LESS) genex_name = "VERSION_LESS";
+                else if (type == GenexNodeType::VERSION_GREATER) genex_name = "VERSION_GREATER";
+                else if (type == GenexNodeType::VERSION_EQUAL) genex_name = "VERSION_EQUAL";
+                else if (type == GenexNodeType::VERSION_LESS_EQUAL) genex_name = "VERSION_LESS_EQUAL";
+                else if (type == GenexNodeType::VERSION_GREATER_EQUAL) genex_name = "VERSION_GREATER_EQUAL";
+                return std::unexpected("$<" + genex_name + ":...> requires exactly 2 arguments");
+            }
+
+            for (const auto& arg : args) {
+                GenexParser inner_parser;
+                auto inner_result = inner_parser.parse(arg);
+                if (!inner_result) {
+                    return std::unexpected(inner_result.error());
+                }
+                node->children.insert(node->children.end(),
+                                    inner_result->nodes.begin(),
+                                    inner_result->nodes.end());
+            }
+        } else if (type == GenexNodeType::TARGET_PROPERTY) {
+            // One or two comma-separated arguments: target,property or just property
+            auto args = split_genex_args(content);
+            if (args.size() != 1 && args.size() != 2) {
+                return std::unexpected("$<TARGET_PROPERTY:...> requires 1 or 2 arguments");
             }
 
             for (const auto& arg : args) {
