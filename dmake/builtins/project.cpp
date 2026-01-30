@@ -2,6 +2,8 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
+#include "../language.hpp"
+#include "../CMakeList.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -456,6 +458,53 @@ void register_project_builtins(Interpreter& interp) {
         if (perms_changed || content_changed) {
             fs::permissions(output_path, target_perms);
         }
+    });
+
+    interp.add_builtin("aux_source_directory", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            interp.set_fatal_error("aux_source_directory() requires <dir> and <variable> arguments");
+            return;
+        }
+
+        std::string directory = args[0];
+        std::string variable = args[1];
+
+        // Resolve directory path
+        std::filesystem::path dir_path = directory;
+        if (!dir_path.is_absolute()) {
+            dir_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / dir_path;
+        }
+
+        // Check if directory exists
+        if (!std::filesystem::exists(dir_path)) {
+            interp.set_fatal_error("aux_source_directory() directory does not exist: " + dir_path.string());
+            return;
+        }
+
+        if (!std::filesystem::is_directory(dir_path)) {
+            interp.set_fatal_error("aux_source_directory() path is not a directory: " + dir_path.string());
+            return;
+        }
+
+        // Collect source files
+        CMakeList source_files;
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(dir_path)) {
+                if (!entry.is_regular_file()) continue;
+
+                auto lang_info = LanguageClassifier::from_path(entry.path().string());
+
+                // Only include compileable source files (not headers, not unknown)
+                if (lang_info.is_compileable && !lang_info.is_header) {
+                    source_files.append(entry.path().string());
+                }
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            interp.set_fatal_error("aux_source_directory() failed to read directory: " + std::string(e.what()));
+            return;
+        }
+
+        interp.set_variable(variable, source_files.to_string());
     });
 }
 

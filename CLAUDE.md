@@ -66,29 +66,12 @@ dmake -E <command> [args...]         # CMake-compatible tool commands
 -DVAR                    # Set variable to ON (boolean flag)
 ```
 
-Examples:
 ```bash
-# Build current directory in build/debug
-./build/dmake
-
-# Build specific target
-./build/dmake my_lib
-
-# Build release configuration with 8 jobs
-./build/dmake --config release -j 8
-
-# Build with variable definitions (CMake-compatible typed syntax)
-./build/dmake -DCMAKE_CXX_FLAGS_DEBUG:STRING="-g -O0" -DENABLE_FEATURE:BOOL=ON
-
-# Build and run with arguments
+./build/dmake                           # Build in build/debug
+./build/dmake my_lib --config release -j 8
 ./build/dmake run my_app -- --verbose
-
-# Run tests matching "parser"
 ./build/dmake test parser
-
-# CMake tool mode
 ./build/dmake -E copy file.txt dest/
-./build/dmake -E make_directory build/tmp
 ```
 
 **Dependencies:**
@@ -120,44 +103,11 @@ dmake consists of four main layers:
 - `LINK_DIRECTORIES`, `LINK_LIBRARIES` (order-preserving)
 - `PRECOMPILE_HEADERS`
 
-**File Sets (CMake 3.23+):**
-- Organizes related files with named file sets
-- Supports `HEADERS` and `CXX_MODULES` types
-- Each file set has: name, type, visibility (PUBLIC/PRIVATE/INTERFACE), base directories, and files
-- `CXX_MODULES` file sets automatically mark sources as module interfaces
-- Files from file sets are merged into `SOURCES` property during task generation
+**File Sets**: Named collections (HEADERS, CXX_MODULES) with visibility. CXX_MODULES auto-mark sources as module interfaces.
 
-**target_sources() Command:**
-- Basic form: `target_sources(target PRIVATE/PUBLIC/INTERFACE sources...)`
-- FILE_SET form: `target_sources(target VISIBILITY FILE_SET name TYPE type BASE_DIRS dirs FILES files)`
-- Supports multiple visibility scopes and file sets in a single call
-- Validates that `CXX_MODULES` file sets don't use INTERFACE scope (except on imported targets)
-- Custom targets only support PRIVATE scope
-- Files are validated for existence before being added
+**target_sources()**: Basic form adds sources with visibility. FILE_SET form organizes files. Validates CXX_MODULES scope and file existence.
 
-**target_compile_features() Command:**
-- Syntax: `target_compile_features(target PRIVATE/PUBLIC/INTERFACE features...)`
-- Specifies compiler features required when compiling a target
-- Automatically sets the minimum required language standard based on features
-- Supports both meta-features (e.g., `cxx_std_17`, `c_std_99`) and individual features (e.g., `cxx_lambdas`)
-- Features are validated against the known features database
-- PUBLIC/INTERFACE features propagate to dependent targets
-
-**Supported C++ Features:**
-- Meta-features: `cxx_std_98`, `cxx_std_11`, `cxx_std_14`, `cxx_std_17`, `cxx_std_20`, `cxx_std_23`, `cxx_std_26`
-- C++11 features (41 total): `cxx_lambdas`, `cxx_nullptr`, `cxx_auto_type`, `cxx_variadic_templates`, `cxx_static_assert`, `cxx_constexpr`, `cxx_decltype`, `cxx_override`, `cxx_final`, etc.
-- C++14 features (11 total): `cxx_generic_lambdas`, `cxx_lambda_init_captures`, `cxx_decltype_auto`, `cxx_return_type_deduction`, `cxx_variable_templates`, etc.
-- No individual features for C++17+ (use meta-features)
-
-**Supported C Features:**
-- Meta-features: `c_std_90`, `c_std_99`, `c_std_11`, `c_std_17`, `c_std_23`
-- Individual features: `c_function_prototypes`, `c_restrict`, `c_variadic_macros`, `c_static_assert`
-
-**Standard Resolution:**
-- The highest required standard from all features is automatically applied
-- Feature requirements override explicitly set `CXX_STANDARD`/`C_STANDARD` if higher
-- Example: `cxx_lambdas` requires C++11, `cxx_generic_lambdas` requires C++14
-- Proper chronological ordering for C standards (C99 < C11 < C17 < C23)
+**target_compile_features()**: Specifies required compiler features. Auto-sets minimum language standard. Supports meta-features (cxx_std_*, c_std_*) and individual features. PUBLIC/INTERFACE propagate.
 
 ### Build System
 
@@ -171,37 +121,13 @@ dmake consists of four main layers:
 
 ### Test Runner
 
-- **Parallel Execution**: `dmake test` runs tests in parallel using `std::async`.
-- **Output Buffering**: Captures `stdout`/`stderr` from test processes to prevent interleaving.
-- **Filtering**: Supports regex pattern matching for test names.
-- **Integration**: Requires `enable_testing()` in CMakeLists.txt to register tests via `add_test()`.
+`dmake test` runs tests in parallel with output buffering. Supports regex filtering. Requires `enable_testing()` and `add_test()`.
 
 ### Command Parser Utility
 
-The `CommandParser` utility (`dmake/command_parser.hpp`) provides a builder-style API for parsing CMake command arguments consistently across builtins.
-
-**Capabilities:**
-- `add_positional(var, label, required)`: Positional arguments (e.g., target name).
-- `add_flag(keyword, bool_var)`: Boolean flags (e.g., `SHARED`).
-- `add_value(keyword, string_var)`: Single value keywords (e.g., `WORKING_DIRECTORY <dir>`).
-- `add_list(keyword, vector_var)`: Multi-value keywords (e.g., `SOURCES <s1> <s2>`).
-- `add_multi_list(keyword, nested_vector_var)`: Repeated multi-value keywords (e.g., `COMMAND <c1> COMMAND <c2>`).
-- `add_default_list(vector_var)`: Arguments not associated with any keyword.
-
-**Standard Usage in Builtins:**
-```cpp
-CommandParser parser("my_command");
-std::string target;
-std::vector<std::string> sources;
-bool verbose = false;
-
-parser.add_positional(target, "target name");
-parser.add_list("SOURCES", sources);
-parser.add_flag("VERBOSE", verbose);
-
-// Validates and reports errors to the interpreter automatically
-PARSE_OR_RETURN(parser, interp, args);
-```
+`CommandParser` (`dmake/command_parser.hpp`) provides builder-style API for parsing CMake commands:
+- `add_positional`, `add_flag`, `add_value`, `add_list`, `add_multi_list`, `add_default_list`
+- Use `PARSE_OR_RETURN(parser, interp, args)` macro for validation
 
 ## CMake Language Support
 
@@ -296,308 +222,71 @@ The parser is a **recursive descent parser** supporting:
 
 ### If Conditions
 
-The `if()` command uses a recursive descent parser with proper operator precedence matching CMake's behavior. Reference: https://cmake.org/cmake/help/latest/command/if.html
+The `if()` command uses a recursive descent parser with proper operator precedence matching CMake's behavior.
 
-**Operator Precedence** (highest to lowest):
-1. Unary tests (`DEFINED`, `TARGET`, etc.)
-2. Binary comparisons (`EQUAL`, `LESS`, `STREQUAL`, etc.)
-3. `NOT` (prefix operator)
-4. `AND` (no short-circuit evaluation)
-5. `OR` (no short-circuit evaluation)
+**Key Features**:
+- Automatic variable dereferencing for unquoted non-keyword arguments
+- Proper operator precedence: unary tests > binary comparisons > NOT > AND > OR
+- CMake-compatible truthiness: falsy = empty, `0`, `OFF`, `NO`, `FALSE`, `N`, `IGNORE`, `*-NOTFOUND`
+- Operators: logical (AND/OR/NOT), numeric (EQUAL/LESS/GREATER), string (STREQUAL/STRLESS), version comparisons, unary tests (DEFINED/TARGET), file tests (EXISTS/IS_DIRECTORY)
 
-**Variable Dereferencing**:
-- Unquoted arguments that are NOT keywords or numeric constants are automatically dereferenced as variables
-- Undefined variables evaluate to empty string
-- Quoted arguments are never dereferenced
-- Keywords: `NOT`, `AND`, `OR`, `DEFINED`, `TARGET`, `EQUAL`, `LESS`, `GREATER`, `STREQUAL`, `STRLESS`, `STRGREATER`, `VERSION_*`, etc.
-
-**Truthiness** (case-insensitive):
-- Falsy: Empty string, `0`, `OFF`, `NO`, `FALSE`, `N`, `IGNORE`, `NOTFOUND`, `*-NOTFOUND`
-- Everything else is truthy (including `ON`, `YES`, `TRUE`, `Y`, non-zero numbers, non-empty strings)
-
-**Supported Operators**:
-- Logical: `AND`, `OR`, `NOT`
-- Numeric: `EQUAL`, `LESS`, `GREATER`, `LESS_EQUAL`, `GREATER_EQUAL`, `NOT_EQUAL`
-- String: `STREQUAL`, `STRLESS`, `STRGREATER`, `STRLESS_EQUAL`, `STRGREATER_EQUAL`
-- Version: `VERSION_EQUAL`, `VERSION_LESS`, `VERSION_GREATER`, `VERSION_LESS_EQUAL`, `VERSION_GREATER_EQUAL`
-- Unary: `DEFINED` (checks if variable exists), `TARGET` (checks if target exists)
-- File tests: `EXISTS`, `IS_DIRECTORY`, `IS_SYMLINK`, `IS_ABSOLUTE`
-- Other: `MATCHES` (regex), `IN_LIST`
-
-**Implementation**: The `evaluate_condition` method in `interperter.cpp` (around line 1011-1400+) implements the full parser with proper precedence handling.
+**Implementation**: `evaluate_condition()` in `interperter.cpp`
 
 ## Multi-Configuration Build Support
 
-dmake supports Cargo-style multiple build configurations with separate output directories.
+Cargo-style separate directories: `build/{debug,release,relwithdebinfo,minsizerel}/`. Structure: `build_root/config` where config defaults to "debug". CMAKE_BUILD_TYPE set automatically and normalized. Each config has own `.dmake_cache`.
 
-### Build Directory Structure
-
-```
-project/
-  build/
-    debug/         # Default configuration
-      .dmake_cache
-      *.o, executables, etc.
-    release/
-      .dmake_cache
-      *.o, executables, etc.
-    relwithdebinfo/
-      .dmake_cache
-      *.o, executables, etc.
-```
-
-### Configuration Logic
-
-**Build directory determination:**
-```
-build_root = -B value OR <project_dir>/build (default)
-config = --config value OR "debug" (default)
-final_build_dir = build_root / config
-```
-
-**CMAKE_BUILD_TYPE variable:**
-- Set automatically based on `--config` flag
-- Normalized to proper case: "debug" → "Debug", "release" → "Release"
-- Available to CMakeLists.txt scripts for conditional logic
-- Can be overridden with `-DCMAKE_BUILD_TYPE=Custom`
-
-### Standard Configurations
-
-| Config | CMAKE_BUILD_TYPE | Default CMAKE_CXX_FLAGS_<CONFIG> |
-|--------|------------------|----------------------------------|
-| debug (default) | Debug | `-g -O0` |
-| release | Release | `-O3 -DNDEBUG` |
-| relwithdebinfo | RelWithDebInfo | `-g -O2 -DNDEBUG` |
-| minsizerel | MinSizeRel | `-Os -DNDEBUG` |
-
-**Compiler Flags**:
-- Default CMAKE_CXX_FLAGS_<CONFIG> are automatically set for standard configurations
-- Flags are applied to all targets created with `add_executable()` or `add_library()`
-- Users can override defaults by setting variables in CMakeLists.txt or via `-D` flag:
-  ```cmake
-  set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -fsanitize=address")
-  ```
-  or
-  ```bash
-  dmake . --config debug -DCMAKE_CXX_FLAGS_DEBUG="-g -O0 -fsanitize=address"
-  ```
-- Additional flags can be added per-target with `target_compile_options()`
-
-### Cache Isolation
-
-Each configuration maintains its own `.dmake_cache` in its build directory:
-- Prevents false cache hits between configurations
-- Allows switching between debug/release without full rebuilds
-- Signatures include all relevant flags and definitions
-
-### Examples
-
-```bash
-# Build debug (default)
-dmake .
-# Output: ./build/debug/myapp
-
-# Build release
-dmake . --config release
-# Output: ./build/release/myapp
-
-# Build to custom location
-dmake . -B out --config debug
-# Output: out/debug/myapp
-
-# Override build type
-dmake . --config release -DCMAKE_BUILD_TYPE=Custom
-# Build dir: ./build/release, but CMAKE_BUILD_TYPE="Custom"
-```
+**Standard configs**: debug (`-g -O0`), release (`-O3 -DNDEBUG`), relwithdebinfo (`-g -O2 -DNDEBUG`), minsizerel (`-Os -DNDEBUG`). Override via CMakeLists.txt or `-D` flag.
 
 ## Advanced Features
 
 ### C++20 Modules (Experimental)
-
-dmake supports C++20 modules using a **scan-at-build** three-stage pipeline:
-
-1. **Scanner Tasks** (parallel):
-   - Runs `g++ -E -fdirectives-only -fmodules-ts <source>`
-   - Extracts `export module` and `import` declarations via regex
-   - Outputs `.ddi` (Dynamic Dependency Info) JSON files
-   - Fully parallelizable with zero initial dependencies
-
-2. **Collator Task** (synchronization barrier):
-   - Reads all `.ddi` files for a target
-   - Resolves module names to BMI (Binary Module Interface) paths
-   - **Dynamically injects dependencies** into the live build graph
-   - Generates module mapper file (`-fmodule-mapper=modules.map`)
-
-3. **Compile Tasks**:
-   - Wait for collator + required BMIs
-   - Use `-fmodules-ts -fmodule-mapper=<file>` flags
-
-**Detection**: Module interface files automatically detected by extension (`.cppm`, `.ixx`, `.ccm`).
-
-**Implementation**: `module_scanner.cpp`, `BuildGraph::inject_module_dependencies()`.
+Three-stage scan-at-build pipeline: 1) Scanner tasks extract module/import declarations to `.ddi` files, 2) Collator resolves modules and dynamically injects dependencies, 3) Compile tasks use module mapper. Auto-detected by extension (`.cppm`, `.ixx`, `.ccm`).
 
 ### Precompiled Headers
-
-- **Automatic wrapper generation**: Creates `<binary_dir>/objs/<target>_pch.hpp`
-- **Single PCH per target**: Contains all `PRECOMPILE_HEADERS` (PRIVATE + PUBLIC)
-- **Compilation**: `g++ -c -o <wrapper>.gch <wrapper>.hpp`
-- **Usage**: `-include <wrapper>` applied to all source files
-- **Incremental**: Regenerates only if header list changes
+Auto-generates PCH wrapper at `<binary_dir>/objs/<target>_pch.hpp` containing all PRECOMPILE_HEADERS. Applied via `-include` to all sources. Incremental regeneration.
 
 ### Find Package System
-
-Implements both **Module Mode** and **Config Mode**:
-- **Module mode**: Searches `CMAKE_MODULE_PATH` then `CMAKE_ROOT/Modules/` for `Find<Package>.cmake`
-- **Config mode**: Looks for `<Package>Config.cmake` or `<package>-config.cmake`
-- **Version checking**: Supports component parsing and version comparison
-- **Variables set**: `<Package>_FOUND`, `<Package>_VERSION_*`, package-specific variables
+Module mode searches for `Find<Package>.cmake`. Config mode searches for `<Package>Config.cmake`. Supports version checking and sets standard variables.
 
 ### Custom Targets
-
-`add_custom_target()` fully implemented:
-- Multiple `COMMAND` entries (sequential execution)
-- `DEPENDS` on files or other targets
-- `ALL` flag for inclusion in default build
-- `WORKING_DIRECTORY` and `COMMENT` options
-- Executes commands in order, stops on first failure
+`add_custom_target()` supports multiple sequential COMMANDs, DEPENDS, ALL flag, WORKING_DIRECTORY, COMMENT.
 
 ### Directory Scan Caching
-
-Optimizes `find_*()` commands:
-- Caches directory listings with mtime validation
-- Clock skew detection with warnings
-- Invalidates cache when directory modifications detected
-- O(1) filename lookups via `unordered_set`
-- Significantly speeds up repeated find operations
+Caches directory listings with mtime validation for `find_*()` commands. O(1) lookups.
 
 ### Toolchain Abstraction
-
-- **Compiler interface**: Abstract `get_compile_command()`, `get_link_command()`, `get_archive_command()`
-- **GnuCompiler implementation**: For gcc/g++
-- **Toolchain manager**: Per-language compiler selection (C, CXX, CUDA)
-- **Extensible**: Ready for clang, MSVC implementations
+Abstract compiler interface with GnuCompiler implementation. Per-language compiler selection. Extensible for clang, MSVC.
 
 ### CMake Tool Mode
-
-`dmake -E <command>` provides CMake-compatible tool commands:
-- `echo`, `echo_append` - Print to stdout
-- `touch`, `touch_nocreate` - Update file timestamps
-- `remove`, `remove_directory` - Delete files/directories
-- `make_directory` - Create directories
-- `copy`, `copy_if_different`, `copy_directory` - Copy operations
-- `rename` - Move/rename files
+`dmake -E <command>` provides CMake-compatible commands: echo, touch, remove, make_directory, copy, rename.
 
 ## Incremental & Parallel Build System
 
-**Concurrency**:
-- Parallel task execution using a thread-per-task model with concurrency limits.
-- **CLI Flags**: 
-    - `-j` or `--parallel` to set the number of concurrent jobs (defaults to hardware thread count).
-    - `-D` to define variables (e.g., `-DDEBUG=ON` or `-DENABLE_FEATURE`).
-- **Thread Safety**: Global mutexes protect output and internal caches (`stat_cache_`, `compiler_version_cache_`).
-
-**Captured Output**:
-- Compiler output is captured and buffered to prevent interleaving.
-- Colors are preserved using `-fdiagnostics-color=always` (when stdout is a TTY).
-- Detailed logs are only printed on failure or for warnings.
-
-**Cache Location**:
-- `<build_dir>/.dmake_cache` stores task signatures.
-
-**Signature Logic**:
-- Task signatures include: command string, compiler version, dmake version, and timestamps of all input files (including discovered headers).
-- **Header Discovery**:
-    1. Fast path: Parse `.d` files generated during compilation.
-    2. Fallback: Run `g++ -H -E` to scan for headers if `.d` files are missing.
-- **Stat Cache**: `BuildGraph` maintains an internal cache of file timestamps to minimize disk I/O.
+- Thread-per-task model with `-j` flag (defaults to hardware threads)
+- Output buffered to prevent interleaving, colors preserved with `-fdiagnostics-color=always`
+- Task signatures in `<build_dir>/.dmake_cache` include command, compiler version, dmake version, input mtimes
+- Header discovery via `.d` files or `g++ -H -E` fallback
+- Stat cache minimizes filesystem I/O
 
 ## Centralized Cache System
 
-dmake implements a centralized JSON-based cache infrastructure for subsystems that need persistent, cross-invocation state.
-
-**Cache Location**: `<build_dir>/.dmake_subsystem_cache.json`
-
-**Architecture**:
-- **Format**: JSON serialization using Glaze (zero-copy parsing, minimal allocations)
-- **Structure**: Subsystem-based namespacing (e.g., `try_compile_cache`, `file_listing_cache`)
-- **Thread Safety**: Mutex-protected read/write operations
-- **Atomicity**: Temp file + atomic rename prevents corruption
-- **Lifecycle**: Loaded on interpreter construction, saved after successful build
-
-**Cache Subsystems**:
-- `CacheSubsystem::TryCompile` - try_compile() results with header dependency tracking
-- `CacheSubsystem::FileListing` - Directory scan cache (future use)
-
-**Implementation**: `dmake/cache_store.hpp/cpp`
+JSON-based cache at `<build_dir>/.dmake_subsystem_cache.json` using Glaze serialization. Thread-safe with mutex protection and atomic writes. Subsystems: `TryCompile`, `FileListing`. Implementation: `dmake/cache_store.hpp/cpp`
 
 ### try_compile() Implementation
 
 Implements CMake's `try_compile` command in SOURCE mode with aggressive caching.
 
-**Supported Syntaxes**:
-1. **New-style (CMake 3.25+)**: `try_compile(result SOURCE_FROM_FILE name path ...)`
-   - Binary directory auto-generated under `${CMAKE_BINARY_DIR}/dmake_scratch_area`
-2. **Old-style**: `try_compile(result bindir srcfile)` or `try_compile(result bindir SOURCES srcfile...)`
-   - Explicit binary directory required
+**Supported**:
+- Source variants: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
+- Compilation options: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`
+- Linking: `LINK_LIBRARIES`, `LINK_OPTIONS`, `CMAKE_FLAGS`
+- Output capture: `OUTPUT_VARIABLE`
 
-**Supported Features**:
-- **Source variants**: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
-- **Compilation options**: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`
-- **Linking**: `LINK_LIBRARIES` (with target name resolution), `LINK_OPTIONS`
-- **CMAKE_FLAGS**: Additional compiler/linker settings (e.g., `-DCOMPILE_DEFINITIONS:STRING=-DFOO`)
-- **Output capture**: `OUTPUT_VARIABLE` for compiler stdout/stderr
-- **Result**: Boolean variable set to `TRUE`/`FALSE`
-
-**Cache Signature** (transparent, human-readable):
-```
-compiler:<path>|version:<version>|lang:<C/CXX>|std:<std>|
-src:<path>:<mtime>|inline:<name>:<blake2b>|
-def:<def>|lib:<lib>|opt:<opt>|dep:<header>:<mtime>|...
-```
-
-**Signature Components**:
-- Compiler path and version
-- Language and standard
-- Source file paths + mtimes (for `SOURCES`)
-- Source names + content BLAKE2b hashes (for inline sources)
-- All compile definitions (sorted)
-- Link libraries and options (sorted)
-- Discovered header dependencies + mtimes
-
-**Cache Validation**:
-- On cache lookup, validates all header mtimes match
-- If any header changed → cache miss, recompile
-- dmake version intentionally excluded (user preference)
-
-**Temporary Directory**: `<bindir>/.dmake_try_compile/<hash>/`
-- Unique per-signature (no conflicts)
-- Preserved on failure (for debugging)
-- Cleaned on success
-
-**Examples**:
-```cmake
-# Basic usage
-try_compile(RESULT ${CMAKE_BINARY_DIR}
-    SOURCE_FROM_CONTENT test.cpp "int main() { return 0; }"
-    CXX_STANDARD 17
-    COMPILE_DEFINITIONS DEBUG
-    OUTPUT_VARIABLE COMPILE_OUTPUT
-)
-
-# With CMAKE_FLAGS (CMake-compatible syntax)
-try_compile(RESULT ${CMAKE_BINARY_DIR}
-    SOURCES test.cpp
-    CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=-DCHECK_FUNCTION_EXISTS=pthread_create
-                -DLINK_LIBRARIES:STRING=pthread
-)
-
-# Real-world CheckFunctionExists pattern
-try_compile(CMAKE_HAVE_PTHREAD_CREATE ${CMAKE_BINARY_DIR}
-    SOURCES CheckFunctionExists.c
-    CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=-DCHECK_FUNCTION_EXISTS=pthread_create
-    LINK_LIBRARIES pthread
-)
-```
+**Caching**:
+- Signature includes compiler, source content (Blake2b), definitions, libraries, and header dependencies (with mtimes)
+- Cache validated by checking header mtimes
+- Temp directory preserved on failure for debugging
 
 **Implementation**: `dmake/builtins/try_compile.cpp`
 
@@ -605,179 +294,45 @@ try_compile(CMAKE_HAVE_PTHREAD_CREATE ${CMAKE_BINARY_DIR}
 
 Implements CMake's `try_run` command for compiling and executing test programs.
 
-**Supported Syntaxes**:
-1. **New-style (CMake 3.25+)**: `try_run(<runResultVar> <compileResultVar> SOURCE_FROM_FILE name path ...)`
-   - Binary directory auto-generated under `${CMAKE_BINARY_DIR}/dmake_scratch_area`
-2. **Old-style**: `try_run(<runResultVar> <compileResultVar> bindir srcfile)` or with `SOURCES`
+**Supported**:
+- Same source variants and compilation options as `try_compile`
+- Execution control: `WORKING_DIRECTORY`, `ARGS`
+- Output capture: `COMPILE_OUTPUT_VARIABLE`, `RUN_OUTPUT_VARIABLE`
+- Cross-compilation support with `CMAKE_CROSSCOMPILING_EMULATOR`
 
-**Supported Features**:
-- **Source variants**: `SOURCES`, `SOURCE_FROM_CONTENT`, `SOURCE_FROM_VAR`, `SOURCE_FROM_FILE`
-- **Compilation options**: `COMPILE_DEFINITIONS`, `CXX_STANDARD`, `C_STANDARD`
-- **Linking**: `LINK_LIBRARIES` (with target name resolution), `LINK_OPTIONS`
-- **CMAKE_FLAGS**: Additional compiler/linker settings (same as try_compile)
-- **Output capture**: `COMPILE_OUTPUT_VARIABLE` for build output, `RUN_OUTPUT_VARIABLE` for execution output
-- **Execution control**: `WORKING_DIRECTORY`, `ARGS` (arguments passed to executable)
-- **Result variables**:
-  - `<compileResultVar>`: `TRUE`/`FALSE` based on compilation success
-  - `<runResultVar>`: Exit code (0-255) if execution succeeded, or `FAILED_TO_RUN` if compilation failed
+**Caching**:
+- Compilation is cached (same as `try_compile`)
+- Execution is NEVER cached - runs every time if compilation succeeds
 
-**Cross-Compilation Behavior**:
-- When `CMAKE_CROSSCOMPILING` is true, compilation proceeds but execution is skipped unless `CMAKE_CROSSCOMPILING_EMULATOR` is configured
-- Without emulator: requires manual cache variable `<runResultVar>` with expected exit code
-- With emulator: runs executable through the emulator
+**Implementation**: `dmake/builtins/try_compile.cpp`
 
-**Caching Strategy**:
-- Compilation is cached using the same strategy as `try_compile` (signature-based with header dependency tracking)
-- Execution is NEVER cached (runs on every invocation if compilation succeeds)
-- Binary reuse: if compilation cache hits, the cached binary is reused for execution
+## Error Handling
 
-**Temporary Directory**: `<bindir>/.dmake_try_run/<hash>/`
-- Unique per-invocation (based on variable names)
-- Preserved on failure (for debugging)
-- Cleaned on success (exit code 0)
-
-**Examples**:
-```cmake
-# Basic usage - check if code runs successfully
-try_run(RUN_RESULT COMPILE_RESULT
-    SOURCE_FROM_CONTENT test.cpp "int main() { return 0; }"
-    CXX_STANDARD 17
-)
-if(COMPILE_RESULT AND RUN_RESULT EQUAL 0)
-    message(STATUS "Test succeeded")
-endif()
-
-# With output capture
-try_run(EXIT_CODE COMPILED
-    SOURCE_FROM_CONTENT check.cpp "#include <iostream>\nint main() { std::cout << \"Works\"; return 0; }"
-    RUN_OUTPUT_VARIABLE OUTPUT
-    COMPILE_OUTPUT_VARIABLE BUILD_LOG
-)
-
-# With arguments
-try_run(RESULT COMPILED
-    SOURCES test_program.cpp
-    ARGS "--version" "-v"
-    RUN_OUTPUT_VARIABLE VERSION_OUTPUT
-)
-
-# Check function behavior at runtime
-try_run(FUNC_RESULT COMPILED
-    SOURCE_FROM_CONTENT check_strtod.c "#include <stdlib.h>\nint main() { return (strtod(\"1.5\", 0) == 1.5) ? 0 : 1; }"
-    C_STANDARD 11
-)
-if(COMPILED AND FUNC_RESULT EQUAL 0)
-    set(HAVE_WORKING_STRTOD TRUE)
-endif()
-
-# Real-world cross-compilation pattern
-if(CMAKE_CROSSCOMPILING)
-    # Set expected result manually
-    set(SIZEOF_INT 4 CACHE STRING "Size of int")
-else()
-    try_run(RUN_RES COMPILE_RES
-        SOURCE_FROM_CONTENT sizeof.c "#include <stdio.h>\nint main() { printf(\"%zu\", sizeof(int)); return 0; }"
-        RUN_OUTPUT_VARIABLE SIZEOF_INT
-    )
-endif()
-```
-
-**Implementation**: `dmake/builtins/try_compile.cpp` (shares compilation logic with try_compile)
-
-## Error Handling & Debugging
-
-**Build Graph Stalls**:
-- If the build cannot progress (e.g., due to an unresolvable dependency cycle), `dmake` will print a detailed list of remaining tasks and their missing dependencies.
-
-**Circular Dependencies**:
-- Detected during graph construction before any commands are executed.
-- Reports the full path of the cycle (e.g., `libA -> libB -> libA`).
-
-**System Errors**:
-- Compiler execution failures (e.g., `g++` not found) during version check or header scanning are fatal and stop the build.
-- Directory creation and cache writing errors are handled gracefully with detailed error messages.
+- **Stalls**: Prints remaining tasks and missing dependencies
+- **Cycles**: Detected during graph construction with full path reported
+- **System errors**: Compiler failures are fatal, cache errors have detailed messages
 
 ## Testing
 
 ### Unit Tests
-
-Tests use **Catch2 v3** and are organized by component:
-- `tests/interpreter_tests.cpp` - Interpreter and builtin command tests
-- `tests/language_tests.cpp` - Parser and language feature tests
-- Additional test files for specific subsystems
-
-**Test helper**: `run_script()` creates a minimal interpreter with custom `message()` builtin for output capture.
-
-**Adding unit tests:**
-1. Add a new `TEST_CASE` in appropriate test file
-2. Use `run_script()` for interpreter tests
-3. For parser tests, create a `Parser` directly and check `parse()` results
-4. Run specific tests: `./build/dmake_tests "[test-name]"`
+Catch2 v3 tests in `tests/interpreter_tests.cpp`, `tests/language_tests.cpp`, etc. Use `run_script()` helper for interpreter tests. Run with `./build/dmake_tests "[test-name]"`.
 
 ### Integration Tests
+Location: `tests/integration/*/`. Each subdirectory has `CMakeLists.txt`, sources, and `test.sh` that takes dmake path and verifies outputs (exit 0 on success). Run with `./tests/integration/run_tests.sh ./build/dmake`.
 
-Location: `tests/integration/*/` - Each subdirectory is a complete test project.
+## Self-Hosting
 
-**Test structure:**
-- `CMakeLists.txt` - Project definition
-- Source files - Test code
-- `test.sh` - Shell script that takes dmake binary path as `$1`, builds project, verifies outputs
-
-**Current integration tests (21):**
-- `basic-exe`, `shared-lib`, `interface-lib`
-- `pch` (precompiled headers)
-- `incremental-rebuild` (cache validation)
-- `custom-target` (add_custom_target)
-- `find-package*` (package discovery with version checking)
-- `execute-process` (process execution)
-- `modules_basic`, `target_sources_cxx_modules` (C++20 modules)
-- `try_compile` (source compilation with caching)
-- `try_run` (compile and execute test programs)
-- Additional tests for control flow, properties, includes, etc.
-
-**Adding integration tests:**
-1. Create directory in `tests/integration/<test-name>`
-2. Add `CMakeLists.txt` and source files
-3. Create `test.sh` that builds with `$1` (dmake path) and verifies outputs
-4. Script should exit 0 on success, non-zero on failure
-5. Runner: `./tests/integration/run_tests.sh ./build/dmake`
-
-## Self hosting
-
-The project can self host. Once you have an initial `dmake` binary:
-
-```bash
-# In the project root
-./build/dmake
-```
-The resulting binary will be in `build/debug/dmake`.
+dmake can build itself. Once you have an initial binary: `./build/dmake` (output in `build/debug/dmake`).
 
 ## Compile Features System
 
 The compile features system (`dmake/compile_features.hpp/cpp`) provides CMake-compatible compiler feature detection and automatic standard selection.
 
-**Architecture:**
-- **Singleton Database**: `CompileFeatures::instance()` provides access to all known C and C++ features
-- **Feature Types**: Meta-features (e.g., `cxx_std_17`) and individual features (e.g., `cxx_lambdas`)
-- **Automatic Standard Deduction**: Features specify their required language standard (e.g., lambdas → C++11)
-- **Chronological Ordering**: Properly handles C standard version ordering (C90 < C99 < C11 < C17 < C23)
-
-**Feature Database:**
-- **C++ Features**: 7 meta-features (C++98-C++26), 52 individual features (C++11-C++14)
-- **C Features**: 5 meta-features (C90-C23), 4 individual features
-- **Fast Lookup**: `O(1)` feature validation via `std::map`
-
-**Integration Points:**
-- `target_compile_features()` builtin validates and stores features in `COMPILE_FEATURES` property
-- `Target::resolve()` includes `COMPILE_FEATURES` in transitive resolution
-- Compilation tasks (`generate_object_tasks`, PCH, modules) query features to determine minimum standard
-- Standard selection: `max(explicit_standard, feature_required_standard)`
-
-**Implementation Notes:**
-- Feature requirements are evaluated at task generation time, not parse time
+- Singleton database with C/C++ meta-features and individual features
+- Automatic standard deduction (e.g., `cxx_lambdas` → C++11)
+- Features validated and stored in `COMPILE_FEATURES` property
 - PUBLIC/INTERFACE features propagate through dependency graph
-- Works alongside explicit `CXX_STANDARD`/`C_STANDARD` settings (takes maximum)
-- No runtime feature detection - purely declarative requirements
+- Standard selection: `max(explicit_standard, feature_required_standard)`
 
 ## Code Locations
 
@@ -854,137 +409,32 @@ The compile features system (`dmake/compile_features.hpp/cpp`) provides CMake-co
 
 ### Adding New Features
 
-**New builtin command:**
-1. Create file in `dmake/builtins/` or add to existing
-2. Implement as lambda: `[](Interpreter& interp, const std::vector<std::string>& args)` (void return)
-3. Use `CommandParser` for argument parsing with `PARSE_OR_RETURN` macro
-4. Call `interp.set_fatal_error()` and return on errors
-5. Register in `Interpreter` constructor (root interpreter only) via `register_*_builtins()`
+**New builtin**: Create in `dmake/builtins/`, implement as lambda with `CommandParser`, register in `Interpreter` constructor
 
-**New target property:**
-1. Add to `Target` class property maps
-2. Update `Target::resolve()` if transitive propagation needed
-3. Update `set_target_properties` and `get_target_property` builtins
-4. Modify `Target::generate_tasks()` to use property in task generation
+**New target property**: Add to `Target` class, update `resolve()` if transitive, modify `generate_tasks()` for usage
 
-**New if() operator:**
-1. Add keyword constant in `interperter.cpp`
-2. Modify `evaluate_condition()` method
-3. Add to appropriate precedence level in recursive parser
-4. Handle evaluation in operator switch/if blocks
+**New if() operator**: Add keyword in `interperter.cpp`, modify `evaluate_condition()` parser
 
-**Error output format:**
-1. Modify `print_error_context()` in `dmake-cli/main.cpp`
-2. Error structure defined in `dmake/interperter.hpp`: `InterpreterError`
+## Key Implementation Notes
 
-## Implementation Details
+**Build Graph**:
+- DFS-based cycle detection with full path reporting
+- Ready queue with parallel dispatch up to job limit
+- Dynamic dependency injection for C++20 modules
 
-### Build Graph Execution
+**Property Resolution**:
+- `Target::resolve()` implements depth-first transitive resolution with cycle detection
+- Merges PRIVATE/PUBLIC/INTERFACE properties across dependency graph
 
-**Task Lifecycle:**
-1. **Graph Construction**: All targets generate tasks before execution begins
-2. **Cycle Detection**: DFS-based detection with full path reporting
-3. **Ready Queue**: Tasks become ready when all dependencies complete
-4. **Parallel Dispatch**: Worker threads pull from ready queue up to job limit
-5. **Dynamic Injection**: C++20 module collator can inject new dependencies mid-build
+**Signatures**:
+- Blake2b hash of: command, compiler version, dmake version, input file mtimes
+- Header discovery via `.d` files or `g++ -H -E` fallback
 
-**Thread Safety:**
-- Global mutexes protect: output streams, build state, caches
-- Each task owns its captured output buffer
-- Stat cache and compiler version cache are thread-safe
-
-### Property Resolution Algorithm
-
-`Target::resolve()` implements depth-first transitive resolution:
-
-1. Check if already resolved (cached results)
-2. Mark as "visiting" (cycle detection)
-3. For each dependency in `LINK_LIBRARIES`:
-   - Recursively resolve dependency
-   - Detect cycles via "visiting" flag
-4. Merge properties:
-   - Self: `PRIVATE` + `PUBLIC`
-   - Propagation: `INTERFACE` + `PUBLIC` from dependencies
-5. Resolve relative paths (relative to source_dir)
-6. Mark as "resolved" and cache results
-
-**Order preservation**: `LINK_LIBRARIES` maintain order for correct linking.
-
-### File Signature Calculation
-
-Task signatures use **Blake2b** hashing:
-```
-signature = hash(command_string + compiler_version + dmake_version +
-                 mtime_of_input1 + mtime_of_input2 + ...)
-```
-
-**Header discovery:**
-1. Check for existing `.d` file (Make-style dependencies)
-2. Parse `.d` file for header list
-3. Fallback: Run `g++ -H -E <source>` and parse output
-4. Include all header mtimes in signature
-
-### Modular Builtin Architecture
-
-Builtins are organized by functionality:
-- `message.cpp` - Output and diagnostics
-- `variable.cpp` - set, unset, option, mark_as_advanced
-- `list.cpp` - All list operations
-- `string.cpp` - String manipulation
-- `math.cpp` - Expression evaluation
-- `target.cpp` - Target creation and configuration
-- `project.cpp` - Project structure (add_subdirectory, include, etc.)
-- `file.cpp` - File system operations
-- `find_commands.cpp` - find_file, find_path, find_library, find_program
-- `find_package.cpp` - Package discovery
-- `process.cpp` - execute_process
-- `test.cpp` - enable_testing, add_test
-
-**Registration**: All builtins registered in root interpreter only (checked via `parent_ == nullptr`).
-
-### Multi-Language Support
-
-Currently supports C and C++ with:
-- Separate compiler selection: `CMAKE_C_COMPILER`, `CMAKE_CXX_COMPILER`
-- Separate standard flags: `CMAKE_C_STANDARD`, `CMAKE_CXX_STANDARD`
-- Per-language compile flags: `CMAKE_C_FLAGS`, `CMAKE_CXX_FLAGS`
-- Per-config flags: `CMAKE_C_FLAGS_DEBUG`, `CMAKE_CXX_FLAGS_RELEASE`, etc.
-- Language-specific target properties
-
-**Extensible**: Architecture ready for CUDA, Objective-C, etc.
-
-### Compiler Version Caching
-
-First build runs `g++ --version`, caches result for session:
-- Avoids subprocess overhead on every build
-- Invalidates signatures if compiler version changes
-- Thread-safe cache with mutex protection
-
-### Key Design Decisions
-
-1. **No configure step**: Interprets CMakeLists.txt on every build (like Ninja with CMake's "rerun cmake" but always)
-2. **Multi-config by default**: Cargo-style `build/<config>/` structure prevents accidental mixing
-3. **Signature-based caching**: More reliable than timestamp-only, catches flag changes
-4. **Thread-per-task model**: Simple model, bounded by job limit, good for I/O-bound compilation
-5. **CMake compatibility first**: Semantic compatibility over feature parity - projects should "just work"
-6. **Modern C++23**: Uses `std::expected` for error handling, ranges, concepts where appropriate
-7. **Minimal dependencies**: Only CLI11, Catch2, Glaze - all lightweight or header-only
-8. **Self-hosting**: dmake can build itself, ensuring real-world usability
-
-### Performance Optimizations
-
-- **Directory scan caching**: O(1) lookups for `find_*()` commands
-- **Stat caching**: Minimizes filesystem calls during build
-- **Compiler version caching**: One subprocess per build, not per task
-- **Parallel everything**: Scanning, compilation, linking (where possible)
-- **Incremental by default**: Signature-based skip of up-to-date tasks
-- **Output buffering**: No lock contention on stdout/stderr during compilation
-
-### Code Statistics
-
-- **Total implementation**: ~7,762 lines (dmake/*.cpp + builtins/*.cpp)
-- **Test coverage**: 15+ integration tests, comprehensive unit tests
-- **Modular design**: Clear separation of concerns, easy to extend
+**Design Decisions**:
+- No configure step - interprets CMakeLists.txt on every build
+- Multi-config by default with Cargo-style `build/<config>/` structure
+- Signature-based caching catches flag changes, more reliable than timestamp-only
+- CMake compatibility first - semantic compatibility over feature parity
 
 ## Some food for your own thought
 * (when writing code) Do not write code before stating assumptions.
