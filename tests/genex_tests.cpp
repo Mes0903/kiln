@@ -428,3 +428,72 @@ TEST_CASE("GenexParser - Complex multi-line genex from real usage", "[genex][par
     REQUIRE(eval_result.has_value());
     REQUIRE(*eval_result == "-Wall -Wextra");
 }
+
+TEST_CASE("GenexEvaluator - Pure genex whitespace splitting", "[genex][evaluator][whitespace]") {
+    // When a value is ONLY a generator expression (pure genex), the result should be split by whitespace
+    // This matches CMake's behavior where genex acts like unquoted arguments
+    GenexEvaluationContext ctx;
+    ctx.cxx_compiler_id = "GNU";
+    GenexEvaluator eval(ctx);
+
+    SECTION("Pure genex should split on whitespace") {
+        std::vector<std::string> values = {
+            "$<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra -Wshadow>",
+            "$<$<CXX_COMPILER_ID:GNU>:-pedantic -pedantic-errors>"
+        };
+
+        auto result = eval.evaluate_property_list(values);
+        REQUIRE(result.has_value());
+
+        // Should be split into 5 separate flags
+        REQUIRE(result->size() == 5);
+        REQUIRE((*result)[0] == "-Wall");
+        REQUIRE((*result)[1] == "-Wextra");
+        REQUIRE((*result)[2] == "-Wshadow");
+        REQUIRE((*result)[3] == "-pedantic");
+        REQUIRE((*result)[4] == "-pedantic-errors");
+    }
+
+    SECTION("Mixed content should NOT split on whitespace") {
+        // If genex is mixed with other text, keep as single value (like quoted argument)
+        std::vector<std::string> values = {
+            "prefix$<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra>suffix"
+        };
+
+        auto result = eval.evaluate_property_list(values);
+        REQUIRE(result.has_value());
+
+        // Should remain as single value
+        REQUIRE(result->size() == 1);
+        REQUIRE((*result)[0] == "prefix-Wall -Wextrasuffix");
+    }
+
+    SECTION("Literal values should NOT split on whitespace") {
+        // Plain literals should remain as single values
+        std::vector<std::string> values = {
+            "-Wall -Wextra -Wshadow"
+        };
+
+        auto result = eval.evaluate_property_list(values);
+        REQUIRE(result.has_value());
+
+        // Should remain as single value
+        REQUIRE(result->size() == 1);
+        REQUIRE((*result)[0] == "-Wall -Wextra -Wshadow");
+    }
+
+    SECTION("Pure genex evaluating to empty should be skipped") {
+        // Genex that evaluates to empty string should not contribute to result
+        std::vector<std::string> values = {
+            "$<$<CXX_COMPILER_ID:MSVC>:-Wall -Wextra>",  // Evaluates to empty (not MSVC)
+            "$<$<CXX_COMPILER_ID:GNU>:-pedantic>"        // Evaluates to "-pedantic"
+        };
+
+        auto result = eval.evaluate_property_list(values);
+        REQUIRE(result.has_value());
+
+        // Only the second one should be present
+        REQUIRE(result->size() == 1);
+        REQUIRE((*result)[0] == "-pedantic");
+    }
+}

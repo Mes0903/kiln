@@ -483,6 +483,20 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
     std::vector<std::string> result;
 
     for (const auto& value : values) {
+        // Parse to check if this is a pure generator expression
+        GenexParser parser;
+        auto parse_result = parser.parse(value);
+        if (!parse_result) {
+            return std::unexpected(parse_result.error());
+        }
+
+        // Check if the value is ONLY a generator expression (single non-literal node)
+        // If so, split the result by whitespace (like unquoted arguments in CMake)
+        // Otherwise, keep it as a single value (like quoted arguments or mixed content)
+        bool is_pure_genex = parse_result->has_genex &&
+                             parse_result->nodes.size() == 1 &&
+                             parse_result->nodes[0]->type != GenexNodeType::LITERAL;
+
         auto eval_result = evaluate(value);
         if (!eval_result) {
             return std::unexpected(eval_result.error());
@@ -490,7 +504,18 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
 
         // Only add non-empty results
         if (!eval_result->empty()) {
-            result.push_back(*eval_result);
+            if (is_pure_genex) {
+                // Split the evaluated result by whitespace (treats genex output like unquoted arguments)
+                // This allows $<1:-Wall -Wextra> to expand into multiple separate flags
+                std::istringstream iss(*eval_result);
+                std::string token;
+                while (iss >> token) {
+                    result.push_back(token);
+                }
+            } else {
+                // Keep as a single value (like a quoted argument or mixed content)
+                result.push_back(*eval_result);
+            }
         }
     }
 
