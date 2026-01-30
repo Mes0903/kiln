@@ -12,10 +12,20 @@ std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
 
     std::vector<std::string> result;
     std::string current;
+    int genex_depth = 0;  // Track $<...> nesting
 
-    for (char c : str) {
-        if (c == ';') {
-            // Push all elements, including empty ones (CMake preserves empty list elements)
+    for (size_t i = 0; i < str.size(); ++i) {
+        char c = str[i];
+
+        // Track genex nesting
+        if (c == '$' && i + 1 < str.size() && str[i + 1] == '<') {
+            genex_depth++;
+            current += c;
+        } else if (c == '>' && genex_depth > 0) {
+            genex_depth--;
+            current += c;
+        } else if (c == ';' && genex_depth == 0) {
+            // Only split on semicolons outside of genex
             result.push_back(current);
             current.clear();
         } else {

@@ -601,10 +601,15 @@ void register_target_builtins(Interpreter& interp) {
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         bool is_custom = (target->get_type() == TargetType::CUSTOM);
 
-        // Helper to validate sources exist (skips generated files from add_custom_command)
+        // Helper to validate sources exist (skips generated files from add_custom_command and genex)
         const auto& custom_rules = interp.get_custom_command_rules();
         auto validate_sources = [&](const std::vector<std::string>& sources) -> bool {
             for (const auto& file : sources) {
+                // Skip validation for generator expressions - they will be evaluated at build time
+                if (file.find("$<") != std::string::npos) {
+                    continue;
+                }
+
                 std::filesystem::path p(file);
                 if (!p.is_absolute()) {
                     p = std::filesystem::path(src_dir) / p;

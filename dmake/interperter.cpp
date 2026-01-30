@@ -401,6 +401,12 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         global_properties_["FIND_LIBRARY_USE_LIB64_PATHS"] = "TRUE";
         global_properties_["FIND_LIBRARY_USE_LIB32_PATHS"] = "FALSE";
 
+
+        // Some CMake defaults
+        variables_.set("CMAKE_INSTALL_BINDIR", "bin");
+        variables_.set("CMAKE_INSTALL_LIBDIR", "lib");
+        variables_.set("CMAKE_INSTALL_INCLUDEDIR", "include");
+
         // Register this interpreter for its directory
         directory_interpreters_[abs_script_dir.string()] = this;
 

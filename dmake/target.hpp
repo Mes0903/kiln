@@ -108,7 +108,8 @@ protected:
     // Helper methods for task generation
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
-                               bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets);
+                               bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                               class GenexEvaluator& evaluator);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected
