@@ -4,6 +4,7 @@
 #include "../command_parser.hpp"
 #include "../genex_parser.hpp"
 #include "../compile_features.hpp"
+#include "../CMakeList.hpp"
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
@@ -405,6 +406,7 @@ void register_target_builtins(Interpreter& interp) {
         CommandParser parser("add_custom_target");
         std::string name;
         bool all = false;
+        bool command_expand_lists = false;
         std::vector<std::vector<std::string>> commands;
         std::vector<std::string> depends;
         std::string working_dir;
@@ -413,6 +415,7 @@ void register_target_builtins(Interpreter& interp) {
 
         parser.positional(name, "target name");
         parser.flag("ALL", all);
+        parser.flag("COMMAND_EXPAND_LISTS", command_expand_lists);
         parser.multi_list("COMMAND", commands);
         parser.list("DEPENDS", depends);
         parser.value("WORKING_DIRECTORY", working_dir);
@@ -428,6 +431,20 @@ void register_target_builtins(Interpreter& interp) {
         target->set_build_by_default(all);
         if (!comment.empty()) {
             target->set_property("COMMENT", comment);
+        }
+
+        // Expand lists in command arguments if COMMAND_EXPAND_LISTS is set
+        if (command_expand_lists) {
+            for (auto& cmd_args : commands) {
+                std::vector<std::string> expanded_args;
+                for (const auto& arg : cmd_args) {
+                    // Use CMakeList to split by semicolons while respecting generator expressions
+                    CMakeList list(arg);
+                    auto parts = list.to_vector();
+                    expanded_args.insert(expanded_args.end(), parts.begin(), parts.end());
+                }
+                cmd_args = std::move(expanded_args);
+            }
         }
 
         for (const auto& cmd_args : commands) {
@@ -798,71 +815,94 @@ void register_target_builtins(Interpreter& interp) {
     });
 
     interp.add_builtin("set_target_properties", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("set_target_properties");
-        std::string name;
-        std::vector<std::string> props;
-        parser.positional(name, "target name");
-        parser.list("PROPERTIES", props);
-        PARSE_OR_RETURN(parser, interp, args);
+        // CMake syntax: set_target_properties(target1 target2 ... PROPERTIES prop1 value1 prop2 value2 ...)
+        // Find PROPERTIES keyword to split target names from properties
+        if (args.empty()) {
+            interp.set_fatal_error("set_target_properties() requires at least a target name");
+            return;
+        }
 
-        auto target = get_target_from_name(interp, name, "set_target_properties");
-        if (!target) return;
+        auto props_it = std::find(args.begin(), args.end(), "PROPERTIES");
+        if (props_it == args.end()) {
+            interp.set_fatal_error("set_target_properties() requires PROPERTIES keyword");
+            return;
+        }
 
+        // Extract target names (everything before PROPERTIES)
+        std::vector<std::string> target_names(args.begin(), props_it);
+        if (target_names.empty()) {
+            interp.set_fatal_error("set_target_properties() requires at least one target name before PROPERTIES");
+            return;
+        }
+
+        // Extract properties (everything after PROPERTIES)
+        std::vector<std::string> props(props_it + 1, args.end());
         if (props.size() % 2 != 0) {
             interp.set_fatal_error("set_target_properties() PROPERTIES must be key-value pairs");
             return;
         }
 
-        // Helper to parse semicolon-separated list and append as INTERFACE property
-        auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
-            std::vector<std::string> items;
-            std::string item;
-            std::istringstream ss(value);
-            while (std::getline(ss, item, ';')) {
-                if (!item.empty()) {
-                    items.push_back(item);
+        // Get all target objects and validate they exist
+        std::vector<std::shared_ptr<Target>> targets;
+        for (const auto& name : target_names) {
+            auto target = get_target_from_name(interp, name, "set_target_properties");
+            if (!target) return;
+            targets.push_back(target);
+        }
+
+        // Apply properties to each target
+        for (auto& target : targets) {
+            // Helper to parse semicolon-separated list and append as INTERFACE property
+            auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
+                std::vector<std::string> items;
+                std::string item;
+                std::istringstream ss(value);
+                while (std::getline(ss, item, ';')) {
+                    if (!item.empty()) {
+                        items.push_back(item);
+                    }
                 }
-            }
 
-            // EARLY VALIDATION (Layer 1) - validate genex support
-            for (const auto& val : items) {
-                auto validation = GenexParser::validate_genex_support(val);
-                if (!validation) {
-                    interp.set_fatal_error("set_target_properties: " + validation.error() +
-                                         " in INTERFACE_" + base_prop_name + " property");
-                    return;
+                // EARLY VALIDATION (Layer 1) - validate genex support
+                for (const auto& val : items) {
+                    auto validation = GenexParser::validate_genex_support(val);
+                    if (!validation) {
+                        interp.set_fatal_error("set_target_properties: " + validation.error() +
+                                             " in INTERFACE_" + base_prop_name + " property");
+                        return;
+                    }
                 }
-            }
 
-            if (!items.empty()) {
-                target->append_property(base_prop_name, items, PropertyVisibility::INTERFACE);
-            }
-        };
+                if (!items.empty()) {
+                    target->append_property(base_prop_name, items, PropertyVisibility::INTERFACE);
+                }
+            };
 
-        for(size_t i = 0; i < props.size(); i += 2) {
-            std::string prop_name = props[i];
-            std::string prop_value = props[i+1];
+            for(size_t i = 0; i < props.size(); i += 2) {
+                std::string prop_name = props[i];
+                std::string prop_value = props[i+1];
 
-            if (prop_name == "OUTPUT_NAME") {
-                target->set_output_name(prop_value);
-            } else if (prop_name == "CXX_STANDARD") {
-                target->set_cxx_standard(prop_value);
-            } else if (prop_name == "IMPORTED_LOCATION" ||
-                       prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
-                target->set_imported_location(prop_value);
-            } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
-                parse_and_append_interface("LINK_LIBRARIES", prop_value);
-            } else if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
-                parse_and_append_interface("INCLUDE_DIRECTORIES", prop_value);
-            } else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") {
-                parse_and_append_interface("COMPILE_DEFINITIONS", prop_value);
-            } else if (prop_name == "INTERFACE_COMPILE_OPTIONS") {
-                parse_and_append_interface("COMPILE_OPTIONS", prop_value);
-            } else if (prop_name == "INTERFACE_LINK_DIRECTORIES") {
-                parse_and_append_interface("LINK_DIRECTORIES", prop_value);
-            } else {
-                // Fallback: Generic property set
-                target->set_property(prop_name, prop_value);
+                if (prop_name == "OUTPUT_NAME") {
+                    target->set_output_name(prop_value);
+                } else if (prop_name == "CXX_STANDARD") {
+                    target->set_cxx_standard(prop_value);
+                } else if (prop_name == "IMPORTED_LOCATION" ||
+                           prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
+                    target->set_imported_location(prop_value);
+                } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
+                    parse_and_append_interface("LINK_LIBRARIES", prop_value);
+                } else if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
+                    parse_and_append_interface("INCLUDE_DIRECTORIES", prop_value);
+                } else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") {
+                    parse_and_append_interface("COMPILE_DEFINITIONS", prop_value);
+                } else if (prop_name == "INTERFACE_COMPILE_OPTIONS") {
+                    parse_and_append_interface("COMPILE_OPTIONS", prop_value);
+                } else if (prop_name == "INTERFACE_LINK_DIRECTORIES") {
+                    parse_and_append_interface("LINK_DIRECTORIES", prop_value);
+                } else {
+                    // Fallback: Generic property set
+                    target->set_property(prop_name, prop_value);
+                }
             }
         }
     });
