@@ -35,6 +35,7 @@ add_library(dmake SHARED
     dmake/builtins/try_compile.cpp
     dmake/builtins/path.cpp
     dmake/builtins/install.cpp
+    dmake/builtins/source_properties.cpp
     dmake/install_executor.cpp
     dmake/CMakeList.cpp
 )
@@ -66,7 +67,8 @@ if(BUILD_TESTING)
         tests/target_sources_tests.cpp
         tests/shadow_map_tests.cpp
         tests/genex_tests.cpp
-        tests/compile_features_tests.cpp)
+        tests/compile_features_tests.cpp
+        tests/source_properties_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

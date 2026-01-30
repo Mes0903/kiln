@@ -1,0 +1,230 @@
+#include "registry.hpp"
+#include "../interperter.hpp"
+#include "../command_parser.hpp"
+#include "../CMakeList.hpp"
+#include <filesystem>
+#include <algorithm>
+
+namespace dmake {
+
+void register_source_properties_builtins(Interpreter& interp) {
+
+    // set_source_files_properties - Set properties on source files
+    // CMake signature:
+    // set_source_files_properties(<files>...
+    //     [DIRECTORY <dirs>...] [TARGET_DIRECTORY <targets>...]
+    //     PROPERTIES <prop1> <value1> [<prop2> <value2>] ...)
+    interp.add_builtin("set_source_files_properties", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("set_source_files_properties() requires arguments");
+            return;
+        }
+
+        // Parse files until we hit a keyword
+        std::vector<std::string> files;
+        std::vector<std::string> directories;
+        std::vector<std::string> target_directories;
+        size_t i = 0;
+
+        // Collect files until DIRECTORY, TARGET_DIRECTORY, or PROPERTIES
+        while (i < args.size() &&
+               args[i] != "DIRECTORY" &&
+               args[i] != "TARGET_DIRECTORY" &&
+               args[i] != "PROPERTIES") {
+            files.push_back(args[i]);
+            ++i;
+        }
+
+        if (files.empty()) {
+            interp.set_fatal_error("set_source_files_properties() requires at least one source file");
+            return;
+        }
+
+        // Parse optional DIRECTORY and TARGET_DIRECTORY
+        while (i < args.size() && args[i] != "PROPERTIES") {
+            if (args[i] == "DIRECTORY") {
+                ++i;
+                while (i < args.size() &&
+                       args[i] != "TARGET_DIRECTORY" &&
+                       args[i] != "PROPERTIES" &&
+                       args[i] != "DIRECTORY") {
+                    directories.push_back(args[i]);
+                    ++i;
+                }
+            } else if (args[i] == "TARGET_DIRECTORY") {
+                ++i;
+                while (i < args.size() &&
+                       args[i] != "DIRECTORY" &&
+                       args[i] != "PROPERTIES" &&
+                       args[i] != "TARGET_DIRECTORY") {
+                    target_directories.push_back(args[i]);
+                    ++i;
+                }
+            } else {
+                ++i;
+            }
+        }
+
+        // Expect PROPERTIES keyword
+        if (i >= args.size() || args[i] != "PROPERTIES") {
+            interp.set_fatal_error("set_source_files_properties() requires PROPERTIES keyword");
+            return;
+        }
+        ++i;
+
+        // Parse property key-value pairs
+        if ((args.size() - i) % 2 != 0) {
+            interp.set_fatal_error("set_source_files_properties() PROPERTIES must be key-value pairs");
+            return;
+        }
+
+        std::vector<std::pair<std::string, std::string>> properties;
+        while (i + 1 < args.size()) {
+            properties.emplace_back(args[i], args[i + 1]);
+            i += 2;
+        }
+
+        if (properties.empty()) {
+            interp.set_fatal_error("set_source_files_properties() requires at least one property");
+            return;
+        }
+
+        // Determine base directories for resolving relative paths
+        std::vector<std::string> base_dirs;
+
+        if (!target_directories.empty()) {
+            // Use target directories
+            for (const auto& target_name : target_directories) {
+                std::string resolved_name = interp.resolve_target_alias(target_name);
+                auto& targets = interp.get_targets();
+                auto it = targets.find(resolved_name);
+                if (it == targets.end()) {
+                    interp.set_fatal_error("set_source_files_properties() unknown target: " + target_name);
+                    return;
+                }
+                base_dirs.push_back(it->second->get_source_dir());
+            }
+        } else if (!directories.empty()) {
+            // Use specified directories
+            std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+            for (const auto& dir : directories) {
+                std::filesystem::path dir_path(dir);
+                if (dir_path.is_absolute()) {
+                    base_dirs.push_back(dir_path.lexically_normal().string());
+                } else {
+                    base_dirs.push_back((std::filesystem::path(current_source_dir) / dir_path).lexically_normal().string());
+                }
+            }
+        } else {
+            // Default to current source directory
+            base_dirs.push_back(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
+        }
+
+        // Apply properties to each file in each base directory
+        auto& source_properties = interp.get_source_properties();
+
+        for (const auto& base_dir : base_dirs) {
+            for (const auto& file : files) {
+                std::filesystem::path file_path(file);
+                std::string abs_path;
+
+                if (file_path.is_absolute()) {
+                    abs_path = file_path.lexically_normal().string();
+                } else {
+                    abs_path = (std::filesystem::path(base_dir) / file_path).lexically_normal().string();
+                }
+
+                // Set each property
+                for (const auto& [prop_name, prop_value] : properties) {
+                    source_properties[abs_path][prop_name] = prop_value;
+                }
+            }
+        }
+    });
+
+    // get_source_file_property - Get a property from a source file
+    // CMake signature:
+    // get_source_file_property(<variable> <file>
+    //     [DIRECTORY <dir> | TARGET_DIRECTORY <target>]
+    //     <property>)
+    interp.add_builtin("get_source_file_property", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() < 3) {
+            interp.set_fatal_error("get_source_file_property() requires at least 3 arguments: <variable> <file> <property>");
+            return;
+        }
+
+        std::string variable = args[0];
+        std::string file = args[1];
+        std::string property_name;
+        std::string opt_directory;
+        std::string opt_target_directory;
+
+        size_t i = 2;
+        while (i < args.size()) {
+            if (args[i] == "DIRECTORY" && i + 1 < args.size()) {
+                opt_directory = args[++i];
+                ++i;
+            } else if (args[i] == "TARGET_DIRECTORY" && i + 1 < args.size()) {
+                opt_target_directory = args[++i];
+                ++i;
+            } else {
+                // Must be the property name
+                property_name = args[i];
+                ++i;
+                break;
+            }
+        }
+
+        if (property_name.empty()) {
+            interp.set_fatal_error("get_source_file_property() requires a property name");
+            return;
+        }
+
+        // Determine base directory
+        std::string base_dir;
+        if (!opt_target_directory.empty()) {
+            std::string resolved_name = interp.resolve_target_alias(opt_target_directory);
+            auto& targets = interp.get_targets();
+            auto it = targets.find(resolved_name);
+            if (it == targets.end()) {
+                interp.set_fatal_error("get_source_file_property() unknown target: " + opt_target_directory);
+                return;
+            }
+            base_dir = it->second->get_source_dir();
+        } else if (!opt_directory.empty()) {
+            std::filesystem::path dir_path(opt_directory);
+            if (dir_path.is_absolute()) {
+                base_dir = dir_path.lexically_normal().string();
+            } else {
+                base_dir = (std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / dir_path).lexically_normal().string();
+            }
+        } else {
+            base_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        }
+
+        // Resolve file path
+        std::filesystem::path file_path(file);
+        std::string abs_path;
+        if (file_path.is_absolute()) {
+            abs_path = file_path.lexically_normal().string();
+        } else {
+            abs_path = (std::filesystem::path(base_dir) / file_path).lexically_normal().string();
+        }
+
+        // Look up the property
+        const auto& source_properties = interp.get_source_properties();
+        auto source_it = source_properties.find(abs_path);
+        if (source_it != source_properties.end()) {
+            auto prop_it = source_it->second.find(property_name);
+            if (prop_it != source_it->second.end()) {
+                interp.set_variable(variable, prop_it->second);
+                return;
+            }
+        }
+
+        // Property not found - return <PROP>-NOTFOUND
+        interp.set_variable(variable, property_name + "-NOTFOUND");
+    });
+}
+
+} // namespace dmake

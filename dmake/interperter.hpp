@@ -281,6 +281,9 @@ public:
     std::map<std::string, std::map<std::string, std::string>>& get_source_properties() {
         return get_root()->source_properties_;
     }
+    const std::map<std::string, std::map<std::string, std::string>>& get_source_properties() const {
+        return get_root()->source_properties_;
+    }
     std::map<std::string, std::string>& get_cache_variables() {
         return get_root()->cache_variables_;
     }
@@ -318,6 +321,7 @@ public:
     friend void register_try_compile_builtins(Interpreter& interp);
     friend void register_path_builtins(Interpreter& interp);
     friend void register_install_builtins(Interpreter& interp);
+    friend void register_source_properties_builtins(Interpreter& interp);
 
     CMakeList from_arguments(const std::vector<std::string>& args);
 

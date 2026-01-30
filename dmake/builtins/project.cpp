@@ -512,6 +512,11 @@ void register_project_builtins(Interpreter& interp) {
         if (perms_changed || content_changed) {
             fs::permissions(output_path, target_perms);
         }
+
+        // Mark output as generated source file
+        auto& source_props = interp.get_source_properties();
+        std::string normalized_output = output_path.lexically_normal().string();
+        source_props[normalized_output]["GENERATED"] = "TRUE";
     });
 
     interp.add_builtin("aux_source_directory", [](Interpreter& interp, const std::vector<std::string>& args) {

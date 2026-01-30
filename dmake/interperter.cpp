@@ -431,6 +431,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_try_compile_builtins(*this);
         register_path_builtins(*this);
         register_install_builtins(*this);
+        register_source_properties_builtins(*this);
 
         add_builtin("enable_testing", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (!args.empty()) {

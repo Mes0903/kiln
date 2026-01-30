@@ -346,9 +346,12 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
 void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
                                       bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
-                                      GenexEvaluator& evaluator) {
+                                      GenexEvaluator& evaluator, const Interpreter& interp) {
     // Check if this target has any module sources (for module mapper path)
     bool target_has_modules = has_module_sources();
+
+    // Get source properties for per-source customization
+    const auto& source_props = interp.get_source_properties();
 
     // SOURCES are essentially PRIVATE
     // Evaluate genex in source paths first
@@ -362,10 +365,38 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         // Skip empty sources (genex that evaluated to empty)
         if (src.empty()) continue;
 
+        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
+        std::string src_normalized = src_abs.lexically_normal().string();
+
+        // Look up per-source properties
+        auto sp_it = source_props.find(src_normalized);
+
+        // Check HEADER_FILE_ONLY - skip compilation entirely
+        if (sp_it != source_props.end()) {
+            auto hfo_it = sp_it->second.find("HEADER_FILE_ONLY");
+            if (hfo_it != sp_it->second.end() && !Interpreter::is_falsy(hfo_it->second)) {
+                continue; // Skip this source - don't compile it
+            }
+        }
+
         auto lang_info = LanguageClassifier::from_path(src);
         if (lang_info.is_header) continue;
+
+        // Check LANGUAGE property override
+        if (sp_it != source_props.end()) {
+            auto lang_it = sp_it->second.find("LANGUAGE");
+            if (lang_it != sp_it->second.end()) {
+                if (lang_it->second == "CXX" || lang_it->second == "C++") {
+                    lang_info.lang = Language::CXX;
+                    lang_info.is_header = false;
+                } else if (lang_it->second == "C") {
+                    lang_info.lang = Language::C;
+                    lang_info.is_header = false;
+                }
+            }
+        }
+
         if (lang_info.lang == Language::UNKNOWN) {
-            // throw std::runtime_error("No compiler registered for file '" + src + "' in target '" + name_ + "'");
             // CMake ignores unknown files
             continue;
         }
@@ -381,7 +412,6 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             continue;
         }
 
-        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
         std::string obj = get_obj_path(binary_dir_, src);
         obj_files.push_back(obj);
 
@@ -424,6 +454,54 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         for (const auto& def : get_resolved_property("COMPILE_DEFINITIONS")) ctx.definitions.push_back(def);
         for (const auto& opt : get_resolved_property("COMPILE_OPTIONS")) ctx.options.push_back(opt);
 
+        // Apply per-source properties
+        if (sp_it != source_props.end()) {
+            // COMPILE_FLAGS (space-separated string)
+            auto cf_it = sp_it->second.find("COMPILE_FLAGS");
+            if (cf_it != sp_it->second.end()) {
+                std::istringstream iss(cf_it->second);
+                std::string flag;
+                while (iss >> flag) {
+                    ctx.options.push_back(flag);
+                }
+            }
+
+            // COMPILE_OPTIONS (semicolon-separated list)
+            auto co_it = sp_it->second.find("COMPILE_OPTIONS");
+            if (co_it != sp_it->second.end()) {
+                CMakeList list(co_it->second);
+                for (const auto& opt : list.to_vector()) {
+                    // Evaluate genex if present
+                    if (opt.find("$<") != std::string::npos) {
+                        auto result = evaluator.evaluate(opt);
+                        if (result && !result->empty()) {
+                            ctx.options.push_back(*result);
+                        }
+                    } else {
+                        ctx.options.push_back(opt);
+                    }
+                }
+            }
+
+            // COMPILE_DEFINITIONS (semicolon-separated list)
+            auto cd_it = sp_it->second.find("COMPILE_DEFINITIONS");
+            if (cd_it != sp_it->second.end()) {
+                CMakeList list(cd_it->second);
+                for (const auto& def : list.to_vector()) {
+                    ctx.definitions.push_back(def);
+                }
+            }
+
+            // INCLUDE_DIRECTORIES (semicolon-separated list)
+            auto id_it = sp_it->second.find("INCLUDE_DIRECTORIES");
+            if (id_it != sp_it->second.end()) {
+                CMakeList list(id_it->second);
+                for (const auto& inc : list.to_vector()) {
+                    ctx.includes.push_back(inc);
+                }
+            }
+        }
+
         BuildTask task;
         task.id = obj;
         task.parent_target = this;
@@ -455,6 +533,21 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 } else {
                     // Utility target - depend on the target name itself
                     task.dependencies.insert(dep_name);
+                }
+            }
+        }
+
+        // Apply OBJECT_DEPENDS - extra file dependencies
+        if (sp_it != source_props.end()) {
+            auto od_it = sp_it->second.find("OBJECT_DEPENDS");
+            if (od_it != sp_it->second.end()) {
+                CMakeList list(od_it->second);
+                for (const auto& dep : list.to_vector()) {
+                    std::filesystem::path dep_path(dep);
+                    if (!dep_path.is_absolute()) {
+                        dep_path = std::filesystem::path(source_dir_) / dep_path;
+                    }
+                    task.inputs.push_back(dep_path.lexically_normal().string());
                 }
             }
         }
@@ -694,7 +787,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         get_resolved_property("COMPILE_DEFINITIONS"),
         get_resolved_property("COMPILE_OPTIONS"));
 
-    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, all_targets, evaluator);
+    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, all_targets, evaluator, interp);
 
     // Add dependencies for compile tasks: PRE_BUILD and custom command outputs
     for (const auto& obj : obj_files) {

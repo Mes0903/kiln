@@ -119,6 +119,17 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cycle_err = check_for_cycles();
     if (cycle_err) return std::unexpected(*cycle_err);
 
+    // 1b. Validate build graph: all inputs must exist or be produced by a task
+    for (const auto& [id, task] : tasks_) {
+        for (const auto& in : task.inputs) {
+            if (!std::filesystem::exists(in) && !file_to_task.count(in)) {
+                return std::unexpected(
+                    "Build graph error: Task '" + id + "' requires '" + in +
+                    "' which doesn't exist and isn't produced by any task");
+            }
+        }
+    }
+
     // 2. Incremental check
     auto cache = load_cache(build_dir);
     std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time

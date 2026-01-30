@@ -109,7 +109,7 @@ protected:
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
                                bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
-                               class GenexEvaluator& evaluator);
+                               class GenexEvaluator& evaluator, const class Interpreter& interp);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected
