@@ -1688,12 +1688,18 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
         std::string token = get_token_string(condition[pos]);
         if (token == "NOT") {
-            pos++;
-            if (pos >= condition.size()) {
-                error_msg = "NOT operator requires an operand";
-                return false;
+            // Check if there's a valid operand after NOT
+            // NOT followed by nothing or by AND/OR should be treated as a primary value
+            // (CMake compatibility - NOT without operand evaluates to false)
+            if (pos + 1 < condition.size()) {
+                std::string next_token = get_token_string(condition[pos + 1]);
+                if (next_token != "AND" && next_token != "OR") {
+                    // Valid operand exists - NOT is an operator
+                    pos++;
+                    return !parse_not();  // Right-associative
+                }
             }
-            return !parse_not();  // Right-associative
+            // No valid operand - fall through to treat "NOT" as a primary value
         }
         return parse_comparison();
     };

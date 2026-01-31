@@ -1555,12 +1555,17 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
     REQUIRE(output.find("else-branch") != std::string::npos);
     REQUIRE(output.find("if-branch") == std::string::npos);
 
-    // if(NOT) should error - NOT requires an operand
-    REQUIRE_THROWS_AS(run_script(R"(
+    // if(NOT) - CMake compatibility: NOT without operand treated as primary value
+    // evaluates to false (NOT is not a boolean constant, dereferenced as empty variable)
+    output = run_script(R"(
         if(NOT)
-            message("pass")
+            message("if-branch")
+        else()
+            message("else-branch")
         endif()
-    )"), std::runtime_error);
+    )");
+    REQUIRE(output.find("else-branch") != std::string::npos);
+    REQUIRE(output.find("if-branch") == std::string::npos);
 
     // Edge case: if(DEFINED) should work - DEFINED is treated as variable name
     output = run_script(R"(
