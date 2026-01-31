@@ -78,7 +78,8 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     REQUIRE(has_wrapper);
 
     // Check if the object file task depends on the PCH
-    std::string obj_file = std::filesystem::path(build_dir_abs) / "objs" / "my_lib.cpp.o";
+    // Object files are stored in: build_dir/objs/target_name/source.cpp.o
+    std::string obj_file = std::filesystem::path(build_dir_abs) / "objs" / "my_lib" / "my_lib.cpp.o";
     obj_file = std::filesystem::path(obj_file).lexically_normal().string();
     REQUIRE(graph.has_task(obj_file));
     auto& obj_task = graph.get_task(obj_file);

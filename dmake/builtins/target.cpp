@@ -602,7 +602,58 @@ void register_target_builtins(Interpreter& interp) {
         };
     };
 
-    interp.add_builtin("target_include_directories", make_target_command("target_include_directories", "INCLUDE_DIRECTORIES"));
+    // target_include_directories - with SYSTEM and BEFORE/AFTER support
+    interp.add_builtin("target_include_directories", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_include_directories");
+        std::string name;
+        bool is_system = false;
+        bool before = false;
+        bool after = false;  // Consume but ignore (AFTER is default)
+        std::vector<std::string> pub, priv, inter;
+
+        parser.positional(name, "target name");
+        parser.flag("SYSTEM", is_system);
+        parser.flag("BEFORE", before);
+        parser.flag("AFTER", after);
+        parser.list("PUBLIC", pub);
+        parser.list("PRIVATE", priv);
+        parser.list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_include_directories");
+        if (!target) return;
+
+        // EARLY VALIDATION (Layer 1) - validate genex support before storing
+        auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
+            for (const auto& value : values) {
+                auto validation = GenexParser::validate_genex_support(value);
+                if (!validation) {
+                    interp.set_fatal_error("target_include_directories: " + validation.error() + " in " + visibility + " scope");
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!pub.empty() && !validate_values(pub, "PUBLIC")) return;
+        if (!priv.empty() && !validate_values(priv, "PRIVATE")) return;
+        if (!inter.empty() && !validate_values(inter, "INTERFACE")) return;
+
+        // Choose property name based on SYSTEM flag
+        std::string prop_name = is_system ? "SYSTEM_INCLUDE_DIRECTORIES" : "INCLUDE_DIRECTORIES";
+
+        // Store with prepend/append based on BEFORE flag
+        if (before) {
+            if (!pub.empty()) target->prepend_property(prop_name, pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->prepend_property(prop_name, priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->prepend_property(prop_name, inter, PropertyVisibility::INTERFACE);
+        } else {
+            if (!pub.empty()) target->append_property(prop_name, pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->append_property(prop_name, priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->append_property(prop_name, inter, PropertyVisibility::INTERFACE);
+        }
+    });
+
     interp.add_builtin("target_compile_definitions", make_target_command("target_compile_definitions", "COMPILE_DEFINITIONS"));
     interp.add_builtin("target_compile_options", make_target_command("target_compile_options", "COMPILE_OPTIONS"));
     interp.add_builtin("target_precompile_headers", make_target_command("target_precompile_headers", "PRECOMPILE_HEADERS"));

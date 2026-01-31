@@ -560,6 +560,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         // Resolve LINK_LIBRARIES (convert target names to paths + propagate properties)
         std::vector<std::string> resolved_link_libs;
         std::vector<std::string> propagated_includes;
+        std::vector<std::string> propagated_system_includes;
         std::vector<std::string> propagated_definitions;
         std::vector<std::string> propagated_options;
         auto& targets = interp.get_root()->targets_;
@@ -572,6 +573,9 @@ void register_try_compile_builtins(Interpreter& interp) {
                 // Propagate INTERFACE properties from the target
                 const auto& iface_includes = target->get_resolved_interface_property("INCLUDE_DIRECTORIES");
                 propagated_includes.insert(propagated_includes.end(), iface_includes.begin(), iface_includes.end());
+
+                const auto& iface_system_includes = target->get_resolved_interface_property("SYSTEM_INCLUDE_DIRECTORIES");
+                propagated_system_includes.insert(propagated_system_includes.end(), iface_system_includes.begin(), iface_system_includes.end());
 
                 const auto& iface_defs = target->get_resolved_interface_property("COMPILE_DEFINITIONS");
                 propagated_definitions.insert(propagated_definitions.end(), iface_defs.begin(), iface_defs.end());
@@ -598,6 +602,10 @@ void register_try_compile_builtins(Interpreter& interp) {
         for (const auto& inc : propagated_includes) {
             // Add as -I flags to raw_compile_flags
             raw_compile_flags.push_back("-I" + inc);
+        }
+        for (const auto& inc : propagated_system_includes) {
+            // Add as -isystem flags to raw_compile_flags
+            raw_compile_flags.push_back("-isystem" + inc);
         }
         for (const auto& def : propagated_definitions) {
             compile_definitions.push_back(def);
@@ -950,6 +958,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         // Resolve LINK_LIBRARIES (convert target names to paths + propagate properties)
         std::vector<std::string> resolved_link_libs;
         std::vector<std::string> propagated_includes;
+        std::vector<std::string> propagated_system_includes;
         std::vector<std::string> propagated_definitions;
         std::vector<std::string> propagated_options;
         auto& targets = interp.get_root()->targets_;
@@ -962,6 +971,9 @@ void register_try_compile_builtins(Interpreter& interp) {
                 // Propagate INTERFACE properties from the target
                 const auto& iface_includes = target->get_resolved_interface_property("INCLUDE_DIRECTORIES");
                 propagated_includes.insert(propagated_includes.end(), iface_includes.begin(), iface_includes.end());
+
+                const auto& iface_system_includes = target->get_resolved_interface_property("SYSTEM_INCLUDE_DIRECTORIES");
+                propagated_system_includes.insert(propagated_system_includes.end(), iface_system_includes.begin(), iface_system_includes.end());
 
                 const auto& iface_defs = target->get_resolved_interface_property("COMPILE_DEFINITIONS");
                 propagated_definitions.insert(propagated_definitions.end(), iface_defs.begin(), iface_defs.end());
@@ -987,6 +999,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         // Merge propagated properties
         for (const auto& inc : propagated_includes) {
             raw_compile_flags.push_back("-I" + inc);
+        }
+        for (const auto& inc : propagated_system_includes) {
+            raw_compile_flags.push_back("-isystem" + inc);
         }
         for (const auto& def : propagated_definitions) {
             compile_definitions.push_back(def);

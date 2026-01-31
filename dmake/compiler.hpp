@@ -9,6 +9,7 @@ struct CompileContext {
     std::string source;
     std::string output;
     std::vector<std::string> includes;
+    std::vector<std::string> system_includes;  // Directories to include with -isystem (no warnings)
     std::vector<std::string> definitions;
     std::vector<std::string> options;
     std::string standard;
@@ -28,6 +29,7 @@ struct ModuleScanContext {
     std::string source;
     std::string output;                    // DDI output file path
     std::vector<std::string> includes;
+    std::vector<std::string> system_includes;  // Directories to include with -isystem (no warnings)
     std::vector<std::string> definitions;
     std::string standard;
     bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)

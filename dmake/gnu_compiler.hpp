@@ -93,6 +93,9 @@ public:
         for (const auto& dir : ctx.includes) {
             cmd.push_back("-I" + dir);
         }
+        for (const auto& dir : ctx.system_includes) {
+            cmd.push_back("-isystem" + dir);
+        }
 
         if (!ctx.pch_include.empty()) {
             // Split pch_include if it contains multiple arguments (e.g., "-include wrapper.hpp")
@@ -185,6 +188,9 @@ public:
         // Include directories
         for (const auto& dir : ctx.includes) {
             cmd.push_back("-I" + dir);
+        }
+        for (const auto& dir : ctx.system_includes) {
+            cmd.push_back("-isystem" + dir);
         }
 
         // Definitions

@@ -181,6 +181,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     };
     std::vector<PropInfo> props_to_resolve = {
         {"INCLUDE_DIRECTORIES", true},
+        {"SYSTEM_INCLUDE_DIRECTORIES", true},  // -isystem includes (no warnings)
         {"COMPILE_DEFINITIONS", false},
         {"COMPILE_OPTIONS", false},
         {"COMPILE_FEATURES", false},
@@ -533,6 +534,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
 
         // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
         for (const auto& dir : evaluate_for_source(get_resolved_property("INCLUDE_DIRECTORIES"))) ctx.includes.push_back(dir);
+        for (const auto& dir : evaluate_for_source(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))) ctx.system_includes.push_back(dir);
 
         for (const auto& def : evaluate_for_source(get_resolved_property("COMPILE_DEFINITIONS"))) ctx.definitions.push_back(def);
         for (const auto& opt : evaluate_for_source(get_resolved_property("COMPILE_OPTIONS"))) ctx.options.push_back(opt);
@@ -646,6 +648,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     const Target* target,
     bool is_shared,
     const std::vector<std::string>& includes,
+    const std::vector<std::string>& system_includes,
     const std::vector<std::string>& definitions,
     const std::vector<std::string>& options) {
 
@@ -730,6 +733,8 @@ static std::pair<std::string, std::string> generate_pch_task(
 
     for (const auto& dir : includes)
         ctx.includes.push_back(dir);
+    for (const auto& dir : system_includes)
+        ctx.system_includes.push_back(dir);
 
     pch_task.commands.push_back(compiler->get_compile_command(ctx));
     pch_task.inputs.push_back(pch_wrapper);
@@ -911,6 +916,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared,
         evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES")),
+        evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES")),
         evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
         evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")));
 
@@ -1222,6 +1228,9 @@ bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& t
         // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
         for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) {
             ctx.includes.push_back(dir);
+        }
+        for (const auto& dir : get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES")) {
+            ctx.system_includes.push_back(dir);
         }
         for (const auto& def : get_resolved_property("COMPILE_DEFINITIONS")) {
             ctx.definitions.push_back(def);
