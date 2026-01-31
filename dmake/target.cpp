@@ -179,6 +179,8 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     genex_ctx.all_targets = &all_targets;
     genex_ctx.current_target = this;
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+    // Defer COMPILE_LANGUAGE and COMPILE_LANG_AND_ID evaluation until per-source processing
+    genex_ctx.allow_deferred_compile_language = true;
 
     GenexEvaluator evaluator(genex_ctx);
 
@@ -480,11 +482,41 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
 
         for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
 
-        // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
-        for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) ctx.includes.push_back(dir);
+        // Create per-source evaluator with compile_language set for COMPILE_LANGUAGE/COMPILE_LANG_AND_ID genex
+        GenexEvaluationContext source_genex_ctx;
+        source_genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+        source_genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+        source_genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+        source_genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+        source_genex_ctx.all_targets = &all_targets;
+        source_genex_ctx.current_target = this;
+        source_genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+        source_genex_ctx.compile_language = lang_info.lang;  // Set compile language for this source
+        GenexEvaluator source_evaluator(source_genex_ctx);
 
-        for (const auto& def : get_resolved_property("COMPILE_DEFINITIONS")) ctx.definitions.push_back(def);
-        for (const auto& opt : get_resolved_property("COMPILE_OPTIONS")) ctx.options.push_back(opt);
+        // Helper to evaluate deferred genex (COMPILE_LANGUAGE, COMPILE_LANG_AND_ID) per-source
+        auto evaluate_for_source = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
+            std::vector<std::string> result;
+            for (const auto& val : values) {
+                // Check if this value might contain deferred genex
+                if (val.find("$<COMPILE_LANG") != std::string::npos) {
+                    auto eval_result = source_evaluator.evaluate(val);
+                    if (eval_result && !eval_result->empty()) {
+                        result.push_back(*eval_result);
+                    }
+                    // Skip if evaluation returned empty (genex didn't match)
+                } else {
+                    result.push_back(val);
+                }
+            }
+            return result;
+        };
+
+        // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
+        for (const auto& dir : evaluate_for_source(get_resolved_property("INCLUDE_DIRECTORIES"))) ctx.includes.push_back(dir);
+
+        for (const auto& def : evaluate_for_source(get_resolved_property("COMPILE_DEFINITIONS"))) ctx.definitions.push_back(def);
+        for (const auto& opt : evaluate_for_source(get_resolved_property("COMPILE_OPTIONS"))) ctx.options.push_back(opt);
 
         // Apply per-source properties
         if (sp_it != source_props.end()) {
@@ -503,9 +535,9 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             if (co_it != sp_it->second.end()) {
                 CMakeList list(co_it->second);
                 for (const auto& opt : list.to_vector()) {
-                    // Evaluate genex if present
+                    // Evaluate genex if present (use source_evaluator for COMPILE_LANGUAGE support)
                     if (opt.find("$<") != std::string::npos) {
-                        auto result = evaluator.evaluate(opt);
+                        auto result = source_evaluator.evaluate(opt);
                         if (result && !result->empty()) {
                             ctx.options.push_back(*result);
                         }
@@ -830,10 +862,38 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     // C++20 modules: generate scanner tasks first (they have no dependencies)
     bool has_modules = generate_module_scanner_tasks(graph, toolchain);
 
+    // Create CXX-specific evaluator for PCH (PCH is always C++)
+    GenexEvaluationContext pch_genex_ctx;
+    pch_genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+    pch_genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+    pch_genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+    pch_genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    pch_genex_ctx.all_targets = &all_targets;
+    pch_genex_ctx.current_target = this;
+    pch_genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+    pch_genex_ctx.compile_language = Language::CXX;  // PCH is always C++
+    GenexEvaluator pch_evaluator(pch_genex_ctx);
+
+    // Helper to evaluate deferred COMPILE_LANGUAGE genex for PCH
+    auto evaluate_for_pch = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
+        std::vector<std::string> result;
+        for (const auto& val : values) {
+            if (val.find("$<COMPILE_LANG") != std::string::npos) {
+                auto eval_result = pch_evaluator.evaluate(val);
+                if (eval_result && !eval_result->empty()) {
+                    result.push_back(*eval_result);
+                }
+            } else {
+                result.push_back(val);
+            }
+        }
+        return result;
+    };
+
     auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared,
-        get_resolved_property("INCLUDE_DIRECTORIES"),
-        get_resolved_property("COMPILE_DEFINITIONS"),
-        get_resolved_property("COMPILE_OPTIONS"));
+        evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES")),
+        evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
+        evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")));
 
     generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, all_targets, evaluator, interp);
 
