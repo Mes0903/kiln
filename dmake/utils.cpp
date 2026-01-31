@@ -1,6 +1,7 @@
 #include "utils.hpp"
 #include "inner/blake2b.h"
 #include "inner/sha256.h"
+#include "inner/md5.h"
 #ifdef __linux__
 #include <linux/limits.h>
 #endif
@@ -31,7 +32,29 @@ dmake::Hash256 dmake::sha256(const void* data, size_t len)
     return hash;
 }
 
+dmake::Hash160 dmake::md5(const void* data, size_t len)
+{
+    Hash160 hash;
+    MD5_CTX ctx;
+    dmake_md5_init(&ctx);
+    dmake_md5_update(&ctx, (const uint8_t*)data, len);
+    dmake_md5_final(&ctx, (uint8_t*)&hash);
+    return hash;
+}
+
 std::string dmake::Hash256::to_string() const
+{
+    std::string result;
+    result.reserve(2 * sizeof(bytes));
+    for (unsigned char byte : bytes)
+    {
+        result += "0123456789abcdef"[byte >> 4];
+        result += "0123456789abcdef"[byte & 0xf];
+    }
+    return result;
+}
+
+std::string dmake::Hash160::to_string() const
 {
     std::string result;
     result.reserve(2 * sizeof(bytes));

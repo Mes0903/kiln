@@ -20,6 +20,7 @@ add_library(dmake SHARED
     dmake/compile_features.cpp
     dmake/inner/blake2b.c
     dmake/inner/sha256.cpp
+    dmake/inner/md5.cpp
     dmake/builtins/message.cpp
     dmake/builtins/variable.cpp
     dmake/builtins/list.cpp

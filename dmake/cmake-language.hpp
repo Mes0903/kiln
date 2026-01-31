@@ -108,7 +108,7 @@ struct ForeachZipLists {
 };
 
 struct ForeachBlock {
-    std::string loop_var;  // The loop variable name (used for simple, range, and in modes)
+    Argument loop_var;  // The loop variable name (used for simple, range, and in modes)
     std::variant<ForeachSimple, ForeachRange, ForeachIn, ForeachZipLists> params;
     std::vector<AstNode> body;
     size_t row = 0;

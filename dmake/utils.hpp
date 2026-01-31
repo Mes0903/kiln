@@ -13,6 +13,13 @@ struct Hash256
     std::string to_string() const;
 };
 
+struct Hash160
+{
+    unsigned char bytes[20];
+
+    std::string to_string() const;
+};
+
 /**
  * @brief Compute the BLAKE2b hash of the given data
  * @note When in doubt, use SHA3 or BLAKE2b. Both are safe and SHA3 is faster if
@@ -32,6 +39,12 @@ Hash256 sha256(const void* data, size_t len);
 inline Hash256 sha256(std::string_view str)
 {
     return sha256(str.data(), str.size());
+}
+
+Hash160 md5(const void* data, size_t len);
+inline Hash160 md5(std::string_view str)
+{
+    return md5(str.data(), str.size());
 }
 
 struct CommandResult {

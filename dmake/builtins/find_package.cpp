@@ -80,6 +80,9 @@ void register_find_package_builtins(Interpreter& interp) {
 
         std::string found_var = package_name + "_FOUND";
 
+        // Set CMAKE_FIND_PACKAGE_NAME so Find modules know which package is being searched
+        interp.set_variable("CMAKE_FIND_PACKAGE_NAME", package_name);
+
         // Set component-related variables before calling Find module or Config file
         std::vector<std::string> all_components = components;
         all_components.insert(all_components.end(), optional_components.begin(), optional_components.end());
@@ -107,6 +110,18 @@ void register_find_package_builtins(Interpreter& interp) {
 
         // Set <Package>_FIND_QUIETLY
         interp.set_variable(package_name + "_FIND_QUIETLY", quiet ? "TRUE" : "FALSE");
+
+        // Set version-related variables (needed by some Find modules like FindPython)
+        // Only set these if a version is specified to avoid empty version range errors
+        VersionComponents v_req = parse_version(version);
+        if (!version.empty()) {
+            interp.set_variable(package_name + "_FIND_VERSION", v_req.full);
+            interp.set_variable(package_name + "_FIND_VERSION_MAJOR", v_req.major);
+            interp.set_variable(package_name + "_FIND_VERSION_MINOR", v_req.minor);
+            interp.set_variable(package_name + "_FIND_VERSION_PATCH", v_req.patch);
+            interp.set_variable(package_name + "_FIND_VERSION_TWEAK", v_req.tweak);
+            interp.set_variable(package_name + "_FIND_VERSION_COUNT", v_req.count);
+        }
 
         // Helper to validate that all required components were found
         auto validate_components = [&]() -> bool {
@@ -263,8 +278,6 @@ void register_find_package_builtins(Interpreter& interp) {
 
         std::filesystem::path found_path;
         std::string lower_name = to_lower(package_name);
-        
-        VersionComponents v_req = parse_version(version);
 
         for (const auto& path : search_paths) {
             // Check if directory exists using cache

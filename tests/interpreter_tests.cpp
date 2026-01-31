@@ -5761,3 +5761,115 @@ TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_p
     std::filesystem::remove_all(temp_dir);
     std::filesystem::remove("test.cpp");
 }
+
+// Tests for FindPython-related bugs (2026-01-31)
+TEST_CASE("if condition: CMake list is truthy", "[interpreter][if][bugfix]") {
+    // Bug: "3;2" was being treated as falsy because it starts with a digit
+    // but doesn't parse as a complete number (strtod stops at ';')
+    SECTION("List with semicolons is truthy") {
+        auto output = run_script(R"(
+            set(MY_LIST "3;2")
+            if(MY_LIST)
+                message("truthy")
+            else()
+                message("falsy")
+            endif()
+        )");
+        REQUIRE(output == "truthy\n");
+    }
+
+    SECTION("Single element list is truthy") {
+        auto output = run_script(R"(
+            set(MY_LIST "3")
+            if(MY_LIST)
+                message("truthy")
+            else()
+                message("falsy")
+            endif()
+        )");
+        REQUIRE(output == "truthy\n");
+    }
+
+    SECTION("List starting with number is truthy") {
+        auto output = run_script(R"(
+            set(VERSIONS "3;2;1")
+            if(VERSIONS)
+                message("truthy")
+            else()
+                message("falsy")
+            endif()
+        )");
+        REQUIRE(output == "truthy\n");
+    }
+}
+
+TEST_CASE("foreach: loop variable with variable reference in name", "[interpreter][foreach][bugfix]") {
+    // Bug: foreach(_${PREFIX}_VAR IN LISTS ...) was not expanding the loop variable name
+    SECTION("Variable reference in loop variable name") {
+        auto output = run_script(R"(
+            set(_PREFIX "Python")
+            set(_Python_VERSIONS "3;2")
+            foreach(_${_PREFIX}_MAJOR IN LISTS _${_PREFIX}_VERSIONS)
+                message("${_Python_MAJOR}")
+            endforeach()
+        )");
+        REQUIRE(output == "3\n2\n");
+    }
+
+    SECTION("Loop variable is properly set and accessible") {
+        auto output = run_script(R"(
+            set(PREFIX "Test")
+            set(Test_ITEMS "a;b;c")
+            foreach(_${PREFIX}_ITEM IN LISTS ${PREFIX}_ITEMS)
+                if(DEFINED _${PREFIX}_ITEM)
+                    message("defined: ${_Test_ITEM}")
+                endif()
+            endforeach()
+        )");
+        REQUIRE(output == "defined: a\ndefined: b\ndefined: c\n");
+    }
+}
+
+TEST_CASE("if condition: variable reference in compound name is dereferenced", "[interpreter][if][bugfix]") {
+    // Bug: if(_${PREFIX}_VAR EQUAL "3") was not dereferencing _Python_VAR after expansion
+    SECTION("EQUAL comparison with compound variable name") {
+        auto output = run_script(R"(
+            set(_PREFIX "Python")
+            set(_Python_VERSION "3")
+            if(_${_PREFIX}_VERSION EQUAL "3")
+                message("match")
+            else()
+                message("no match")
+            endif()
+        )");
+        REQUIRE(output == "match\n");
+    }
+
+    SECTION("STREQUAL comparison with compound variable name") {
+        auto output = run_script(R"(
+            set(NS "My")
+            set(My_VALUE "hello")
+            if(${NS}_VALUE STREQUAL "hello")
+                message("match")
+            else()
+                message("no match")
+            endif()
+        )");
+        REQUIRE(output == "match\n");
+    }
+
+    SECTION("Compound name in elseif") {
+        auto output = run_script(R"(
+            set(_PREFIX "Python")
+            set(_Python_MAJOR "3")
+            if(_${_PREFIX}_MAJOR EQUAL "2")
+                message("python2")
+            elseif(_${_PREFIX}_MAJOR EQUAL "3")
+                message("python3")
+            else()
+                message("unknown")
+            endif()
+        )");
+        REQUIRE(output == "python3\n");
+    }
+}

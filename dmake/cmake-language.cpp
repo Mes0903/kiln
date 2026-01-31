@@ -356,17 +356,12 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
 
         foreach_block.params = zip_params;
         // Set loop_var to first variable for completeness (won't be used in interpreter)
-        foreach_block.loop_var = zip_params.loop_vars[0];
+        foreach_block.loop_var = Argument{{zip_params.loop_vars[0]}, false};
 
     } else {
         // Original logic for non-ZIP_LISTS modes
-        // Extract loop variable (must be simple identifier)
-        if (!foreach_command.arguments[0].parts.empty() &&
-            std::holds_alternative<std::string>(foreach_command.arguments[0].parts[0])) {
-            foreach_block.loop_var = std::get<std::string>(foreach_command.arguments[0].parts[0]);
-        } else {
-            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() loop variable must be a simple identifier"});
-        }
+        // Store the full loop variable argument (may contain variable references like _${PREFIX}_VAR)
+        foreach_block.loop_var = foreach_command.arguments[0];
 
         if (foreach_command.arguments.size() == 1) {
             return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires items to iterate over"});

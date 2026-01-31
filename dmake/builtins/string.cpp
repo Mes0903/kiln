@@ -1017,6 +1017,16 @@ void register_string_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, sha256(input).to_string());
 
+        } else if (operation == "MD5") {
+            CommandParser parser("string", "MD5");
+            std::string input, out_var;
+
+            parser.positional(out_var, "output variable");
+            parser.positional(input, "input string");
+
+            PARSE_OR_RETURN(parser, interp, sub_args);
+            interp.set_variable(out_var, md5(input).to_string());
+
         } else if (operation == "BLAKE2B") {
             CommandParser parser("string", "BLAKE2B");
             std::string input, out_var, key;

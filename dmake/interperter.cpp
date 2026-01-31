@@ -1214,11 +1214,14 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     }
 
     // Original logic for non-ZIP_LISTS modes
+    // Evaluate the loop variable name (may contain variable references like _${PREFIX}_VAR)
+    std::string loop_var_name = evaluate_argument(block.loop_var);
+
     // Save the loop variable's previous value (for nested loops)
-    bool loop_var_was_set = is_variable_set(block.loop_var);
+    bool loop_var_was_set = is_variable_set(loop_var_name);
     std::string loop_var_old_value;
     if (loop_var_was_set) {
-        loop_var_old_value = get_variable(block.loop_var);
+        loop_var_old_value = get_variable(loop_var_name);
     }
 
     loop_depth_++;
@@ -1257,7 +1260,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     }
 
     for (const auto& item : items) {
-        set_variable(block.loop_var, item);
+        set_variable(loop_var_name, item);
         auto res = interpret(block.body);
         if (!res) {
             set_fatal_error(res.error());
@@ -1268,9 +1271,9 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
             loop_depth_--;
             // Restore loop variable before returning
             if (loop_var_was_set) {
-                set_variable(block.loop_var, loop_var_old_value);
+                set_variable(loop_var_name, loop_var_old_value);
             } else {
-                unset_variable(block.loop_var);
+                unset_variable(loop_var_name);
             }
             safe_pop_trace_stack("foreach body error");
             return res;
@@ -1282,9 +1285,9 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
 
     // Restore loop variable after loop completes
     if (loop_var_was_set) {
-        set_variable(block.loop_var, loop_var_old_value);
+        set_variable(loop_var_name, loop_var_old_value);
     } else {
-        unset_variable(block.loop_var);
+        unset_variable(loop_var_name);
     }
 
     // Sanity check: loop depth should never go negative
@@ -1503,8 +1506,10 @@ bool Interpreter::is_falsy(const std::string& val) {
 
     // CMake behavior: strings that look like they might be numbers but aren't valid
     // should be treated as false. Examples: "2x", "-3.5y", "+2bad"
-    // Check if the string starts with a sign or digit
-    if (!val.empty() && (std::isdigit(val[0]) || val[0] == '+' || val[0] == '-')) {
+    // However, CMake lists (semicolon-separated values) are always truthy if non-empty.
+    // Check if the string starts with a sign or digit, but skip if it's a list.
+    if (val.find(';') == std::string::npos &&
+        !val.empty() && (std::isdigit(val[0]) || val[0] == '+' || val[0] == '-')) {
         // Try to parse as a number
         char* end;
         std::strtod(val.c_str(), &end);
@@ -1604,11 +1609,12 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             return token;
         }
 
-        // If the argument contained variable references (e.g., ${type}), the expansion
-        // already happened in get_token_string(). Don't dereference the result again.
-        // Only pure literals should be dereferenced as variable names.
-        if (contains_variable_reference(arg)) {
-            return token;
+        // If the argument is ONLY a single variable reference (e.g., ${VAR}), the expansion
+        // already happened in get_token_string() and we have the value. Don't dereference again.
+        // But if the argument contains mixed parts (e.g., _${PREFIX}_SUFFIX), the expansion
+        // gives us a variable NAME that should be dereferenced to get its value.
+        if (arg.parts.size() == 1 && std::holds_alternative<VariableReference>(arg.parts[0])) {
+            return token;  // Already have the value from the variable reference
         }
 
         // Dereference as variable
