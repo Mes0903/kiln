@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include <algorithm>
+#include <unistd.h>
 
 namespace dmake {
 
@@ -364,6 +365,30 @@ void register_variable_builtins(Interpreter& interp) {
 
         CMakeList missing_list(keywords_missing_values);
         interp.set_variable(prefix + "_KEYWORDS_MISSING_VALUES", missing_list.to_string());
+    });
+
+    interp.add_builtin("site_name", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() != 1) {
+            interp.set_fatal_error("site_name() requires exactly one argument");
+            return;
+        }
+
+        std::string var_name = args[0];
+        std::string hostname;
+
+        // Get hostname using gethostname()
+        char buffer[HOST_NAME_MAX + 1];
+        if (gethostname(buffer, sizeof(buffer)) == 0) {
+            hostname = buffer;
+        } else {
+            // Fallback: try HOSTNAME environment variable
+            if (const char* env_hostname = std::getenv("HOSTNAME")) {
+                hostname = env_hostname;
+            }
+            // If both fail, hostname remains empty
+        }
+
+        interp.set_variable(var_name, hostname);
     });
 }
 
