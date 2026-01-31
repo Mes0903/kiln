@@ -962,16 +962,10 @@ void register_target_builtins(Interpreter& interp) {
 
         // Apply properties to each target
         for (auto& target : targets) {
-            // Helper to parse semicolon-separated list and append as INTERFACE property
+            // Helper to validate genex and append as INTERFACE property (uses append_property_from_string for splitting)
             auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
-                std::vector<std::string> items;
-                std::string item;
-                std::istringstream ss(value);
-                while (std::getline(ss, item, ';')) {
-                    if (!item.empty()) {
-                        items.push_back(item);
-                    }
-                }
+                // Split first to validate each item
+                CMakeList items(value);
 
                 // EARLY VALIDATION (Layer 1) - validate genex support
                 for (const auto& val : items) {
@@ -984,7 +978,7 @@ void register_target_builtins(Interpreter& interp) {
                 }
 
                 if (!items.empty()) {
-                    target->append_property(base_prop_name, items, PropertyVisibility::INTERFACE);
+                    target->append_property_from_string(base_prop_name, value, PropertyVisibility::INTERFACE);
                 }
             };
 

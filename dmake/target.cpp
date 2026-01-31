@@ -6,6 +6,7 @@
 #include "genex_evaluator.hpp"
 #include "interperter.hpp"
 #include "compile_features.hpp"
+#include "CMakeList.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -13,6 +14,8 @@
 #include <algorithm>
 #include <functional>
 #include <set>
+#include <cassert>
+#include <iostream>
 
 namespace dmake {
 
@@ -30,8 +33,24 @@ std::string Target::get_property(const std::string& name) const {
 }
 
 void Target::append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {
+#ifndef NDEBUG
+    // Catch bugs: values should already be split by semicolons
+    for (const auto& v : values) {
+        if (v.find(';') != std::string::npos &&
+            v.find("$<") == std::string::npos) {  // Allow generator expressions which may contain semicolons
+            std::cerr << "WARNING: append_property('" << name
+                      << "') received unsplit value: " << v << "\n";
+            assert(false && "Property value contains semicolons - should be split at boundary");
+        }
+    }
+#endif
     auto& list = list_properties_[name][visibility];
     list.insert(list.end(), values.begin(), values.end());
+}
+
+void Target::append_property_from_string(const std::string& name, const std::string& value, PropertyVisibility visibility) {
+    CMakeList list(value);  // Always split by semicolons
+    append_property(name, list.to_vector(), visibility);
 }
 
 void Target::prepend_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {

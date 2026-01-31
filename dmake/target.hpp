@@ -63,9 +63,13 @@ public:
     std::string get_property(const std::string& name) const;
 
     // Generic List Property Access (for properties that accumulate like SOURCES, DEFINITIONS)
+    // Note: values should already be split - append_property() asserts no semicolons in debug builds
     void append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
     void prepend_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
     const std::vector<std::string>& get_property_list(const std::string& name, PropertyVisibility visibility) const;
+
+    // Helper for raw string inputs: splits by semicolon then appends
+    void append_property_from_string(const std::string& name, const std::string& value, PropertyVisibility visibility);
 
     // File Set Support
     void add_file_set(FileSet file_set);
