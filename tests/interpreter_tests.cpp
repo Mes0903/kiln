@@ -1519,15 +1519,20 @@ TEST_CASE("if condition: complex expressions", "[interpreter][if]") {
 }
 
 TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
-    // if(A B C) should error - unconsumed tokens
-    REQUIRE_THROWS_AS(run_script(R"(
+    // if(A B C) - unconsumed tokens: CMake compatibility mode returns false
+    // No exception thrown, condition evaluates to false (else branch taken)
+    auto output = run_script(R"(
         set(A "10")
         set(B "20")
         set(C "15")
         if(A B C)
-            message("pass")
+            message("if-branch")
+        else()
+            message("else-branch")
         endif()
-    )"), std::runtime_error);
+    )");
+    REQUIRE(output.find("else-branch") != std::string::npos);
+    REQUIRE(output.find("if-branch") == std::string::npos);
 
     // if(A EQUAL) should error - missing right operand
     REQUIRE_THROWS_AS(run_script(R"(
@@ -1537,15 +1542,20 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
         endif()
     )"), std::runtime_error);
 
-    // if(AND B) should error - missing left operand
-    REQUIRE_THROWS_AS(run_script(R"(
+    // if(AND B) - AND at start treated as variable name, B is unconsumed
+    // CMake compatibility: evaluates to false
+    output = run_script(R"(
         set(B "10")
         if(AND B)
-            message("pass")
+            message("if-branch")
+        else()
+            message("else-branch")
         endif()
-    )"), std::runtime_error);
+    )");
+    REQUIRE(output.find("else-branch") != std::string::npos);
+    REQUIRE(output.find("if-branch") == std::string::npos);
 
-    // if(NOT) should error - missing operand
+    // if(NOT) should error - NOT requires an operand
     REQUIRE_THROWS_AS(run_script(R"(
         if(NOT)
             message("pass")
@@ -1553,7 +1563,7 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
     )"), std::runtime_error);
 
     // Edge case: if(DEFINED) should work - DEFINED is treated as variable name
-    auto output = run_script(R"(
+    output = run_script(R"(
         if(DEFINED)
             message("fail")
         else()
@@ -5549,6 +5559,7 @@ TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_propertie
     REQUIRE(ast.has_value());
 
     auto result = interp.interpret(ast.value());
+    interp.finalize_directory_targets();
     REQUIRE(result.has_value());
 
     // Check that definitions were added without -D prefix
@@ -5580,6 +5591,7 @@ TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][direct
     REQUIRE(ast.has_value());
 
     auto result = interp.interpret(ast.value());
+    interp.finalize_directory_targets();
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
@@ -5608,6 +5620,7 @@ TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_pro
     REQUIRE(ast.has_value());
 
     auto result = interp.interpret(ast.value());
+    interp.finalize_directory_targets();
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
@@ -5636,6 +5649,7 @@ TEST_CASE("add_link_options applies to targets", "[interpreter][directory_proper
     REQUIRE(ast.has_value());
 
     auto result = interp.interpret(ast.value());
+    interp.finalize_directory_targets();
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
