@@ -600,6 +600,40 @@ TEST_CASE("GenexEvaluator - Pure genex whitespace splitting", "[genex][evaluator
         REQUIRE(result->size() == 1);
         REQUIRE((*result)[0] == "-pedantic");
     }
+
+    SECTION("Pure genex should split on semicolons (CMake list separator)") {
+        // When genex output contains semicolons, it represents a CMake list
+        // Each list item should become a separate entry (like yaml-cpp's ${yaml-cpp-contrib-sources})
+        std::vector<std::string> values = {
+            "$<$<BOOL:ON>:src/a.cpp;src/b.cpp;src/c.cpp>"
+        };
+
+        auto result = eval.evaluate_property_list(values);
+        REQUIRE(result.has_value());
+
+        // Should be split into 3 separate sources
+        REQUIRE(result->size() == 3);
+        REQUIRE((*result)[0] == "src/a.cpp");
+        REQUIRE((*result)[1] == "src/b.cpp");
+        REQUIRE((*result)[2] == "src/c.cpp");
+    }
+
+    SECTION("Pure genex should split semicolons AND whitespace") {
+        // Both semicolons and whitespace should cause splitting
+        std::vector<std::string> values = {
+            "$<$<BOOL:ON>:src/a.cpp;src/b.cpp -flag1 -flag2>"
+        };
+
+        auto result = eval.evaluate_property_list(values);
+        REQUIRE(result.has_value());
+
+        // Should be split into 4 separate items
+        REQUIRE(result->size() == 4);
+        REQUIRE((*result)[0] == "src/a.cpp");
+        REQUIRE((*result)[1] == "src/b.cpp");
+        REQUIRE((*result)[2] == "-flag1");
+        REQUIRE((*result)[3] == "-flag2");
+    }
 }
 
 // ============================================================================

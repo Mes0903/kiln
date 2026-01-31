@@ -1,5 +1,6 @@
 #include "genex_evaluator.hpp"
 #include "target.hpp"
+#include "CMakeList.hpp"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -602,12 +603,19 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
         // Only add non-empty results
         if (!eval_result->empty()) {
             if (is_pure_genex) {
-                // Split the evaluated result by whitespace (treats genex output like unquoted arguments)
-                // This allows $<1:-Wall -Wextra> to expand into multiple separate flags
-                std::istringstream iss(*eval_result);
-                std::string token;
-                while (iss >> token) {
-                    result.push_back(token);
+                // Split the evaluated result by semicolons first (CMake list separator),
+                // then by whitespace (treats genex output like unquoted arguments).
+                // This allows:
+                //   - $<1:-Wall -Wextra> to expand into multiple separate flags
+                //   - $<$<BOOL:ON>:${LIST_VAR}> to expand semicolon-separated lists
+                CMakeList list(*eval_result);
+                for (const auto& item : list) {
+                    // Further split by whitespace
+                    std::istringstream iss(item);
+                    std::string token;
+                    while (iss >> token) {
+                        result.push_back(token);
+                    }
                 }
             } else {
                 // Keep as a single value (like a quoted argument or mixed content)
