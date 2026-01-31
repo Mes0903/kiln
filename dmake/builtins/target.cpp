@@ -8,6 +8,7 @@
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
+#include <set>
 
 namespace dmake {
 
@@ -442,6 +443,48 @@ void register_target_builtins(Interpreter& interp) {
     });
 
     interp.add_builtin("add_custom_target", [&](Interpreter& interp, const std::vector<std::string>& args) {
+        // CMake allows an implicit command after the target name (and optional ALL):
+        //   add_custom_target(name [ALL] cmd args... [DEPENDS ...])
+        // We normalize this to the explicit COMMAND form before parsing.
+        static const std::set<std::string> keywords = {
+            "COMMAND", "DEPENDS", "WORKING_DIRECTORY", "COMMENT", "SOURCES",
+            "VERBATIM", "COMMAND_EXPAND_LISTS", "ALL", "BYPRODUCTS", "JOB_POOL",
+            "USES_TERMINAL"
+        };
+
+        std::vector<std::string> normalized_args;
+        if (!args.empty()) {
+            size_t i = 0;
+            // First arg is target name
+            normalized_args.push_back(args[i++]);
+            // Skip ALL if present
+            if (i < args.size() && args[i] == "ALL") {
+                normalized_args.push_back(args[i++]);
+            }
+            // Collect non-keyword arguments as implicit command
+            std::vector<std::string> implicit_cmd;
+            while (i < args.size() && keywords.find(args[i]) == keywords.end()) {
+                implicit_cmd.push_back(args[i++]);
+            }
+            // Check for mixing old and new syntax
+            if (!implicit_cmd.empty()) {
+                // Check if there's also an explicit COMMAND keyword in remaining args
+                for (size_t j = i; j < args.size(); ++j) {
+                    if (args[j] == "COMMAND") {
+                        interp.set_fatal_error("add_custom_target(): cannot mix implicit command syntax "
+                            "(arguments after target name) with explicit COMMAND keyword");
+                        return;
+                    }
+                }
+                normalized_args.push_back("COMMAND");
+                normalized_args.insert(normalized_args.end(), implicit_cmd.begin(), implicit_cmd.end());
+            }
+            // Copy remaining arguments
+            while (i < args.size()) {
+                normalized_args.push_back(args[i++]);
+            }
+        }
+
         CommandParser parser("add_custom_target");
         std::string name;
         bool all = false;
@@ -463,7 +506,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.list("SOURCES", sources);
         // Note: VERBATIM is ignored as we currently use shell execution via popen
         parser.flag("VERBATIM", verbatim);
-        PARSE_OR_RETURN(parser, interp, args);
+        PARSE_OR_RETURN(parser, interp, normalized_args);
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
