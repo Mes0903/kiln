@@ -214,9 +214,13 @@ public:
 
     std::expected<void, InterpreterError> include_file(const std::string& file_path, bool optional = false);
 
-    // Cached file existence check - caching handled internally
+    // File existence check (caching handled internally)
     bool cached_file_exists(const std::filesystem::path& full_path);
     bool cached_file_exists(const std::filesystem::path& dir, const std::string& filename);
+
+    // Get directory listing (caching handled internally)
+    // Returns nullptr if directory doesn't exist or can't be read
+    const std::unordered_set<std::string>* get_directory_listing(const std::filesystem::path& dir);
 
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }
@@ -357,8 +361,6 @@ private:
     Interpreter* get_root();
     const Interpreter* get_root() const;
 
-    // Internal cache helper - returns directory listing if cached and valid
-    const std::unordered_set<std::string>* get_cached_directory_listing(const std::filesystem::path& dir);
 
     std::string build_dir_;
     std::ostream* out_;

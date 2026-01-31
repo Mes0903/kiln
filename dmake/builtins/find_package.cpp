@@ -16,6 +16,27 @@ std::string to_lower(std::string s) {
     return s;
 }
 
+// Check if a directory name matches a package name (case-insensitive prefix match)
+// e.g., "Botan-3.10.0" matches package "Botan" or "botan"
+bool directory_matches_package(const std::string& dir_name, const std::string& package_name) {
+    std::string lower_dir = to_lower(dir_name);
+    std::string lower_pkg = to_lower(package_name);
+
+    // Exact match
+    if (lower_dir == lower_pkg) return true;
+
+    // Prefix match followed by a separator (-, _, or digit for versioned dirs)
+    if (lower_dir.length() > lower_pkg.length() &&
+        lower_dir.substr(0, lower_pkg.length()) == lower_pkg) {
+        char next_char = lower_dir[lower_pkg.length()];
+        if (next_char == '-' || next_char == '_' || std::isdigit(next_char)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 struct VersionComponents {
     std::string full;
     std::string major;
@@ -279,23 +300,14 @@ void register_find_package_builtins(Interpreter& interp) {
         std::filesystem::path found_path;
         std::string lower_name = to_lower(package_name);
 
-        for (const auto& path : search_paths) {
-            // Check if directory exists using cache
-            auto path_parent = path.parent_path();
-            auto path_name = path.filename().string();
-            if (!path_parent.empty() && !path_name.empty()) {
-                if (!interp.cached_file_exists(path_parent, path_name)) continue;
-            }
-            // Verify it's actually a directory
-            std::error_code ec;
-            if (!std::filesystem::is_directory(path, ec)) continue;
+        // Candidates for Config file and Version file (used in multiple places)
+        struct Candidate {
+            std::string config;
+            std::string version;
+        };
 
-            // Candidates for Config file and Version file
-            struct Candidate {
-                std::string config;
-                std::string version;
-            };
-
+        // Helper lambda to check a directory for config files
+        auto check_directory_for_config = [&](const std::filesystem::path& path) -> bool {
             std::vector<Candidate> candidates = {
                 {package_name + "Config.cmake", package_name + "ConfigVersion.cmake"},
                 {lower_name + "-config.cmake", lower_name + "-config-version.cmake"}
@@ -350,9 +362,48 @@ void register_find_package_builtins(Interpreter& interp) {
 
                 // If we get here, it's either no version requested OR version check passed
                 found_path = config_path;
-                break;
+                return true;
             }
-            if (!found_path.empty()) break;
+            return false;
+        };
+
+        // First pass: check explicit search paths
+        for (const auto& path : search_paths) {
+            // Check if directory exists using cache
+            auto path_parent = path.parent_path();
+            auto path_name = path.filename().string();
+            if (!path_parent.empty() && !path_name.empty()) {
+                if (!interp.cached_file_exists(path_parent, path_name)) continue;
+            }
+            // Verify it's actually a directory
+            std::error_code ec;
+            if (!std::filesystem::is_directory(path, ec)) continue;
+
+            if (check_directory_for_config(path)) break;
+        }
+
+        // Second pass: scan system roots for directories matching package name pattern
+        // This handles cases like Botan-3.10.0/ for package Botan
+        if (found_path.empty()) {
+            for (const auto& root : system_roots) {
+                // Use cached directory listing
+                auto* entries = interp.get_directory_listing(root);
+                if (!entries) continue;
+
+                // Check each entry that matches the package name pattern
+                for (const auto& entry_name : *entries) {
+                    if (!directory_matches_package(entry_name, package_name)) continue;
+
+                    std::filesystem::path subdir = std::filesystem::path(root) / entry_name;
+
+                    // Verify it's a directory (stat call, but only for matching entries)
+                    std::error_code ec;
+                    if (!std::filesystem::is_directory(subdir, ec)) continue;
+
+                    if (check_directory_for_config(subdir)) break;
+                }
+                if (!found_path.empty()) break;
+            }
         }
 
         if (!found_path.empty()) {

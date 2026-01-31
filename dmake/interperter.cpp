@@ -790,7 +790,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     return res;
 }
 
-const std::unordered_set<std::string>* Interpreter::get_cached_directory_listing(const std::filesystem::path& dir) {
+const std::unordered_set<std::string>* Interpreter::get_directory_listing(const std::filesystem::path& dir) {
     Interpreter* root = get_root();
 
     // Normalize to absolute path
@@ -869,7 +869,7 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
 
     // Try to get cached listing of parent directory
     // This will populate the cache on-demand if not already cached
-    auto* entries = get_cached_directory_listing(parent);
+    auto* entries = get_directory_listing(parent);
     if (!entries) {
         // Cache population failed (permissions, doesn't exist, etc.)
         // Fall back to direct filesystem check
@@ -881,7 +881,7 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
 }
 
 bool Interpreter::cached_file_exists(const std::filesystem::path& dir, const std::string& filename) {
-    auto* entries = get_cached_directory_listing(dir);
+    auto* entries = get_directory_listing(dir);
     return entries && entries->contains(filename);
 }
 

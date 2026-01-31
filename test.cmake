@@ -1,1 +1,1 @@
-include(OurFindPython.cmake)
+find_package(Botan)
