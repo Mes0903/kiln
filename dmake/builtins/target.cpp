@@ -974,9 +974,15 @@ void register_target_builtins(Interpreter& interp) {
         if (!pub.empty()) target->append_property("LINK_LIBRARIES", pub, PropertyVisibility::PUBLIC);
         if (!priv.empty()) target->append_property("LINK_LIBRARIES", priv, PropertyVisibility::PRIVATE);
         if (!inter.empty()) target->append_property("LINK_LIBRARIES", inter, PropertyVisibility::INTERFACE);
-        // Default (legacy CMake) is roughly PRIVATE or PUBLIC depending on target type,
-        // but modern CMake treats it as PRIVATE/PUBLIC. In dmake we map to PRIVATE for safety.
-        if (!def.empty()) target->append_property("LINK_LIBRARIES", def, PropertyVisibility::PRIVATE);
+        // Default (no keyword) libraries are treated as PUBLIC for non-INTERFACE targets
+        // and INTERFACE for INTERFACE targets (CMake compatibility)
+        if (!def.empty()) {
+            if (target->get_type() == TargetType::INTERFACE_LIBRARY) {
+                target->append_property("LINK_LIBRARIES", def, PropertyVisibility::INTERFACE);
+            } else {
+                target->append_property("LINK_LIBRARIES", def, PropertyVisibility::PUBLIC);
+            }
+        }
     });
 
     interp.add_builtin("set_target_properties", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
@@ -1136,6 +1142,51 @@ void register_target_builtins(Interpreter& interp) {
                 std::filesystem::path(dir) :
                 std::filesystem::path(src_dir) / dir;
             dirs.push_back(resolved.string());
+        }
+    });
+
+    interp.add_builtin("target_link_directories", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("target_link_directories");
+        std::string name;
+        bool before = false;
+        bool after = false;
+        std::vector<std::string> pub, priv, inter;
+
+        parser.positional(name, "target name");
+        parser.flag("BEFORE", before);
+        parser.flag("AFTER", after);
+        parser.list("PUBLIC", pub);
+        parser.list("PRIVATE", priv);
+        parser.list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto target = get_target_from_name(interp, name, "target_link_directories");
+        if (!target) return;
+
+        // Resolve paths relative to source directory
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        auto resolve_dirs = [&](std::vector<std::string>& dirs) {
+            for (auto& dir : dirs) {
+                std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
+                    std::filesystem::path(dir) :
+                    std::filesystem::path(src_dir) / dir;
+                dir = resolved.string();
+            }
+        };
+
+        resolve_dirs(pub);
+        resolve_dirs(priv);
+        resolve_dirs(inter);
+
+        // Store with prepend/append based on BEFORE flag
+        if (before) {
+            if (!pub.empty()) target->prepend_property("LINK_DIRECTORIES", pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->prepend_property("LINK_DIRECTORIES", priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->prepend_property("LINK_DIRECTORIES", inter, PropertyVisibility::INTERFACE);
+        } else {
+            if (!pub.empty()) target->append_property("LINK_DIRECTORIES", pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->append_property("LINK_DIRECTORIES", priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->append_property("LINK_DIRECTORIES", inter, PropertyVisibility::INTERFACE);
         }
     });
 

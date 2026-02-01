@@ -1,9 +1,11 @@
 #include "genex_evaluator.hpp"
 #include "target.hpp"
 #include "CMakeList.hpp"
+#include "language.hpp"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <iostream>
 #include <sstream>
 
 namespace dmake {
@@ -337,6 +339,12 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             for (const auto& src : sources) {
                 // Skip genex in source paths (they would need recursive evaluation)
                 if (GenexParser::contains_genex(src)) {
+                    continue;
+                }
+
+                // Skip header files - they don't produce object files
+                auto lang_info = LanguageClassifier::from_path(src);
+                if (lang_info.is_header || !lang_info.is_compileable) {
                     continue;
                 }
 

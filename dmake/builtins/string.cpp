@@ -93,6 +93,56 @@ std::string genex_strip(const std::string& str) {
     return result;
 }
 
+// Helper to apply regex replacement line by line
+// This matches CMake's behavior where . doesn't cross line boundaries
+// Each line is processed independently with std::regex_replace
+std::string regex_replace_line_by_line(const std::string& input,
+                                        const std::regex& re,
+                                        const std::string& replacement) {
+    // Check if input contains newlines
+    if (input.find('\n') == std::string::npos) {
+        // Single line - use normal regex_replace
+        return std::regex_replace(input, re, replacement);
+    }
+
+    // Multi-line input - process line by line
+    // Check if any line has a match - if so, use only the replacement from that line
+    std::istringstream check_stream(input);
+    std::string check_line;
+
+    while (std::getline(check_stream, check_line)) {
+        // Check if this line contains a match
+        std::smatch match;
+        if (std::regex_search(check_line, match, re)) {
+            // Found a match - return just the replaced result from this line
+            // This matches CMake behavior where patterns like .*PATTERN.* with multiline
+            // input return just the replacement when a match is found
+            return std::regex_replace(check_line, re, replacement);
+        }
+    }
+
+    // No match found in any line - process normally (replace in each line)
+    std::string result;
+    std::istringstream stream(input);
+    std::string line;
+    bool first_line = true;
+
+    while (std::getline(stream, line)) {
+        if (!first_line) {
+            result += '\n';
+        }
+        first_line = false;
+        result += std::regex_replace(line, re, replacement);
+    }
+
+    // Handle case where input ends with newline
+    if (!input.empty() && input.back() == '\n' && (result.empty() || result.back() != '\n')) {
+        result += '\n';
+    }
+
+    return result;
+}
+
 // Helper to convert CMake-style regex replacement string to C++ std::regex format
 // CMake uses \1, \2, etc. for capture groups, $ is literal
 // C++ std::regex_replace uses $1, $2, etc., $$ for literal $
@@ -547,7 +597,8 @@ void register_string_builtins(Interpreter& interp) {
                     std::regex re(pattern);
                     // Convert CMake-style replacement (\1, \2) to C++ style ($1, $2)
                     std::string cpp_replacement = cmake_to_cpp_replacement(replacement);
-                    std::string result = std::regex_replace(input, re, cpp_replacement);
+                    // Apply regex replacement line by line to match CMake behavior
+                    std::string result = regex_replace_line_by_line(input, re, cpp_replacement);
                     interp.set_variable(out_var, result);
                 } catch (const std::regex_error& e) {
                     interp.set_fatal_error("string(REGEX REPLACE) invalid regex: " + std::string(e.what()));

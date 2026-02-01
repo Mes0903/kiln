@@ -400,8 +400,15 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         // Skip empty sources (genex that evaluated to empty)
         if (src.empty()) continue;
 
-        // Determine if source is relative to source_dir or binary_dir
+        // Handle pre-compiled object files (e.g., from $<TARGET_OBJECTS:...>)
+        // These don't need compilation - just add them directly to obj_files for linking
         std::filesystem::path src_path(src);
+        if (src_path.extension() == ".o" || src_path.extension() == ".obj") {
+            obj_files.push_back(src);
+            continue;
+        }
+
+        // Determine if source is relative to source_dir or binary_dir
         std::filesystem::path src_abs;
         std::string src_normalized;
 
@@ -821,6 +828,12 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
+
+    // Check POSITION_INDEPENDENT_CODE property - if set, compile with -fPIC
+    std::string pic_prop = get_property("POSITION_INDEPENDENT_CODE");
+    if (!pic_prop.empty() && !Interpreter::is_falsy(pic_prop)) {
+        is_shared = true;  // Use -fPIC for position-independent code
+    }
 
     // Get custom command rules from interpreter
     const auto& custom_rules = interp.get_custom_command_rules();

@@ -225,6 +225,10 @@ void register_project_builtins(Interpreter& interp) {
         interp.set_variable("PROJECT_SOURCE_DIR", interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
         interp.set_variable("PROJECT_BINARY_DIR", interp.get_variable("CMAKE_CURRENT_BINARY_DIR"));
 
+        // CMake also sets <ProjectName>_SOURCE_DIR and <ProjectName>_BINARY_DIR
+        interp.set_variable(project_name + "_SOURCE_DIR", interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
+        interp.set_variable(project_name + "_BINARY_DIR", interp.get_variable("CMAKE_CURRENT_BINARY_DIR"));
+
         std::vector<std::string> languages;
         std::string version;
 
