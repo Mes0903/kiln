@@ -208,7 +208,7 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             return std::unexpected("Parse error");
         }
 
-        auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, nullptr, build_path.string());
+        auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string());
         interpreter->set_current_file(cmake_lists.string());
 
         // Set BUILD_TESTING before user definitions (user can override with -D)

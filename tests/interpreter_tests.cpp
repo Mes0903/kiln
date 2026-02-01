@@ -3937,7 +3937,7 @@ TEST_CASE("get_property TARGET TYPE", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     // Parse and run a script that tests get_property
     std::string script = R"(
@@ -3995,7 +3995,7 @@ TEST_CASE("get_target_property TYPE", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main2.cpp)
@@ -4034,7 +4034,7 @@ TEST_CASE("get_property TARGET other properties", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main3.cpp)
@@ -4071,7 +4071,7 @@ TEST_CASE("get_property TARGET SET mode", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main4.cpp)
@@ -4108,7 +4108,7 @@ TEST_CASE("get_target_property NOTFOUND for missing property", "[interpreter][pr
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main5.cpp)
@@ -4138,7 +4138,7 @@ TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_library(myimported SHARED IMPORTED)
@@ -4174,7 +4174,7 @@ TEST_CASE("Built-in global properties", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
@@ -4218,7 +4218,7 @@ TEST_CASE("set/get_property INSTALL scope", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
@@ -4265,7 +4265,7 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
@@ -4303,7 +4303,7 @@ TEST_CASE("enable_language() updates ENABLED_LANGUAGES", "[interpreter][language
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
@@ -4353,7 +4353,7 @@ TEST_CASE("enable_language() with OPTIONAL", "[interpreter][language]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     // Test OPTIONAL flag - unsupported language should not error
     std::string script = R"(
@@ -4383,7 +4383,7 @@ TEST_CASE("enable_language() error on unsupported language", "[interpreter][lang
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, nullptr, temp_dir + "/build");
+    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     // Test error on unsupported language without OPTIONAL
     std::string script = R"(
@@ -5549,7 +5549,7 @@ TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_propertie
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_definitions(-DFOO -DBAR=123)
@@ -5581,7 +5581,7 @@ TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][direct
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_compile_definitions(FOO BAR=456)
@@ -5610,7 +5610,7 @@ TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_pro
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_compile_options(-Wall -Werror)
@@ -5639,7 +5639,7 @@ TEST_CASE("add_link_options applies to targets", "[interpreter][directory_proper
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_link_options(-Wl,--as-needed)
@@ -5668,7 +5668,7 @@ TEST_CASE("link_libraries applies to targets", "[interpreter][directory_properti
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
     { std::ofstream f("lib.cpp"); f << "void lib_func() {}\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_library(mylib STATIC lib.cpp)
@@ -5702,7 +5702,7 @@ TEST_CASE("Directory properties apply retroactively", "[interpreter][directory_p
     { std::ofstream f("before.cpp"); f << "int main() { return 0; }\n"; }
     { std::ofstream f("after.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_executable(before before.cpp)
@@ -5741,7 +5741,7 @@ TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_p
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     dmake::Parser parser(R"(
         add_definitions(-DFOO=1)

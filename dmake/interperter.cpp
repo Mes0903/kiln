@@ -162,14 +162,28 @@ int compare_versions(const std::string& a, const std::string& b) {
 } // anonymous namespace
 
 Interpreter* Interpreter::get_root() {
-    return root_;
+    return this;  // No child interpreters anymore - we ARE the root
 }
 
 const Interpreter* Interpreter::get_root() const {
-    return root_;
+    return this;  // No child interpreters anymore - we ARE the root
 }
 
-Interpreter* Interpreter::get_interpreter_for_directory(const std::string& dir) {
+DirectoryContext& Interpreter::get_current_directory_context() {
+    if (directory_stack_.empty()) {
+        std::cerr << "FATAL: get_current_directory_context() called with empty directory_stack_\n";
+        std::abort();
+    }
+    const std::string& current_dir = directory_stack_.back();
+    auto it = directory_contexts_.find(current_dir);
+    if (it == directory_contexts_.end()) {
+        std::cerr << "FATAL: Directory context not found for: " << current_dir << "\n";
+        std::abort();
+    }
+    return it->second;
+}
+
+DirectoryContext* Interpreter::get_directory_context(const std::string& dir) {
     std::filesystem::path abs_dir;
     if (std::filesystem::path(dir).is_absolute()) {
         abs_dir = std::filesystem::path(dir).lexically_normal();
@@ -177,12 +191,46 @@ Interpreter* Interpreter::get_interpreter_for_directory(const std::string& dir) 
         abs_dir = (std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / dir).lexically_normal();
     }
 
-    auto& registry = get_directory_interpreters();
-    auto it = registry.find(abs_dir.string());
-    if (it != registry.end()) {
-        return it->second;
+    auto it = directory_contexts_.find(abs_dir.string());
+    if (it != directory_contexts_.end()) {
+        return &it->second;
     }
     return nullptr;
+}
+
+void Interpreter::push_directory(const std::string& source_dir, const std::string& binary_dir) {
+    std::filesystem::path abs_source = std::filesystem::absolute(source_dir).lexically_normal();
+    std::string abs_source_str = abs_source.string();
+
+    // Create new DirectoryContext
+    DirectoryContext ctx;
+    ctx.source_dir = abs_source_str;
+    ctx.binary_dir = binary_dir;
+
+    // Set parent directory for property inheritance
+    if (!directory_stack_.empty()) {
+        ctx.parent_dir = directory_stack_.back();
+        // Inherit accumulated directory properties from parent (CMake semantics)
+        auto parent_it = directory_contexts_.find(ctx.parent_dir);
+        if (parent_it != directory_contexts_.end()) {
+            ctx.accumulated = parent_it->second.accumulated;
+        }
+    }
+
+    // Add to contexts map
+    directory_contexts_[abs_source_str] = std::move(ctx);
+
+    // Push onto stack
+    directory_stack_.push_back(abs_source_str);
+}
+
+void Interpreter::pop_directory() {
+    if (directory_stack_.empty()) {
+        std::cerr << "FATAL: pop_directory() called with empty directory_stack_\n";
+        std::abort();
+    }
+    // Don't remove the context from the map - it's needed for get_property DIRECTORY /path
+    directory_stack_.pop_back();
 }
 
 
@@ -195,46 +243,60 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         print_message("WARN", "Build type '" + build_type + "' is not a standard build type. Things MIGHT go wrong.");
     }
 
-    if (parent_ != nullptr) return get_root()->run_build(jobs, requested_targets);
+    // No longer needed - no child interpreters anymore
 
     // Determine which targets to build
     std::set<std::string> targets_to_build;
+
+    // Helper to recursively collect a target and its dependencies
+    std::function<void(const std::string&)> collect = [&](const std::string& name) {
+        if (targets_to_build.count(name)) return;
+        if (!targets_.count(name)) {
+            // Not a dmake target, might be a system lib or imported target
+            return;
+        }
+        targets_to_build.insert(name);
+        auto target = targets_[name];
+        for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PRIVATE)) collect(lib);
+        for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PUBLIC)) collect(lib);
+        for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::INTERFACE)) collect(lib);
+
+        auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+        if (custom) {
+            for (const auto& dep : custom->get_custom_dependencies()) {
+                collect(dep);
+            }
+        }
+
+        // Also collect manually added dependencies (from add_dependencies command)
+        for (const auto& dep : target->get_manually_added_dependencies()) {
+            collect(dep);
+        }
+    };
+
     if (requested_targets.empty()) {
+        // Collect initial set of default targets
+        std::vector<std::string> initial_targets;
         for (const auto& [name, target] : targets_) {
             auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
             if (custom) {
                 // Custom targets only build by default if they have ALL flag
                 if (custom->is_build_by_default()) {
-                    targets_to_build.insert(name);
+                    initial_targets.push_back(name);
                 }
             } else {
                 // Executables and libraries are "ALL" by default unless EXCLUDE_FROM_ALL is set
                 std::string exclude = target->get_property("EXCLUDE_FROM_ALL");
                 if (exclude.empty() || is_falsy(exclude)) {
-                    targets_to_build.insert(name);
+                    initial_targets.push_back(name);
                 }
             }
         }
+        // Now recursively collect dependencies for each initial target
+        for (const auto& name : initial_targets) {
+            collect(name);
+        }
     } else {
-        std::function<void(const std::string&)> collect = [&](const std::string& name) {
-            if (targets_to_build.count(name)) return;
-            if (!targets_.count(name)) {
-                // Not a dmake target, might be a system lib or imported target
-                return;
-            }
-            targets_to_build.insert(name);
-            auto target = targets_[name];
-            for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PRIVATE)) collect(lib);
-            for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PUBLIC)) collect(lib);
-            for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::INTERFACE)) collect(lib);
-
-            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-            if (custom) {
-                for (const auto& dep : custom->get_custom_dependencies()) {
-                    collect(dep);
-                }
-            }
-        };
         for (const auto& t : requested_targets) {
             // Resolve aliases to real target names
             std::string resolved = resolve_target_alias(t);
@@ -366,16 +428,22 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     return this;
 }
 
-Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, Interpreter* parent, std::optional<std::string> build_dir)
-    : out_(out), err_(err), parent_(parent) {
-
-    // Cache the root interpreter to avoid O(N) parent chain traversal on every global lookup.
-    root_ = parent_ ? parent_->root_ : this;
+Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir)
+    : out_(out), err_(err) {
 
     std::filesystem::path abs_script_dir = script_dir.empty() ?
         std::filesystem::current_path() :
         std::filesystem::absolute(script_dir).lexically_normal();
     frame_stack_.push_front({abs_script_dir.string(), nullptr});
+
+    std::filesystem::path abs_binary_dir;
+    if (build_dir.has_value()) {
+        build_dir_ = *build_dir;
+        abs_binary_dir = std::filesystem::absolute(build_dir_).lexically_normal();
+    } else {
+        build_dir_ = "build";
+        abs_binary_dir = abs_script_dir / build_dir_;
+    }
 
     // Initialize variables via ShadowMap (depth starts at 0)
     variables_.set("CMAKE_SIZEOF_VOID_P", std::to_string(sizeof(void*)));
@@ -383,82 +451,72 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_CURRENT_LIST_DIR", abs_script_dir.string());
     variables_.set("CMAKE_CURRENT_LIST_FILE", (abs_script_dir / "CMakeLists.txt").string()); // Default assumption
 
-    if (parent_ == nullptr) {
-        std::filesystem::path abs_binary_dir;
-        if (build_dir.has_value()) {
-            build_dir_ = *build_dir;
-            abs_binary_dir = std::filesystem::absolute(build_dir_).lexically_normal();
-        } else {
-            build_dir_ = "build";
-            abs_binary_dir = abs_script_dir / build_dir_;
-        }
+    variables_.set("DMAKE_VERSION", "0.1.0");
 
-        variables_.set("DMAKE_VERSION", "0.1.0");
+    variables_.set("CMAKE_SOURCE_DIR", variables_.get("CMAKE_CURRENT_SOURCE_DIR"));
+    variables_.set("CMAKE_BINARY_DIR", abs_binary_dir.string());
+    variables_.set("CMAKE_CURRENT_BINARY_DIR", abs_binary_dir.string());
+    variables_.set("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
-        variables_.set("CMAKE_SOURCE_DIR", variables_.get("CMAKE_CURRENT_SOURCE_DIR"));
-        variables_.set("CMAKE_BINARY_DIR", abs_binary_dir.string());
-        variables_.set("CMAKE_CURRENT_BINARY_DIR", abs_binary_dir.string());
-        variables_.set("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
+    // Set default install prefix if not already set
+    if (get_variable("CMAKE_INSTALL_PREFIX").empty()) {
+        variables_.set("CMAKE_INSTALL_PREFIX", "/usr/local");
+    }
 
-        // Set default install prefix if not already set
-        if (get_variable("CMAKE_INSTALL_PREFIX").empty()) {
-            variables_.set("CMAKE_INSTALL_PREFIX", "/usr/local");
-        }
+    if (abs_binary_dir == abs_script_dir) {
+        set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
+    }
 
-        if (abs_binary_dir == abs_script_dir) {
-            set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
-        }
+    variables_.set("CMAKE_VERSION", "3.20.0");
+    variables_.set("CMAKE_MAJOR_VERSION", "3");
+    variables_.set("CMAKE_MINOR_VERSION", "20");
+    variables_.set("CMAKE_PATCH_VERSION", "0");
 
-        variables_.set("CMAKE_VERSION", "3.20.0");
-        variables_.set("CMAKE_MAJOR_VERSION", "3");
-        variables_.set("CMAKE_MINOR_VERSION", "20");
-        variables_.set("CMAKE_PATCH_VERSION", "0");
+    variables_.set("CMAKE_FILES_DIRECTORY", "/CMakeFiles");
 
-        variables_.set("CMAKE_FILES_DIRECTORY", "/CMakeFiles");
-
-        // Platform flags
+    // Platform flags
 #ifdef __unix__
-        variables_.set("UNIX", "1");
+    variables_.set("UNIX", "1");
 #endif
 #ifdef __APPLE__
-        variables_.set("APPLE", "1");
+    variables_.set("APPLE", "1");
 #endif
 #ifdef _WIN32
-        variables_.set("WIN32", "1");
+    variables_.set("WIN32", "1");
 #endif
 #ifdef __linux__
-        variables_.set("LINUX", "1");
+    variables_.set("LINUX", "1");
 #endif
 
-        variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
-        variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
-        variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
+    variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
+    variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
+    variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
 
-        variables_.set("CMAKE_COMMAND", get_executable_path());
-        variables_.set("CMAKE_ROOT", "/usr/share/cmake");
+    variables_.set("CMAKE_COMMAND", get_executable_path());
+    variables_.set("CMAKE_ROOT", "/usr/share/cmake");
 
-        // Initialize toolchain with compiler detection
-        // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
-        // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
-        fake_cmake_compiler_checks_and_init(*this, toolchain_);
+    // Initialize toolchain with compiler detection
+    // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
+    // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
+    fake_cmake_compiler_checks_and_init(*this, toolchain_);
 
-        // Initialize built-in global properties
-        // CMake modules expect these to be set (e.g., CheckLanguage.cmake checks ENABLED_LANGUAGES)
-        global_properties_["ENABLED_LANGUAGES"] = "C;CXX";
-        global_properties_["GENERATOR_IS_MULTI_CONFIG"] = "FALSE";
-        global_properties_["TARGET_SUPPORTS_SHARED_LIBS"] = "TRUE";
-        global_properties_["CMAKE_ROLE"] = "PROJECT";
-        global_properties_["FIND_LIBRARY_USE_LIB64_PATHS"] = "TRUE";
-        global_properties_["FIND_LIBRARY_USE_LIB32_PATHS"] = "FALSE";
+    // Initialize built-in global properties
+    // CMake modules expect these to be set (e.g., CheckLanguage.cmake checks ENABLED_LANGUAGES)
+    global_properties_["ENABLED_LANGUAGES"] = "C;CXX";
+    global_properties_["GENERATOR_IS_MULTI_CONFIG"] = "FALSE";
+    global_properties_["TARGET_SUPPORTS_SHARED_LIBS"] = "TRUE";
+    global_properties_["CMAKE_ROLE"] = "PROJECT";
+    global_properties_["FIND_LIBRARY_USE_LIB64_PATHS"] = "TRUE";
+    global_properties_["FIND_LIBRARY_USE_LIB32_PATHS"] = "FALSE";
 
 
-        // Some CMake defaults
-        variables_.set("CMAKE_INSTALL_BINDIR", "bin");
-        variables_.set("CMAKE_INSTALL_LIBDIR", "lib");
-        variables_.set("CMAKE_INSTALL_INCLUDEDIR", "include");
+    // Some CMake defaults
+    variables_.set("CMAKE_INSTALL_BINDIR", "bin");
+    variables_.set("CMAKE_INSTALL_LIBDIR", "lib");
+    variables_.set("CMAKE_INSTALL_INCLUDEDIR", "include");
 
-        // Register this interpreter for its directory
-        directory_interpreters_[abs_script_dir.string()] = this;
+    // Initialize root directory context
+    push_directory(abs_script_dir.string(), abs_binary_dir.string());
 
         // Initialize cache store
         std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
@@ -620,9 +678,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             if (current_file.empty()) return;
 
             if (scope == "GLOBAL") {
-                interp.get_root()->global_guarded_files_.insert(current_file);
+                interp.global_guarded_files_.insert(current_file);
             } else {
-                interp.directory_guarded_files_.insert(current_file);
+                interp.get_current_directory_context().guarded_files.insert(current_file);
             }
         });
 
@@ -631,11 +689,17 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         add_builtin("add_subdirectory", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) return;
             std::string subdir = args[0];
-            std::filesystem::path path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / subdir;
-            std::filesystem::path cmake_file = path / "CMakeLists.txt";
+            std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+            std::string current_binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+            std::filesystem::path source_path = std::filesystem::path(current_source_dir) / subdir;
+            std::filesystem::path abs_source_path = std::filesystem::absolute(source_path).lexically_normal();
+            std::filesystem::path cmake_file = abs_source_path / "CMakeLists.txt";
+
+            // Compute binary directory for the subdirectory
+            std::filesystem::path binary_path = std::filesystem::path(current_binary_dir) / subdir;
 
             if (!std::filesystem::exists(cmake_file)) {
-                interp.set_fatal_error("CMakeLists.txt not found in " + path.string());
+                interp.set_fatal_error("CMakeLists.txt not found in " + abs_source_path.string());
                 return;
             }
 
@@ -643,27 +707,40 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             if(!file) { interp.set_fatal_error("Could not read " + cmake_file.string()); return; }
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-            Interpreter sub_interp(path.string(), interp.out_, interp.err_, &interp);
-            sub_interp.set_current_file(cmake_file.string());
-            sub_interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
-            sub_interp.set_variable("CMAKE_CURRENT_LIST_DIR", path.string());
+            // Save current file for restoration
+            std::string saved_file = interp.get_current_file();
 
-            // Inherit parent's accumulated directory properties
-            sub_interp.accumulated_directory_properties_ = interp.accumulated_directory_properties_;
+            // Push variable scope and directory context
+            interp.get_variables().push_scope();
+            interp.push_directory(abs_source_path.string(), binary_path.string());
 
-            // Register this interpreter for its directory
-            std::filesystem::path abs_path = std::filesystem::absolute(path).lexically_normal();
-            interp.get_directory_interpreters()[abs_path.string()] = &sub_interp;
+            // Set CMAKE_CURRENT_* variables for the subdirectory
+            interp.set_variable("CMAKE_CURRENT_SOURCE_DIR", abs_source_path.string());
+            interp.set_variable("CMAKE_CURRENT_BINARY_DIR", binary_path.string());
+            interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
+            interp.set_variable("CMAKE_CURRENT_LIST_DIR", abs_source_path.string());
+            interp.set_current_file(cmake_file.string());
 
+            // Parse and interpret the subdirectory CMakeLists.txt
             Parser parser(content, cmake_file.string());
             auto ast = parser.parse();
             if (ast) {
-                auto res = sub_interp.interpret(ast.value());
-                if (!res) interp.set_fatal_error(res.error());
-                else sub_interp.finalize_directory_targets();  // Apply retroactive properties
+                auto res = interp.interpret(ast.value());
+                if (!res) {
+                    interp.set_fatal_error(res.error());
+                } else {
+                    interp.finalize_directory_targets();  // Apply retroactive properties
+                }
             } else {
                 interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
             }
+
+            // Pop directory context and variable scope
+            interp.pop_directory();
+            interp.get_variables().pop_scope();
+
+            // Restore current file
+            interp.set_current_file(saved_file);
         });
 
         add_builtin("include", [](Interpreter& interp, const std::vector<std::string>& args) {
@@ -771,15 +848,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 interp.set_fatal_error("Unknown cmake_language mode: " + args[0]);
             }
         });
-    } else {
-        variables_.set("CMAKE_SOURCE_DIR", parent_->get_variable("CMAKE_SOURCE_DIR"));
-        variables_.set("CMAKE_BINARY_DIR", parent_->get_variable("CMAKE_BINARY_DIR"));
-        build_dir_ = parent_->build_dir_;
-
-        // Calculate CMAKE_CURRENT_BINARY_DIR based on relative path from source root
-        std::filesystem::path rel_path = std::filesystem::relative(abs_script_dir, parent_->get_variable("CMAKE_SOURCE_DIR"));
-        variables_.set("CMAKE_CURRENT_BINARY_DIR", (std::filesystem::path(variables_.get("CMAKE_BINARY_DIR")) / rel_path).lexically_normal().string());
-    }
 }
 
 std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<AstNode>& ast) {
@@ -882,8 +950,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     std::string abs_path = std::filesystem::absolute(path).string();
 
     // Check include guards
-    if (get_root()->global_guarded_files_.contains(abs_path)) return {};
-    if (directory_guarded_files_.contains(abs_path)) return {};
+    if (global_guarded_files_.contains(abs_path)) return {};
+    if (get_current_directory_context().guarded_files.contains(abs_path)) return {};
 
     std::ifstream file(path);
     if (!file) {
@@ -2172,41 +2240,23 @@ void Interpreter::set_variable(const std::string& name, const std::string& val) 
 }
 
 std::expected<void, std::string> Interpreter::set_variable_parent_scope(const std::string& name, const std::string& val) {
-    // First try the ShadowMap's parent scope (for function context)
-    if (variables_.depth() > 0) {
-        auto result = variables_.set_parent_scope(name, val);
-        if (result) {
-            return {};
-        }
-        return std::unexpected(result.error());
-    }
-
-    // At depth 0 - check if we have a parent interpreter (add_subdirectory context)
-    if (parent_ != nullptr) {
-        parent_->set_variable(name, val);
+    // Use ShadowMap's parent scope for both function and subdirectory contexts
+    // add_subdirectory now uses push_scope/pop_scope, so ShadowMap handles all scoping
+    auto result = variables_.set_parent_scope(name, val);
+    if (result) {
         return {};
     }
-
-    return std::unexpected("PARENT_SCOPE requires a parent scope (must be called from a function or subdirectory)");
+    return std::unexpected(result.error());
 }
 
 std::expected<void, std::string> Interpreter::unset_variable_parent_scope(const std::string& name) {
-    // First try the ShadowMap's parent scope (for function context)
-    if (variables_.depth() > 0) {
-        auto result = variables_.unset_parent_scope(name);
-        if (result) {
-            return {};
-        }
-        return std::unexpected(result.error());
-    }
-
-    // At depth 0 - check if we have a parent interpreter (add_subdirectory context)
-    if (parent_ != nullptr) {
-        parent_->unset_variable(name);
+    // Use ShadowMap's parent scope for both function and subdirectory contexts
+    // add_subdirectory now uses push_scope/pop_scope, so ShadowMap handles all scoping
+    auto result = variables_.unset_parent_scope(name);
+    if (result) {
         return {};
     }
-
-    return std::unexpected("PARENT_SCOPE requires a parent scope (must be called from a function or subdirectory)");
+    return std::unexpected(result.error());
 }
 
 void Interpreter::set_cache_variable(const std::string& var_name, const std::string& value) {
@@ -2225,17 +2275,13 @@ bool Interpreter::is_variable_set(const std::string& name) const {
     }
 
     // Check local variables (O(1) via ShadowMap)
+    // ShadowMap now handles all scoping including subdirectory scope
     if (variables_.is_defined(name)) {
         return true;
     }
 
-    // Check parent interpreter (subdirectory scope)
-    if (parent_ && parent_->is_variable_set(name)) {
-        return true;
-    }
-
     // Check cache variables
-    return get_root()->cache_variables_.contains(name);
+    return cache_variables_.contains(name);
 }
 
 std::optional<std::string> Interpreter::get_optional_variable(const std::string& name) const {
@@ -2265,21 +2311,14 @@ std::optional<std::string> Interpreter::get_optional_variable(const std::string&
     }
 
     // Check local variables (use is_defined to distinguish "not set" from "set to empty")
+    // ShadowMap now handles all scoping including subdirectory scope
     if (variables_.is_defined(name)) {
         return variables_.get(name);
     }
 
-    // Check parent interpreter (subdirectory scope)
-    if (parent_) {
-        auto parent_value = parent_->get_optional_variable(name);
-        if (parent_value.has_value()) {
-            return parent_value;
-        }
-    }
-
     // Check cache variables (CACHE variables are globally accessible)
-    auto cache_it = get_root()->cache_variables_.find(name);
-    if (cache_it != get_root()->cache_variables_.end()) {
+    auto cache_it = cache_variables_.find(name);
+    if (cache_it != cache_variables_.end()) {
         return cache_it->second;
     }
 
@@ -2398,28 +2437,32 @@ void Interpreter::accumulate_error(const std::string& error) {
 }
 
 void Interpreter::check_invariants() const {
-    // Critical invariant: frame stack should never be empty during execution
+    // These are internal invariant checks - if any fail, it's a bug in dmake itself.
+    // Please report at: https://github.com/anthropics/dmake/issues
+
     if (frame_stack_.empty()) {
-        std::cerr << "FATAL: frame_stack_ is empty (this should never happen)\n";
+        std::cerr << "INTERNAL ERROR (dmake bug): frame_stack_ is empty\n";
         std::abort();
     }
 
-    // Loop control should only be set when in a loop
     if (loop_control_ != LoopControl::NONE && loop_depth_ <= 0) {
-        std::cerr << "FATAL: loop_control_ is set (" << static_cast<int>(loop_control_)
+        std::cerr << "INTERNAL ERROR (dmake bug): loop_control_ is set (" << static_cast<int>(loop_control_)
                   << ") but loop_depth_ is " << loop_depth_ << "\n";
         std::abort();
     }
 
-    // Loop depth should never be negative
     if (loop_depth_ < 0) {
-        std::cerr << "FATAL: loop_depth_ is negative (" << loop_depth_ << ")\n";
+        std::cerr << "INTERNAL ERROR (dmake bug): loop_depth_ is negative (" << loop_depth_ << ")\n";
         std::abort();
     }
 
-    // Root interpreter should have builtins
-    if (parent_ == nullptr && builtins_.empty()) {
-        std::cerr << "FATAL: root interpreter has no builtins (not properly initialized?)\n";
+    if (builtins_.empty()) {
+        std::cerr << "INTERNAL ERROR (dmake bug): interpreter has no builtins\n";
+        std::abort();
+    }
+
+    if (directory_stack_.empty()) {
+        std::cerr << "INTERNAL ERROR (dmake bug): directory_stack_ is empty\n";
         std::abort();
     }
 }
@@ -2435,9 +2478,10 @@ void Interpreter::safe_pop_trace_stack(const std::string& context) {
 }
 
 void Interpreter::finalize_directory_targets() {
-    // Apply accumulated directory properties to all owned targets
-    for (const auto& target : owned_targets_) {
-        for (const auto& [prop_name, values] : accumulated_directory_properties_) {
+    // Apply accumulated directory properties to all owned targets in current directory
+    auto& ctx = get_current_directory_context();
+    for (const auto& target : ctx.owned_targets) {
+        for (const auto& [prop_name, values] : ctx.accumulated) {
             if (!values.empty()) {
                 // append_property handles duplicates gracefully (just appends again)
                 target->append_property(prop_name, values, PropertyVisibility::PRIVATE);

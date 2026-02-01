@@ -25,7 +25,7 @@ TEST_CASE("target_sources basic", "[target][target_sources]") {
         f2 << "void bar() {}\n";
     }
 
-    Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
     register_target_builtins(interp);
 
     std::string script = R"(
@@ -68,7 +68,7 @@ TEST_CASE("target_sources with FILE_SET HEADERS", "[target][target_sources][file
         f2 << "#pragma once\nvoid lib_func();\n";
     }
 
-    Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
     register_target_builtins(interp);
 
     std::string script = R"(
@@ -123,7 +123,7 @@ TEST_CASE("target_sources with FILE_SET CXX_MODULES", "[target][target_sources][
         f2 << "export module math;\nexport int add(int a, int b) { return a + b; }\n";
     }
 
-    Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
     register_target_builtins(interp);
 
     std::string script = R"(
@@ -178,7 +178,7 @@ TEST_CASE("target_sources with multiple visibility scopes", "[target][target_sou
         f3 << "void iface() {}\n";
     }
 
-    Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
     register_target_builtins(interp);
 
     std::string script = R"(

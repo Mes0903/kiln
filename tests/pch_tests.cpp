@@ -31,7 +31,7 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
         my_pch_h << "#define PCH_TEST\n";
     }
 
-    Interpreter interp(".", &std::cout, &std::cerr, nullptr, temp_dir);
+    Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
     // Register builtins
     register_target_builtins(interp);

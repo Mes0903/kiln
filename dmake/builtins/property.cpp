@@ -230,21 +230,21 @@ void register_property_builtins(Interpreter& interp) {
 
             case PropertyScope::DIRECTORY: {
                 // Items are directory paths (optional)
-                std::vector<Interpreter*> target_interpreters;
+                std::vector<DirectoryContext*> target_contexts;
                 if (items.empty()) {
                     // Current directory
-                    target_interpreters.push_back(&interp);
+                    target_contexts.push_back(&interp.get_current_directory_context());
                 } else {
                     for (const auto& dir_path : items) {
                         // Check if it's the current directory
                         std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
                         if (dir_path == "." || dir_path == current_source_dir) {
-                            target_interpreters.push_back(&interp);
+                            target_contexts.push_back(&interp.get_current_directory_context());
                         } else {
-                            // Look up the interpreter for the specified directory
-                            Interpreter* dir_interp = interp.get_interpreter_for_directory(dir_path);
-                            if (dir_interp) {
-                                target_interpreters.push_back(dir_interp);
+                            // Look up the directory context for the specified directory
+                            DirectoryContext* dir_ctx = interp.get_directory_context(dir_path);
+                            if (dir_ctx) {
+                                target_contexts.push_back(dir_ctx);
                             } else {
                                 interp.set_fatal_error("set_property(DIRECTORY ...) unknown directory: " + dir_path);
                                 return;
@@ -253,8 +253,8 @@ void register_property_builtins(Interpreter& interp) {
                     }
                 }
 
-                for (auto* target_interp : target_interpreters) {
-                    auto& dir_props = target_interp->get_directory_properties();
+                for (auto* target_ctx : target_contexts) {
+                    auto& dir_props = target_ctx->properties;
                     if (append || append_string) {
                         std::string old_val = dir_props[property_name];
                         if (!old_val.empty() && !value.empty()) {
@@ -638,41 +638,47 @@ void register_property_builtins(Interpreter& interp) {
             }
 
             case PropertyScope::DIRECTORY: {
-                // Determine which interpreter's directory properties to use
-                Interpreter* target_interp = &interp;
+                // Determine which directory context to use
+                DirectoryContext* target_ctx = nullptr;
                 if (!item_name.empty()) {
                     // Explicit directory path provided
                     std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-                    if (item_name != "." && item_name != current_source_dir) {
-                        target_interp = interp.get_interpreter_for_directory(item_name);
-                        if (!target_interp) {
+                    if (item_name == "." || item_name == current_source_dir) {
+                        target_ctx = &interp.get_current_directory_context();
+                    } else {
+                        target_ctx = interp.get_directory_context(item_name);
+                        if (!target_ctx) {
                             // Unknown directory - return empty
                             interp.set_variable(var_name, "");
                             return;
                         }
                     }
+                } else {
+                    // No directory specified - use current directory
+                    target_ctx = &interp.get_current_directory_context();
                 }
 
                 // Check target directory properties
-                auto& target_dir_props = target_interp->get_directory_properties();
-                auto it = target_dir_props.find(property_name);
-                if (it != target_dir_props.end()) {
+                auto it = target_ctx->properties.find(property_name);
+                if (it != target_ctx->properties.end()) {
                     value = it->second;
                     value_found = true;
                 }
 
                 // If not found and property is inherited, check parent directories
                 if (!value_found && is_inherited()) {
-                    Interpreter* current = target_interp->parent_;
-                    while (current != nullptr) {
-                        auto& parent_dir_props = current->get_directory_properties();
-                        auto parent_it = parent_dir_props.find(property_name);
-                        if (parent_it != parent_dir_props.end()) {
+                    std::string parent_dir = target_ctx->parent_dir;
+                    while (!parent_dir.empty()) {
+                        DirectoryContext* parent_ctx = interp.get_directory_context(parent_dir);
+                        if (!parent_ctx) break;
+
+                        auto parent_it = parent_ctx->properties.find(property_name);
+                        if (parent_it != parent_ctx->properties.end()) {
                             value = parent_it->second;
                             value_found = true;
                             break;
                         }
-                        current = current->parent_;
+                        parent_dir = parent_ctx->parent_dir;
                     }
 
                     // If still not found, check GLOBAL scope

@@ -190,8 +190,8 @@ void register_target_builtins(Interpreter& interp) {
         if (exclude_from_all) {
             target->set_property("EXCLUDE_FROM_ALL", "TRUE");
         }
-        interp.get_root()->targets_[name] = target;
-        interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
+        interp.get_targets()[name] = target;
+        interp.get_current_directory_context().owned_targets.push_back(target);  // Track ownership for this directory
     });
 
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
@@ -261,8 +261,8 @@ void register_target_builtins(Interpreter& interp) {
             configure_target(interp, target);
             if (!add_sources_to_target(interp, target, src_dir, sources)) return;
         }
-        interp.get_root()->targets_[name] = target;
-        interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
+        interp.get_targets()[name] = target;
+        interp.get_current_directory_context().owned_targets.push_back(target);  // Track ownership for this directory
     });
 
     // add_custom_command - two forms:
@@ -609,8 +609,8 @@ void register_target_builtins(Interpreter& interp) {
             target->append_property("SOURCES", sources, PropertyVisibility::PRIVATE);
         }
 
-        interp.get_root()->targets_[name] = target;
-        interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
+        interp.get_targets()[name] = target;
+        interp.get_current_directory_context().owned_targets.push_back(target);  // Track ownership for this directory
     });
 
     auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> std::shared_ptr<Target> {
@@ -1192,7 +1192,7 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-        auto& dirs = interp.accumulated_directory_properties_["INCLUDE_DIRECTORIES"];
+        auto& dirs = interp.get_current_directory_context().accumulated["INCLUDE_DIRECTORIES"];
 
         for (const auto& arg : args) {
             std::string dir = arg;
@@ -1255,7 +1255,7 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-        auto& dirs = interp.accumulated_directory_properties_["LINK_DIRECTORIES"];
+        auto& dirs = interp.get_current_directory_context().accumulated["LINK_DIRECTORIES"];
 
         for (const auto& arg : args) {
             std::string dir = arg;
@@ -1272,7 +1272,7 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
-        auto& defs = interp.accumulated_directory_properties_["COMPILE_DEFINITIONS"];
+        auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
         for (const auto& arg : args) {
             std::string def = arg;
             // Strip -D prefix if present (CMake compatibility)
@@ -1289,7 +1289,7 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
-        auto& defs = interp.accumulated_directory_properties_["COMPILE_DEFINITIONS"];
+        auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
         // No -D prefix stripping (modern CMake style)
         defs.insert(defs.end(), args.begin(), args.end());
     });
@@ -1300,7 +1300,7 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
-        auto& opts = interp.accumulated_directory_properties_["COMPILE_OPTIONS"];
+        auto& opts = interp.get_current_directory_context().accumulated["COMPILE_OPTIONS"];
         opts.insert(opts.end(), args.begin(), args.end());
     });
 
@@ -1310,7 +1310,7 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
-        auto& opts = interp.accumulated_directory_properties_["LINK_OPTIONS"];
+        auto& opts = interp.get_current_directory_context().accumulated["LINK_OPTIONS"];
         opts.insert(opts.end(), args.begin(), args.end());
     });
 
@@ -1326,7 +1326,7 @@ void register_target_builtins(Interpreter& interp) {
             resolved_libs.push_back(interp.resolve_target_alias(lib));
         }
 
-        auto& libs = interp.accumulated_directory_properties_["LINK_LIBRARIES"];
+        auto& libs = interp.get_current_directory_context().accumulated["LINK_LIBRARIES"];
         libs.insert(libs.end(), resolved_libs.begin(), resolved_libs.end());
     });
 

@@ -173,12 +173,24 @@ struct FrameMetadata {
     const FunctionBlock* function_block = nullptr;  // Pointer to FunctionBlock if this is a function frame
 };
 
+// Directory-specific state (stored in map at root, keyed by abs source path)
+struct DirectoryContext {
+    std::string source_dir;
+    std::string binary_dir;
+    std::string parent_dir;  // For property inheritance (empty for root)
+
+    std::map<std::string, std::string> properties;                    // DIRECTORY scope properties
+    std::map<std::string, std::vector<std::string>> accumulated;      // Compile defs, includes, etc.
+    std::vector<std::shared_ptr<Target>> owned_targets;               // For finalize_directory_targets()
+    std::set<std::string> guarded_files;                              // Directory-level include guards
+};
+
 class Interpreter {
 public:
     using BuiltinFunction = std::function<void(Interpreter&, const std::vector<std::string>&)>;
     enum class LoopControl { NONE, BREAK, CONTINUE };
 
-    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, Interpreter* parent = nullptr, std::optional<std::string> build_dir = std::nullopt);
+    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, std::optional<std::string> build_dir = std::nullopt);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
     std::expected<Interpreter*, BuildError> run_build(int jobs = 0, const std::vector<std::string>& targets = {});
@@ -298,15 +310,17 @@ public:
     // Variable map accessor for builtins (needed for PARENT_SCOPE)
     ShadowMap& get_variables() { return variables_; }
     const ShadowMap& get_variables() const { return variables_; }
-    std::map<std::string, std::string>& get_directory_properties() {
-        return directory_properties_;
-    }
 
-    // Directory-to-interpreter registry for explicit DIRECTORY scope operations
-    std::unordered_map<std::string, Interpreter*>& get_directory_interpreters() {
-        return get_root()->directory_interpreters_;
+    // Directory context accessors (scope-based approach)
+    DirectoryContext& get_current_directory_context();
+    DirectoryContext* get_directory_context(const std::string& dir);
+    void push_directory(const std::string& source_dir, const std::string& binary_dir);
+    void pop_directory();
+
+    // For property.cpp compatibility - returns current directory's properties
+    std::map<std::string, std::string>& get_directory_properties() {
+        return get_current_directory_context().properties;
     }
-    Interpreter* get_interpreter_for_directory(const std::string& dir);
 
     // Install properties: installed_path -> property_name -> value
     std::map<std::string, std::map<std::string, std::string>>& get_install_properties() {
@@ -401,8 +415,6 @@ private:
     std::map<std::string, std::map<std::string, std::string>> source_properties_;
     // Install property values: normalized_install_path -> property_name -> value
     std::map<std::string, std::map<std::string, std::string>> install_properties_;
-    // Directory-to-interpreter registry for explicit DIRECTORY scope operations
-    std::unordered_map<std::string, Interpreter*> directory_interpreters_;
 
     // Directory scan cache for optimizing file lookups
     struct DirectoryCacheEntry {
@@ -411,24 +423,18 @@ private:
     };
     std::unordered_map<std::string, DirectoryCacheEntry> dir_scan_cache_;  // Key: absolute directory path
 
-    // Generic directory-scoped accumulated properties (per interpreter, inherited by children)
-    // Stores lists like: COMPILE_DEFINITIONS, COMPILE_OPTIONS, INCLUDE_DIRECTORIES, LINK_DIRECTORIES, etc.
-    std::map<std::string, std::vector<std::string>> accumulated_directory_properties_;
+    // Directory contexts: keyed by absolute source path (managed at root)
+    // Each directory has its own context with properties, accumulated values, and owned targets
+    std::map<std::string, DirectoryContext> directory_contexts_;
 
-    // Track targets created by this interpreter (for retroactive property application)
-    std::vector<std::shared_ptr<Target>> owned_targets_;
-
-    std::set<std::string> directory_guarded_files_;
-
-    // Directory-scoped property values (per interpreter scope)
-    std::map<std::string, std::string> directory_properties_;
+    // Directory stack: tracks the current directory (back = current)
+    // Used for push_directory/pop_directory during add_subdirectory
+    std::vector<std::string> directory_stack_;
 
     // Global functions and macros (stored at root, accessible everywhere)
     // CMake semantics: functions/macros are globally visible once defined
     std::unordered_map<std::string, std::unique_ptr<FunctionBlock>> user_functions_;
     std::unordered_map<std::string, std::unique_ptr<MacroBlock>> user_macros_;
-
-    Interpreter* parent_ = nullptr;
 
     // Shadow Map-based variable scoping (O(1) access, automatic cleanup)
     ShadowMap variables_;  // Regular variables with scope tracking
@@ -447,8 +453,6 @@ private:
     // Return control state (for return() command)
     bool return_requested_ = false;
 
-    // Cache the root interpreter to avoid walking the parent chain
-    Interpreter* root_ = nullptr;
 
     // Macro parameter substitution (for text-replacement in macros)
     // Checked before variable lookup to implement CMake macro semantics
