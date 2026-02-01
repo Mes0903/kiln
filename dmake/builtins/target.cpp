@@ -58,6 +58,12 @@ void register_target_builtins(Interpreter& interp) {
         configure_lang(Language::CXX, "CXX");
         configure_lang(Language::C, "C");
 
+        // Set POSITION_INDEPENDENT_CODE from CMAKE_POSITION_INDEPENDENT_CODE
+        std::string pic = interp.get_variable("CMAKE_POSITION_INDEPENDENT_CODE");
+        if (!pic.empty() && !interp.is_falsy(pic)) {
+            target->set_property("POSITION_INDEPENDENT_CODE", "ON");
+        }
+
         // Note: Accumulated directory properties are applied retroactively via
         // finalize_directory_targets() to match CMake's behavior where directory-level
         // commands like add_definitions() affect all targets in the directory,
