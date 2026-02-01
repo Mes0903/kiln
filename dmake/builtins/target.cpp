@@ -123,10 +123,16 @@ void register_target_builtins(Interpreter& interp) {
         std::string name;
         bool imported = false;
         bool is_alias = false;
+        bool win32 = false;
+        bool macosx_bundle = false;
+        bool exclude_from_all = false;
         std::vector<std::string> sources;
         parser.positional(name, "target name");
         parser.flag("IMPORTED", imported);
         parser.flag("ALIAS", is_alias);
+        parser.flag("WIN32", win32);
+        parser.flag("MACOSX_BUNDLE", macosx_bundle);
+        parser.flag("EXCLUDE_FROM_ALL", exclude_from_all);
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -167,6 +173,16 @@ void register_target_builtins(Interpreter& interp) {
         } else {
             configure_target(interp, target);
             if (!add_sources_to_target(interp, target, src_dir, sources)) return;
+        }
+        // Set WIN32_EXECUTABLE, MACOSX_BUNDLE, and EXCLUDE_FROM_ALL properties
+        if (win32) {
+            target->set_property("WIN32_EXECUTABLE", "TRUE");
+        }
+        if (macosx_bundle) {
+            target->set_property("MACOSX_BUNDLE", "TRUE");
+        }
+        if (exclude_from_all) {
+            target->set_property("EXCLUDE_FROM_ALL", "TRUE");
         }
         interp.get_root()->targets_[name] = target;
         interp.owned_targets_.push_back(target);  // Track ownership for this interpreter
@@ -245,6 +261,7 @@ void register_target_builtins(Interpreter& interp) {
 
     // add_custom_command - two forms:
     // 1. OUTPUT form: add_custom_command(OUTPUT outputs... COMMAND cmd... [DEPENDS deps...] [WORKING_DIRECTORY dir] [COMMENT comment])
+    //    Also: add_custom_command(APPEND OUTPUT outputs... COMMAND cmd... [DEPENDS deps...])
     // 2. TARGET form: add_custom_command(TARGET target PRE_BUILD|PRE_LINK|POST_BUILD COMMAND cmd...)
     interp.add_builtin("add_custom_command", [&](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
@@ -255,8 +272,22 @@ void register_target_builtins(Interpreter& interp) {
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
 
+        // Handle APPEND as first keyword - it's the OUTPUT form with append=true
+        // CMake allows: add_custom_command(APPEND OUTPUT ... COMMAND ... DEPENDS ...)
+        bool append_first = (args[0] == "APPEND");
+        const std::vector<std::string>* parse_args = &args;
+        std::vector<std::string> args_without_append;
+        if (append_first) {
+            args_without_append.assign(args.begin() + 1, args.end());
+            parse_args = &args_without_append;
+            if (parse_args->empty() || (*parse_args)[0] != "OUTPUT") {
+                interp.set_fatal_error("add_custom_command(APPEND) requires OUTPUT keyword");
+                return;
+            }
+        }
+
         // Detect which form based on first keyword
-        if (args[0] == "OUTPUT") {
+        if ((*parse_args)[0] == "OUTPUT") {
             // OUTPUT form - generates files
             CommandParser parser("add_custom_command");
             std::vector<std::string> outputs;
@@ -266,7 +297,7 @@ void register_target_builtins(Interpreter& interp) {
             std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
             std::string comment;
-            bool append = false;
+            bool append_flag = false;
             bool verbatim = false;
 
             parser.list("OUTPUT", outputs);
@@ -276,9 +307,12 @@ void register_target_builtins(Interpreter& interp) {
             parser.list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
             parser.value("WORKING_DIRECTORY", working_dir);
             parser.value("COMMENT", comment);
-            parser.flag("APPEND", append);
+            parser.flag("APPEND", append_flag);
             parser.flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
-            PARSE_OR_RETURN(parser, interp, args);
+            PARSE_OR_RETURN(parser, interp, *parse_args);
+
+            // APPEND can be first keyword or a flag within the command
+            bool append = append_first || append_flag;
 
             // Handle deprecated ARGS keyword - append to last COMMAND
             if (!cmd_args.empty() && !commands.empty()) {
@@ -364,15 +398,15 @@ void register_target_builtins(Interpreter& interp) {
                     rules[out] = rule;
                 }
             }
-        } else if (args[0] == "TARGET") {
+        } else if ((*parse_args)[0] == "TARGET") {
             // TARGET form - build events
-            if (args.size() < 4) {
+            if (parse_args->size() < 4) {
                 interp.set_fatal_error("add_custom_command(TARGET) requires: TARGET <name> PRE_BUILD|PRE_LINK|POST_BUILD COMMAND ...");
                 return;
             }
 
-            std::string target_name = args[1];
-            std::string timing = args[2];
+            std::string target_name = (*parse_args)[1];
+            std::string timing = (*parse_args)[2];
 
             // Validate timing keyword
             if (timing != "PRE_BUILD" && timing != "PRE_LINK" && timing != "POST_BUILD") {
@@ -405,7 +439,7 @@ void register_target_builtins(Interpreter& interp) {
             parser.flag("VERBATIM", verbatim);
 
             // Parse from index 3 onwards (skip TARGET <name> <timing>)
-            std::vector<std::string> remaining_args(args.begin() + 3, args.end());
+            std::vector<std::string> remaining_args(parse_args->begin() + 3, parse_args->end());
             PARSE_OR_RETURN(parser, interp, remaining_args);
 
             // Handle deprecated ARGS keyword - append to last COMMAND
@@ -441,7 +475,7 @@ void register_target_builtins(Interpreter& interp) {
                 }
             }
         } else {
-            interp.set_fatal_error("add_custom_command() first argument must be OUTPUT or TARGET, got: " + args[0]);
+            interp.set_fatal_error("add_custom_command() first argument must be OUTPUT or TARGET, got: " + (*parse_args)[0]);
             return;
         }
     });

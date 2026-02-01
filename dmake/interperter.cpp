@@ -209,7 +209,10 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
                 }
             } else {
                 // Executables and libraries are "ALL" by default unless EXCLUDE_FROM_ALL is set
-                targets_to_build.insert(name);
+                std::string exclude = target->get_property("EXCLUDE_FROM_ALL");
+                if (exclude.empty() || is_falsy(exclude)) {
+                    targets_to_build.insert(name);
+                }
             }
         }
     } else {
