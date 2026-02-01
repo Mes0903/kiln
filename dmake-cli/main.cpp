@@ -274,6 +274,8 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     struct TestResult {
         std::string name;
         bool passed;
+        bool skipped;
+        bool timed_out;
         double duration;
         std::string output;
     };
@@ -282,45 +284,115 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     auto start_all = std::chrono::high_resolution_clock::now();
 
     for (auto* test : selected_tests) {
-        TestResult res;
-        res.name = test->name;
+        futures.push_back(std::async(std::launch::async, [test, &targets_map]() -> TestResult {
+            TestResult res;
+            res.name = test->name;
+            res.passed = false;
+            res.skipped = false;
+            res.timed_out = false;
 
-        auto start = std::chrono::high_resolution_clock::now();
+            auto start = std::chrono::high_resolution_clock::now();
 
-        std::string cmd = test->command;
-        if (targets_map.count(cmd)) {
-            cmd = targets_map[cmd]->get_output_path();
-        }
+            std::string cmd = test->command;
+            if (targets_map.count(cmd)) {
+                cmd = targets_map[cmd]->get_output_path();
+            }
 
-        std::vector<std::string> command_vec;
-        command_vec.push_back(cmd);
-        for (const auto& arg : test->args) {
-            command_vec.push_back(arg);
-        }
+            std::vector<std::string> command_vec;
+            command_vec.push_back(cmd);
+            for (const auto& arg : test->args) {
+                command_vec.push_back(arg);
+            }
 
-        auto result = dmake::run_command(command_vec, test->working_dir);
-        res.passed = (result.exit_code == 0);
-        res.output = result.output;
+            // Check for TIMEOUT property
+            double timeout = 0.0;
+            auto timeout_it = test->properties.find("TIMEOUT");
+            if (timeout_it != test->properties.end()) {
+                try {
+                    timeout = std::stod(timeout_it->second);
+                } catch (...) {
+                    res.output = "Error: Invalid TIMEOUT value '" + timeout_it->second + "'\n";
+                    res.duration = 0.0;
+                    return res;
+                }
+            }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        res.duration = std::chrono::duration<double>(end - start).count();
-        futures.push_back(std::async(std::launch::deferred, [res]() { return res; }));
+            // Check for SKIP_RETURN_CODE property
+            std::optional<int> skip_code;
+            auto skip_it = test->properties.find("SKIP_RETURN_CODE");
+            if (skip_it != test->properties.end()) {
+                try {
+                    skip_code = std::stoi(skip_it->second);
+                } catch (...) {
+                    res.output = "Error: Invalid SKIP_RETURN_CODE value '" + skip_it->second + "'\n";
+                    res.duration = 0.0;
+                    return res;
+                }
+            }
+
+            // Execute the command with timeout handling
+            std::future<dmake::CommandResult> cmd_future = std::async(std::launch::async, [&]() {
+                return dmake::run_command(command_vec, test->working_dir);
+            });
+
+            dmake::CommandResult result;
+            if (timeout > 0.0) {
+                auto timeout_duration = std::chrono::duration<double>(timeout);
+                if (cmd_future.wait_for(timeout_duration) == std::future_status::timeout) {
+                    res.timed_out = true;
+                    res.passed = false;
+                    res.output = "Test timed out after " + std::to_string(timeout) + " seconds\n";
+                    auto end = std::chrono::high_resolution_clock::now();
+                    res.duration = std::chrono::duration<double>(end - start).count();
+                    // Note: The actual test process may still be running, but we don't wait for it
+                    return res;
+                }
+                result = cmd_future.get();
+            } else {
+                result = cmd_future.get();
+            }
+
+            res.output = result.output;
+
+            // Check if test was skipped
+            if (skip_code.has_value() && result.exit_code == skip_code.value()) {
+                res.skipped = true;
+                res.passed = true;  // Skipped tests count as passed
+            } else {
+                res.passed = (result.exit_code == 0);
+            }
+
+            auto end = std::chrono::high_resolution_clock::now();
+            res.duration = std::chrono::duration<double>(end - start).count();
+            return res;
+        }));
     }
 
     int passed_count = 0;
+    int skipped_count = 0;
+    int failed_count = 0;
     for (size_t i = 0; i < futures.size(); ++i) {
         auto res = futures[i].get();
         std::cout << "[" << (i + 1) << "/" << selected_tests.size() << "] "
                   << std::left << std::setw(40) << res.name << " ";
-        if (res.passed) {
+
+        if (res.skipped) {
+            std::cout << "\033[1;33mSKIPPED\033[0m";
+            skipped_count++;
+            passed_count++;  // Skipped tests count as passed
+        } else if (res.timed_out) {
+            std::cout << "\033[1;35mTIMEOUT\033[0m";
+            failed_count++;
+        } else if (res.passed) {
             std::cout << "\033[1;32mPASSED\033[0m";
             passed_count++;
         } else {
             std::cout << "\033[1;31mFAILED\033[0m";
+            failed_count++;
         }
         std::cout << " (" << std::fixed << std::setprecision(2) << res.duration << "s)" << std::endl;
 
-        if (!res.passed) {
+        if (!res.passed || res.timed_out) {
             std::cout << "--- Output ---" << std::endl;
             std::cout << res.output;
             std::cout << "--------------" << std::endl;
@@ -330,7 +402,11 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     auto end_all = std::chrono::high_resolution_clock::now();
     double total_duration = std::chrono::duration<double>(end_all - start_all).count();
 
-    std::cout << "\nTest Summary: " << passed_count << "/" << selected_tests.size() << " passed ("
+    std::cout << "\nTest Summary: " << passed_count << "/" << selected_tests.size() << " passed";
+    if (skipped_count > 0) {
+        std::cout << " (" << skipped_count << " skipped)";
+    }
+    std::cout << " ("
               << std::fixed << std::setprecision(2) << total_duration << "s)" << std::endl;
 
     return (passed_count == selected_tests.size()) ? 0 : 1;

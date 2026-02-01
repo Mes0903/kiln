@@ -123,6 +123,13 @@ dmake consists of four main layers:
 
 `dmake test` runs tests in parallel with output buffering. Supports regex filtering. Requires `enable_testing()` and `add_test()`.
 
+**Test Properties** (via `set_tests_properties()`):
+- **TIMEOUT**: Maximum execution time in seconds. Tests exceeding this duration are marked as TIMEOUT and fail.
+- **SKIP_RETURN_CODE**: Exit code that indicates test was skipped (commonly 77). Skipped tests count as passed.
+- Unsupported properties generate warnings but are stored for future use.
+
+Test results: PASSED (green), FAILED (red), SKIPPED (yellow), TIMEOUT (magenta).
+
 ### Command Parser Utility
 
 `CommandParser` (`dmake/command_parser.hpp`) provides builder-style API for parsing CMake commands:
@@ -213,6 +220,7 @@ The parser is a **recursive descent parser** supporting:
 
 **Testing:**
 - `enable_testing()`, `add_test()` - Test registration
+- `set_tests_properties()` - Set test properties (TIMEOUT, SKIP_RETURN_CODE supported)
 - `try_compile()` - Test compilation of source code with aggressive caching
 - `try_run()` - Compile and execute test programs (caches compilation, not execution)
 

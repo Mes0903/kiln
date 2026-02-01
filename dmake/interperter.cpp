@@ -488,6 +488,83 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
             interp.get_tests().push_back(std::move(test));
         });
+
+        add_builtin("set_tests_properties", [](Interpreter& interp, const std::vector<std::string>& args) {
+            if (!interp.is_testing_enabled()) {
+                return;
+            }
+
+            // Supported test properties (explicitly tracked)
+            static const std::unordered_set<std::string> SUPPORTED_PROPERTIES = {
+                "TIMEOUT",
+                "SKIP_RETURN_CODE",
+                // Future properties can be added here:
+                // "WILL_FAIL", "PASS_REGULAR_EXPRESSION", "FAIL_REGULAR_EXPRESSION",
+                // "WORKING_DIRECTORY", "ENVIRONMENT", "LABELS", "DEPENDS", etc.
+            };
+
+            // Parse: set_tests_properties(test1 [test2...] PROPERTIES prop1 val1 [prop2 val2...])
+            if (args.size() < 3) {
+                interp.set_fatal_error("set_tests_properties requires at least one test name and PROPERTIES keyword");
+                return;
+            }
+
+            // Find PROPERTIES keyword
+            auto props_it = std::find(args.begin(), args.end(), "PROPERTIES");
+            if (props_it == args.end()) {
+                interp.set_fatal_error("set_tests_properties requires PROPERTIES keyword");
+                return;
+            }
+
+            // Extract test names (everything before PROPERTIES)
+            std::vector<std::string> test_names(args.begin(), props_it);
+            if (test_names.empty()) {
+                interp.set_fatal_error("set_tests_properties requires at least one test name");
+                return;
+            }
+
+            // Extract properties (everything after PROPERTIES)
+            std::vector<std::string> prop_args(props_it + 1, args.end());
+            if (prop_args.size() % 2 != 0) {
+                interp.set_fatal_error("set_tests_properties PROPERTIES must have pairs of property names and values");
+                return;
+            }
+
+            // Parse properties into map
+            std::map<std::string, std::string> properties;
+            for (size_t i = 0; i < prop_args.size(); i += 2) {
+                std::string prop_name = prop_args[i];
+                std::string prop_value = prop_args[i + 1];
+
+                // Warn if property is not supported (but still set it)
+                if (SUPPORTED_PROPERTIES.find(prop_name) == SUPPORTED_PROPERTIES.end()) {
+                    interp.print_message("WARN", "Test property '" + prop_name + "' is not yet supported by dmake");
+                }
+
+                properties[prop_name] = prop_value;
+            }
+
+            // Apply properties to all named tests
+            auto& tests = interp.get_tests();
+            for (const auto& test_name : test_names) {
+                bool found = false;
+                for (auto& test : tests) {
+                    if (test.name == test_name) {
+                        // Merge properties (allowing multiple set_tests_properties calls)
+                        for (const auto& [key, value] : properties) {
+                            test.properties[key] = value;
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    interp.print_message("WARN", "Test '" + test_name + "' not found, cannot set properties");
+                }
+            }
+        });
+
         register_find_package_builtins(*this);
 
         add_builtin("include_guard", [](Interpreter& interp, const std::vector<std::string>& args) {
