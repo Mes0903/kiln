@@ -1348,12 +1348,13 @@ void register_target_builtins(Interpreter& interp) {
         for (size_t i = 1; i < args.size(); ++i) {
             std::string dep = interp.resolve_target_alias(args[i]);
 
-            // Verify the dependency target exists
+            // CMake allows forward references to targets not yet defined. This is a bad idea
+            // as it makes build order dependent on definition order, but we allow it with a warning.
             auto& targets = interp.get_root()->targets_;
             if (targets.find(dep) == targets.end()) {
-                interp.set_fatal_error("add_dependencies(): Cannot add dependency on target \"" + args[i] +
-                                      "\" which does not exist");
-                return;
+                interp.print_message("WARNING", "add_dependencies() references target \"" + args[i]
+                          + "\" which does not exist yet. This is a bad idea - consider "
+                          + "reordering your CMakeLists.txt to define targets before referencing them.");
             }
 
             target->add_dependency(dep);

@@ -2171,6 +2171,44 @@ void Interpreter::set_variable(const std::string& name, const std::string& val) 
     variables_.set(name, val);
 }
 
+std::expected<void, std::string> Interpreter::set_variable_parent_scope(const std::string& name, const std::string& val) {
+    // First try the ShadowMap's parent scope (for function context)
+    if (variables_.depth() > 0) {
+        auto result = variables_.set_parent_scope(name, val);
+        if (result) {
+            return {};
+        }
+        return std::unexpected(result.error());
+    }
+
+    // At depth 0 - check if we have a parent interpreter (add_subdirectory context)
+    if (parent_ != nullptr) {
+        parent_->set_variable(name, val);
+        return {};
+    }
+
+    return std::unexpected("PARENT_SCOPE requires a parent scope (must be called from a function or subdirectory)");
+}
+
+std::expected<void, std::string> Interpreter::unset_variable_parent_scope(const std::string& name) {
+    // First try the ShadowMap's parent scope (for function context)
+    if (variables_.depth() > 0) {
+        auto result = variables_.unset_parent_scope(name);
+        if (result) {
+            return {};
+        }
+        return std::unexpected(result.error());
+    }
+
+    // At depth 0 - check if we have a parent interpreter (add_subdirectory context)
+    if (parent_ != nullptr) {
+        parent_->unset_variable(name);
+        return {};
+    }
+
+    return std::unexpected("PARENT_SCOPE requires a parent scope (must be called from a function or subdirectory)");
+}
+
 void Interpreter::set_cache_variable(const std::string& var_name, const std::string& value) {
     get_root()->cache_variables_[var_name] = value;
 }
