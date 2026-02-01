@@ -313,6 +313,55 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return output_path.parent_path().string();
         }
 
+        case GenexNodeType::TARGET_OBJECTS: {
+            // $<TARGET_OBJECTS:target> returns object files from OBJECT_LIBRARY
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_OBJECTS requires all_targets context");
+            }
+            auto target_it = ctx_.all_targets->find(node.raw_content);
+            if (target_it == ctx_.all_targets->end()) {
+                return std::unexpected("TARGET_OBJECTS: target '" + node.raw_content + "' not found");
+            }
+            const auto& target = target_it->second;
+            if (target->get_type() != TargetType::OBJECT_LIBRARY) {
+                return std::unexpected("TARGET_OBJECTS: target '" + node.raw_content + "' is not an OBJECT library");
+            }
+
+            // Collect object file paths for all sources in the object library
+            std::string result;
+            const auto& sources = target->get_property_list("SOURCES", PropertyVisibility::PRIVATE);
+            std::string binary_dir = target->get_binary_dir();
+            std::string target_name = target->get_name();
+            std::string source_dir = target->get_source_dir();
+
+            for (const auto& src : sources) {
+                // Skip genex in source paths (they would need recursive evaluation)
+                if (GenexParser::contains_genex(src)) {
+                    continue;
+                }
+
+                // Compute object path using same logic as get_obj_path in target.cpp
+                std::filesystem::path src_path(src);
+                std::filesystem::path obj_suffix;
+
+                if (src_path.is_absolute()) {
+                    obj_suffix = src_path.filename();
+                } else {
+                    obj_suffix = src_path;
+                }
+
+                std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / target_name / obj_suffix;
+                obj += ".o";
+                std::string obj_str = binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
+
+                if (!result.empty()) {
+                    result += ";";
+                }
+                result += obj_str;
+            }
+            return result;
+        }
+
         case GenexNodeType::TARGET_PROPERTY: {
             // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
             auto args = GenexParser().split_genex_args(node.raw_content);

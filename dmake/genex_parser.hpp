@@ -30,6 +30,7 @@ enum class GenexNodeType {
     TARGET_FILE,          // $<TARGET_FILE:target> - full path to target output
     TARGET_FILE_NAME,     // $<TARGET_FILE_NAME:target> - filename of target output
     TARGET_FILE_DIR,      // $<TARGET_FILE_DIR:target> - directory of target output
+    TARGET_OBJECTS,       // $<TARGET_OBJECTS:target> - object files from OBJECT_LIBRARY
     TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>
     COMPILE_LANG_AND_ID,  // $<COMPILE_LANG_AND_ID:lang,id1,id2,...>
@@ -62,6 +63,12 @@ struct GenexParseResult {
 class GenexParser {
 public:
     GenexParser() = default;
+
+    // Quick check if string contains any generator expression (without parsing)
+    // Use this to skip validation/processing for strings that can't contain genex
+    static bool contains_genex(const std::string& input) {
+        return input.find("$<") != std::string::npos;
+    }
 
     // Parse a property value that may contain genex
     std::expected<GenexParseResult, std::string> parse(const std::string& input);

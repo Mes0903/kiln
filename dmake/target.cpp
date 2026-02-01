@@ -37,7 +37,7 @@ void Target::append_property(const std::string& name, const std::vector<std::str
     // Catch bugs: values should already be split by semicolons
     for (const auto& v : values) {
         if (v.find(';') != std::string::npos &&
-            v.find("$<") == std::string::npos) {  // Allow generator expressions which may contain semicolons
+            !GenexParser::contains_genex(v)) {  // Allow generator expressions which may contain semicolons
             std::cerr << "WARNING: append_property('" << name
                       << "') received unsplit value: " << v << "\n";
             assert(false && "Property value contains semicolons - should be split at boundary");
@@ -557,7 +557,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 CMakeList list(co_it->second);
                 for (const auto& opt : list.to_vector()) {
                     // Evaluate genex if present (use source_evaluator for COMPILE_LANGUAGE support)
-                    if (opt.find("$<") != std::string::npos) {
+                    if (GenexParser::contains_genex(opt)) {
                         auto result = source_evaluator.evaluate(opt);
                         if (result && !result->empty()) {
                             ctx.options.push_back(*result);

@@ -81,7 +81,7 @@ std::expected<void, std::string> BuildGraph::finalize(const GenexEvaluationConte
             std::vector<std::string> evaluated_cmd;
             for (const auto& arg : cmd) {
                 // Fast path: no genex
-                if (arg.find("$<") == std::string::npos) {
+                if (!GenexParser::contains_genex(arg)) {
                     evaluated_cmd.push_back(arg);
                     continue;
                 }
@@ -123,7 +123,7 @@ std::expected<void, std::string> BuildGraph::finalize(const GenexEvaluationConte
         }
 
         // Evaluate working_dir if it contains genex
-        if (!task.working_dir.empty() && task.working_dir.find("$<") != std::string::npos) {
+        if (!task.working_dir.empty() && GenexParser::contains_genex(task.working_dir)) {
             auto result = evaluator.evaluate(task.working_dir);
             if (!result) {
                 return std::unexpected("Generator expression error in working_dir for task '" + id + "': " + result.error());

@@ -30,6 +30,7 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "TARGET_FILE") return GenexNodeType::TARGET_FILE;
     if (keyword == "TARGET_FILE_NAME") return GenexNodeType::TARGET_FILE_NAME;
     if (keyword == "TARGET_FILE_DIR") return GenexNodeType::TARGET_FILE_DIR;
+    if (keyword == "TARGET_OBJECTS") return GenexNodeType::TARGET_OBJECTS;
     if (keyword == "TARGET_PROPERTY") return GenexNodeType::TARGET_PROPERTY;
     if (keyword == "COMPILE_LANGUAGE") return GenexNodeType::COMPILE_LANGUAGE;
     if (keyword == "COMPILE_LANG_AND_ID") return GenexNodeType::COMPILE_LANG_AND_ID;

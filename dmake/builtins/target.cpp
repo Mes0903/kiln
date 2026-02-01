@@ -72,6 +72,10 @@ void register_target_builtins(Interpreter& interp) {
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
 
         for(const auto& file : sources) {
+            // Skip validation for generator expressions - they will be evaluated at build time
+            if (GenexParser::contains_genex(file)) {
+                continue;
+            }
             std::filesystem::path p(file);
             std::string normalized_src, normalized_bin;
 
@@ -760,7 +764,7 @@ void register_target_builtins(Interpreter& interp) {
         auto validate_sources = [&](const std::vector<std::string>& sources) -> bool {
             for (const auto& file : sources) {
                 // Skip validation for generator expressions - they will be evaluated at build time
-                if (file.find("$<") != std::string::npos) {
+                if (GenexParser::contains_genex(file)) {
                     continue;
                 }
 
