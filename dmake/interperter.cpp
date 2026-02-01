@@ -690,8 +690,20 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         });
 
         add_builtin("return", [](Interpreter& interp, const std::vector<std::string>& args) {
-            // CMake's return() doesn't accept arguments, but we silently ignore them for compatibility
-            (void)args;
+            // CMake 3.25+ supports return(PROPAGATE var1 var2 ...)
+            // which propagates variables to the parent scope before returning
+            if (!args.empty() && args[0] == "PROPAGATE") {
+                for (size_t i = 1; i < args.size(); ++i) {
+                    const std::string& var_name = args[i];
+                    auto value = interp.get_optional_variable(var_name);
+                    if (value.has_value()) {
+                        interp.get_variables().set_parent_scope(var_name, *value);
+                    } else {
+                        // Variable not defined - unset in parent scope
+                        interp.get_variables().unset_parent_scope(var_name);
+                    }
+                }
+            }
             interp.request_return();
         });
 
