@@ -302,7 +302,7 @@ void register_target_builtins(Interpreter& interp) {
             std::vector<std::string> byproducts;
             std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
-            std::string comment;
+            std::vector<std::string> comment_parts;
             bool append_flag = false;
             bool verbatim = false;
 
@@ -312,7 +312,7 @@ void register_target_builtins(Interpreter& interp) {
             parser.list("DEPENDS", depends);
             parser.list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
             parser.value("WORKING_DIRECTORY", working_dir);
-            parser.value("COMMENT", comment);
+            parser.list("COMMENT", comment_parts);
             parser.flag("APPEND", append_flag);
             parser.flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
             PARSE_OR_RETURN(parser, interp, *parse_args);
@@ -395,7 +395,11 @@ void register_target_builtins(Interpreter& interp) {
                 rule->commands = commands;
                 rule->depends = depends;
                 rule->working_dir = working_dir;
-                rule->comment = comment;
+                // Join comment parts with spaces (CMake collects all args after COMMENT until next keyword)
+                for (size_t i = 0; i < comment_parts.size(); ++i) {
+                    if (i > 0) rule->comment += " ";
+                    rule->comment += comment_parts[i];
+                }
                 rule->source_dir = src_dir;
                 rule->binary_dir = bin_dir;
 
@@ -435,13 +439,13 @@ void register_target_builtins(Interpreter& interp) {
             std::vector<std::vector<std::string>> commands;
             std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
-            std::string comment;
+            std::vector<std::string> comment_parts;
             bool verbatim = false;
 
             parser.multi_list("COMMAND", commands);
             parser.list("ARGS", cmd_args);  // Deprecated, appends to last COMMAND
             parser.value("WORKING_DIRECTORY", working_dir);
-            parser.value("COMMENT", comment);
+            parser.list("COMMENT", comment_parts);
             parser.flag("VERBATIM", verbatim);
 
             // Parse from index 3 onwards (skip TARGET <name> <timing>)
@@ -463,6 +467,13 @@ void register_target_builtins(Interpreter& interp) {
                 working_dir = bin_dir;
             } else if (!std::filesystem::path(working_dir).is_absolute()) {
                 working_dir = (std::filesystem::path(bin_dir) / working_dir).lexically_normal().string();
+            }
+
+            // Join comment parts with spaces (CMake collects all args after COMMENT until next keyword)
+            std::string comment;
+            for (size_t i = 0; i < comment_parts.size(); ++i) {
+                if (i > 0) comment += " ";
+                comment += comment_parts[i];
             }
 
             // Add commands to target
@@ -536,7 +547,7 @@ void register_target_builtins(Interpreter& interp) {
         std::vector<std::vector<std::string>> commands;
         std::vector<std::string> depends;
         std::string working_dir;
-        std::string comment;
+        std::vector<std::string> comment_parts;
         std::vector<std::string> sources;
         bool verbatim = false;
 
@@ -546,7 +557,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.multi_list("COMMAND", commands);
         parser.list("DEPENDS", depends);
         parser.value("WORKING_DIRECTORY", working_dir);
-        parser.value("COMMENT", comment);
+        parser.list("COMMENT", comment_parts);
         parser.list("SOURCES", sources);
         // Note: VERBATIM is ignored as we currently use shell execution via popen
         parser.flag("VERBATIM", verbatim);
@@ -557,6 +568,13 @@ void register_target_builtins(Interpreter& interp) {
 
         auto target = std::make_shared<CustomTarget>(name, src_dir, bin_dir);
         target->set_build_by_default(all);
+
+        // Join comment parts with spaces (CMake collects all args after COMMENT until next keyword)
+        std::string comment;
+        for (size_t i = 0; i < comment_parts.size(); ++i) {
+            if (i > 0) comment += " ";
+            comment += comment_parts[i];
+        }
         if (!comment.empty()) {
             target->set_property("COMMENT", comment);
         }
