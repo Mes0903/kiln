@@ -593,6 +593,12 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return cond_val;
             }
 
+            // If condition contains deferred genex (e.g., $<COMPILE_LANG_AND_ID:...>),
+            // return the entire expression as deferred for per-source evaluation
+            if (cond_val->find("$<") != std::string::npos) {
+                return "$<" + *cond_val + ":" + node.raw_content + ">";
+            }
+
             // If condition is true, evaluate remaining children as value
             if (is_truthy(*cond_val)) {
                 std::string result;
@@ -659,7 +665,11 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
 
         // Only add non-empty results
         if (!eval_result->empty()) {
-            if (is_pure_genex) {
+            // If result still contains deferred genex (e.g., $<COMPILE_LANG_AND_ID:...>),
+            // don't split it - keep it intact for per-source evaluation
+            if (eval_result->find("$<") != std::string::npos) {
+                result.push_back(*eval_result);
+            } else if (is_pure_genex) {
                 // Split the evaluated result by semicolons first (CMake list separator),
                 // then by whitespace (treats genex output like unquoted arguments).
                 // This allows:

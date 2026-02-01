@@ -70,7 +70,20 @@ public:
             }
         }
 
-        for (const auto& opt : ctx.options) cmd.push_back(opt);
+        for (const auto& opt : ctx.options) {
+            // Handle CMake's SHELL: prefix - strips prefix and passes arguments as-is
+            if (opt.starts_with("SHELL:")) {
+                // Split the rest by whitespace and add as separate arguments
+                std::string rest = opt.substr(6);  // Skip "SHELL:"
+                std::stringstream ss(rest);
+                std::string arg;
+                while (ss >> arg) {
+                    cmd.push_back(arg);
+                }
+            } else {
+                cmd.push_back(opt);
+            }
+        }
         for (const auto& def : ctx.definitions) {
             // Strip -D prefix if present (some CMakeLists.txt files include it)
             std::string clean_def = def;
@@ -126,7 +139,19 @@ public:
             cmd.push_back("-fdiagnostics-color=always");
         }
 
-        for (const auto& flag : ctx.linker_flags) cmd.push_back(flag);
+        for (const auto& flag : ctx.linker_flags) {
+            // Handle CMake's SHELL: prefix - strips prefix and passes arguments as-is
+            if (flag.starts_with("SHELL:")) {
+                std::string rest = flag.substr(6);
+                std::stringstream ss(rest);
+                std::string arg;
+                while (ss >> arg) {
+                    cmd.push_back(arg);
+                }
+            } else {
+                cmd.push_back(flag);
+            }
+        }
 
         cmd.push_back("-Wl,-rpath,'$ORIGIN'");
         if (ctx.is_shared) cmd.push_back("-shared");
@@ -137,12 +162,16 @@ public:
 
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
         for (const auto& lib : ctx.libs) {
-            // Strip -l prefix if present (some CMakeLists.txt files include it)
-            std::string clean_lib = lib;
-            if (clean_lib.starts_with("-l")) {
-                clean_lib = clean_lib.substr(2);
+            // Handle different library formats:
+            // - Flags like "-pthread" -> pass through as-is
+            // - Already prefixed "-l..." -> pass through as-is
+            // - Paths containing "/" -> pass through as-is
+            // - Plain library names -> add "-l" prefix
+            if (lib.starts_with("-") || lib.find('/') != std::string::npos) {
+                cmd.push_back(lib);
+            } else {
+                cmd.push_back("-l" + lib);
             }
-            cmd.push_back("-l" + clean_lib);
         }
 
         return cmd;

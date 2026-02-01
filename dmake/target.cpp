@@ -286,7 +286,8 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                 // For static libraries, we need ALL their link dependencies (including PRIVATE)
                 // because static libs are just .o archives with unresolved symbols.
                 // For shared libraries, only INTERFACE deps propagate (shared libs resolve their own symbols).
-                if (dep->get_type() == TargetType::STATIC_LIBRARY) {
+                // IMPORTANT: Imported static libraries store deps in INTERFACE, not PRIVATE.
+                if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
                     merge(res_libs, dep->get_resolved_property("LINK_LIBRARIES"));
                 } else {
                     merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
@@ -294,26 +295,33 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
             }
 
             // Propagate to Dependents (from dep's INTERFACE)
-            // Skip if link_only - the dependency shouldn't propagate to our dependents
-            if ((is_public || is_interface_only) && !link_only) {
-                for (const auto& info : props_to_resolve) {
-                    merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
+            if (is_public || is_interface_only) {
+                // If link_only, only propagate LINK_LIBRARIES (skip INCLUDE_DIRECTORIES, COMPILE_OPTIONS, etc.)
+                if (!link_only) {
+                    for (const auto& info : props_to_resolve) {
+                        merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                    }
                 }
 
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_iface_libs.push_back(dep_path);
 
-                // Same logic: static libs need full deps propagated
-                if (dep->get_type() == TargetType::STATIC_LIBRARY) {
+                // Always propagate LINK_LIBRARIES (even with link_only - that's the point of linking)
+                // For static libraries, we need ALL their link deps because static libs are archives with unresolved symbols.
+                // For imported static libs, deps are in INTERFACE; for built static libs, deps are in PRIVATE+PUBLIC.
+                if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
                     merge(res_iface_libs, dep->get_resolved_property("LINK_LIBRARIES"));
                 } else {
                     merge(res_iface_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
                 }
             }
         } else {
-             // System library or raw file
+             // System library or raw file - no INTERFACE properties to worry about,
+             // so LINK_ONLY doesn't affect propagation (it only suppresses INTERFACE properties)
              if (!is_interface_only) res_libs.push_back(lib_name);
-             if ((is_public || is_interface_only) && !link_only) res_iface_libs.push_back(lib_name);
+             if (is_public || is_interface_only) {
+                 res_iface_libs.push_back(lib_name);
+             }
         }
     };
 
@@ -342,6 +350,11 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
 // --- Task Generation ---
 
 std::string Target::get_output_path() const {
+    // Interface libraries have no linkable output - they only propagate properties
+    if (type_ == TargetType::INTERFACE_LIBRARY) {
+        return "";
+    }
+
     if (is_imported_ && !imported_location_.empty()) {
         return imported_location_;
     }

@@ -1,9 +1,12 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../genex_evaluator.hpp"
+#include "../genex_parser.hpp"
 #include <sstream>
 #include <algorithm>
 #include <stack>
+#include <iostream>
 
 namespace dmake {
 
@@ -178,6 +181,61 @@ void register_message_builtins(Interpreter& interp) {
                         mode == "DEPRECATION" || mode == "DEPRECATION_ERROR");
 
         interp.print_message(mode, content, is_error);
+    });
+
+    // Debug builtin to evaluate genex expressions
+    // Usage: dmake_eval_genex(<expression> [LANGUAGE <lang>] [DEFERRED])
+    interp.add_builtin("dmake_eval_genex", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("dmake_eval_genex() requires at least one argument");
+            return;
+        }
+
+        std::string expr = args[0];
+        std::optional<Language> compile_lang;
+        bool allow_deferred = false;
+
+        // Parse options
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "LANGUAGE" && i + 1 < args.size()) {
+                std::string lang = args[++i];
+                if (lang == "C") compile_lang = Language::C;
+                else if (lang == "CXX") compile_lang = Language::CXX;
+                else if (lang == "CUDA") compile_lang = Language::CUDA;
+            } else if (args[i] == "DEFERRED") {
+                allow_deferred = true;
+            }
+        }
+
+        // Set up context
+        GenexEvaluationContext ctx;
+        ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+        ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+        ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+        ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+        ctx.all_targets = &interp.get_targets();
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+        ctx.allow_deferred_compile_language = allow_deferred;
+        if (compile_lang) {
+            ctx.compile_language = *compile_lang;
+        }
+
+        GenexEvaluator evaluator(ctx);
+
+        std::cerr << "[dmake_eval_genex] Input: " << expr << "\n";
+        std::cerr << "[dmake_eval_genex] Context:\n";
+        std::cerr << "  build_type: " << ctx.build_type << "\n";
+        std::cerr << "  cxx_compiler_id: " << ctx.cxx_compiler_id << "\n";
+        std::cerr << "  c_compiler_id: " << ctx.c_compiler_id << "\n";
+        std::cerr << "  compile_language: " << (compile_lang ? (compile_lang == Language::CXX ? "CXX" : compile_lang == Language::C ? "C" : "CUDA") : "(none)") << "\n";
+        std::cerr << "  allow_deferred: " << (allow_deferred ? "true" : "false") << "\n";
+
+        auto result = evaluator.evaluate(expr);
+        if (result) {
+            std::cerr << "[dmake_eval_genex] Result: '" << *result << "'\n";
+        } else {
+            std::cerr << "[dmake_eval_genex] Error: " << result.error() << "\n";
+        }
     });
 }
 
