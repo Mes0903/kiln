@@ -503,6 +503,15 @@ void register_install_builtins(Interpreter& interp) {
             interp.set_fatal_error("install() first argument must be TARGETS, FILES, PROGRAMS, DIRECTORY, SCRIPT, CODE, or EXPORT");
         }
     });
+
+    interp.add_builtin("export", [](Interpreter& interp, const std::vector<std::string>& args) {
+        // Export is not yet supported - just show a warning and ignore
+        std::string export_name = "unknown";
+        if (!args.empty()) {
+            export_name = args[0];
+        }
+        interp.print_message("WARNING", "export() is not yet supported - ignoring export of '" + export_name + "'", true);
+    });
 }
 
 } // namespace dmake
