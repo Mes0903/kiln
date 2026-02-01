@@ -605,6 +605,13 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
 }
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
+    // Skip UTF-8 BOM if present at the start of the file
+    if (content_.length() >= 3 &&
+        static_cast<unsigned char>(content_[0]) == 0xEF &&
+        static_cast<unsigned char>(content_[1]) == 0xBB &&
+        static_cast<unsigned char>(content_[2]) == 0xBF) {
+        pos_ = 3;
+    }
     return parse_block({});
 }
 
