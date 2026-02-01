@@ -117,6 +117,48 @@ void fake_cmake_compiler_checks_and_init(
     }
 }
 
+// Compare version strings component-wise (CMake behavior)
+// Returns: -1 if a < b, 0 if a == b, 1 if a > b
+// CMake behavior: split by '.', parse each component as integer (non-numeric suffix stripped),
+// missing components treated as 0
+int compare_versions(const std::string& a, const std::string& b) {
+    std::vector<int> parts_a, parts_b;
+
+    // Parse version a - split by '.' and parse each component
+    std::istringstream iss_a(a);
+    std::string component;
+    while (std::getline(iss_a, component, '.')) {
+        // CMake strips non-numeric suffixes: "1a" -> 1, "1-suffix" -> 1
+        try {
+            parts_a.push_back(std::stoi(component));
+        } catch (...) {
+            parts_a.push_back(0);
+        }
+    }
+
+    // Parse version b
+    std::istringstream iss_b(b);
+    while (std::getline(iss_b, component, '.')) {
+        try {
+            parts_b.push_back(std::stoi(component));
+        } catch (...) {
+            parts_b.push_back(0);
+        }
+    }
+
+    // Pad shorter vector with zeros (missing components = 0)
+    size_t max_len = std::max(parts_a.size(), parts_b.size());
+    parts_a.resize(max_len, 0);
+    parts_b.resize(max_len, 0);
+
+    // Compare component by component
+    for (size_t i = 0; i < max_len; ++i) {
+        if (parts_a[i] < parts_b[i]) return -1;
+        if (parts_a[i] > parts_b[i]) return 1;
+    }
+    return 0;
+}
+
 } // anonymous namespace
 
 Interpreter* Interpreter::get_root() {
@@ -1571,31 +1613,25 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
 bool Interpreter::is_falsy(const std::string& val) {
     if (val.empty()) return true;
 
+    // Exact match for "0" only (not "00", "0.0", "-0", etc.)
+    if (val == "0") return true;
+
     std::string upper_val = val;
     std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
 
-    // False constants (case-insensitive)
-    if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
-        upper_val == "FALSE" || upper_val == "N" || upper_val == "IGNORE" ||
-        upper_val == "NOTFOUND" || upper_val.ends_with("-NOTFOUND")) {
+    // False constants (case-insensitive, exact match)
+    if (upper_val == "OFF" || upper_val == "NO" ||
+        upper_val == "FALSE" || upper_val == "N" ||
+        upper_val == "IGNORE" || upper_val == "NOTFOUND") {
         return true;
     }
 
-    // CMake behavior: strings that look like they might be numbers but aren't valid
-    // should be treated as false. Examples: "2x", "-3.5y", "+2bad"
-    // However, CMake lists (semicolon-separated values) are always truthy if non-empty.
-    // Check if the string starts with a sign or digit, but skip if it's a list.
-    if (val.find(';') == std::string::npos &&
-        !val.empty() && (std::isdigit(val[0]) || val[0] == '+' || val[0] == '-')) {
-        // Try to parse as a number
-        char* end;
-        std::strtod(val.c_str(), &end);
-        // If parsing didn't consume the entire string, it's an invalid number
-        if (*end != '\0') {
-            return true;
-        }
+    // Ends with -NOTFOUND
+    if (upper_val.ends_with("-NOTFOUND")) {
+        return true;
     }
 
+    // Everything else is truthy (including "2x", "0.0", "00", "-0", etc.)
     return false;
 }
 
@@ -1611,11 +1647,11 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
     // friendly for small sets of strings compared to std::set or binary search.
     static constexpr std::array keywords = {
         "(", ")", "AND", "COMMAND", "DEFINED", "EQUAL", "EXISTS", "GREATER",
-        "GREATER_EQUAL", "IN_LIST", "IS_ABSOLUTE", "IS_DIRECTORY", "IS_SYMLINK",
-        "LESS", "LESS_EQUAL", "MATCHES", "NOT", "NOT_EQUAL", "OR", "POLICY",
-        "STREQUAL", "STRGREATER", "STRGREATER_EQUAL", "STRLESS", "STRLESS_EQUAL",
-        "TARGET", "TEST", "VERSION_EQUAL", "VERSION_GREATER", "VERSION_GREATER_EQUAL",
-        "VERSION_LESS", "VERSION_LESS_EQUAL"
+        "GREATER_EQUAL", "IN_LIST", "IS_ABSOLUTE", "IS_DIRECTORY", "IS_NEWER_THAN",
+        "IS_SYMLINK", "LESS", "LESS_EQUAL", "MATCHES", "NOT", "NOT_EQUAL", "OR",
+        "POLICY", "STREQUAL", "STRGREATER", "STRGREATER_EQUAL", "STRLESS",
+        "STRLESS_EQUAL", "TARGET", "TEST", "VERSION_EQUAL", "VERSION_GREATER",
+        "VERSION_GREATER_EQUAL", "VERSION_LESS", "VERSION_LESS_EQUAL"
     };
 
     // Boolean constants that have fixed truthiness values (case-insensitive)
@@ -1845,7 +1881,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             if (op == "STRLESS_EQUAL") return left <= right;
             if (op == "STRGREATER_EQUAL") return left >= right;
         }
-        // Version comparisons (simplified - real CMake does component-wise comparison)
+        // Version comparisons - component-wise numeric comparison (CMake behavior)
         else if (op.starts_with("VERSION_")) {
             pos++;
             if (pos >= condition.size()) {
@@ -1856,17 +1892,13 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             std::string left = evaluate_token(condition[start_pos]);
             std::string right = evaluate_token(condition[pos++]);
 
-            if (op == "VERSION_EQUAL") {
-                return left == right;
-            }
-            // Simplified lexicographic comparison (real CMake splits on . and compares numerically)
-            bool less = std::lexicographical_compare(
-                left.begin(), left.end(), right.begin(), right.end());
+            int cmp = compare_versions(left, right);
 
-            if (op == "VERSION_LESS") return less;
-            if (op == "VERSION_GREATER") return !less && left != right;
-            if (op == "VERSION_LESS_EQUAL") return less || left == right;
-            if (op == "VERSION_GREATER_EQUAL") return !less || left == right;
+            if (op == "VERSION_EQUAL") return cmp == 0;
+            if (op == "VERSION_LESS") return cmp < 0;
+            if (op == "VERSION_GREATER") return cmp > 0;
+            if (op == "VERSION_LESS_EQUAL") return cmp <= 0;
+            if (op == "VERSION_GREATER_EQUAL") return cmp >= 0;
         }
         // regex
         else if(op == "MATCHES") {
@@ -1912,6 +1944,28 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             // Parse the list (semicolon-separated) and check if value is in it
             CMakeList list(list_str);
             return list.contains(value);
+        }
+        // IS_NEWER_THAN - file timestamp comparison
+        else if (op == "IS_NEWER_THAN") {
+            pos++;
+            if (pos >= condition.size()) {
+                error_msg = "IS_NEWER_THAN operator requires a right operand";
+                return false;
+            }
+
+            std::string left = evaluate_argument(condition[start_pos]);
+            std::string right = evaluate_argument(condition[pos++]);
+
+            // CMake behavior: returns true if file1 >= file2 OR either doesn't exist
+            std::error_code ec1, ec2;
+            auto time1 = std::filesystem::last_write_time(left, ec1);
+            auto time2 = std::filesystem::last_write_time(right, ec2);
+
+            if (ec1 || ec2) {
+                // Either file doesn't exist - return true
+                return true;
+            }
+            return time1 >= time2;
         }
 
         // Not a comparison operator - return the unary/primary result

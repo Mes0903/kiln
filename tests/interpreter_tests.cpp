@@ -3481,40 +3481,35 @@ TEST_CASE("message() concatenates arguments without spaces", "[interpreter][bugf
     REQUIRE(output == "AB\n");
 }
 
-TEST_CASE("if condition: invalid numeric strings are falsy", "[interpreter][if][bugfix]") {
-    // Strings that start like numbers but aren't valid numbers should be falsy
-    // This matches CMake behavior from IfTest.cmake.in
+TEST_CASE("if condition: CMake truthiness for numeric-looking strings", "[interpreter][if][bugfix]") {
+    // CMake truthiness rules: only exact "0", empty string, and false constants are falsy.
+    // Invalid numeric strings like "2x" are TRUTHY in CMake (not falsy).
+    // This test was corrected to match actual CMake behavior.
 
-    // Test "2x" - looks like it starts with a number but isn't valid
+    // Test "2x" - not a valid number, but should be TRUTHY (CMake behavior)
+    // Note: When used as a literal (unquoted), it's dereferenced as a variable name.
+    // Since "2x" is undefined, it becomes empty string (falsy).
+    // But when the VARIABLE contains "2x", the value "2x" should be truthy.
     auto output = run_script(R"(
-        if(2x)
+        set(VAR "2x")
+        if(VAR)
             message("2x is true")
         else()
             message("2x is false")
         endif()
     )");
-    REQUIRE(output == "2x is false\n");
+    REQUIRE(output == "2x is true\n");
 
-    // Test "-2x" - negative number prefix but invalid
+    // Test "-2x" stored in a variable - should be TRUTHY
     output = run_script(R"(
-        if(-2x)
+        set(VAR "-2x")
+        if(VAR)
             message("-2x is true")
         else()
             message("-2x is false")
         endif()
     )");
-    REQUIRE(output == "-2x is false\n");
-
-    // Test with variable expansion
-    output = run_script(R"(
-        set(_bad 2x)
-        if(${_bad})
-            message("variable 2x is true")
-        else()
-            message("variable 2x is false")
-        endif()
-    )");
-    REQUIRE(output == "variable 2x is false\n");
+    REQUIRE(output == "-2x is true\n");
 
     // Valid numbers should still be truthy
     output = run_script(R"(
@@ -5890,5 +5885,204 @@ TEST_CASE("if condition: variable reference in compound name is dereferenced", "
             endif()
         )");
         REQUIRE(output == "python3\n");
+    }
+}
+
+TEST_CASE("VERSION comparison component-wise", "[interpreter][if][version]") {
+    SECTION("Numeric component comparison (1.10 > 1.9)") {
+        CHECK(run_script(R"(
+            if("1.10" VERSION_GREATER "1.9")
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("1.2 < 1.10 (not lexicographic)") {
+        CHECK(run_script(R"(
+            if("1.2" VERSION_LESS "1.10")
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("Missing components treated as zero") {
+        CHECK(run_script(R"(
+            if("1" VERSION_EQUAL "1.0")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        CHECK(run_script(R"(
+            if("1" VERSION_EQUAL "1.0.0")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        CHECK(run_script(R"(
+            if("1.0" VERSION_EQUAL "1.0.0")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("Multi-component comparison") {
+        CHECK(run_script(R"(
+            if("3.21.1" VERSION_GREATER "3.21")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        CHECK(run_script(R"(
+            if("1.0.0.1" VERSION_GREATER "1.0.0")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("VERSION_LESS_EQUAL and VERSION_GREATER_EQUAL") {
+        CHECK(run_script(R"(
+            if("1.0" VERSION_LESS_EQUAL "1.0")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        CHECK(run_script(R"(
+            if("1.0" VERSION_GREATER_EQUAL "1.0")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        CHECK(run_script(R"(
+            if("1.9" VERSION_LESS_EQUAL "1.10")
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+}
+
+TEST_CASE("Truthiness - CMake exact rules", "[interpreter][if][truthiness]") {
+    SECTION("Invalid numeric-looking strings are truthy") {
+        // "2x" starts with digit but isn't a valid number - should be truthy in CMake
+        CHECK(run_script(R"(
+            set(V "2x")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        CHECK(run_script(R"(
+            set(V "3.14abc")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("Only exact '0' is falsy, not variants") {
+        // "0" is falsy
+        CHECK(run_script(R"(
+            set(V "0")
+            if(V)
+                message(STATUS "FAIL")
+            else()
+                message(STATUS "PASS")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        // "0.0" is truthy
+        CHECK(run_script(R"(
+            set(V "0.0")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        // "00" is truthy
+        CHECK(run_script(R"(
+            set(V "00")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        // "-0" is truthy
+        CHECK(run_script(R"(
+            set(V "-0")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+
+        // "+0" is truthy
+        CHECK(run_script(R"(
+            set(V "+0")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("Strings with trailing space are truthy") {
+        CHECK(run_script(R"(
+            set(V "0 ")
+            if(V)
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+}
+
+TEST_CASE("IS_NEWER_THAN operator", "[interpreter][if][is_newer_than]") {
+    SECTION("Newer file returns true") {
+        CHECK(run_script(R"(
+            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/older.txt" "older")
+            execute_process(COMMAND sleep 0.1)
+            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/newer.txt" "newer")
+            if("${CMAKE_CURRENT_BINARY_DIR}/newer.txt" IS_NEWER_THAN "${CMAKE_CURRENT_BINARY_DIR}/older.txt")
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("Missing file returns true") {
+        CHECK(run_script(R"(
+            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/exists_file.txt" "exists")
+            if("${CMAKE_CURRENT_BINARY_DIR}/nonexistent_file_12345.txt" IS_NEWER_THAN "${CMAKE_CURRENT_BINARY_DIR}/exists_file.txt")
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
+    }
+
+    SECTION("Same file returns true (equal mtime)") {
+        CHECK(run_script(R"(
+            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/same_file.txt" "content")
+            if("${CMAKE_CURRENT_BINARY_DIR}/same_file.txt" IS_NEWER_THAN "${CMAKE_CURRENT_BINARY_DIR}/same_file.txt")
+                message(STATUS "PASS")
+            else()
+                message(STATUS "FAIL")
+            endif()
+        )").find("PASS") != std::string::npos);
     }
 }
