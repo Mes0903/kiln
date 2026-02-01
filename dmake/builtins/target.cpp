@@ -1283,6 +1283,42 @@ void register_target_builtins(Interpreter& interp) {
         }
     });
 
+    interp.add_builtin("remove_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("remove_definitions() requires at least one definition");
+            return;
+        }
+
+        // Build set of items to remove (args may be semicolon-separated lists)
+        std::set<std::string> to_remove;
+        for (const auto& arg : args) {
+            CMakeList items(arg);
+            for (const auto& item : items) {
+                std::string def = item;
+                // Strip -D prefix if present (CMake compatibility)
+                if (def.size() >= 2 && def[0] == '-' && def[1] == 'D') {
+                    def = def.substr(2);
+                }
+                to_remove.insert(def);
+            }
+        }
+
+        // Flatten accumulated defs (may contain semicolon-separated entries), filter, store back
+        auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
+        CMakeList all_defs;
+        for (const auto& d : defs) {
+            all_defs.append(d);
+        }
+
+        std::vector<std::string> filtered;
+        for (const auto& def : all_defs) {
+            if (to_remove.find(def) == to_remove.end()) {
+                filtered.push_back(def);
+            }
+        }
+        defs = std::move(filtered);
+    });
+
     interp.add_builtin("add_compile_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
             interp.set_fatal_error("add_compile_definitions() requires at least one definition");
