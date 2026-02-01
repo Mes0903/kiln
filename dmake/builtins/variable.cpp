@@ -121,7 +121,9 @@ void register_variable_builtins(Interpreter& interp) {
 
         std::vector<std::string> value_args(args.begin() + 1, args.end());
         CMakeList value_list(value_args);
-        interp.set_variable(var_name, value_list.to_string());
+        std::string value = value_list.to_string();
+
+        interp.set_variable(var_name, value);
     });
 
     interp.add_builtin("unset", [](Interpreter& interp, const std::vector<std::string>& args) {

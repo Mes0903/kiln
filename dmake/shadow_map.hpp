@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <vector>
 #include <expected>
+#include <optional>
 
 namespace dmake {
 
@@ -34,7 +35,12 @@ public:
         if (it == variables_.end() || it->second.empty()) {
             return empty;
         }
-        return it->second.back().value;
+        // Check for tombstone (nullopt = unset)
+        const auto& val = it->second.back().value;
+        if (!val.has_value()) {
+            return empty;
+        }
+        return *val;
     }
 
     /**
@@ -48,12 +54,12 @@ public:
 
         // If already set at current depth, modify in place (no tracking needed)
         if (!versions.empty() && versions.back().depth == current_depth_) {
-            versions.back().value = value;
+            versions.back().value = value;  // Assigns to optional
             return;
         }
 
         // Push new version at current depth - track for cleanup
-        versions.push_back({value, current_depth_});
+        versions.push_back({std::optional<std::string>(value), current_depth_});
         if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
             modified_per_depth_[current_depth_].insert(name);
         }
@@ -92,7 +98,7 @@ public:
             ++insert_pos;
         }
 
-        versions.insert(insert_pos, {value, target_depth});
+        versions.insert(insert_pos, {std::optional<std::string>(value), target_depth});
 
         // Track modification
         if (target_depth < static_cast<int>(modified_per_depth_.size())) {
@@ -105,7 +111,7 @@ public:
     /**
      * Unset a variable at the current depth.
      * If the variable exists at this depth, removes that version.
-     * Parent scope values (if any) become visible again.
+     * If the variable exists at a parent depth, inserts a tombstone to mask it.
      * O(1) complexity.
      */
     void unset(const std::string& name) {
@@ -116,9 +122,16 @@ public:
 
         auto& versions = it->second;
         if (versions.back().depth == current_depth_) {
+            // Variable is at current depth - remove it
             versions.pop_back();
-            // Note: We don't remove from modified_per_depth_ - harmless to keep
+        } else if (versions.back().depth < current_depth_ && versions.back().value.has_value()) {
+            // Variable exists at parent depth and is visible - insert tombstone to mask it
+            versions.push_back({std::nullopt, current_depth_});
+            if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
+                modified_per_depth_[current_depth_].insert(name);
+            }
         }
+        // If variable is already a tombstone at parent depth, do nothing
     }
 
     /**
@@ -158,7 +171,11 @@ public:
      */
     bool is_defined(const std::string& name) const {
         auto it = variables_.find(name);
-        return it != variables_.end() && !it->second.empty();
+        if (it == variables_.end() || it->second.empty()) {
+            return false;
+        }
+        // Check for tombstone
+        return it->second.back().value.has_value();
     }
 
     /**
@@ -217,8 +234,8 @@ public:
     std::unordered_map<std::string, std::string> snapshot() const {
         std::unordered_map<std::string, std::string> result;
         for (const auto& [name, versions] : variables_) {
-            if (!versions.empty()) {
-                result[name] = versions.back().value;
+            if (!versions.empty() && versions.back().value.has_value()) {
+                result[name] = *versions.back().value;
             }
         }
         return result;
@@ -235,8 +252,8 @@ public:
 
 private:
     struct VariableVersion {
-        std::string value;  // String first for better alignment
-        int depth;          // Int second (no padding waste)
+        std::optional<std::string> value;  // nullopt = tombstone (unset masking parent)
+        int depth;
     };
 
     // Variable name -> [version history sorted by depth]
