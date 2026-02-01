@@ -62,16 +62,34 @@ void print_error_context(const std::string& file_path, size_t row, size_t col, s
     
     if (has_content) {
         size_t line_start = 0;
-        size_t current_line = 1;
-        for (size_t i = 0; i < file_content.size() && current_line < row; ++i) {
-            if (file_content[i] == '\n') {
-                ++current_line;
-                line_start = i + 1;
-            }
-        }
+        size_t line_end = 0;
 
-        size_t line_end = file_content.find('\n', line_start);
-        if (line_end == std::string::npos) line_end = file_content.size();
+        // Use offset if available to find the line boundaries directly
+        if (offset > 0 && offset < file_content.size()) {
+            // Search backwards from offset to find the start of the line
+            line_start = offset;
+            while (line_start > 0 && file_content[line_start - 1] != '\n') {
+                line_start--;
+            }
+
+            // Search forwards from offset to find the end of the line
+            line_end = offset;
+            while (line_end < file_content.size() && file_content[line_end] != '\n') {
+                line_end++;
+            }
+        } else {
+            // Fallback: count lines from the beginning
+            size_t current_line = 1;
+            for (size_t i = 0; i < file_content.size() && current_line < row; ++i) {
+                if (file_content[i] == '\n') {
+                    ++current_line;
+                    line_start = i + 1;
+                }
+            }
+
+            line_end = file_content.find('\n', line_start);
+            if (line_end == std::string::npos) line_end = file_content.size();
+        }
 
         std::string line = file_content.substr(line_start, line_end - line_start);
         auto [display_line, col_map] = expand_tabs(line);
