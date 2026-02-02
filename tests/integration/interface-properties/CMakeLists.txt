@@ -17,4 +17,4 @@ add_executable(app main.cpp)
 target_link_libraries(app PRIVATE mylib)
 
 # Dump target info to verify propagation (for debugging)
-cmake_dump_target_info(app)
+dmake_dump_target_info(app)

@@ -274,6 +274,10 @@ public:
     void enable_testing_globally() { get_root()->testing_enabled_ = true; }
     bool is_testing_enabled() const { return get_root()->get_root()->testing_enabled_; }
 
+    // Deferred target dump (for dmake_dump_target_info AT_BUILD)
+    void add_target_to_dump_at_build(const std::string& name) { get_root()->targets_to_dump_at_build_.insert(name); }
+    const std::set<std::string>& get_targets_to_dump_at_build() const { return get_root()->targets_to_dump_at_build_; }
+
     // Custom command rules (OUTPUT form of add_custom_command)
     std::map<std::string, std::shared_ptr<CustomCommandRule>>& get_custom_command_rules() {
         return get_root()->custom_command_rules_;
@@ -388,6 +392,7 @@ private:
     std::map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
     bool testing_enabled_ = false;
+    std::set<std::string> targets_to_dump_at_build_;  // For dmake_dump_target_info AT_BUILD
 
     // Custom command rules (OUTPUT form of add_custom_command)
     // Maps output file path -> rule that generates it

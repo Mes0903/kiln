@@ -79,6 +79,96 @@ const std::vector<std::string>& Target::get_resolved_interface_property(const st
     return (it != resolved_interface_properties_.end()) ? it->second : empty;
 }
 
+std::string Target::generate_dump_info() const {
+    // Helper to print a vector
+    auto print_vec = [](const std::string& indent, const std::vector<std::string>& vec) -> std::string {
+        if (vec.empty()) return indent + "(empty)";
+        std::string result;
+        for (const auto& item : vec) {
+            result += indent + "- " + item + "\n";
+        }
+        return result;
+    };
+
+    // Helper to get type name
+    auto type_name = [](TargetType type) -> std::string {
+        switch(type) {
+            case TargetType::EXECUTABLE: return "EXECUTABLE";
+            case TargetType::SHARED_LIBRARY: return "SHARED_LIBRARY";
+            case TargetType::STATIC_LIBRARY: return "STATIC_LIBRARY";
+            case TargetType::OBJECT_LIBRARY: return "OBJECT_LIBRARY";
+            case TargetType::INTERFACE_LIBRARY: return "INTERFACE_LIBRARY";
+            case TargetType::CUSTOM: return "CUSTOM";
+            default: return "UNKNOWN";
+        }
+    };
+
+    // Print basic info
+    std::string output;
+    output += "=== Target: " + name_ + " ===\n";
+    output += "Type: " + type_name(type_) + "\n";
+    output += "Source Dir: " + source_dir_ + "\n";
+    output += "Binary Dir: " + binary_dir_ + "\n";
+    output += "Output Path: " + get_output_path() + "\n";
+    output += "Imported: " + std::string(is_imported_ ? "yes" : "no") + "\n";
+    if (is_imported_) {
+        output += "Imported Location: " + imported_location_ + "\n";
+    }
+    output += "\n";
+
+    // Print unresolved properties
+    std::vector<std::string> prop_names = {
+        "SOURCES", "INCLUDE_DIRECTORIES", "COMPILE_DEFINITIONS",
+        "COMPILE_OPTIONS", "LINK_LIBRARIES", "LINK_DIRECTORIES",
+        "LINK_OPTIONS", "PRECOMPILE_HEADERS"
+    };
+
+    output += "--- Unresolved Properties ---\n";
+    for (const auto& prop : prop_names) {
+        const auto& priv = get_property_list(prop, PropertyVisibility::PRIVATE);
+        const auto& pub = get_property_list(prop, PropertyVisibility::PUBLIC);
+        const auto& iface = get_property_list(prop, PropertyVisibility::INTERFACE);
+
+        if (!priv.empty() || !pub.empty() || !iface.empty()) {
+            output += "\n" + prop + ":\n";
+            if (!priv.empty()) {
+                output += "  PRIVATE:\n";
+                output += print_vec("    ", priv);
+            }
+            if (!pub.empty()) {
+                output += "  PUBLIC:\n";
+                output += print_vec("    ", pub);
+            }
+            if (!iface.empty()) {
+                output += "  INTERFACE:\n";
+                output += print_vec("    ", iface);
+            }
+        }
+    }
+
+    // Print resolved properties (if resolved)
+    output += "\n--- Resolved Properties (after dependency resolution) ---\n";
+    for (const auto& prop : prop_names) {
+        const auto& resolved = get_resolved_property(prop);
+        if (!resolved.empty()) {
+            output += "\n" + prop + " (for building this target):\n";
+            output += print_vec("  ", resolved);
+        }
+    }
+
+    output += "\n--- Resolved Interface Properties (propagated to dependents) ---\n";
+    for (const auto& prop : prop_names) {
+        const auto& resolved_iface = get_resolved_interface_property(prop);
+        if (!resolved_iface.empty()) {
+            output += "\n" + prop + " (for dependents):\n";
+            output += print_vec("  ", resolved_iface);
+        }
+    }
+
+    output += "\n";
+    return output;
+}
+
 // --- File Set Support ---
 
 void Target::add_file_set(FileSet file_set) {

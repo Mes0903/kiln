@@ -105,6 +105,9 @@ public:
     const std::vector<std::string>& get_resolved_property(const std::string& name) const;
     const std::vector<std::string>& get_resolved_interface_property(const std::string& name) const;
 
+    // Generate a formatted dump of target info (for dmake_dump_target_info)
+    std::string generate_dump_info() const;
+
     // Get the module mapper file path for this target
     std::string get_module_mapper_path() const;
 

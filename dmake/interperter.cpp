@@ -354,6 +354,13 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
     }
 
+    // Print deferred target dumps (AT_BUILD) - targets are now resolved
+    for (const auto& dump_target_name : get_targets_to_dump_at_build()) {
+        if (targets_.count(dump_target_name)) {
+            print_message("", targets_[dump_target_name]->generate_dump_info());
+        }
+    }
+
     // Link dependency resolution (adding inputs to link tasks)
     for (const auto& name : targets_to_build) {
         auto target = targets_[name];

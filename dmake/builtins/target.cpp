@@ -1397,102 +1397,24 @@ void register_target_builtins(Interpreter& interp) {
         }
     });
 
-    interp.add_builtin("cmake_dump_target_info", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("cmake_dump_target_info");
+    interp.add_builtin("dmake_dump_target_info", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("dmake_dump_target_info");
         std::string name;
+        bool at_build = false;
         parser.positional(name, "target name", true);
+        parser.flag("AT_BUILD", at_build);
         PARSE_OR_RETURN(parser, interp, args);
 
-        auto target = get_target_from_name(interp, name, "cmake_dump_target_info");
+        auto target = get_target_from_name(interp, name, "dmake_dump_target_info");
         if (!target) return;
 
-        // Helper to print a vector
-        auto print_vec = [](const std::string& indent, const std::vector<std::string>& vec) -> std::string {
-            if (vec.empty()) return indent + "(empty)";
-            std::string result;
-            for (const auto& item : vec) {
-                result += indent + "- " + item + "\n";
-            }
-            return result;
-        };
-
-        // Helper to get type name
-        auto type_name = [](TargetType type) -> std::string {
-            switch(type) {
-                case TargetType::EXECUTABLE: return "EXECUTABLE";
-                case TargetType::SHARED_LIBRARY: return "SHARED_LIBRARY";
-                case TargetType::STATIC_LIBRARY: return "STATIC_LIBRARY";
-                case TargetType::OBJECT_LIBRARY: return "OBJECT_LIBRARY";
-                case TargetType::INTERFACE_LIBRARY: return "INTERFACE_LIBRARY";
-                case TargetType::CUSTOM: return "CUSTOM";
-                default: return "UNKNOWN";
-            }
-        };
-
-        // Print basic info
-        std::string output;
-        output += "=== Target: " + target->get_name() + " ===\n";
-        output += "Type: " + type_name(target->get_type()) + "\n";
-        output += "Source Dir: " + target->get_source_dir() + "\n";
-        output += "Binary Dir: " + target->get_binary_dir() + "\n";
-        output += "Output Path: " + target->get_output_path() + "\n";
-        output += "Imported: " + std::string(target->is_imported() ? "yes" : "no") + "\n";
-        if (target->is_imported()) {
-            output += "Imported Location: " + target->get_imported_location() + "\n";
+        if (at_build) {
+            // Defer printing until after target resolution during build
+            interp.add_target_to_dump_at_build(target->get_name());
+        } else {
+            // Print immediately
+            interp.print_message("", target->generate_dump_info());
         }
-        output += "\n";
-
-        // Print unresolved properties
-        std::vector<std::string> prop_names = {
-            "SOURCES", "INCLUDE_DIRECTORIES", "COMPILE_DEFINITIONS",
-            "COMPILE_OPTIONS", "LINK_LIBRARIES", "LINK_DIRECTORIES",
-            "LINK_OPTIONS", "PRECOMPILE_HEADERS"
-        };
-
-        output += "--- Unresolved Properties ---\n";
-        for (const auto& prop : prop_names) {
-            const auto& priv = target->get_property_list(prop, PropertyVisibility::PRIVATE);
-            const auto& pub = target->get_property_list(prop, PropertyVisibility::PUBLIC);
-            const auto& iface = target->get_property_list(prop, PropertyVisibility::INTERFACE);
-
-            if (!priv.empty() || !pub.empty() || !iface.empty()) {
-                output += "\n" + prop + ":\n";
-                if (!priv.empty()) {
-                    output += "  PRIVATE:\n";
-                    output += print_vec("    ", priv);
-                }
-                if (!pub.empty()) {
-                    output += "  PUBLIC:\n";
-                    output += print_vec("    ", pub);
-                }
-                if (!iface.empty()) {
-                    output += "  INTERFACE:\n";
-                    output += print_vec("    ", iface);
-                }
-            }
-        }
-
-        // Print resolved properties (if resolved)
-        output += "\n--- Resolved Properties (after dependency resolution) ---\n";
-        for (const auto& prop : prop_names) {
-            const auto& resolved = target->get_resolved_property(prop);
-            if (!resolved.empty()) {
-                output += "\n" + prop + " (for building this target):\n";
-                output += print_vec("  ", resolved);
-            }
-        }
-
-        output += "\n--- Resolved Interface Properties (propagated to dependents) ---\n";
-        for (const auto& prop : prop_names) {
-            const auto& resolved_iface = target->get_resolved_interface_property(prop);
-            if (!resolved_iface.empty()) {
-                output += "\n" + prop + " (for dependents):\n";
-                output += print_vec("  ", resolved_iface);
-            }
-        }
-
-        output += "\n";
-        interp.print_message("", output);
     });
 }
 
