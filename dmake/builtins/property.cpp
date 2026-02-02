@@ -76,6 +76,95 @@ static std::string resolve_source_path(Interpreter& interp, const std::string& s
 
 void register_property_builtins(Interpreter& interp) {
 
+    // get_cmake_property() - Get global CMake properties
+    // Syntax: get_cmake_property(<var> <property>)
+    interp.add_builtin("get_cmake_property", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() != 2) {
+            interp.set_fatal_error("get_cmake_property() requires exactly 2 arguments: <var> <property>");
+            return;
+        }
+
+        const std::string& var_name = args[0];
+        const std::string& property = args[1];
+
+        std::string result;
+
+        if (property == "VARIABLES") {
+            // Return semicolon-separated list of all defined variables
+            auto names = interp.get_variables().get_all_names();
+            std::sort(names.begin(), names.end());
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (i > 0) result += ";";
+                result += names[i];
+            }
+        } else if (property == "CACHE_VARIABLES") {
+            // Return semicolon-separated list of all cache variables
+            auto& cache_vars = interp.get_cache_variables();
+            std::vector<std::string> names;
+            for (const auto& [name, value] : cache_vars) {
+                // Skip internal property storage keys
+                if (name.find(".__property__.") == std::string::npos) {
+                    names.push_back(name);
+                }
+            }
+            std::sort(names.begin(), names.end());
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (i > 0) result += ";";
+                result += names[i];
+            }
+        } else if (property == "COMPONENTS") {
+            // Return semicolon-separated list of install components
+            std::set<std::string> components;
+            for (const auto& rule : interp.get_install_rules()) {
+                if (rule->targets_rule) {
+                    if (!rule->targets_rule->archive_dest.component.empty())
+                        components.insert(rule->targets_rule->archive_dest.component);
+                    if (!rule->targets_rule->library_dest.component.empty())
+                        components.insert(rule->targets_rule->library_dest.component);
+                    if (!rule->targets_rule->runtime_dest.component.empty())
+                        components.insert(rule->targets_rule->runtime_dest.component);
+                }
+                if (rule->files_rule) {
+                    if (!rule->files_rule->destination.component.empty())
+                        components.insert(rule->files_rule->destination.component);
+                }
+                if (rule->script_rule) {
+                    if (!rule->script_rule->component.empty())
+                        components.insert(rule->script_rule->component);
+                }
+                if (rule->export_rule) {
+                    if (!rule->export_rule->component.empty())
+                        components.insert(rule->export_rule->component);
+                }
+            }
+            bool first = true;
+            for (const auto& comp : components) {
+                if (!first) result += ";";
+                result += comp;
+                first = false;
+            }
+        } else if (property == "MACROS") {
+            // CMake allows querying defined macros
+            // We don't currently expose user_macros_, so return empty for now
+            result = "";
+        } else if (property == "COMMANDS") {
+            // CMake allows querying defined commands
+            // We don't currently expose the full command list easily
+            result = "";
+        } else {
+            // Check global properties
+            auto& global_properties = interp.get_global_properties();
+            auto it = global_properties.find(property);
+            if (it != global_properties.end()) {
+                result = it->second;
+            } else {
+                result = property + "-NOTFOUND";
+            }
+        }
+
+        interp.set_variable(var_name, result);
+    });
+
     // define_property() - Define a new property with metadata
     interp.add_builtin("define_property", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 3) {

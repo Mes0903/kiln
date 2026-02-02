@@ -250,6 +250,20 @@ public:
         }
     }
 
+    /**
+     * Get all currently visible variable names.
+     * O(n) where n is total number of variables.
+     */
+    std::vector<std::string> get_all_names() const {
+        std::vector<std::string> result;
+        for (const auto& [name, versions] : variables_) {
+            if (!versions.empty() && versions.back().value.has_value()) {
+                result.push_back(name);
+            }
+        }
+        return result;
+    }
+
 private:
     struct VariableVersion {
         std::optional<std::string> value;  // nullopt = tombstone (unset masking parent)
