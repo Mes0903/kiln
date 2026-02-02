@@ -234,8 +234,9 @@ std::expected<CompileResult, std::string> compile_sources(
 
     // Definitions
     for (const auto& def : params.compile_definitions) {
-        // Strip -D prefix if present (CMake allows passing it with or without)
-        if (def.size() >= 2 && def.substr(0, 2) == "-D") {
+        // Items starting with - are already flags (compiler flags or -D definitions), pass as-is
+        // Other items are plain definitions, add -D prefix
+        if (!def.empty() && def[0] == '-') {
             compile_cmd.push_back(def);
         } else {
             compile_cmd.push_back("-D" + def);
