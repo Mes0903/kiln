@@ -15,5 +15,7 @@
 [STATUS] === Property System Test Complete ===
 [STATUS] Generating build graph...
 [STATUS] Starting debug build...
-[1;32m    Finished[0m build in 0.01s
+[1;32m   Compiling[0m [testlib] test.cpp
+[1;32m     Linking[0m [testlib] libtestlib.a
+[1;32m    Finished[0m build in 0.04s
 [STATUS] Build finished.

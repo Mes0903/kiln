@@ -1,0 +1,17 @@
+[STATUS] Single property: TestValue
+[STATUS] Multiple properties: ValueA, ValueB, ValueC
+[STATUS] Overwritten property: NewValue
+[STATUS] Non-existent property returns empty
+[STATUS] PARENT_DIRECTORY empty for root
+[STATUS] DIRECTORY keyword: Works
+[STATUS] Property via set_property: SetPropertyValue
+[STATUS] Include directories: /test/include
+[STATUS] DEFINITION keyword: DefinitionValue
+[STATUS] Subdir PARENT_DIRECTORY: /home/marty/Documents/dmake/tests/integration/directory-properties
+[STATUS] Parent property from subdir: NewValue
+[STATUS] Subdir property from parent: SubdirValue
+[STATUS] === Directory Properties Test Complete ===
+[STATUS] Generating build graph...
+[STATUS] Starting debug build...
+[1;32m    Finished[0m build in 0.00s
+[STATUS] Build finished.

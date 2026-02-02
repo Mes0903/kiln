@@ -500,6 +500,150 @@ void register_property_builtins(Interpreter& interp) {
         }
     });
 
+    // set_directory_properties() - Set properties on the current directory
+    // Syntax: set_directory_properties(PROPERTIES prop1 value1 [prop2 value2] ...)
+    interp.add_builtin("set_directory_properties", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("set_directory_properties() requires at least PROPERTIES keyword");
+            return;
+        }
+
+        // Find PROPERTIES keyword
+        size_t props_idx = 0;
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i] == "PROPERTIES") {
+                props_idx = i;
+                break;
+            }
+        }
+
+        if (props_idx == 0 && args[0] != "PROPERTIES") {
+            interp.set_fatal_error("set_directory_properties() expected PROPERTIES keyword, got: " + args[0]);
+            return;
+        }
+
+        // Property-value pairs must come after PROPERTIES
+        size_t pair_start = props_idx + 1;
+        size_t num_pairs = args.size() - pair_start;
+
+        if (num_pairs == 0) {
+            // No properties to set - this is valid (no-op)
+            return;
+        }
+
+        if (num_pairs % 2 != 0) {
+            interp.set_fatal_error("set_directory_properties() requires an even number of arguments after PROPERTIES (property-value pairs)");
+            return;
+        }
+
+        // Get current directory context
+        auto& dir_context = interp.get_current_directory_context();
+
+        // Set each property
+        for (size_t i = pair_start; i < args.size(); i += 2) {
+            const std::string& prop_name = args[i];
+            const std::string& prop_value = args[i + 1];
+            dir_context.properties[prop_name] = prop_value;
+        }
+    });
+
+    // get_directory_property() - Get property or variable from a directory
+    // Syntax: get_directory_property(<variable> [DIRECTORY <dir>] <prop-name>)
+    //         get_directory_property(<variable> [DIRECTORY <dir>] DEFINITION <var-name>)
+    interp.add_builtin("get_directory_property", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            interp.set_fatal_error("get_directory_property() requires at least 2 arguments: <variable> <prop-name>");
+            return;
+        }
+
+        std::string var_name = args[0];
+        std::string directory_path;
+        size_t prop_idx = 1;
+
+        // Check for optional DIRECTORY keyword
+        if (args.size() >= 3 && args[1] == "DIRECTORY") {
+            if (args.size() < 4) {
+                interp.set_fatal_error("get_directory_property() DIRECTORY requires a path argument");
+                return;
+            }
+            directory_path = args[2];
+            prop_idx = 3;
+        }
+
+        if (prop_idx >= args.size()) {
+            interp.set_fatal_error("get_directory_property() missing property name");
+            return;
+        }
+
+        // Get the target directory context
+        DirectoryContext* target_ctx = nullptr;
+        if (!directory_path.empty()) {
+            std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+            if (directory_path == "." || directory_path == current_source_dir) {
+                target_ctx = &interp.get_current_directory_context();
+            } else {
+                target_ctx = interp.get_directory_context(directory_path);
+                if (!target_ctx) {
+                    interp.set_fatal_error("get_directory_property() unknown directory: " + directory_path);
+                    return;
+                }
+            }
+        } else {
+            target_ctx = &interp.get_current_directory_context();
+        }
+
+        // Check for DEFINITION keyword (get variable instead of property)
+        if (args[prop_idx] == "DEFINITION") {
+            if (prop_idx + 1 >= args.size()) {
+                interp.set_fatal_error("get_directory_property() DEFINITION requires a variable name");
+                return;
+            }
+            std::string def_var_name = args[prop_idx + 1];
+
+            // Get variable from the directory's scope
+            // For now, we only support getting variables from the current directory
+            // A full implementation would need to track per-directory variable scopes
+            if (directory_path.empty() || directory_path == "." ||
+                directory_path == interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) {
+                interp.set_variable(var_name, interp.get_variable(def_var_name));
+            } else {
+                // For other directories, return empty (CMake would have the full scope)
+                interp.set_variable(var_name, "");
+            }
+            return;
+        }
+
+        std::string prop_name = args[prop_idx];
+
+        // Check for built-in directory properties
+        if (prop_name == "PARENT_DIRECTORY") {
+            interp.set_variable(var_name, target_ctx->parent_dir);
+            return;
+        }
+
+        // Check properties map
+        auto it = target_ctx->properties.find(prop_name);
+        if (it != target_ctx->properties.end()) {
+            interp.set_variable(var_name, it->second);
+            return;
+        }
+
+        // Check accumulated properties (INCLUDE_DIRECTORIES, etc.)
+        auto acc_it = target_ctx->accumulated.find(prop_name);
+        if (acc_it != target_ctx->accumulated.end()) {
+            std::string value;
+            for (size_t i = 0; i < acc_it->second.size(); ++i) {
+                if (i > 0) value += ";";
+                value += acc_it->second[i];
+            }
+            interp.set_variable(var_name, value);
+            return;
+        }
+
+        // Property not found - return empty
+        interp.set_variable(var_name, "");
+    });
+
     // get_property() - Get property values with inheritance support
     interp.add_builtin("get_property", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() < 4) {
