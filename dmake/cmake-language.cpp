@@ -298,8 +298,8 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         if (!foreach_command.arguments[i].quoted &&
             foreach_command.arguments[i].parts.size() == 1 &&
             std::holds_alternative<std::string>(foreach_command.arguments[i].parts[0])) {
-            std::string keyword = std::get<std::string>(foreach_command.arguments[i].parts[0]);
-            std::transform(keyword.begin(), keyword.end(), keyword.begin(), ::toupper);
+            const std::string& keyword = std::get<std::string>(foreach_command.arguments[i].parts[0]);
+            // CMake foreach keywords (IN, RANGE, LISTS, ITEMS, ZIP_LISTS) are case-sensitive
             if (keyword == "IN") {
                 has_in_keyword = true;
                 in_position = i;
@@ -318,8 +318,8 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         if (!foreach_command.arguments[in_position + 1].quoted &&
             foreach_command.arguments[in_position + 1].parts.size() == 1 &&
             std::holds_alternative<std::string>(foreach_command.arguments[in_position + 1].parts[0])) {
-            std::string next_keyword = std::get<std::string>(foreach_command.arguments[in_position + 1].parts[0]);
-            std::transform(next_keyword.begin(), next_keyword.end(), next_keyword.begin(), ::toupper);
+            const std::string& next_keyword = std::get<std::string>(foreach_command.arguments[in_position + 1].parts[0]);
+            // CMake foreach keywords are case-sensitive
             if (next_keyword == "ZIP_LISTS") {
                 is_zip_lists = true;
             }
@@ -368,12 +368,12 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         }
 
         // Determine mode by checking second argument
+        // CMake foreach keywords (IN, RANGE, LISTS, ITEMS, ZIP_LISTS) are case-sensitive
         std::string mode_keyword;
         if (!foreach_command.arguments[1].quoted &&
             foreach_command.arguments[1].parts.size() == 1 &&
             std::holds_alternative<std::string>(foreach_command.arguments[1].parts[0])) {
             mode_keyword = std::get<std::string>(foreach_command.arguments[1].parts[0]);
-            std::transform(mode_keyword.begin(), mode_keyword.end(), mode_keyword.begin(), ::toupper);
         }
 
     if (mode_keyword == "RANGE") {
@@ -412,7 +412,6 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
                 foreach_command.arguments[idx].parts.size() == 1 &&
                 std::holds_alternative<std::string>(foreach_command.arguments[idx].parts[0])) {
                 keyword = std::get<std::string>(foreach_command.arguments[idx].parts[0]);
-                std::transform(keyword.begin(), keyword.end(), keyword.begin(), ::toupper);
             }
 
             if (keyword == "LISTS") {
@@ -425,7 +424,6 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
                         foreach_command.arguments[idx].parts.size() == 1 &&
                         std::holds_alternative<std::string>(foreach_command.arguments[idx].parts[0])) {
                         next_keyword = std::get<std::string>(foreach_command.arguments[idx].parts[0]);
-                        std::transform(next_keyword.begin(), next_keyword.end(), next_keyword.begin(), ::toupper);
                     }
                     if (next_keyword == "ITEMS") {
                         break;  // Stop collecting, let the outer loop handle ITEMS

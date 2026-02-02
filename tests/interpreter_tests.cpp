@@ -822,6 +822,18 @@ TEST_CASE("Foreach basic", "[interpreter][foreach]") {
     REQUIRE(output == "1\n2\n3\n");
 }
 
+TEST_CASE("foreach with lowercase in is literal item", "[interpreter][foreach]") {
+    // CMake foreach keywords (IN, RANGE, LISTS, ITEMS) are case-sensitive
+    // Lowercase 'in' should be treated as a literal item to iterate, not a keyword
+    auto output = run_script(R"(
+        set(CHARSETS a b c)
+        foreach(cs in ${CHARSETS})
+            message("${cs}")
+        endforeach()
+    )");
+    REQUIRE(output == "in\na\nb\nc\n");
+}
+
 TEST_CASE("foreach RANGE with stop only", "[interpreter][foreach]") {
     auto output = run_script(R"(
         foreach(i RANGE 3)
