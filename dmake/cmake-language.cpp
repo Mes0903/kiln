@@ -702,6 +702,9 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     if (pos_ >= content_.length() || content_[pos_] != '(') {
         return std::unexpected(ParseError{row_, col_, pos_, 1, "Expected '(' after identifier"});
     }
+    size_t open_paren_row = row_;
+    size_t open_paren_col = col_;
+    size_t open_paren_offset = pos_;
     pos_++;
     col_++;
 
@@ -711,7 +714,10 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     int nesting = 0;
     while (pos_ < content_.length()) {
         consume_whitespace();
-        if (pos_ < content_.length() && content_[pos_] == ')' && nesting == 0) {
+        if (pos_ >= content_.length()) {
+            break;  // EOF reached - will be caught by closing paren check below
+        }
+        if (content_[pos_] == ')' && nesting == 0) {
             break;
         }
 
@@ -731,7 +737,7 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
 
     // Parse closing parenthesis
     if (pos_ >= content_.length() || content_[pos_] != ')') {
-        return std::unexpected(ParseError{row_, col_, pos_, 1, "Expected ')' to close argument list"});
+        return std::unexpected(ParseError{open_paren_row, open_paren_col, open_paren_offset, 1, "This '(' is not closed before end of file"});
     }
     pos_++;
     col_++;
