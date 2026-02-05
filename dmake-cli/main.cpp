@@ -2,6 +2,7 @@
 #include "dmake/interperter.hpp"
 #include "dmake/utils.hpp"
 #include "dmake/install_executor.hpp"
+#include "dmake/profiler.hpp"
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -40,6 +41,7 @@ struct GlobalOptions {
     std::vector<std::string> definitions;
     std::string config = "debug";
     std::string script_path;
+    bool profile = false;
 };
 
 void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<dmake::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
@@ -200,14 +202,18 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         std::ifstream file(cmake_lists);
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
+        dmake::ProfileScope parse_profile("parse " + cmake_lists.filename().string(), "parse");
         dmake::Parser parser(content, cmake_lists.string());
         auto ast_or_error = parser.parse();
+        parse_profile.stop();
+
         if (!ast_or_error) {
             const auto& error = ast_or_error.error();
             print_error_context(cmake_lists.string(), error.row, error.col, error.offset, error.length, error.reason);
             return std::unexpected("Parse error");
         }
 
+        dmake::ProfileScope configure_profile("configure", "configure");
         auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string());
         interpreter->set_current_file(cmake_lists.string());
 
@@ -223,15 +229,19 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_RELWITHDEBINFO", "-g -O2 -DNDEBUG");
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_MINSIZEREL", "-Os -DNDEBUG");
+        configure_profile.stop();
 
-        auto interpret_result = interpreter->interpret(ast_or_error.value());
-        if (!interpret_result) {
-            print_error_context(interpret_result.error());
-            return std::unexpected("Interpretation error");
+        {
+            dmake::ProfileScope scope("interpret " + cmake_lists.filename().string(), "interpret");
+            auto interpret_result = interpreter->interpret(ast_or_error.value());
+            if (!interpret_result) {
+                print_error_context(interpret_result.error());
+                return std::unexpected("Interpretation error");
+            }
+
+            // Apply retroactive directory properties to root-level targets
+            interpreter->finalize_directory_targets();
         }
-
-        // Apply retroactive directory properties to root-level targets
-        interpreter->finalize_directory_targets();
 
         auto build_result = interpreter->run_build(opt.jobs, targets);
         if (!build_result) {
@@ -243,6 +253,13 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         auto cache_save_result = interpreter->get_cache_store().save();
         if (!cache_save_result) {
             std::cerr << "\033[1;33mwarning:\033[0m Failed to save cache: " << cache_save_result.error() << std::endl;
+        }
+
+        // Write profile if enabled
+        if (dmake::g_profiling_enabled.load(std::memory_order_relaxed)) {
+            auto profile_path = (build_path / "profile.json").string();
+            dmake::Profiler::instance().write(profile_path);
+            std::cerr << "\033[1;36mProfile\033[0m written to " << profile_path << std::endl;
         }
 
         return interpreter;
@@ -440,6 +457,7 @@ int main(int argc, char* argv[]) {
     app.add_option("-j,--parallel", opt.jobs, "Parallel jobs (default: 0 for all cores)");
     app.add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build)");
     app.add_option("-D", opt.definitions, "Define variables (VAR=VALUE)");
+    app.add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
     app.add_option("-c,--config", opt.config, "Build configuration (debug, release, relwithdebinfo, minsizerel)")
        ->transform([](const std::string& value) -> std::string {
            auto copy = value;
@@ -490,6 +508,10 @@ int main(int argc, char* argv[]) {
     app.allow_extras();
 
     CLI11_PARSE(app, argc, argv);
+
+    if (opt.profile) {
+        dmake::Profiler::instance().enable();
+    }
 
     if (e_cmd->parsed()) {
         auto e_args = e_cmd->remaining();

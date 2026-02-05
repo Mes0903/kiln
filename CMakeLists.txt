@@ -38,6 +38,7 @@ add_library(dmake SHARED
     dmake/builtins/install.cpp
     dmake/builtins/source_properties.cpp
     dmake/install_executor.cpp
+    dmake/profiler.cpp
     dmake/CMakeList.cpp
 )
 

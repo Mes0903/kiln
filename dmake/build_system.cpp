@@ -3,6 +3,7 @@
 #include "utils.hpp"
 #include "module_scanner.hpp"
 #include "genex_evaluator.hpp"
+#include "profiler.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -283,6 +284,19 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
             threads.emplace_back([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
                 const auto& task = tasks_.at(id);
+
+                // Profile this task
+                std::string profile_name;
+                if (g_profiling_enabled.load(std::memory_order_relaxed)) {
+                    std::string artifact = task.parent_target ? task.parent_target->get_name() : "";
+                    if (task.is_module_collator) profile_name = "collate " + artifact;
+                    else if (task.is_module_scanner) profile_name = "scan " + std::filesystem::path(task.source_file).filename().string();
+                    else if (task.is_compilation) profile_name = "compile " + std::filesystem::path(task.source_file).filename().string();
+                    else if (task.parent_target && id == task.parent_target->get_output_path())
+                        profile_name = "link " + artifact;
+                    else profile_name = "run " + std::filesystem::path(id).filename().string();
+                }
+                ProfileScope task_profile(profile_name, "build");
 
                 // Check if outputs exist first - no need to calculate signature if we must compile anyway
                 bool outputs_exist = true;

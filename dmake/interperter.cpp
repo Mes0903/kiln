@@ -4,6 +4,7 @@
 #include "build_system.hpp"
 #include "gnu_compiler.hpp"
 #include "genex_evaluator.hpp"
+#include "profiler.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -350,8 +351,11 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         if (!flag.empty()) shared_linker_flags.push_back(flag);
     }
 
-    for (const auto& name : targets_to_build) {
-        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+    {
+        ProfileScope scope("generate tasks", "graph");
+        for (const auto& name : targets_to_build) {
+            targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+        }
     }
 
     // Print deferred target dumps (AT_BUILD) - targets are now resolved
@@ -399,6 +403,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
 
     // 2b. Finalize - evaluate all generator expressions in all tasks
     {
+        ProfileScope scope("finalize graph", "graph");
         GenexEvaluationContext genex_ctx;
         genex_ctx.build_type = get_variable("CMAKE_BUILD_TYPE");
         genex_ctx.system_name = get_variable("CMAKE_SYSTEM_NAME");
@@ -966,6 +971,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     }
 
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    ProfileScope file_profile("include " + std::filesystem::path(abs_path).filename().string(), "interpret");
 
     Parser parser(content, path.string());
     auto ast = parser.parse();
