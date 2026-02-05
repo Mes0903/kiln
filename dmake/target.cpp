@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <functional>
 #include <set>
+#include <unordered_map>
 #include <cassert>
 #include <iostream>
 
@@ -880,9 +881,34 @@ static void resolve_command_target_references(
 {
     for (auto& cmd : commands) {
         if (cmd.empty()) continue;
+
+        std::shared_ptr<Target> resolved;
+
+        // Direct target name lookup (executables only)
         auto it = all_targets.find(cmd[0]);
         if (it != all_targets.end() && it->second->get_type() == TargetType::EXECUTABLE) {
-            std::string output = it->second->get_output_path();
+            resolved = it->second;
+        }
+
+        // Fall back: executable whose OUTPUT_NAME matches the command
+        if (!resolved) {
+            static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
+            static std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
+            if (&all_targets != cached_source) {
+                cached_source = &all_targets;
+                output_name_map.clear();
+                for (const auto& [name, target] : all_targets) {
+                    if (target->get_type() == TargetType::EXECUTABLE)
+                        output_name_map.emplace(target->get_output_name(), target);
+                }
+            }
+            auto oit = output_name_map.find(cmd[0]);
+            if (oit != output_name_map.end())
+                resolved = oit->second;
+        }
+
+        if (resolved) {
+            std::string output = resolved->get_output_path();
             if (!output.empty()) {
                 cmd[0] = output;
                 task.dependencies.insert(output);
