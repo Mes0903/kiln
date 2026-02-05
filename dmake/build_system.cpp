@@ -214,13 +214,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cache = load_cache(build_dir);
     std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time
 
-    // 3. Parallel execution
+    // 3. Parallel execution with fixed worker threads
     std::set<std::string> completed;
     std::set<std::string> running;
     std::string fatal_error;
     std::mutex loop_mutex;
     std::condition_variable cv;
-    std::vector<std::thread> threads;  // Track all threads for joining
 
     if (jobs <= 0) {
         jobs = std::thread::hardware_concurrency();
@@ -235,55 +234,61 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     };
 
     auto start_time = std::chrono::steady_clock::now();
-    bool build_loop_running = true;
 
-    while (build_loop_running) {
-        std::vector<std::string> to_start;
-        {
-            std::unique_lock<std::mutex> lock(loop_mutex);
-            if (!fatal_error.empty()) {
-                build_loop_running = false;
-                break;
-            }
-            if (completed.size() == tasks_.size()) break;
+    std::vector<std::thread> workers;
+    workers.reserve(jobs);
 
-            for (const auto& [id, task] : tasks_) {
-                if (completed.count(id) == 0 && running.count(id) == 0 && is_ready(id)) {
-                    to_start.push_back(id);
-                }
-            }
+    for (int w = 0; w < jobs; w++) {
+        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &is_ready]() {
+            while (true) {
+                std::string id;
 
-            if (to_start.empty() && running.empty()) {
-                // Stall detection
-                std::ostringstream oss;
-                oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
-                for (const auto& [id, task] : tasks_) {
-                    if (completed.count(id)) continue;
-                    oss << "\n  - " << id << " depends on: ";
-                    for (const auto& dep : task.dependencies) {
-                        if (completed.find(dep) == completed.end()) oss << dep << " ";
+                // Grab the next ready task
+                {
+                    std::unique_lock<std::mutex> lock(loop_mutex);
+                    cv.wait(lock, [&] {
+                        if (!fatal_error.empty()) return true;
+                        if (completed.size() == tasks_.size()) return true;
+                        for (const auto& [tid, task] : tasks_) {
+                            if (!completed.count(tid) && !running.count(tid) && is_ready(tid))
+                                return true;
+                        }
+                        return running.empty(); // stall: nothing ready and nothing in flight
+                    });
+
+                    if (!fatal_error.empty() || completed.size() == tasks_.size()) return;
+
+                    for (const auto& [tid, task] : tasks_) {
+                        if (!completed.count(tid) && !running.count(tid) && is_ready(tid)) {
+                            id = tid;
+                            break;
+                        }
                     }
+
+                    if (id.empty()) {
+                        if (running.empty() && completed.size() < tasks_.size()) {
+                            std::ostringstream oss;
+                            oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
+                            for (const auto& [tid, task] : tasks_) {
+                                if (completed.count(tid)) continue;
+                                oss << "\n  - " << tid << " depends on: ";
+                                for (const auto& dep : task.dependencies) {
+                                    if (completed.find(dep) == completed.end()) oss << dep << " ";
+                                }
+                            }
+                            fatal_error = oss.str();
+                            cv.notify_all();
+                        }
+                        return;
+                    }
+
+                    running.insert(id);
                 }
-                fatal_error = oss.str();
-                build_loop_running = false;
-                break;
-            }
 
-            if (to_start.empty()) {
-                cv.wait(lock);
-                continue;
-            }
-        }
-
-        for (const auto& id : to_start) {
-            {
-                std::unique_lock<std::mutex> lock(loop_mutex);
-                if (running.size() >= static_cast<size_t>(jobs)) break;
-                running.insert(id);
-            }
-
-            threads.emplace_back([this, id, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv]() {
+                // Execute the task (outside lock)
                 const auto& task = tasks_.at(id);
+                std::string sig;
+                std::string task_error;
 
                 // Profile this task
                 std::string profile_name;
@@ -298,52 +303,37 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 }
                 ProfileScope task_profile(profile_name, "build");
 
-                // Check if outputs exist first - no need to calculate signature if we must compile anyway
-                bool outputs_exist = true;
-                if (task.outputs.empty()) {
-                    outputs_exist = false; // No outputs means always run (unless we add something like a 'stamp' file)
-                } else {
-                    for (const auto& out : task.outputs) {
-                        if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
-                    }
-                }
-
-                std::string sig;
-                bool should_compile = !outputs_exist || task.always_run; // Must compile if outputs don't exist or always_run is set
-
-                if (outputs_exist && !task.always_run) {
-                    // Only calculate signature if we might skip compilation
-                    auto sig_res = calculate_signature(task);
-                    if (!sig_res) {
-                        std::lock_guard<std::mutex> lock(loop_mutex);
-                        fatal_error = sig_res.error();
-                        cv.notify_all();
-                        return;
-                    }
-                    sig = *sig_res;
-
-                    // Check if we can skip based on signature match
-                    if (cache.count(id) && cache[id] == sig) {
-                        should_compile = false;
+                do { // do-while(false) for break-on-error
+                    // Check if outputs exist
+                    bool outputs_exist = true;
+                    if (task.outputs.empty()) {
+                        outputs_exist = false;
                     } else {
-                        should_compile = true;
+                        for (const auto& out : task.outputs) {
+                            if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+                        }
                     }
-                }
 
-                if (should_compile) {
+                    bool should_compile = !outputs_exist || task.always_run;
+
+                    if (outputs_exist && !task.always_run) {
+                        auto sig_res = calculate_signature(task);
+                        if (!sig_res) { task_error = sig_res.error(); break; }
+                        sig = *sig_res;
+                        should_compile = !(cache.count(id) && cache[id] == sig);
+                    }
+
+                    if (!should_compile) break;
+
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
 
                     // Pre-create output directories
                     for (const auto& out : task.outputs) {
                         std::error_code ec;
                         std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
-                        if (ec) {
-                            std::lock_guard<std::mutex> lock(loop_mutex);
-                            fatal_error = "Failed to create directory for " + out + ": " + ec.message();
-                            cv.notify_all();
-                            return;
-                        }
+                        if (ec) { task_error = "Failed to create directory for " + out + ": " + ec.message(); break; }
                     }
+                    if (!task_error.empty()) break;
 
                     // C++20 modules: handle collator tasks specially (in-process execution)
                     if (task.is_module_collator) {
@@ -353,32 +343,21 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                       << artifact_name << "] modules" << std::endl;
                         }
 
-                        // Parse all DDI files from scanner tasks
-                        std::map<std::string, std::string> module_to_task;  // Module name -> provider object task
-                        std::map<std::string, std::vector<std::string>> task_requires;  // Object task -> required modules
+                        std::map<std::string, std::string> module_to_task;
+                        std::map<std::string, std::vector<std::string>> task_requires;
                         std::vector<ModuleMapEntry> mapper_entries;
 
                         for (const auto& ddi_path : task.inputs) {
                             auto ddi_result = parse_ddi_file(ddi_path);
-                            if (!ddi_result) {
-                                std::lock_guard<std::mutex> lock(loop_mutex);
-                                fatal_error = ddi_result.error();
-                                cv.notify_all();
-                                return;
-                            }
+                            if (!ddi_result) { task_error = ddi_result.error(); break; }
 
                             const auto& ddi = *ddi_result;
-
-                            // Find the object task for this source
                             std::string obj_path = std::filesystem::path(task.parent_target->get_binary_dir())
                                 / "objs" / (std::filesystem::path(ddi.source).filename().string() + ".o");
                             obj_path = std::filesystem::path(obj_path).lexically_normal().string();
 
-                            // If this source provides a module, record it
                             if (!ddi.provides.empty()) {
                                 module_to_task[ddi.provides] = obj_path;
-
-                                // Add to module mapper
                                 ModuleMapEntry entry;
                                 entry.module_name = ddi.provides;
                                 entry.bmi_path = get_bmi_path(task.parent_target->get_binary_dir(), ddi.provides);
@@ -387,29 +366,21 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 mapper_entries.push_back(entry);
                             }
 
-                            // Record what this source imports
                             if (!ddi.imports.empty()) {
                                 task_requires[obj_path] = ddi.imports;
                             }
                         }
+                        if (!task_error.empty()) break;
 
-                        // Write module mapper file
                         std::string mapper_content = generate_module_mapper_content(mapper_entries);
                         std::ofstream mapper_file(task.outputs[0]);
-                        if (!mapper_file) {
-                            std::lock_guard<std::mutex> lock(loop_mutex);
-                            fatal_error = "Failed to write module mapper: " + task.outputs[0];
-                            cv.notify_all();
-                            return;
-                        }
+                        if (!mapper_file) { task_error = "Failed to write module mapper: " + task.outputs[0]; break; }
                         mapper_file << mapper_content;
                         mapper_file.close();
 
-                        // Inject dependencies into compile tasks
                         inject_module_dependencies(module_to_task, task_requires);
 
                     } else if (task.is_module_scanner) {
-                        // C++20 modules: scanner task - run preprocessor and parse output
                         {
                             std::lock_guard<std::mutex> lock(output_mutex_);
                             std::cout << "\033[1;32m" << std::setw(12) << "Scanning" << "\033[0m ["
@@ -417,27 +388,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                       << std::filesystem::path(task.source_file).filename().string() << std::endl;
                         }
 
-                        // Run the scan command
                         auto result = run_command(task.commands[0], task.working_dir);
-                        // Scanner may have non-zero exit code for parse errors but still produce useful output
-                        // We capture stdout which contains preprocessed directives
-
-                        // Parse the output to extract module info
                         ModuleDependencyInfo ddi = parse_module_scan_output(result.output, task.source_file);
                         ddi.timestamp = std::filesystem::last_write_time(task.source_file);
 
-                        // Write DDI file
                         auto write_result = write_ddi_file(task.outputs[0], ddi);
-                        if (!write_result) {
-                            std::lock_guard<std::mutex> lock(loop_mutex);
-                            fatal_error = write_result.error();
-                            cv.notify_all();
-                            return;
-                        }
+                        if (!write_result) { task_error = write_result.error(); break; }
 
                     } else {
                         // Regular task execution
-                        // Execute all commands in sequence
                         for (const auto& cmd : task.commands) {
                             std::string verb = "Running";
                             std::string target_display = task.source_file.empty() ?
@@ -450,7 +409,6 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 verb = "  Linking";
                             }
 
-                            // For custom targets, use the comment if available
                             if (task.parent_target && task.parent_target->get_type() == TargetType::CUSTOM) {
                                 std::string comment = task.parent_target->get_property("COMMENT");
                                 if (!comment.empty()) {
@@ -466,57 +424,50 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                             auto result = run_command(cmd, task.working_dir);
                             if (result.exit_code != 0) {
-                                std::lock_guard<std::mutex> lock(output_mutex_);
-                                if (!result.output.empty()) std::cerr << result.output << std::endl;
-
-                                std::lock_guard<std::mutex> lock_loop(loop_mutex);
-                                fatal_error = "Command failed: " + join_command(cmd);
-                                cv.notify_all();
-                                return;
+                                {
+                                    std::lock_guard<std::mutex> lock(output_mutex_);
+                                    if (!result.output.empty()) std::cerr << result.output << std::endl;
+                                }
+                                task_error = "Command failed: " + join_command(cmd);
+                                break;
                             } else if (!result.output.empty()) {
                                 std::lock_guard<std::mutex> lock(output_mutex_);
                                 std::cout << result.output << std::endl;
                             }
                         }
+                        if (!task_error.empty()) break;
                     }
 
-                    // Must calculate signature after compilation for cache (now .d files exist)
+                    // Recalculate signature after compilation (now .d files exist)
                     if (!task.always_run) {
                         auto new_sig_res = calculate_signature(task);
-                        if (!new_sig_res) {
-                            std::lock_guard<std::mutex> lock(loop_mutex);
-                            fatal_error = new_sig_res.error();
-                            cv.notify_all();
-                            return;
-                        }
+                        if (!new_sig_res) { task_error = new_sig_res.error(); break; }
                         sig = *new_sig_res;
                     }
-                }
+                } while (false);
 
+                task_profile.stop();
+
+                // Mark task complete (or failed)
                 {
                     std::lock_guard<std::mutex> lock(loop_mutex);
-                    new_cache[id] = sig;
+                    if (!task_error.empty()) {
+                        fatal_error = task_error;
+                    } else {
+                        new_cache[id] = sig;
+                    }
                     completed.insert(id);
                     running.erase(id);
                     cv.notify_all();
                 }
-            });
-        }
-
-        std::unique_lock<std::mutex> lock(loop_mutex);
-        if (running.size() >= static_cast<size_t>(jobs) || to_start.empty()) {
-            cv.wait(lock);
-        }
+            }
+        });
     }
 
-    // Join all threads before returning
-    for (auto& thread : threads) {
-        if (thread.joinable()) {
-            thread.join();
-        }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
     }
 
-    // Check if there was a fatal error during execution
     if (!fatal_error.empty()) {
         return std::unexpected(fatal_error);
     }
