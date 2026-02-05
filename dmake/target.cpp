@@ -871,6 +871,26 @@ static std::pair<std::string, std::string> generate_pch_task(
     return {pch_gch_path, pch_include_arg};
 }
 
+// Resolve executable target names in the first argument of COMMAND clauses.
+// CMake replaces bare target names with the built binary path and adds an implicit dependency.
+static void resolve_command_target_references(
+    std::vector<std::vector<std::string>>& commands,
+    BuildTask& task,
+    const std::map<std::string, std::shared_ptr<Target>>& all_targets)
+{
+    for (auto& cmd : commands) {
+        if (cmd.empty()) continue;
+        auto it = all_targets.find(cmd[0]);
+        if (it != all_targets.end() && it->second->get_type() == TargetType::EXECUTABLE) {
+            std::string output = it->second->get_output_path();
+            if (!output.empty()) {
+                cmd[0] = output;
+                task.dependencies.insert(output);
+            }
+        }
+    }
+}
+
 // Helper to generate a task for a custom command rule
 static void generate_custom_command_task(BuildGraph& graph, const CustomCommandRule& rule,
                                          const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
@@ -883,6 +903,8 @@ static void generate_custom_command_task(BuildGraph& graph, const CustomCommandR
     for (const auto& cmd : rule.commands) {
         task.commands.push_back(cmd);
     }
+
+    resolve_command_target_references(task.commands, task, all_targets);
 
     for (const auto& out : rule.outputs) {
         task.outputs.push_back(out);
@@ -995,6 +1017,8 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
                 pre_build.working_dir = cmd.working_dir;
             }
         }
+
+        resolve_command_target_references(pre_build.commands, pre_build, all_targets);
 
         graph.add_task(std::move(pre_build));
     }
@@ -1177,6 +1201,8 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             link.commands.push_back(cmd.command);
         }
 
+        resolve_command_target_references(link.commands, link, all_targets);
+
         // Then add the actual link command(s)
         for (auto& cmd : link_cmds) {
             link.commands.push_back(std::move(cmd));
@@ -1202,6 +1228,8 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             }
         }
 
+        resolve_command_target_references(post_build.commands, post_build, all_targets);
+
         // POST_BUILD depends on the link task completing
         post_build.dependencies.insert(output_path);
         post_build.inputs.push_back(output_path);
@@ -1223,6 +1251,8 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
             task.working_dir = custom_cmd.working_dir;
         }
     }
+
+    resolve_command_target_references(task.commands, task, all_targets);
 
     // Handle DEPENDS from add_custom_target
     for (const auto& dep_name : custom_depends_) {
