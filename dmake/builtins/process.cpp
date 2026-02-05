@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../profiler.hpp"
 #include "../utils.hpp"
 #include <iostream>
 #include <sstream>
@@ -203,6 +204,21 @@ void register_process_builtins(Interpreter& interp) {
             return;
         }
 
+        int64_t profile_start = 0;
+        bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
+        std::string profile_name;
+        std::string profile_cmd;
+        if (profiling) {
+            profile_start = Profiler::instance().now_us();
+            const auto& cmd = commands[0][0];
+            auto pos = cmd.rfind('/');
+            profile_name = "execute_process " + (pos != std::string::npos ? cmd.substr(pos + 1) : cmd);
+            for (const auto& pipeline : commands) {
+                if (!profile_cmd.empty()) profile_cmd += " | ";
+                profile_cmd += join_command(pipeline);
+            }
+        }
+
         ProcessOptions options;
         options.working_dir = working_dir;
         options.input_file = input_file;
@@ -302,6 +318,12 @@ void register_process_builtins(Interpreter& interp) {
                     return;
                 }
             }
+        }
+
+        if (profiling) {
+            auto dur = Profiler::instance().now_us() - profile_start;
+            Profiler::instance().add_complete(profile_name, "configure", profile_start, dur,
+                Profiler::Args({{"cmd", profile_cmd}}));
         }
     });
 }

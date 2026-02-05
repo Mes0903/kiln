@@ -14,6 +14,7 @@ struct TraceEventJson {
     int64_t dur;
     int64_t pid;
     int64_t tid;
+    std::optional<std::map<std::string, std::string>> args;
 };
 
 struct TraceFileJson {
@@ -44,14 +45,14 @@ int64_t Profiler::get_tid() {
 }
 
 void Profiler::add_complete(std::string name, std::string cat,
-                            int64_t start_us, int64_t duration_us) {
-    add_complete(std::move(name), std::move(cat), start_us, duration_us, get_tid());
+                            int64_t start_us, int64_t duration_us, Profiler::Args args) {
+    add_complete(std::move(name), std::move(cat), start_us, duration_us, get_tid(), std::move(args));
 }
 
 void Profiler::add_complete(std::string name, std::string cat,
-                            int64_t start_us, int64_t duration_us, int64_t tid) {
+                            int64_t start_us, int64_t duration_us, int64_t tid, Profiler::Args args) {
     std::lock_guard<std::mutex> lock(mutex_);
-    events_.push_back({std::move(name), std::move(cat), start_us, duration_us, tid});
+    events_.push_back({std::move(name), std::move(cat), start_us, duration_us, tid, std::move(args)});
 }
 
 void Profiler::write(const std::string& path) {
@@ -68,7 +69,8 @@ void Profiler::write(const std::string& path) {
             .ts = e.ts,
             .dur = e.dur,
             .pid = 1,
-            .tid = e.tid
+            .tid = e.tid,
+            .args = e.args
         });
     }
 

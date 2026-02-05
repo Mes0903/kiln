@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../profiler.hpp"
 #include "../CMakeList.hpp"
 #include <filesystem>
 #include <functional>
@@ -576,6 +577,11 @@ void register_find_command(
             return;
         }
 
+        // Profiling setup
+        int64_t profile_start = 0;
+        bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
+        if (profiling) profile_start = Profiler::instance().now_us();
+
         // Check persistent cache
         auto default_paths = get_defaults(interp);
         auto search_paths = build_search_paths(interp, opts, default_paths, cmd_name);
@@ -588,6 +594,10 @@ void register_find_command(
             // Validate cache entry
             if (validate_find_cache_entry(interp, *cached)) {
                 // Cache hit - no filesystem scan needed
+                if (profiling) {
+                    auto dur = Profiler::instance().now_us() - profile_start;
+                    Profiler::instance().add_complete(cmd_name + " " + opts.names[0] + " (cached)", "configure", profile_start, dur);
+                }
                 if (!cached->found_path.empty()) {
                     interp.set_variable(opts.var_name, cached->found_path);
                     if (!opts.no_cache) {
@@ -668,6 +678,11 @@ void register_find_command(
                 }
                 interp.set_fatal_error(err);
             }
+        }
+
+        if (profiling) {
+            auto dur = Profiler::instance().now_us() - profile_start;
+            Profiler::instance().add_complete(cmd_name + " " + opts.names[0], "configure", profile_start, dur);
         }
     });
 }

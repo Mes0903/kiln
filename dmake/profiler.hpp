@@ -3,6 +3,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <map>
+#include <optional>
 #include <mutex>
 #include <chrono>
 #include <atomic>
@@ -21,13 +23,15 @@ public:
     // Start recording. Resets the epoch so all timestamps are relative to this call.
     void enable();
 
+    using Args = std::optional<std::map<std::string, std::string>>;
+
     // Record a complete duration event ("X" phase in Chrome trace format).
     void add_complete(std::string name, std::string cat,
-                      int64_t start_us, int64_t duration_us);
+                      int64_t start_us, int64_t duration_us, Args args = std::nullopt);
 
     // Record a complete duration event with explicit thread ID.
     void add_complete(std::string name, std::string cat,
-                      int64_t start_us, int64_t duration_us, int64_t tid);
+                      int64_t start_us, int64_t duration_us, int64_t tid, Args args = std::nullopt);
 
     // Get current timestamp in microseconds since profiler epoch.
     int64_t now_us() const;
@@ -48,6 +52,7 @@ private:
         int64_t ts;
         int64_t dur;
         int64_t tid;
+        Args args = std::nullopt;
     };
 
     std::chrono::steady_clock::time_point epoch_;

@@ -3,6 +3,7 @@
 #include "../target.hpp"
 #include "../build_system.hpp"
 #include "../cache_store.hpp"
+#include "../profiler.hpp"
 #include "../utils.hpp"
 #include "../CMakeList.hpp"
 #include <filesystem>
@@ -474,6 +475,18 @@ void register_try_compile_builtins(Interpreter& interp) {
             return;
         }
 
+        // Profiling setup
+        int64_t profile_start = 0;
+        bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
+        std::string profile_src;
+        if (profiling) {
+            profile_start = Profiler::instance().now_us();
+            if (!sources.empty()) profile_src = std::filesystem::path(sources[0]).filename().string();
+            else if (!source_from_content.empty()) profile_src = source_from_content[0];
+            else if (!source_from_var.empty()) profile_src = source_from_var[0];
+            else if (!source_from_file.empty()) profile_src = source_from_file[0];
+        }
+
         // Get cache store
         CacheStore& cache = interp.get_cache_store();
 
@@ -633,6 +646,10 @@ void register_try_compile_builtins(Interpreter& interp) {
             // Validate header mtimes
             if (validate_cache_entry(*cached)) {
                 // Cache hit!
+                if (profiling) {
+                    auto dur = Profiler::instance().now_us() - profile_start;
+                    Profiler::instance().add_complete("try_compile " + profile_src + " (cached)", "configure", profile_start, dur);
+                }
                 interp.set_variable(result_var, cached->success ? "TRUE" : "FALSE");
                 if (!output_variable.empty()) {
                     interp.set_variable(output_variable, cached->output);
@@ -745,6 +762,11 @@ void register_try_compile_builtins(Interpreter& interp) {
             interp.set_variable(output_variable, output);
         }
 
+        if (profiling) {
+            auto dur = Profiler::instance().now_us() - profile_start;
+            Profiler::instance().add_complete("try_compile " + profile_src, "configure", profile_start, dur);
+        }
+
         // Clean up temp directory on success (keep on failure for debugging)
         if (compile_success) {
             std::filesystem::remove_all(temp_dir, ec);
@@ -807,6 +829,16 @@ void register_try_compile_builtins(Interpreter& interp) {
             }
             sources.push_back(old_style_srcfile);
         }
+
+        // Profiling
+        std::string profile_src;
+        if (g_profiling_enabled.load(std::memory_order_relaxed)) {
+            if (!sources.empty()) profile_src = std::filesystem::path(sources[0]).filename().string();
+            else if (!source_from_content.empty()) profile_src = source_from_content[0];
+            else if (!source_from_var.empty()) profile_src = source_from_var[0];
+            else if (!source_from_file.empty()) profile_src = source_from_file[0];
+        }
+        ProfileScope try_run_profile("try_run " + profile_src, "configure");
 
         // Auto-generate bindir if not specified
         if (bindir.empty()) {

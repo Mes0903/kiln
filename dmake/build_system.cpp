@@ -290,19 +290,6 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 std::string sig;
                 std::string task_error;
 
-                // Profile this task
-                std::string profile_name;
-                if (g_profiling_enabled.load(std::memory_order_relaxed)) {
-                    std::string artifact = task.parent_target ? task.parent_target->get_name() : "";
-                    if (task.is_module_collator) profile_name = "collate " + artifact;
-                    else if (task.is_module_scanner) profile_name = "scan " + std::filesystem::path(task.source_file).filename().string();
-                    else if (task.is_compilation) profile_name = "compile " + std::filesystem::path(task.source_file).filename().string();
-                    else if (task.parent_target && id == task.parent_target->get_output_path())
-                        profile_name = "link " + artifact;
-                    else profile_name = "run " + std::filesystem::path(id).filename().string();
-                }
-                ProfileScope task_profile(profile_name, "build");
-
                 do { // do-while(false) for break-on-error
                     // Check if outputs exist
                     bool outputs_exist = true;
@@ -324,6 +311,24 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     }
 
                     if (!should_compile) break;
+
+                    // Skip marker tasks (no outputs, no commands) - e.g. imported targets
+                    if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) break;
+
+                    // Profile only tasks that actually execute
+                    int64_t profile_start = 0;
+                    bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
+                    std::string profile_name;
+                    if (profiling) {
+                        profile_start = Profiler::instance().now_us();
+                        std::string artifact = task.parent_target ? task.parent_target->get_name() : "";
+                        if (task.is_module_collator) profile_name = "collate " + artifact;
+                        else if (task.is_module_scanner) profile_name = "scan " + std::filesystem::path(task.source_file).filename().string();
+                        else if (task.is_compilation) profile_name = "compile " + std::filesystem::path(task.source_file).filename().string();
+                        else if (task.parent_target && id == task.parent_target->get_output_path())
+                            profile_name = "link " + artifact;
+                        else profile_name = "run " + std::filesystem::path(id).filename().string();
+                    }
 
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
 
@@ -438,6 +443,21 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         if (!task_error.empty()) break;
                     }
 
+                    // Emit profiling event with full command details
+                    if (profiling) {
+                        auto dur = Profiler::instance().now_us() - profile_start;
+                        Profiler::Args args;
+                        if (!task.commands.empty()) {
+                            std::string cmds;
+                            for (const auto& cmd : task.commands) {
+                                if (!cmds.empty()) cmds += " && ";
+                                cmds += join_command(cmd);
+                            }
+                            args = std::map<std::string, std::string>{{"cmd", std::move(cmds)}};
+                        }
+                        Profiler::instance().add_complete(profile_name, "build", profile_start, dur, std::move(args));
+                    }
+
                     // Recalculate signature after compilation (now .d files exist)
                     if (!task.always_run) {
                         auto new_sig_res = calculate_signature(task);
@@ -445,8 +465,6 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         sig = *new_sig_res;
                     }
                 } while (false);
-
-                task_profile.stop();
 
                 // Mark task complete (or failed)
                 {
