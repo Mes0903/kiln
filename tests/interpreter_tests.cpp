@@ -6098,3 +6098,51 @@ TEST_CASE("IS_NEWER_THAN operator", "[interpreter][if][is_newer_than]") {
         )").find("PASS") != std::string::npos);
     }
 }
+
+TEST_CASE("if condition: undefined variable in MATCHES is literal", "[interpreter][if][bugfix]") {
+    // Undefined bare words should be kept as literal strings, not become empty.
+    // An empty regex would match everything, causing false positives.
+    auto output = run_script(R"(
+        set(MY_VAR "Linux")
+        if(MY_VAR MATCHES AIX)
+            message("matched")
+        else()
+            message("no match")
+        endif()
+    )");
+    REQUIRE(output == "no match\n");
+
+    // Verify MATCHES still works when the pattern is a defined variable
+    output = run_script(R"(
+        set(MY_VAR "Linux")
+        set(PAT "Lin")
+        if(MY_VAR MATCHES PAT)
+            message("matched")
+        else()
+            message("no match")
+        endif()
+    )");
+    REQUIRE(output == "matched\n");
+
+    // Verify undefined variable on LHS of MATCHES also uses literal string
+    output = run_script(R"(
+        if(UNDEFINED_VAR MATCHES "UNDEFINED_VAR")
+            message("literal")
+        else()
+            message("empty")
+        endif()
+    )");
+    REQUIRE(output == "literal\n");
+
+    // Verify undefined variable with OR doesn't cause false positive
+    output = run_script(R"(
+        set(CMAKE_SYSTEM_PROCESSOR "x86_64")
+        set(CMAKE_SYSTEM_NAME "Linux")
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64|powerpc64" OR CMAKE_SYSTEM_NAME MATCHES AIX)
+            message("ppc")
+        else()
+            message("not ppc")
+        endif()
+    )");
+    REQUIRE(output == "not ppc\n");
+}

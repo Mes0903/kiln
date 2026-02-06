@@ -1952,13 +1952,13 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             return token;  // Already have the value from the variable reference
         }
 
-        // Dereference as variable
+        // Dereference as variable (CMake if() semantics)
         // If defined: return value (even if empty)
-        // If undefined: return empty string
-        // Note: This means undefined variables evaluate to empty (falsy)
-        //       but named boolean constants like TRUE, FALSE, ON, OFF, YES, NO, Y, N
-        //       are treated as variable names that dereference to empty if not defined
-        return get_variable(token);
+        // If undefined: return the literal token string
+        // This matches CMake behavior where bare words that don't name a defined
+        // variable are kept as literal strings (e.g., "AIX" stays "AIX" in MATCHES)
+        auto opt = get_optional_variable(token);
+        return opt.has_value() ? *opt : token;
     };
 
     // Recursive descent parser with proper CMake precedence
