@@ -4,6 +4,7 @@
 #include "module_scanner.hpp"
 #include "genex_evaluator.hpp"
 #include "profiler.hpp"
+#include "printing.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -344,7 +345,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     if (task.is_module_collator) {
                         {
                             std::lock_guard<std::mutex> lock(output_mutex_);
-                            std::cout << "\033[1;32m" << std::setw(12) << "Collating" << "\033[0m ["
+                            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << "Collating" << dmake::c(std::cout, dmake::colors::RESET) << " ["
                                       << artifact_name << "] modules" << std::endl;
                         }
 
@@ -388,7 +389,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     } else if (task.is_module_scanner) {
                         {
                             std::lock_guard<std::mutex> lock(output_mutex_);
-                            std::cout << "\033[1;32m" << std::setw(12) << "Scanning" << "\033[0m ["
+                            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << "Scanning" << dmake::c(std::cout, dmake::colors::RESET) << " ["
                                       << artifact_name << "] "
                                       << std::filesystem::path(task.source_file).filename().string() << std::endl;
                         }
@@ -423,7 +424,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                             {
                                 std::lock_guard<std::mutex> lock(output_mutex_);
-                                std::cout << "\033[1;32m" << std::setw(12) << verb << "\033[0m ["
+                                std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << verb << dmake::c(std::cout, dmake::colors::RESET) << " ["
                                           << artifact_name << "] " << target_display << std::endl;
                             }
 
@@ -495,7 +496,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
     {
         std::lock_guard<std::mutex> lock(output_mutex_);
-        std::cout << "\033[1;32m" << std::setw(12) << "Finished" << "\033[0m build in "
+        std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << "Finished" << dmake::c(std::cout, dmake::colors::RESET) << " build in "
                 << std::fixed << std::setprecision(2) << duration.count() / 1000.0 << "s" << std::endl;
     }
 

@@ -1,15 +1,22 @@
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
-include(ExtractValidFlags.cmake)
-foreach(_cxx1x_flag -std=c++20)
-  extract_valid_cxx_flags(_cxx1x_flag_supported ${_cxx1x_flag})
-  message("${_cxx1x_flag} is ${_cxx1x_flag_supported}")
-  if(_cxx1x_flag_supported)
-    set(CXX1XCXXFLAGS ${_cxx1x_flag})
-    break()
-  endif()
-endforeach()
-    if(_cxx1x_flag_supported)
-      set(CXX1XCXXFLAGS ${_cxx1x_flag})
-      break()
-    endif()
-  endforeach()
+    INSTALL(
+      RUNTIME_DEPENDENCY_SET
+      ${tgt}
+      COMPONENT RuntimeDeps
+      DESTINATION ${INSTALL_BINDIR}
+      PRE_EXCLUDE_REGEXES
+      "api-ms-" # Windows stuff
+      "ext-ms-"
+      "icuuc\\.dll" # Old Windows 10 (1809)
+      "icuin\\.dll"
+      ${exclude_libs}
+      "clang_rt" # ASAN libraries
+      "vcruntime"
+      POST_EXCLUDE_REGEXES
+      ".*system32/.*\\.dll" # Windows stuff
+      POST_INCLUDE_REGEXES
+      "libssl" "libcrypto" # Account for OpenSSL libraries in system32
+      DIRECTORIES
+      $<$<BOOL:${VCPKG_INSTALLED_DIR}>:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin # This is broken!!!!!!!!!!!! HERE!!!!!!!!!!!
+      $<$<AND:$<CONFIG:Debug>,$<BOOL:${VCPKG_INSTALLED_DIR}>>:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin>
+      ${_path_list}
+    )

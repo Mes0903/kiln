@@ -1,5 +1,6 @@
 #include "dmake/cmake-language.hpp"
 #include "dmake/interperter.hpp"
+#include "dmake/printing.hpp"
 #include "dmake/utils.hpp"
 #include "dmake/install_executor.hpp"
 #include "dmake/profiler.hpp"
@@ -17,24 +18,6 @@
 
 namespace {
 
-// Expand tabs to spaces (4-column tab stops) and return mapping from source column to visual column
-std::pair<std::string, std::vector<size_t>> expand_tabs(std::string_view line, size_t tab_width = 4) {
-    std::string result;
-    std::vector<size_t> col_map;  // col_map[i] = visual position of source column i
-
-    for (char c : line) {
-        col_map.push_back(result.length());
-        if (c == '\t') {
-            size_t spaces = tab_width - (result.length() % tab_width);
-            result.append(spaces, ' ');
-        } else {
-            result += c;
-        }
-    }
-    col_map.push_back(result.length());  // For positions at/past end of line
-    return {result, col_map};
-}
-
 struct GlobalOptions {
     int jobs = 0;
     std::string build_dir_str;
@@ -45,79 +28,7 @@ struct GlobalOptions {
 };
 
 void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<dmake::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
-    std::cerr << "\033[1;31merror:\033[0m " << message << std::endl;
-    std::cerr << "  \033[1;34m-->\033[0m " << file_path << ":" << row << ":" << col << std::endl;
-
-    std::string file_content;
-    bool has_content = false;
-
-    if (source_content) {
-        file_content = *source_content;
-        has_content = true;
-    } else {
-        std::ifstream error_file(file_path);
-        if (error_file) {
-            file_content.assign((std::istreambuf_iterator<char>(error_file)), std::istreambuf_iterator<char>());
-            has_content = true;
-        }
-    }
-    
-    if (has_content) {
-        size_t line_start = 0;
-        size_t line_end = 0;
-
-        // Use offset if available to find the line boundaries directly
-        if (offset > 0 && offset < file_content.size()) {
-            // Search backwards from offset to find the start of the line
-            line_start = offset;
-            while (line_start > 0 && file_content[line_start - 1] != '\n') {
-                line_start--;
-            }
-
-            // Search forwards from offset to find the end of the line
-            line_end = offset;
-            while (line_end < file_content.size() && file_content[line_end] != '\n') {
-                line_end++;
-            }
-        } else {
-            // Fallback: count lines from the beginning
-            size_t current_line = 1;
-            for (size_t i = 0; i < file_content.size() && current_line < row; ++i) {
-                if (file_content[i] == '\n') {
-                    ++current_line;
-                    line_start = i + 1;
-                }
-            }
-
-            line_end = file_content.find('\n', line_start);
-            if (line_end == std::string::npos) line_end = file_content.size();
-        }
-
-        std::string line = file_content.substr(line_start, line_end - line_start);
-        auto [display_line, col_map] = expand_tabs(line);
-        std::string padding(std::to_string(row).length(), ' ');
-
-        std::cerr << "   " << padding << " \033[1;34m|\033[0m" << std::endl;
-        std::cerr << "   \033[1;34m" << row << " |\033[0m " << display_line << std::endl;
-
-        size_t caret_col = std::min(col, col_map.size()) - 1;
-        size_t visual_start = col_map[caret_col];
-        size_t visual_end = (caret_col + length < col_map.size()) ? col_map[caret_col + length] : display_line.length();
-        size_t caret_len = std::max(visual_end - visual_start, size_t{1});
-
-        std::cerr << "   " << padding << " \033[1;34m|\033[0m " << std::string(visual_start, ' ');
-        if (caret_len > 0) {
-            std::cerr << "\033[1;31m" << std::string(caret_len, '^') << "\033[0m";
-        }
-        std::cerr << std::endl;
-    }
-
-    if (!backtrace.empty()) {
-        std::cerr << "Call Stack (most recent call first):" << std::endl;
-        for (auto it = backtrace.rbegin(); it != backtrace.rend(); ++it) {
-            std::cerr << "  " << it->file << ":" << it->row << " (" << it->command << ")" << std::endl;
-        }
-    }
+    dmake::print_diagnostic(std::cerr, dmake::DiagnosticSeverity::Error, message, file_path, row, col, offset, length, backtrace, source_content);
 }
 
 void print_error_context(const dmake::InterpreterError& error) {
@@ -245,21 +156,21 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
 
         auto build_result = interpreter->run_build(opt.jobs, targets);
         if (!build_result) {
-            std::cerr << "\033[1;31merror:\033[0m " << build_result.error().message << std::endl;
+            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_RED) << "error:" << dmake::c(std::cerr, dmake::colors::RESET) << " " << build_result.error().message << std::endl;
             return std::unexpected("Build failed");
         }
 
         // Save cache after successful build
         auto cache_save_result = interpreter->get_cache_store().save();
         if (!cache_save_result) {
-            std::cerr << "\033[1;33mwarning:\033[0m Failed to save cache: " << cache_save_result.error() << std::endl;
+            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_YELLOW) << "warning:" << dmake::c(std::cerr, dmake::colors::RESET) << " Failed to save cache: " << cache_save_result.error() << std::endl;
         }
 
         // Write profile if enabled
         if (dmake::g_profiling_enabled.load(std::memory_order_relaxed)) {
             auto profile_path = (build_path / "profile.json").string();
             dmake::Profiler::instance().write(profile_path);
-            std::cerr << "\033[1;36mProfile\033[0m written to " << profile_path << std::endl;
+            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_CYAN) << "Profile" << dmake::c(std::cerr, dmake::colors::RESET) << " written to " << profile_path << std::endl;
         }
 
         return interpreter;
@@ -304,7 +215,7 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 
     std::vector<std::string> target_list(targets_to_build.begin(), targets_to_build.end());
 
-    std::cout << "\033[1;34mRunning " << selected_tests.size() << " tests...\033[0m" << std::endl;
+    std::cout << dmake::c(std::cout, dmake::colors::BOLD_BLUE) << "Running " << selected_tests.size() << " tests..." << dmake::c(std::cout, dmake::colors::RESET) << std::endl;
 
     struct TestResult {
         std::string name;
@@ -412,17 +323,17 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
                   << std::left << std::setw(40) << res.name << " ";
 
         if (res.skipped) {
-            std::cout << "\033[1;33mSKIPPED\033[0m";
+            std::cout << dmake::c(std::cout, dmake::colors::BOLD_YELLOW) << "SKIPPED" << dmake::c(std::cout, dmake::colors::RESET);
             skipped_count++;
             passed_count++;  // Skipped tests count as passed
         } else if (res.timed_out) {
-            std::cout << "\033[1;35mTIMEOUT\033[0m";
+            std::cout << dmake::c(std::cout, dmake::colors::BOLD_MAGENTA) << "TIMEOUT" << dmake::c(std::cout, dmake::colors::RESET);
             failed_count++;
         } else if (res.passed) {
-            std::cout << "\033[1;32mPASSED\033[0m";
+            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << "PASSED" << dmake::c(std::cout, dmake::colors::RESET);
             passed_count++;
         } else {
-            std::cout << "\033[1;31mFAILED\033[0m";
+            std::cout << dmake::c(std::cout, dmake::colors::BOLD_RED) << "FAILED" << dmake::c(std::cout, dmake::colors::RESET);
             failed_count++;
         }
         std::cout << " (" << std::fixed << std::setprecision(2) << res.duration << "s)" << std::endl;
@@ -612,7 +523,7 @@ int main(int argc, char* argv[]) {
             prefix = "/usr/local";  // CMake default
         }
 
-        std::cout << "\033[1;34mInstalling to:\033[0m " << prefix << std::endl;
+        std::cout << dmake::c(std::cout, dmake::colors::BOLD_BLUE) << "Installing to:" << dmake::c(std::cout, dmake::colors::RESET) << " " << prefix << std::endl;
 
         // Execute install
         auto result = dmake::execute_install_rules(
@@ -624,11 +535,11 @@ int main(int argc, char* argv[]) {
         );
 
         if (!result) {
-            std::cerr << "\033[1;31merror:\033[0m " << result.error() << std::endl;
+            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_RED) << "error:" << dmake::c(std::cerr, dmake::colors::RESET) << " " << result.error() << std::endl;
             return 1;
         }
 
-        std::cout << "\033[1;32mInstallation complete.\033[0m" << std::endl;
+        std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << "Installation complete." << dmake::c(std::cout, dmake::colors::RESET) << std::endl;
         return 0;
     }
 
@@ -672,7 +583,7 @@ int main(int argc, char* argv[]) {
         }
         argv_exec.push_back(nullptr);
 
-        std::cout << "\033[1;32mRunning\033[0m " << exec_path << "..." << std::endl;
+        std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << "Running" << dmake::c(std::cout, dmake::colors::RESET) << " " << exec_path << "..." << std::endl;
         execvp(argv_exec[0], argv_exec.data());
 
         std::cerr << "Error: Failed to execute " << exec_path << ": " << strerror(errno) << std::endl;

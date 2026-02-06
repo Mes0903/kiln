@@ -20,6 +20,7 @@
 #include "toolchain.hpp"
 #include "cache_store.hpp"
 #include "shadow_map.hpp"
+#include "printing.hpp"
 
 namespace dmake {
 
@@ -128,21 +129,6 @@ struct InstallRule {
     std::shared_ptr<InstallScriptRule> script_rule;
     std::shared_ptr<InstallExportRule> export_rule;
 };
-
-// ANSI escape codes for colors
-namespace colors {
-    const std::string RESET = "\033[0m";
-    const std::string RED = "\033[31m";
-    const std::string BRIGHT_RED = "\033[91m";
-    const std::string BOLD_RED = "\033[1;31m";
-    const std::string YELLOW = "\033[33m";
-    const std::string GREEN = "\033[32m";
-    const std::string CYAN = "\033[36m";
-    const std::string WHITE = "\033[37m";
-    const std::string DIM = "\033[2m";
-    const std::string DIM_CYAN = "\033[2;36m";
-    const std::string MAGENTA = "\033[35m"; // Legacy, not used in new scheme
-} // namespace colors
 
 // Forward declaration
 class Interpreter;

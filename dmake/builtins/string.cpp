@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cctype>
 #include "../regex.hpp"
-#include <sstream>
 #include <iomanip>
 #include <random>
 #include <ctime>
@@ -93,48 +92,6 @@ std::string genex_strip(const std::string& str) {
     return result;
 }
 
-// Helper to apply regex replacement line by line
-// This matches CMake's behavior where . doesn't cross line boundaries
-std::string regex_replace_line_by_line(const std::string& input,
-                                        const Regex& re,
-                                        const std::string& replacement) {
-    // Check if input contains newlines
-    if (input.find('\n') == std::string::npos) {
-        return re.replace_all(input, replacement);
-    }
-
-    // Multi-line input - process line by line
-    // Check if any line has a match - if so, use only the replacement from that line
-    std::istringstream check_stream(input);
-    std::string check_line;
-
-    while (std::getline(check_stream, check_line)) {
-        if (re.search(check_line)) {
-            return re.replace_all(check_line, replacement);
-        }
-    }
-
-    // No match found in any line - process normally (replace in each line)
-    std::string result;
-    std::istringstream stream(input);
-    std::string line;
-    bool first_line = true;
-
-    while (std::getline(stream, line)) {
-        if (!first_line) {
-            result += '\n';
-        }
-        first_line = false;
-        result += re.replace_all(line, replacement);
-    }
-
-    // Handle case where input ends with newline
-    if (!input.empty() && input.back() == '\n' && (result.empty() || result.back() != '\n')) {
-        result += '\n';
-    }
-
-    return result;
-}
 
 // Helper to make a valid C identifier
 std::string make_c_identifier(const std::string& str) {
@@ -539,7 +496,9 @@ void register_string_builtins(Interpreter& interp) {
                     return;
                 }
                 // replace_all handles CMake \1 \2 syntax natively
-                std::string result = regex_replace_line_by_line(input, *re, replacement);
+                // PCRE2 already doesn't match \n with . (no PCRE2_DOTALL),
+                // matching CMake's behavior without needing line-by-line processing
+                std::string result = re->replace_all(input, replacement);
                 interp.set_variable(out_var, result);
 
             } else if (regex_op == "QUOTE") {

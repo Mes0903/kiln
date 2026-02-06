@@ -2,7 +2,7 @@
 
 Better C/C++ builds that just works, with CMake as an input language.
 
-> ![NOTE]
+> [!NOTE]
 > Experimental project, GCC/G++ only for now
 
 ## Why
@@ -25,8 +25,9 @@ The project has very few dependencies:
 
 * CLI11 (https://github.com/CLIUtils/CLI11)
 * Catch2 3.x (https://github.com/catchorg/Catch2)
+* PCRE2 (https://github.com/PCRE2Project/pcre2)
 * C++23 capable compiler (GCC 13+)
-* CMake (dmake is an execution enginem you still need the CMake shipped modules)
+* CMake (dmake is an execution engine, you still need the CMake shipped modules)
 
 To build `dmake` for the first time using CMake:
 
@@ -77,6 +78,7 @@ Common flags:
 - `--config <debug|release|relwithdebinfo>`: Set build configuration
 - `-DVAR=VAL`: Define a CMake variable
 - `-B <dir>`: Set build root directory
+- `--profile`: Output a Chrome Trace Event Format compatiable profile that can be loaded into [Perfetto](https://ui.perfetto.dev/) and others
 
 ## Self Hosting
 

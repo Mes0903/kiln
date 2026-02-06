@@ -2456,65 +2456,8 @@ std::optional<std::string> Interpreter::get_optional_variable(const std::string&
 
 void Interpreter::print_message(const std::string& mode, const std::string& msg, bool is_err) {
     std::ostream& os = is_err ? *err_ : *out_;
-    bool color = isatty(is_err ? STDERR_FILENO : STDOUT_FILENO);
-    std::string prefix, msg_color;
-
-    // Get indentation
     std::string indent = get_variable("CMAKE_MESSAGE_INDENT");
-
-    // Determine prefix and color based on mode
-    if (mode == "FATAL_ERROR") {
-        prefix = "[FATAL_ERROR]";
-        msg_color = colors::BOLD_RED;
-    } else if (mode == "SEND_ERROR") {
-        prefix = "[SEND_ERROR]";
-        msg_color = colors::RED;
-    } else if (mode == "WARNING") {
-        prefix = "[WARNING]";
-        msg_color = colors::YELLOW;
-    } else if (mode == "AUTHOR_WARNING") {
-        prefix = "[AUTHOR_WARNING]";
-        msg_color = colors::YELLOW;
-    } else if (mode == "DEPRECATION") {
-        prefix = "[DEPRECATION]";
-        msg_color = colors::YELLOW;
-    } else if (mode == "DEPRECATION_ERROR") {
-        prefix = "[DEPRECATION]";
-        msg_color = colors::RED;
-    } else if (mode == "NOTICE") {
-        prefix = "[NOTICE]";
-        msg_color = colors::WHITE;
-    } else if (mode == "STATUS") {
-        prefix = "[STATUS]";
-        msg_color = colors::CYAN;
-    } else if (mode == "VERBOSE") {
-        prefix = "[VERBOSE]";
-        msg_color = colors::DIM;
-    } else if (mode == "DEBUG") {
-        prefix = "[DEBUG]";
-        msg_color = colors::DIM_CYAN;
-    } else if (mode == "TRACE") {
-        prefix = "[TRACE]";
-        msg_color = colors::DIM;
-    } else if (mode == "CHECK_START") {
-        prefix = "--";
-        msg_color = colors::CYAN;
-    } else if (mode == "CHECK_PASS") {
-        prefix = "--";
-        msg_color = colors::GREEN;
-    } else if (mode == "CHECK_FAIL") {
-        prefix = "--";
-        msg_color = colors::RED;
-    } else {
-        prefix = "[INFO]";
-        msg_color = "";
-    }
-
-    if (color && !msg_color.empty()) {
-        os << msg_color << prefix << " " << indent << msg << colors::RESET << std::endl;
-    } else {
-        os << prefix << " " << indent << msg << std::endl;
-    }
+    dmake::print_message(os, mode, msg, indent);
 }
 
 CMakeArray Interpreter::from_arguments(const std::vector<std::string>& args) {

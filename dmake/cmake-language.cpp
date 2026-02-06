@@ -1,8 +1,10 @@
 #include "cmake-language.hpp"
+#include "printing.hpp"
 
 #include <cctype>
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 
 namespace dmake {
 
@@ -813,13 +815,18 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     }
 
     std::string current_literal;
-    int genex_depth = 0;  // Track generator expression nesting: $< ... >
+
+    // Advisory genex balance tracking (for warnings only, not control flow)
+    int genex_depth = 0;
+    size_t genex_start_row = 0, genex_start_col = 0, genex_start_offset = 0;
 
     while (pos_ < content_.length()) {
         char current = content_[pos_];
 
-        // Stop at whitespace, parens, or comments, but only if not inside a genex
-        if (genex_depth == 0 && (std::isspace(current) || current == '(' || current == ')' || current == '#')) {
+        // Stop at whitespace, parens, or comments
+        // CMake treats $< and > as ordinary characters at parse time;
+        // generator expressions are only evaluated during build.
+        if (std::isspace(current) || current == '(' || current == ')' || current == '#') {
             break;
         }
 
@@ -972,27 +979,26 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
             }
         }
 
-        // Track generator expression nesting for balanced parsing
+        // Advisory genex depth tracking (for balance warning only)
         if (content_[pos_] == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '<') {
+            if (genex_depth == 0) {
+                genex_start_row = row_;
+                genex_start_col = col_;
+                genex_start_offset = pos_;
+            }
             genex_depth++;
-            pos_++; // Skip '$'
-            col_++;
-            pos_++; // Skip '<'
-            col_++;
         } else if (content_[pos_] == '>' && genex_depth > 0) {
             genex_depth--;
-            pos_++;
-            col_++;
-        } else {
-            // Handle newlines in position tracking
-            if (content_[pos_] == '\n') {
-                row_++;
-                col_ = 1;
-            } else {
-                col_++;
-            }
-            pos_++;
         }
+
+        // Handle newlines in position tracking
+        if (content_[pos_] == '\n') {
+            row_++;
+            col_ = 1;
+        } else {
+            col_++;
+        }
+        pos_++;
     }
 
     // Collect any remaining text
@@ -1001,6 +1007,16 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     }
     if (!current_literal.empty()) {
         parts.emplace_back(std::move(current_literal));
+    }
+
+    // Warn about unbalanced generator expressions
+    if (genex_depth > 0 && !parts.empty()) {
+        dmake::print_diagnostic(std::cerr, DiagnosticSeverity::Warning,
+            "Unbalanced generator expression (missing closing '>')",
+            filename_, genex_start_row, genex_start_col, genex_start_offset,
+            pos_ - genex_start_offset,
+            {}, std::string(content_),
+            "Accepting as-is - CMake treats generator expressions as strings at parse time.");
     }
 
     if (parts.empty()) {
