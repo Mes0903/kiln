@@ -453,6 +453,25 @@ int main(int argc, char* argv[]) {
                 std::filesystem::create_directories(e_args[i]);
             }
             return 0;
+        } else if (cmd == "create_symlink") {
+            if(e_args.size() != 3) {
+                std::cerr << "Error: create_symlink requires exactly two arguments" << std::endl;
+                return 1;
+            }
+
+            auto src = e_args[1];
+            auto dst = e_args[2];
+            bool exists = std::filesystem::exists(dst);
+            bool is_symlink = std::filesystem::is_symlink(dst);
+            if(exists && !is_symlink) {
+                std::cerr << "Error: Link destination " << dst << " already exists and is not a symlink" << std::endl;
+                return 1;
+            }
+            else if(exists && is_symlink) {
+                return 0;
+            }
+            std::filesystem::create_symlink(src, dst);
+            return 0;
         } else {
             std::cerr << "Error: Unknown -E command: " << cmd << std::endl;
             return 1;

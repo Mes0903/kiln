@@ -1330,6 +1330,19 @@ void register_file_builtins(Interpreter& interp) {
             interp.set_fatal_error("file() sub-command not implemented: " + operation);
         }
     });
+
+    interp.add_builtin("make_directory", [](Interpreter& interp, const std::vector<std::string>& args) {
+        CommandParser parser("file", "MAKE_DIRECTORY");
+        std::string path;
+        parser.positional(path, "path");
+        PARSE_OR_RETURN(parser, interp, args);
+
+        std::error_code ec;
+        std::filesystem::create_directories(path, ec);
+        if (ec) {
+            interp.set_fatal_error("file(MAKE_DIRECTORY) could not create directory: " + path + " (" + ec.message() + ")");
+        }
+    });
 }
 
 } // namespace dmake
