@@ -37,6 +37,7 @@ enum class GenexNodeType {
     PLATFORM_ID,          // $<PLATFORM_ID:platform>
     CXX_COMPILER_ID,      // $<CXX_COMPILER_ID:id>
     C_COMPILER_ID,        // $<C_COMPILER_ID:id>
+    INSTALL_PREFIX,       // $<INSTALL_PREFIX> - install prefix path
     CONDITIONAL,          // $<cond:text> where cond is a genex
     UNSUPPORTED           // Unknown or unsupported genex type
 };

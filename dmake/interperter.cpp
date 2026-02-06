@@ -14,6 +14,8 @@
 #include "regex.hpp"
 #include <sys/stat.h>
 #include "builtins/registry.hpp"
+#include "intercept/external_project.hpp"
+#include "intercept/fetch_content.hpp"
 
 namespace dmake {
 
@@ -421,6 +423,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         genex_ctx.cxx_compiler_id = get_variable("CMAKE_CXX_COMPILER_ID");
         genex_ctx.c_compiler_id = get_variable("CMAKE_C_COMPILER_ID");
         genex_ctx.all_targets = &targets_;
+        genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
         genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
 
         auto finalize_result = graph.finalize(genex_ctx);
@@ -516,6 +519,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
 
     variables_.set("CMAKE_COMMAND", get_executable_path());
+    variables_.set("CMAKE_GENERATOR", "dmake");
+    variables_.set("CMAKE_MAKE_PROGRAM", get_executable_path());
     variables_.set("CMAKE_ROOT", "/usr/share/cmake");
 
     // Initialize toolchain with compiler detection
@@ -956,6 +961,16 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     if(file_path.ends_with("CPack") || file_path.ends_with("CPack.cmake")) {
         print_message("WARNING", "dmake does not support cpack (yet). Ignoring..");
+        return {};
+    }
+
+    if (file_path == "ExternalProject" || file_path.ends_with("ExternalProject.cmake") || file_path.ends_with("/ExternalProject")) {
+        register_external_project_builtins(*this);
+        return {};
+    }
+
+    if (file_path == "FetchContent" || file_path.ends_with("FetchContent.cmake") || file_path.ends_with("/FetchContent")) {
+        register_fetch_content_builtins(*this);
         return {};
     }
 

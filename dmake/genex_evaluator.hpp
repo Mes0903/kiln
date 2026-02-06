@@ -32,6 +32,7 @@ struct GenexEvaluationContext {
     std::optional<Language> compile_language;  // For per-source evaluation
     const std::map<std::string, std::shared_ptr<Target>>* all_targets = nullptr;
     const Target* current_target = nullptr;     // For error messages
+    std::string install_prefix;       // CMAKE_INSTALL_PREFIX (for $<INSTALL_PREFIX>)
     enum class Phase { BUILD, INSTALL } phase = Phase::BUILD;
     bool allow_deferred_compile_language = false;  // For deferred evaluation
 };

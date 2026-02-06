@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <functional>
 #include <sstream>
+#include <map>
 
 namespace dmake {
 
@@ -37,6 +38,9 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "PLATFORM_ID") return GenexNodeType::PLATFORM_ID;
     if (keyword == "CXX_COMPILER_ID") return GenexNodeType::CXX_COMPILER_ID;
     if (keyword == "C_COMPILER_ID") return GenexNodeType::C_COMPILER_ID;
+
+    // Constant literal genexes ($<SEMICOLON>, $<COMMA>, etc.)
+    // are handled specially in parse_genex_node(), not here.
 
     return GenexNodeType::UNSUPPORTED;
 }
@@ -185,6 +189,30 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
         }
         node->end_pos = pos_;
         return node;
+    }
+
+    // Handle constant literal genexes: $<SEMICOLON>, $<COMMA>, $<ANGLE-R>, $<QUOTE>
+    if (type == GenexNodeType::UNSUPPORTED && peek() == '>') {
+        static const std::map<std::string, std::string> constant_genexes = {
+            {"SEMICOLON", ";"},
+            {"COMMA", ","},
+            {"ANGLE-R", ">"},
+            {"QUOTE", "\""},
+            {"INSTALL_PREFIX", ""},  // Placeholder, resolved in evaluator
+        };
+        auto cit = constant_genexes.find(keyword);
+        if (cit != constant_genexes.end()) {
+            advance(); // consume '>'
+            if (keyword == "INSTALL_PREFIX") {
+                // Needs runtime resolution — use a dedicated type
+                node->type = GenexNodeType::INSTALL_PREFIX;
+            } else {
+                node->type = GenexNodeType::LITERAL;
+            }
+            node->raw_content = cit->second;
+            node->end_pos = pos_;
+            return node;
+        }
     }
 
     // If it's UNSUPPORTED, store the original string for error reporting

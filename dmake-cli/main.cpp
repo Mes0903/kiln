@@ -25,6 +25,7 @@ struct GlobalOptions {
     std::vector<std::string> definitions;
     std::string config = "debug";
     std::string script_path;
+    std::string source_dir_str;  // -S flag for ExternalProject recursive invocation
     bool profile = false;
 };
 
@@ -104,8 +105,17 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             return std::unexpected("CMakeLists.txt not found in " + project_path.string());
         }
 
-        std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
-        std::filesystem::path build_path = build_root / opt.config;
+        std::filesystem::path build_path;
+        if (!opt.source_dir_str.empty()) {
+            // -S mode: use -B as-is (no config appended), used for ExternalProject recursive builds
+            if (opt.build_dir_str.empty()) {
+                return std::unexpected("-S requires -B to be specified");
+            }
+            build_path = std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+        } else {
+            std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+            build_path = build_root / opt.config;
+        }
 
         if (build_path == project_path) {
             return std::unexpected("Build directory cannot be source directory");
@@ -362,15 +372,19 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 } // namespace
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"dmake - A modern C++ build system with CMake compatibility."};
-
+    CLI::App app{"dmake - A modern C++ build system with CMake compatibility.\n"
+                  "  Use 'dmake <subcommand> --help' for subcommand-specific options."};
+    app.set_version_flag("-v,--version", "0.1.0-alpha");
     GlobalOptions opt;
-    app.add_option("-P", opt.script_path, "Run dmake in script mode");
-    app.add_option("-j,--parallel", opt.jobs, "Parallel jobs (default: 0 for all cores)");
-    app.add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build)");
-    app.add_option("-D", opt.definitions, "Define variables (VAR=VALUE)");
+    app.add_option("-P", opt.script_path, "Run a CMake script (script mode)");
+    app.add_option("-S", opt.source_dir_str, "Source directory (uses -B as-is, no config appended)");
+    app.add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)")
+       ->default_val(0);
+    app.add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
+    app.add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
     app.add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
-    app.add_option("-c,--config", opt.config, "Build configuration (debug, release, relwithdebinfo, minsizerel)")
+    app.add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
+       ->default_val("debug")
        ->transform([](const std::string& value) -> std::string {
            auto copy = value;
            std::transform(copy.begin(), copy.end(), copy.begin(), ::tolower);
@@ -378,43 +392,73 @@ int main(int argc, char* argv[]) {
                return copy;
            }
            throw CLI::ValidationError("Invalid configuration");
-       }, "convert to lower case", "lowercase");
+       }, "", "lowercase");
+
+    app.footer(R"(
+Examples:
+  dmake                             # Build current directory (debug)
+  dmake build -j8 --config release  # Build with 8 jobs in release mode
+  dmake run my_app -- --verbose     # Build and run a target with args
+  dmake test "parser.*"             # Run tests matching a regex
+  dmake -E copy file.txt dest/      # CMake-compatible tool command
+  dmake -P script.cmake -DFOO=bar   # Run a CMake script
+)");
 
     std::string build_project_dir = ".";
     std::vector<std::string> build_targets;
-    auto* build_cmd = app.add_subcommand("build", "Build targets (default)");
-    build_cmd->add_option("project", build_project_dir, "Project directory or first target");
-    build_cmd->add_option("targets", build_targets, "Targets to build");
+    auto* build_cmd = app.add_subcommand("build", "Build specific targets (default if no subcommand given)");
+    build_cmd->add_option("project", build_project_dir, "Project directory (default: current directory)");
+    build_cmd->add_option("targets", build_targets, "Target names to build (default: all)");
 
     std::string test_project_dir = ".";
     std::string test_pattern;
-    auto* test_cmd = app.add_subcommand("test", "Run tests");
-    test_cmd->add_option("project", test_project_dir, "Project directory");
-    test_cmd->add_option("pattern", test_pattern, "Test pattern (regex)");
+    auto* test_cmd = app.add_subcommand("test", "Build and run tests (parallel)");
+    test_cmd->add_option("project", test_project_dir, "Project directory (default: current directory)");
+    test_cmd->add_option("pattern", test_pattern, "Regex filter for test names");
 
     std::string run_project_dir = ".";
     std::string run_target;
     std::vector<std::string> run_args;
-    auto* run_cmd = app.add_subcommand("run", "Run a target");
-    run_cmd->add_option("project", run_project_dir, "Project directory");
-    run_cmd->add_option("target", run_target, "Target to run")->required();
-    run_cmd->add_option("args", run_args, "Arguments for the target");
+    auto* run_cmd = app.add_subcommand("run", "Build and run an executable target");
+    run_cmd->add_option("project", run_project_dir, "Project directory (default: current directory)");
+    run_cmd->add_option("target", run_target, "Executable target to run")->required();
+    run_cmd->add_option("args", run_args, "Arguments passed to the target (use -- to separate)");
 
-    auto* clean_cmd = app.add_subcommand("clean", "Clean build directory");
+    auto* clean_cmd = app.add_subcommand("clean", "Remove build artifacts for the current config");
     std::string clean_project_dir = ".";
-    clean_cmd->add_option("project", clean_project_dir, "Project directory");
+    clean_cmd->add_option("project", clean_project_dir, "Project directory (default: current directory)");
 
-    auto* install_cmd = app.add_subcommand("install", "Install project files");
+    auto* install_cmd = app.add_subcommand("install", "Build and install project files");
     std::string install_project_dir = ".";
     std::string install_prefix;
     std::string install_component;
-    install_cmd->add_option("project", install_project_dir, "Project directory");
+    install_cmd->add_option("project", install_project_dir, "Project directory (default: current directory)");
     install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
-    install_cmd->add_option("--component", install_component, "Install specific component only");
+    install_cmd->add_option("--component", install_component, "Install only the specified component");
 
-    auto* e_cmd = app.add_subcommand("mode-E", "CMake-like command-line tool mode");
+    auto* e_cmd = app.add_subcommand("tool", "CMake-compatible tool commands (echo, touch, copy, ...)");
     e_cmd->alias("-E");
     e_cmd->prefix_command();
+
+    // Propagate global options to subcommands so e.g. "dmake build -j8" works
+    auto add_global_opts = [&](CLI::App* sub) {
+        sub->add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)");
+        sub->add_option("-B", opt.build_dir_str, "Build directory");
+        sub->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE)");
+        sub->add_flag("--profile", opt.profile, "Generate build profile");
+        sub->add_option("-c,--config", opt.config, "Build configuration")
+           ->transform([](const std::string& value) -> std::string {
+               auto copy = value;
+               std::transform(copy.begin(), copy.end(), copy.begin(), ::tolower);
+               if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
+                   return copy;
+               }
+               throw CLI::ValidationError("Invalid configuration");
+           }, "", "lowercase");
+    };
+    for (auto* sub : {build_cmd, test_cmd, run_cmd, clean_cmd, install_cmd}) {
+        add_global_opts(sub);
+    }
 
     app.require_subcommand(0, 1);
     app.allow_extras();
@@ -576,6 +620,16 @@ int main(int argc, char* argv[]) {
         }
 
         return run_test_action(opt, build_res.value().get(), test_pattern);
+    }
+
+    // Handle -S flag: override project_dir with the source directory
+    if (!opt.source_dir_str.empty()) {
+        auto build_res = run_build_action(opt, opt.source_dir_str, {});
+        if (!build_res) {
+            std::cerr << "Error: " << build_res.error() << std::endl;
+            return 1;
+        }
+        return 0;
     }
 
     std::string project_dir = build_project_dir;

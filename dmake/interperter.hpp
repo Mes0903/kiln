@@ -337,6 +337,8 @@ public:
     friend void register_path_builtins(Interpreter& interp);
     friend void register_install_builtins(Interpreter& interp);
     friend void register_source_properties_builtins(Interpreter& interp);
+    friend void register_external_project_builtins(Interpreter& interp);
+    friend void register_fetch_content_builtins(Interpreter& interp);
 
     CMakeArray from_arguments(const std::vector<std::string>& args);
 

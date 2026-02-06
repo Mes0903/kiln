@@ -1,0 +1,248 @@
+#include "download_utils.hpp"
+#include "../utils.hpp"
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <algorithm>
+#include <curl/curl.h>
+#include <archive.h>
+#include <archive_entry.h>
+
+namespace dmake {
+
+std::expected<void, std::string> download_url(
+    const std::string& url,
+    const std::string& dest_file,
+    const std::string& hash_algo,
+    const std::string& hash_value)
+{
+    // If we have a hash and the file exists, check if it already matches
+    if (!hash_algo.empty() && !hash_value.empty() && std::filesystem::exists(dest_file)) {
+        std::ifstream existing(dest_file, std::ios::binary);
+        if (existing) {
+            std::string content((std::istreambuf_iterator<char>(existing)),
+                                std::istreambuf_iterator<char>());
+            std::string existing_hash;
+            if (hash_algo == "SHA256") {
+                existing_hash = sha256(content).to_string();
+            } else if (hash_algo == "MD5") {
+                existing_hash = md5(content).to_string();
+            }
+            std::string normalized_expected = hash_value;
+            std::transform(normalized_expected.begin(), normalized_expected.end(),
+                           normalized_expected.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (existing_hash == normalized_expected) {
+                return {};
+            }
+        }
+    }
+
+    struct DownloadData {
+        std::string buffer;
+    };
+    DownloadData dl_data;
+
+    auto write_callback = +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+        auto* data = static_cast<DownloadData*>(userdata);
+        size_t total = size * nmemb;
+        data->buffer.append(ptr, total);
+        return total;
+    };
+
+    auto progress_callback = +[](void*, curl_off_t dltotal, curl_off_t dlnow,
+                                  curl_off_t, curl_off_t) -> int {
+        if (dltotal > 0) {
+            int pct = static_cast<int>(dlnow * 100 / dltotal);
+            std::cerr << "\r[download] " << pct << "% (" << dlnow << "/" << dltotal << " bytes)" << std::flush;
+        }
+        return 0;
+    };
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return std::unexpected<std::string>("Failed to initialize curl");
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &dl_data);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (res == CURLE_OK) {
+        std::cerr << "\n";
+    }
+
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        return std::unexpected<std::string>(
+            "Download failed for \"" + url + "\": " + curl_easy_strerror(res));
+    }
+
+    // Verify hash
+    if (!hash_algo.empty() && !hash_value.empty()) {
+        std::string computed;
+        if (hash_algo == "SHA256") {
+            computed = sha256(dl_data.buffer).to_string();
+        } else if (hash_algo == "MD5") {
+            computed = md5(dl_data.buffer).to_string();
+        } else {
+            return std::unexpected<std::string>("Unsupported hash algorithm: " + hash_algo);
+        }
+        std::string normalized_expected = hash_value;
+        std::transform(normalized_expected.begin(), normalized_expected.end(),
+                       normalized_expected.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (computed != normalized_expected) {
+            return std::unexpected<std::string>(
+                "Hash mismatch for \"" + url + "\"\n  expected: " + normalized_expected + "\n  actual:   " + computed);
+        }
+    }
+
+    // Write to file
+    std::filesystem::path out_path(dest_file);
+    std::filesystem::create_directories(out_path.parent_path());
+    std::ofstream out(out_path, std::ios::binary);
+    if (!out) {
+        return std::unexpected<std::string>("Could not write to: " + dest_file);
+    }
+    out.write(dl_data.buffer.data(), static_cast<std::streamsize>(dl_data.buffer.size()));
+
+    return {};
+}
+
+std::expected<void, std::string> extract_archive(
+    const std::string& archive_path,
+    const std::string& dest_dir)
+{
+    if (!std::filesystem::exists(archive_path)) {
+        return std::unexpected<std::string>("Archive does not exist: " + archive_path);
+    }
+
+    std::filesystem::create_directories(dest_dir);
+
+    struct archive* a = archive_read_new();
+    archive_read_support_format_all(a);
+    archive_read_support_filter_all(a);
+
+    int r = archive_read_open_filename(a, archive_path.c_str(), 16384);
+    if (r != ARCHIVE_OK) {
+        std::string err = archive_error_string(a);
+        archive_read_free(a);
+        return std::unexpected<std::string>("Could not open archive: " + archive_path + ": " + err);
+    }
+
+    struct archive* ext = archive_write_disk_new();
+    int flags = ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS;
+    archive_write_disk_set_options(ext, flags);
+    archive_write_disk_set_standard_lookup(ext);
+
+    struct archive_entry* entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        std::string pathname = archive_entry_pathname(entry);
+        std::filesystem::path full_path = std::filesystem::path(dest_dir) / pathname;
+        archive_entry_set_pathname(entry, full_path.string().c_str());
+
+        r = archive_write_header(ext, entry);
+        if (r != ARCHIVE_OK) {
+            std::cerr << "warning: " << archive_error_string(ext) << "\n";
+        } else if (archive_entry_size(entry) > 0) {
+            const void* buff;
+            size_t size;
+            la_int64_t offset;
+            while ((r = archive_read_data_block(a, &buff, &size, &offset)) == ARCHIVE_OK) {
+                r = archive_write_data_block(ext, buff, size, offset);
+                if (r != ARCHIVE_OK) {
+                    std::cerr << "warning: " << archive_error_string(ext) << "\n";
+                    break;
+                }
+            }
+        }
+        archive_write_finish_entry(ext);
+    }
+
+    archive_write_close(ext);
+    archive_write_free(ext);
+    archive_read_close(a);
+    archive_read_free(a);
+
+    return {};
+}
+
+std::expected<void, std::string> git_clone(
+    const std::string& repo_url,
+    const std::string& dest_dir,
+    const std::string& tag,
+    bool shallow)
+{
+    std::vector<std::string> cmd = {"git", "clone"};
+    if (shallow && !tag.empty()) {
+        cmd.push_back("--depth");
+        cmd.push_back("1");
+    }
+    if (!tag.empty()) {
+        cmd.push_back("--branch");
+        cmd.push_back(tag);
+    }
+    cmd.push_back("--");
+    cmd.push_back(repo_url);
+    cmd.push_back(dest_dir);
+
+    auto result = run_command(cmd);
+    if (result.exit_code != 0) {
+        return std::unexpected<std::string>(
+            "git clone failed for " + repo_url + ":\n" + result.output);
+    }
+
+    // If tag specified and not shallow, checkout the exact ref
+    // (handles commit hashes that --branch doesn't support)
+    if (!tag.empty() && !shallow) {
+        auto checkout = run_command(std::vector<std::string>{"git", "-C", dest_dir, "checkout", tag});
+        if (checkout.exit_code != 0) {
+            // --branch worked, this is fine
+        }
+    }
+
+    return {};
+}
+
+void replace_tokens(std::vector<std::string>& command,
+                    const std::vector<std::pair<std::string, std::string>>& replacements)
+{
+    for (auto& arg : command) {
+        for (const auto& [token, value] : replacements) {
+            size_t pos = 0;
+            while ((pos = arg.find(token, pos)) != std::string::npos) {
+                arg.replace(pos, token.length(), value);
+                pos += value.length();
+            }
+        }
+    }
+}
+
+std::expected<void, std::string> run_steps(
+    const std::vector<std::vector<std::string>>& commands,
+    const std::string& working_dir)
+{
+    for (const auto& cmd : commands) {
+        if (cmd.empty()) continue;
+
+        auto result = run_command(cmd, working_dir);
+        if (result.exit_code != 0) {
+            std::string cmd_str;
+            for (const auto& a : cmd) {
+                if (!cmd_str.empty()) cmd_str += ' ';
+                cmd_str += a;
+            }
+            return std::unexpected<std::string>(
+                "Command failed: " + cmd_str + "\n" + result.output);
+        }
+    }
+    return {};
+}
+
+} // namespace dmake

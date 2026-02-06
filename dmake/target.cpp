@@ -290,6 +290,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     genex_ctx.all_targets = &all_targets;
     genex_ctx.current_target = this;
+    genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
     // Defer COMPILE_LANGUAGE and COMPILE_LANG_AND_ID evaluation until per-source processing
     genex_ctx.allow_deferred_compile_language = true;
@@ -713,6 +714,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     source_genex_base.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     source_genex_base.all_targets = &all_targets;
     source_genex_base.current_target = this;
+    source_genex_base.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     source_genex_base.phase = GenexEvaluationContext::Phase::BUILD;
 
     if (needs_per_lang_eval) {
@@ -1124,6 +1126,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     genex_ctx.all_targets = &all_targets;
     genex_ctx.current_target = this;
+    genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
     GenexEvaluator evaluator(genex_ctx);
 
@@ -1173,6 +1176,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     pch_genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     pch_genex_ctx.all_targets = &all_targets;
     pch_genex_ctx.current_target = this;
+    pch_genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     pch_genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
     pch_genex_ctx.compile_language = Language::CXX;  // PCH is always C++
     GenexEvaluator pch_evaluator(pch_genex_ctx);

@@ -80,6 +80,10 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             // (skip INTERFACE propagation) is handled by evaluate_link_library()
             return evaluate_nodes(node.children);
 
+        case GenexNodeType::INSTALL_PREFIX:
+            // $<INSTALL_PREFIX> - resolves to CMAKE_INSTALL_PREFIX
+            return ctx_.install_prefix.empty() ? "/usr/local" : ctx_.install_prefix;
+
         case GenexNodeType::CONFIG: {
             // $<CONFIG:cfg> returns 1 if CMAKE_BUILD_TYPE matches (case-insensitive), 0 otherwise
             std::string config = to_lower(node.raw_content);
