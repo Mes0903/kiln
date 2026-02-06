@@ -584,13 +584,24 @@ static void generate_custom_command_task(BuildGraph& graph, const CustomCommandR
             }
         } else {
             std::filesystem::path p(dep);
-            if (!p.is_absolute()) {
-                p = std::filesystem::path(rule.source_dir) / dep;
+            std::string normalized;
+            if (p.is_absolute()) {
+                normalized = p.lexically_normal().string();
+            } else {
+                // Try source dir first, then binary dir (custom command outputs are in binary dir)
+                normalized = (std::filesystem::path(rule.source_dir) / dep).lexically_normal().string();
             }
-            std::string normalized = p.lexically_normal().string();
 
             // Check if a custom command rule produces this file
             auto cc_it = custom_rules.find(normalized);
+            if (cc_it == custom_rules.end() && !p.is_absolute()) {
+                // Fallback: check binary dir (custom command outputs are registered there)
+                auto bin_normalized = (std::filesystem::path(rule.binary_dir) / dep).lexically_normal().string();
+                cc_it = custom_rules.find(bin_normalized);
+                if (cc_it != custom_rules.end()) {
+                    normalized = bin_normalized;
+                }
+            }
             if (cc_it != custom_rules.end()) {
                 generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated);
                 task.dependencies.insert(cc_it->second->outputs[0]);
@@ -1371,11 +1382,23 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
             }
         } else {
             std::filesystem::path p(dep_name);
-            if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
-            std::string normalized = p.lexically_normal().string();
+            std::string normalized;
+            if (p.is_absolute()) {
+                normalized = p.lexically_normal().string();
+            } else {
+                normalized = (std::filesystem::path(source_dir_) / p).lexically_normal().string();
+            }
 
             // Check if a custom command rule produces this file
             auto cc_it = custom_rules.find(normalized);
+            if (cc_it == custom_rules.end() && !p.is_absolute()) {
+                // Fallback: check binary dir (custom command outputs are registered there)
+                auto bin_normalized = (std::filesystem::path(binary_dir_) / p).lexically_normal().string();
+                cc_it = custom_rules.find(bin_normalized);
+                if (cc_it != custom_rules.end()) {
+                    normalized = bin_normalized;
+                }
+            }
             if (cc_it != custom_rules.end()) {
                 generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated_cc_tasks);
                 task.dependencies.insert(cc_it->second->outputs[0]);
