@@ -66,6 +66,10 @@ std::vector<std::string> CMakeArray::to_vector() const {
 
 void CMakeArray::append(const std::string& item) {
     if (item.empty()) return;
+    if (item.find(';') == std::string::npos) {
+        items_.push_back(item);
+        return;
+    }
     auto parts = split_by_semicolon(item);
     items_.insert(items_.end(), parts.begin(), parts.end());
 }

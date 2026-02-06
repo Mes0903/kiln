@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../profiler.hpp"
 #include "../command_parser.hpp"
+#include "../cache_store.hpp"
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -10,45 +11,52 @@
 #include <string_view>
 #include <ctime>
 #include <chrono>
+#include <sys/stat.h>
 
 namespace dmake {
 
 namespace {
 
+// Simple recursive glob matcher - no regex compilation
 bool matches_glob(const std::string& text, const std::string& pattern) {
-    // Convert glob pattern to regex
-    // * -> .*
-    // ? -> .
-    // . -> \.
-    std::string rx_str = "^";
-    for (char c : pattern) {
-        if (c == '*') rx_str += ".*";
-        else if (c == '?') rx_str += ".";
-        else if (std::string_view(".+^$|()[]{}").find(c) != std::string::npos) {
-            rx_str += "\\";
-            rx_str += c;
-        }
-        else {
-            rx_str += c;
+    size_t ti = 0, pi = 0;
+    size_t star_p = std::string::npos, star_t = 0;
+
+    while (ti < text.size()) {
+        if (pi < pattern.size() && (pattern[pi] == '?' || pattern[pi] == text[ti])) {
+            ++ti;
+            ++pi;
+        } else if (pi < pattern.size() && pattern[pi] == '*') {
+            star_p = pi++;
+            star_t = ti;
+        } else if (star_p != std::string::npos) {
+            pi = star_p + 1;
+            ti = ++star_t;
+        } else {
+            return false;
         }
     }
-    rx_str += "$";
-    try {
-        std::regex rx(rx_str);
-        return std::regex_match(text, rx);
-    } catch (...) {
-        return false;
-    }
+    while (pi < pattern.size() && pattern[pi] == '*') ++pi;
+    return pi == pattern.size();
+}
+
+static int64_t get_dir_mtime(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0) return st.st_mtime;
+    return 0;
 }
 
 // Recursively collect matching files using cached directory listings
-void glob_directory(Interpreter& interp, const std::filesystem::path& dir,
+void glob_directory(Interpreter& interp, const std::string& dir_str,
                     const std::string& leaf_pattern, bool recurse,
-                    const std::string& relative, CMakeArray& results) {
-    auto* entries = interp.get_directory_listing(dir);
+                    const std::string& relative, CMakeArray& results,
+                    std::map<std::string, int64_t>& dir_mtimes) {
+    auto* entries = interp.get_directory_listing(dir_str);
     if (!entries) return;
 
-    auto* subdirs = interp.get_directory_subdirs(dir);
+    dir_mtimes[dir_str] = get_dir_mtime(dir_str);
+
+    auto* subdirs = interp.get_directory_subdirs(dir_str);
 
     // Match files against pattern (skip directories)
     for (const auto& name : *entries) {
@@ -56,16 +64,16 @@ void glob_directory(Interpreter& interp, const std::filesystem::path& dir,
         if (!matches_glob(name, leaf_pattern)) continue;
 
         if (!relative.empty()) {
-            results.append(std::filesystem::relative(dir / name, relative).string());
+            results.push_back(std::filesystem::relative(dir_str + '/' + name, relative).string());
         } else {
-            results.append((dir / name).string());
+            results.push_back(dir_str + '/' + name);
         }
     }
 
     // Recurse into subdirectories
     if (recurse && subdirs) {
         for (const auto& subdir_name : *subdirs) {
-            glob_directory(interp, dir / subdir_name, leaf_pattern, true, relative, results);
+            glob_directory(interp, dir_str + '/' + subdir_name, leaf_pattern, true, relative, results, dir_mtimes);
         }
     }
 }
@@ -73,6 +81,7 @@ void glob_directory(Interpreter& interp, const std::filesystem::path& dir,
 void perform_glob(Interpreter& interp, const std::string& var, const std::vector<std::string>& patterns, bool recurse, const std::string& relative) {
     CMakeArray results;
     std::filesystem::path base_path = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+    auto& cache = interp.get_cache_store();
 
     for (const auto& pattern : patterns) {
         bool pattern_recurse = recurse;
@@ -139,7 +148,67 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         // If leaf is **, we match everything
         if (leaf_pattern == "**") leaf_pattern = "*";
 
-        glob_directory(interp, search_dir, leaf_pattern, pattern_recurse, relative, results);
+        std::string search_dir_str = search_dir.string();
+
+        // Cache key: dir + pattern + recurse + relative
+        std::string cache_sig = search_dir_str + "|" + leaf_pattern +
+                                "|r:" + (pattern_recurse ? "1" : "0") +
+                                "|rel:" + relative;
+
+        auto& profiler = Profiler::instance();
+        int64_t t_start = g_profiling_enabled.load(std::memory_order_acquire) ? profiler.now_us() : 0;
+
+        // Check glob cache
+        bool cache_hit = false;
+        size_t match_count = 0;
+        auto cached = cache.lookup<CacheSubsystem::Glob>(cache_sig);
+        if (cached) {
+            // Validate: check all directory mtimes
+            bool valid = true;
+            for (const auto& [dir, cached_mtime] : cached->dir_mtimes) {
+                if (get_dir_mtime(dir) != cached_mtime) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                cache_hit = true;
+                if (!cached->result.empty()) {
+                    results.append(cached->result);
+                    match_count = std::count(cached->result.begin(), cached->result.end(), ';') + 1;
+                }
+            }
+        }
+
+        if (!cache_hit) {
+            // Cache miss — run the glob
+            CMakeArray pattern_results;
+            std::map<std::string, int64_t> dir_mtimes;
+            glob_directory(interp, search_dir_str, leaf_pattern, pattern_recurse, relative, pattern_results, dir_mtimes);
+
+            match_count = pattern_results.size();
+
+            // Store in cache
+            GlobCacheEntry entry;
+            entry.result = pattern_results.to_string();
+            entry.dir_mtimes = std::move(dir_mtimes);
+            cache.insert<CacheSubsystem::Glob>(cache_sig, entry);
+
+            results.append(pattern_results);
+        }
+
+        if (t_start) {
+            int64_t dur = profiler.now_us() - t_start;
+            profiler.add_complete(
+                "glob " + leaf_pattern, "configure", t_start, dur,
+                Profiler::Args{std::map<std::string, std::string>{
+                    {"pattern", pattern},
+                    {"dir", search_dir_str},
+                    {"cache", cache_hit ? "hit" : "miss"},
+                    {"matches", std::to_string(match_count)},
+                    {"recurse", pattern_recurse ? "yes" : "no"},
+                }});
+        }
     }
 
     interp.set_variable(var, results.to_string());
@@ -196,7 +265,7 @@ void register_file_builtins(Interpreter& interp) {
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             interp.set_variable(var, content);
         } else if (operation == "GLOB" || operation == "GLOB_RECURSE") {
-            dmake::ProfileScope configure_profile("glob", "configure");
+            // Profiling handled inside perform_glob per-pattern
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(" + operation + ") requires a variable name");
                 return;

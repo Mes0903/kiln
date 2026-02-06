@@ -17,6 +17,7 @@ enum class CacheSubsystem {
     FileListing,
     FindResult,
     ExternalCommand,  // Generic external command caching (pkg-config, etc.)
+    Glob,             // file(GLOB) / file(GLOB_RECURSE) results
     // Future: ModuleScanning, etc.
 };
 
@@ -63,6 +64,12 @@ struct ExternalCommandCacheEntry {
     std::map<std::string, std::optional<int64_t>> tracked_dir_mtimes;
 };
 
+// Cache entry for file(GLOB) results - caches the matched file list
+struct GlobCacheEntry {
+    std::string result;                                  // Semicolon-separated matched files
+    std::map<std::string, int64_t> dir_mtimes;          // All scanned dirs with mtimes
+};
+
 // Root structure for JSON serialization
 struct CacheRoot {
     std::map<std::string, TryCompileCacheEntry> try_compile_cache;
@@ -70,6 +77,7 @@ struct CacheRoot {
     std::map<std::string, FileListingCacheEntry> file_listing_cache;
     std::map<std::string, FindResultCacheEntry> find_result_cache;
     std::map<std::string, ExternalCommandCacheEntry> external_command_cache;
+    std::map<std::string, GlobCacheEntry> glob_cache;
 };
 
 // Centralized cache store with subsystem namespacing
@@ -91,7 +99,8 @@ public:
         typename std::conditional<S == CacheSubsystem::TryRun, TryRunCacheEntry,
         typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
         typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
-        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type>::type
+        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry,
+        typename std::conditional<S == CacheSubsystem::Glob, GlobCacheEntry, void>::type>::type>::type>::type>::type
     >::type> lookup(const std::string& signature);
 
     // Insert/update entry
@@ -101,7 +110,8 @@ public:
         typename std::conditional<S == CacheSubsystem::TryRun, TryRunCacheEntry,
         typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
         typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
-        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type>::type
+        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry,
+        typename std::conditional<S == CacheSubsystem::Glob, GlobCacheEntry, void>::type>::type>::type>::type>::type
     >::type& entry);
 
     // Clear all entries for a subsystem
@@ -225,6 +235,28 @@ template<>
 inline void CacheStore::clear_subsystem<CacheSubsystem::ExternalCommand>() {
     std::lock_guard lock(mutex_);
     cache_data_.external_command_cache.clear();
+}
+
+template<>
+inline std::optional<GlobCacheEntry> CacheStore::lookup<CacheSubsystem::Glob>(const std::string& signature) {
+    std::lock_guard lock(mutex_);
+    auto it = cache_data_.glob_cache.find(signature);
+    if (it != cache_data_.glob_cache.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+template<>
+inline void CacheStore::insert<CacheSubsystem::Glob>(const std::string& signature, const GlobCacheEntry& entry) {
+    std::lock_guard lock(mutex_);
+    cache_data_.glob_cache[signature] = entry;
+}
+
+template<>
+inline void CacheStore::clear_subsystem<CacheSubsystem::Glob>() {
+    std::lock_guard lock(mutex_);
+    cache_data_.glob_cache.clear();
 }
 
 } // namespace dmake
