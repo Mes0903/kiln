@@ -325,11 +325,13 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return std::unexpected("TARGET_OBJECTS: target '" + node.raw_content + "' not found");
             }
             const auto& target = target_it->second;
-            if (target->get_type() != TargetType::OBJECT_LIBRARY) {
-                return std::unexpected("TARGET_OBJECTS: target '" + node.raw_content + "' is not an OBJECT library");
+            // Since CMake 3.21, TARGET_OBJECTS works on any library with compiled sources
+            auto ttype = target->get_type();
+            if (ttype == TargetType::INTERFACE_LIBRARY || ttype == TargetType::CUSTOM) {
+                return std::unexpected("TARGET_OBJECTS: target '" + node.raw_content + "' has no compiled sources");
             }
 
-            // Collect object file paths for all sources in the object library
+            // Collect object file paths for all sources in the target
             std::string result;
             const auto& sources = target->get_property_list("SOURCES", PropertyVisibility::PRIVATE);
             std::string binary_dir = target->get_binary_dir();

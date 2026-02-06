@@ -362,6 +362,25 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         auto dep_it = all_targets.find(lib_name);
         if (dep_it != all_targets.end()) {
             auto& dep = dep_it->second;
+
+            // CMake allows circular dependencies between static libraries.
+            // Static libs are just .o archives — the linker resolves symbols by
+            // scanning them, and CMake repeats the cycle on the link line.
+            // When we detect a cycle, add the library to the link line but skip
+            // property propagation (the dep's resolved properties aren't ready yet).
+            if (dep->is_visiting()) {
+                if (dep->get_type() == TargetType::STATIC_LIBRARY ||
+                    dep->get_type() == TargetType::OBJECT_LIBRARY) {
+                    std::string dep_path = dep->get_output_path();
+                    if (!dep_path.empty()) {
+                        if (!is_interface_only) res_libs.push_back(dep_path);
+                        if (is_public || is_interface_only) res_iface_libs.push_back(dep_path);
+                    }
+                    return;
+                }
+                throw std::runtime_error("Circular dependency detected involving target: " + dep->get_name());
+            }
+
             dep->resolve(all_targets, interp);
 
             // Inherit for building THIS target (from dep's INTERFACE)
@@ -528,9 +547,16 @@ static void resolve_command_target_references(
     }
 }
 
-// Helper to generate a task for a custom command rule
+// Helper to generate a task for a custom command rule.
+// Recursively generates tasks for any deps that are themselves custom command outputs.
 static void generate_custom_command_task(BuildGraph& graph, const CustomCommandRule& rule,
-                                         const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
+                                         const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                                         const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
+                                         std::set<std::string>& generated) {
+    if (generated.count(rule.outputs[0]) || graph.has_task(rule.outputs[0]))
+        return;
+    generated.insert(rule.outputs[0]);
+
     BuildTask task;
     task.id = rule.outputs[0];
     task.working_dir = rule.working_dir;
@@ -561,7 +587,15 @@ static void generate_custom_command_task(BuildGraph& graph, const CustomCommandR
             if (!p.is_absolute()) {
                 p = std::filesystem::path(rule.source_dir) / dep;
             }
-            task.inputs.push_back(p.lexically_normal().string());
+            std::string normalized = p.lexically_normal().string();
+
+            // Check if a custom command rule produces this file
+            auto cc_it = custom_rules.find(normalized);
+            if (cc_it != custom_rules.end()) {
+                generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated);
+                task.dependencies.insert(cc_it->second->outputs[0]);
+            }
+            task.inputs.push_back(normalized);
         }
     }
 
@@ -749,8 +783,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 cc_it = custom_rules.find(normalized_bin_dir);
             }
             if (cc_it != custom_rules.end() && !generated_custom_tasks.count(cc_it->second->outputs[0])) {
-                generate_custom_command_task(graph, *cc_it->second, all_targets);
-                generated_custom_tasks.insert(cc_it->second->outputs[0]);
+                generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated_custom_tasks);
             }
         }
 
@@ -1234,11 +1267,15 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         link.dependencies.insert(obj);
     }
 
-    for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
-         if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
-             link.inputs.push_back(lib);
-             link.dependencies.insert(lib);
-         }
+    // Static libraries are just .o archives — ar doesn't resolve symbols against
+    // other libraries. Only executables/shared libraries need link-library deps.
+    if (type_ != TargetType::STATIC_LIBRARY) {
+        for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
+             if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
+                 link.inputs.push_back(lib);
+                 link.dependencies.insert(lib);
+             }
+        }
     }
 
     // Add manually added dependencies (from add_dependencies command)
@@ -1302,12 +1339,15 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     }
 }
 
-void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter&, const std::vector<std::string>&, const std::vector<std::string>&) {
+void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp, const std::vector<std::string>&, const std::vector<std::string>&) {
     BuildTask task;
     task.id = name_;
     task.parent_target = this;
     task.always_run = true;
     task.working_dir = binary_dir_;
+
+    const auto& custom_rules = interp.get_custom_command_rules();
+    std::set<std::string> generated_cc_tasks;
 
     for (const auto& custom_cmd : custom_commands_) {
         task.commands.push_back(custom_cmd.command);
@@ -1332,7 +1372,15 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
         } else {
             std::filesystem::path p(dep_name);
             if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
-            task.inputs.push_back(p.string());
+            std::string normalized = p.lexically_normal().string();
+
+            // Check if a custom command rule produces this file
+            auto cc_it = custom_rules.find(normalized);
+            if (cc_it != custom_rules.end()) {
+                generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated_cc_tasks);
+                task.dependencies.insert(cc_it->second->outputs[0]);
+            }
+            task.inputs.push_back(normalized);
         }
     }
 

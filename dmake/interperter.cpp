@@ -366,8 +366,13 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     }
 
     // Link dependency resolution (adding inputs to link tasks)
+    // Static libraries are just .o archives — they don't link against other libs,
+    // so adding link-library inputs would create spurious (and circular) dependencies.
     for (const auto& name : targets_to_build) {
         auto target = targets_[name];
+        if (target->get_type() == TargetType::STATIC_LIBRARY)
+            continue;
+
         std::string out_path = target->get_output_path();
 
         // For custom targets, out_path might be empty or same as name
@@ -942,6 +947,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         print_message("WARNING", "dmake does not support cpack (yet). Ignoring..");
         return {};
     }
+
+
 
     // Helper to check if a path exists, trying with and without .cmake extension
     auto try_path = [this](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
@@ -2314,7 +2321,8 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
         if (!remaining.empty()) {
             print_message("AUTHOR_WARNING",
                           "Malformed if() condition - unexpected tokens: " + remaining +
-                          "\n  Condition evaluates to FALSE (CMake compatibility mode)");
+                          "\n  Condition evaluates to FALSE (CMake compatibility mode)" +
+                          "\n  in " + current_file_ + ":" + std::to_string(row + 1));
         }
         return false;
     }
