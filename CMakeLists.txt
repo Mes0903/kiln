@@ -51,6 +51,13 @@ pkg_check_modules(PCRE2 REQUIRED libpcre2-8)
 target_include_directories(dmake PUBLIC ${PCRE2_INCLUDE_DIRS})
 target_link_libraries(dmake PUBLIC ${PCRE2_LIBRARIES})
 
+find_package(CURL REQUIRED)
+target_link_libraries(dmake PUBLIC CURL::libcurl)
+
+pkg_check_modules(ARCHIVE REQUIRED libarchive)
+target_include_directories(dmake PUBLIC ${ARCHIVE_INCLUDE_DIRS})
+target_link_libraries(dmake PUBLIC ${ARCHIVE_LIBRARIES})
+
 find_package(CLI11 CONFIG REQUIRED)
 
 add_executable(dmake_cli dmake-cli/main.cpp)

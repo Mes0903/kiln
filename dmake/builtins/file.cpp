@@ -3,6 +3,7 @@
 #include "../profiler.hpp"
 #include "../command_parser.hpp"
 #include "../cache_store.hpp"
+#include "../utils.hpp"
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -12,6 +13,9 @@
 #include <ctime>
 #include <chrono>
 #include <sys/stat.h>
+#include <curl/curl.h>
+#include <archive.h>
+#include <archive_entry.h>
 
 namespace dmake {
 
@@ -1326,6 +1330,377 @@ void register_file_builtins(Interpreter& interp) {
             if (!result_var.empty()) {
                 interp.set_variable(result_var, "0");
             }
+        } else if (operation == "DOWNLOAD") {
+            // file(DOWNLOAD <url> [<file>] [STATUS <var>] [LOG <var>] [TIMEOUT <sec>]
+            //      [INACTIVITY_TIMEOUT <sec>] [SHOW_PROGRESS] [TLS_VERIFY <ON|OFF>]
+            //      [TLS_CAINFO <file>] [USERPWD <u:p>] [HTTPHEADER <hdr>...]
+            //      [EXPECTED_HASH <ALGO>=<value>] [EXPECTED_MD5 <value>])
+            CommandParser parser("file", "DOWNLOAD");
+            std::string url, file_path, status_var, log_var;
+            std::string timeout_str, inactivity_timeout_str;
+            std::string tls_verify_str, tls_cainfo, userpwd;
+            std::string expected_hash_str, expected_md5;
+            std::vector<std::string> http_headers;
+            bool show_progress = false;
+
+            parser.positional(url, "url");
+            parser.positional(file_path, "file", false);
+            parser.value("STATUS", status_var);
+            parser.value("LOG", log_var);
+            parser.value("TIMEOUT", timeout_str);
+            parser.value("INACTIVITY_TIMEOUT", inactivity_timeout_str);
+            parser.flag("SHOW_PROGRESS", show_progress);
+            parser.value("TLS_VERIFY", tls_verify_str);
+            parser.value("TLS_CAINFO", tls_cainfo);
+            parser.value("USERPWD", userpwd);
+            parser.list("HTTPHEADER", http_headers);
+            parser.value("EXPECTED_HASH", expected_hash_str);
+            parser.value("EXPECTED_MD5", expected_md5);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            // Parse expected hash
+            std::string hash_algo, hash_value;
+            if (!expected_hash_str.empty()) {
+                auto eq_pos = expected_hash_str.find('=');
+                if (eq_pos == std::string::npos) {
+                    interp.set_fatal_error("file(DOWNLOAD) EXPECTED_HASH must be ALGO=value");
+                    return;
+                }
+                hash_algo = expected_hash_str.substr(0, eq_pos);
+                hash_value = expected_hash_str.substr(eq_pos + 1);
+                std::transform(hash_algo.begin(), hash_algo.end(), hash_algo.begin(),
+                               [](unsigned char c) { return std::toupper(c); });
+                std::transform(hash_value.begin(), hash_value.end(), hash_value.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                if (hash_algo != "SHA256" && hash_algo != "MD5") {
+                    interp.set_fatal_error("file(DOWNLOAD) unsupported hash algorithm: " + hash_algo);
+                    return;
+                }
+            } else if (!expected_md5.empty()) {
+                hash_algo = "MD5";
+                hash_value = expected_md5;
+                std::transform(hash_value.begin(), hash_value.end(), hash_value.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+            }
+
+            // Resolve output file path
+            std::filesystem::path out_path;
+            if (!file_path.empty()) {
+                out_path = file_path;
+                if (!out_path.is_absolute()) {
+                    out_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_BINARY_DIR")) / out_path;
+                }
+            }
+
+            // If we have an expected hash and the file already exists, check it
+            if (!hash_algo.empty() && !out_path.empty() && std::filesystem::exists(out_path)) {
+                std::ifstream existing(out_path, std::ios::binary);
+                if (existing) {
+                    std::string content((std::istreambuf_iterator<char>(existing)),
+                                        std::istreambuf_iterator<char>());
+                    std::string existing_hash;
+                    if (hash_algo == "SHA256") {
+                        existing_hash = dmake::sha256(content).to_string();
+                    } else {
+                        existing_hash = dmake::md5(content).to_string();
+                    }
+                    if (existing_hash == hash_value) {
+                        // File already matches, skip download
+                        if (!status_var.empty()) {
+                            interp.set_variable(status_var, "0;\"Already exists with correct hash\"");
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // Perform download with libcurl
+            struct DownloadData {
+                std::string buffer;
+                std::string log;
+            };
+            DownloadData dl_data;
+
+            auto write_callback = +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+                auto* data = static_cast<DownloadData*>(userdata);
+                size_t total = size * nmemb;
+                data->buffer.append(ptr, total);
+                return total;
+            };
+
+            auto progress_callback = +[](void* /*clientp*/, curl_off_t dltotal, curl_off_t dlnow,
+                                          curl_off_t /*ultotal*/, curl_off_t /*ulnow*/) -> int {
+                if (dltotal > 0) {
+                    int pct = static_cast<int>(dlnow * 100 / dltotal);
+                    std::cerr << "\r[download] " << pct << "% (" << dlnow << "/" << dltotal << " bytes)" << std::flush;
+                }
+                return 0;
+            };
+
+            CURL* curl = curl_easy_init();
+            if (!curl) {
+                if (!status_var.empty()) {
+                    interp.set_variable(status_var, "1;\"Failed to initialize curl\"");
+                } else {
+                    interp.set_fatal_error("file(DOWNLOAD) failed to initialize curl");
+                }
+                return;
+            }
+
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &dl_data);
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+            curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+
+            // TLS verification (default ON)
+            bool verify_tls = true;
+            if (!tls_verify_str.empty()) {
+                std::string upper = tls_verify_str;
+                std::transform(upper.begin(), upper.end(), upper.begin(),
+                               [](unsigned char c) { return std::toupper(c); });
+                if (upper == "OFF" || upper == "FALSE" || upper == "0" || upper == "NO") {
+                    verify_tls = false;
+                }
+            }
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_tls ? 1L : 0L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_tls ? 2L : 0L);
+
+            if (!tls_cainfo.empty()) {
+                curl_easy_setopt(curl, CURLOPT_CAINFO, tls_cainfo.c_str());
+            }
+
+            if (!timeout_str.empty()) {
+                long timeout_sec = std::stol(timeout_str);
+                curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_sec);
+            }
+
+            if (!inactivity_timeout_str.empty()) {
+                long inact_sec = std::stol(inactivity_timeout_str);
+                curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+                curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, inact_sec);
+            }
+
+            if (!userpwd.empty()) {
+                curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+            }
+
+            struct curl_slist* headers_list = nullptr;
+            for (const auto& hdr : http_headers) {
+                headers_list = curl_slist_append(headers_list, hdr.c_str());
+            }
+            if (headers_list) {
+                curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers_list);
+            }
+
+            if (show_progress) {
+                curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+                curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+            }
+
+            CURLcode res = curl_easy_perform(curl);
+
+            if (show_progress && res == CURLE_OK) {
+                std::cerr << "\n";  // newline after progress
+            }
+
+            long http_code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+            if (headers_list) {
+                curl_slist_free_all(headers_list);
+            }
+            curl_easy_cleanup(curl);
+
+            if (res != CURLE_OK) {
+                std::string err_msg = curl_easy_strerror(res);
+                if (!log_var.empty()) {
+                    interp.set_variable(log_var, err_msg);
+                }
+                if (!status_var.empty()) {
+                    interp.set_variable(status_var,
+                        std::to_string(static_cast<int>(res)) + ";\"" + err_msg + "\"");
+                } else {
+                    interp.set_fatal_error("file(DOWNLOAD) failed for \"" + url + "\": " + err_msg);
+                }
+                return;
+            }
+
+            // Verify hash before writing
+            if (!hash_algo.empty()) {
+                std::string computed;
+                if (hash_algo == "SHA256") {
+                    computed = dmake::sha256(dl_data.buffer).to_string();
+                } else {
+                    computed = dmake::md5(dl_data.buffer).to_string();
+                }
+                if (computed != hash_value) {
+                    std::string err = "file(DOWNLOAD) hash mismatch for \"" + url + "\"\n"
+                                      "  expected: " + hash_value + "\n"
+                                      "  actual:   " + computed;
+                    if (!status_var.empty()) {
+                        interp.set_variable(status_var, "1;\"Hash mismatch\"");
+                    } else {
+                        interp.set_fatal_error(err);
+                    }
+                    return;
+                }
+            }
+
+            // Write to file if path given
+            if (!out_path.empty()) {
+                std::filesystem::create_directories(out_path.parent_path());
+                std::ofstream out(out_path, std::ios::binary);
+                if (!out) {
+                    if (!status_var.empty()) {
+                        interp.set_variable(status_var, "1;\"Could not write file\"");
+                    } else {
+                        interp.set_fatal_error("file(DOWNLOAD) could not write to: " + out_path.string());
+                    }
+                    return;
+                }
+                out.write(dl_data.buffer.data(), static_cast<std::streamsize>(dl_data.buffer.size()));
+            }
+
+            if (!log_var.empty()) {
+                interp.set_variable(log_var, "Downloaded " + url + " (" +
+                                    std::to_string(dl_data.buffer.size()) + " bytes)");
+            }
+            if (!status_var.empty()) {
+                interp.set_variable(status_var, "0;\"No error\"");
+            }
+        } else if (operation == "ARCHIVE_EXTRACT") {
+            // file(ARCHIVE_EXTRACT INPUT <archive> [DESTINATION <dir>]
+            //      [PATTERNS <pat>...] [LIST_ONLY] [VERBOSE] [TOUCH])
+            CommandParser parser("file", "ARCHIVE_EXTRACT");
+            std::string input_file, destination;
+            std::vector<std::string> patterns;
+            bool list_only = false, verbose = false, touch = false;
+
+            parser.value("INPUT", input_file);
+            parser.value("DESTINATION", destination);
+            parser.list("PATTERNS", patterns);
+            parser.flag("LIST_ONLY", list_only);
+            parser.flag("VERBOSE", verbose);
+            parser.flag("TOUCH", touch);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            if (input_file.empty()) {
+                interp.set_fatal_error("file(ARCHIVE_EXTRACT) requires INPUT");
+                return;
+            }
+
+            // Resolve input path
+            std::filesystem::path in_path = input_file;
+            if (!in_path.is_absolute()) {
+                in_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / in_path;
+            }
+
+            if (!std::filesystem::exists(in_path)) {
+                interp.set_fatal_error("file(ARCHIVE_EXTRACT) input file does not exist: " + in_path.string());
+                return;
+            }
+
+            // Resolve destination (default: CMAKE_CURRENT_BINARY_DIR)
+            std::filesystem::path dest_path;
+            if (!destination.empty()) {
+                dest_path = destination;
+                if (!dest_path.is_absolute()) {
+                    dest_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_BINARY_DIR")) / dest_path;
+                }
+            } else {
+                dest_path = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+            }
+
+            if (!list_only) {
+                std::filesystem::create_directories(dest_path);
+            }
+
+            // Open archive for reading
+            struct archive* a = archive_read_new();
+            archive_read_support_format_all(a);
+            archive_read_support_filter_all(a);
+
+            int r = archive_read_open_filename(a, in_path.string().c_str(), 16384);
+            if (r != ARCHIVE_OK) {
+                std::string err = archive_error_string(a);
+                archive_read_free(a);
+                interp.set_fatal_error("file(ARCHIVE_EXTRACT) could not open archive: " + in_path.string() + ": " + err);
+                return;
+            }
+
+            // Set up disk writer for extraction
+            struct archive* ext = nullptr;
+            if (!list_only) {
+                ext = archive_write_disk_new();
+                int flags = ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS;
+                if (!touch) {
+                    flags |= ARCHIVE_EXTRACT_TIME;
+                }
+                archive_write_disk_set_options(ext, flags);
+                archive_write_disk_set_standard_lookup(ext);
+            }
+
+            struct archive_entry* entry;
+            while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+                std::string pathname = archive_entry_pathname(entry);
+
+                // Apply pattern filtering
+                if (!patterns.empty()) {
+                    bool matched = false;
+                    for (const auto& pat : patterns) {
+                        if (matches_glob(pathname, pat)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        archive_read_data_skip(a);
+                        continue;
+                    }
+                }
+
+                if (list_only) {
+                    std::cout << pathname << "\n";
+                    archive_read_data_skip(a);
+                    continue;
+                }
+
+                if (verbose) {
+                    std::cerr << pathname << "\n";
+                }
+
+                // Set destination path
+                std::filesystem::path full_path = dest_path / pathname;
+                archive_entry_set_pathname(entry, full_path.string().c_str());
+
+                r = archive_write_header(ext, entry);
+                if (r != ARCHIVE_OK) {
+                    std::cerr << "file(ARCHIVE_EXTRACT) warning: " << archive_error_string(ext) << "\n";
+                } else if (archive_entry_size(entry) > 0) {
+                    const void* buff;
+                    size_t size;
+                    la_int64_t offset;
+                    while ((r = archive_read_data_block(a, &buff, &size, &offset)) == ARCHIVE_OK) {
+                        r = archive_write_data_block(ext, buff, size, offset);
+                        if (r != ARCHIVE_OK) {
+                            std::cerr << "file(ARCHIVE_EXTRACT) warning: " << archive_error_string(ext) << "\n";
+                            break;
+                        }
+                    }
+                    if (r != ARCHIVE_OK && r != ARCHIVE_EOF) {
+                        std::cerr << "file(ARCHIVE_EXTRACT) warning: " << archive_error_string(a) << "\n";
+                    }
+                }
+                archive_write_finish_entry(ext);
+            }
+
+            if (ext) {
+                archive_write_close(ext);
+                archive_write_free(ext);
+            }
+            archive_read_close(a);
+            archive_read_free(a);
         } else {
             interp.set_fatal_error("file() sub-command not implemented: " + operation);
         }
