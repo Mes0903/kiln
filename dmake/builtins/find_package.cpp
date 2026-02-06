@@ -49,7 +49,7 @@ struct VersionComponents {
 VersionComponents parse_version(const std::string& version) {
     VersionComponents v;
     v.full = version;
-    
+
     if (version.empty()) {
         v.count = "0";
         return v;
@@ -70,7 +70,7 @@ VersionComponents parse_version(const std::string& version) {
     if (parts.size() > 1) v.minor = parts[1];
     if (parts.size() > 2) v.patch = parts[2];
     if (parts.size() > 3) v.tweak = parts[3];
-    
+
     return v;
 }
 
@@ -121,14 +121,13 @@ void register_find_package_builtins(Interpreter& interp) {
             for (const auto& comp : components) {
                 interp.set_variable(package_name + "_FIND_REQUIRED_" + comp, "TRUE");
             }
-            for (const auto& comp : optional_components) {
-                interp.set_variable(package_name + "_FIND_REQUIRED_" + comp, "FALSE");
-            }
+            // No need to set false if not required - CMake only defines it when true
         }
 
         // Set <Package>_FIND_REQUIRED
-        interp.set_variable(package_name + "_FIND_REQUIRED", required ? "TRUE" : "FALSE");
-
+        if(required) {
+            interp.set_variable(package_name + "_FIND_REQUIRED", "TRUE");
+        }
         // Set <Package>_FIND_QUIETLY
         interp.set_variable(package_name + "_FIND_QUIETLY", quiet ? "TRUE" : "FALSE");
 
@@ -196,10 +195,10 @@ void register_find_package_builtins(Interpreter& interp) {
         // CMake logic: If CONFIG is specified, skip Module mode.
         // If neither CONFIG nor NO_MODULE is specified, try Module mode.
         bool try_module = !config && !no_module;
-        
+
         if (try_module) {
             std::vector<std::filesystem::path> module_paths;
-            
+
             // 1.1 Check CMAKE_MODULE_PATH
             std::string module_path_var = interp.get_variable("CMAKE_MODULE_PATH");
             if (!module_path_var.empty()) {
@@ -212,7 +211,7 @@ void register_find_package_builtins(Interpreter& interp) {
                 }
                 module_paths.push_back(module_path_var.substr(start));
             }
-            
+
             // 1.2 System module paths
             std::vector<std::string> system_modules = {
                 "/usr/share/cmake/Modules",
@@ -221,17 +220,17 @@ void register_find_package_builtins(Interpreter& interp) {
                 "/usr/lib/x86_64-linux-gnu/cmake/Modules"
             };
             for(const auto& p : system_modules) module_paths.push_back(p);
-            
+
             std::string module_filename = "Find" + package_name + ".cmake";
             std::filesystem::path found_module;
-            
+
             for(const auto& path : module_paths) {
                 if(interp.cached_file_exists(path, module_filename)) {
                     found_module = path / module_filename;
                     break;
                 }
             }
-            
+
             if (!found_module.empty()) {
                 if (!quiet) {
                      interp.print_message("STATUS", "Found module: " + found_module.string());

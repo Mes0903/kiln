@@ -326,6 +326,101 @@ void register_process_builtins(Interpreter& interp) {
                 Profiler::Args({{"cmd", profile_cmd}}));
         }
     });
+
+    // Deprecated CMake command, still needed by projects like MariaDB
+    interp.add_builtin("exec_program", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("exec_program requires at least one argument (executable)");
+            return;
+        }
+
+        // Parse: exec_program(exe [dir] [ARGS ...] [OUTPUT_VARIABLE var] [RETURN_VALUE var])
+        // The first arg is the executable. The second arg is the working directory
+        // ONLY if it's not a keyword.
+        static const auto is_keyword = [](const std::string& s) {
+            return s == "ARGS" || s == "OUTPUT_VARIABLE" || s == "RETURN_VALUE";
+        };
+
+        std::string executable = args[0];
+        std::string working_dir;
+        std::string output_variable;
+        std::string return_value_var;
+        std::vector<std::string> exec_args;
+
+        size_t i = 1;
+
+        // Optional positional working directory
+        if (i < args.size() && !is_keyword(args[i])) {
+            working_dir = args[i];
+            ++i;
+        }
+
+        // Parse keyword arguments
+        while (i < args.size()) {
+            if (args[i] == "ARGS") {
+                ++i;
+                while (i < args.size() && !is_keyword(args[i])) {
+                    exec_args.push_back(args[i]);
+                    ++i;
+                }
+            } else if (args[i] == "OUTPUT_VARIABLE") {
+                ++i;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("exec_program: OUTPUT_VARIABLE requires a variable name");
+                    return;
+                }
+                output_variable = args[i];
+                ++i;
+            } else if (args[i] == "RETURN_VALUE") {
+                ++i;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("exec_program: RETURN_VALUE requires a variable name");
+                    return;
+                }
+                return_value_var = args[i];
+                ++i;
+            } else {
+                // Unknown argument - treat as end of known args
+                // CMake silently ignores these
+                ++i;
+            }
+        }
+
+        // Build the command vector: executable + args
+        std::vector<std::string> command;
+        command.push_back(executable);
+        command.insert(command.end(), exec_args.begin(), exec_args.end());
+
+        ProcessOptions options;
+        options.working_dir = working_dir;
+
+        // When OUTPUT_VARIABLE is set, capture both stdout+stderr and suppress console output
+        std::string dummy_output;
+        if (!output_variable.empty()) {
+            options.output_variable = &dummy_output;
+            options.error_variable = &dummy_output;
+            options.output_quiet = true;
+            options.error_quiet = true;
+        }
+
+        std::vector<std::vector<std::string>> commands = { command };
+        PipelineResult res = execute_pipeline(commands, options);
+
+        if (!output_variable.empty()) {
+            // exec_program combines stdout+stderr into one variable
+            std::string combined = res.captured_stdout + res.captured_stderr;
+            // Strip trailing newline like CMake does
+            while (!combined.empty() && combined.back() == '\n') {
+                combined.pop_back();
+            }
+            interp.set_variable(output_variable, combined);
+        }
+
+        if (!return_value_var.empty()) {
+            int exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
+            interp.set_variable(return_value_var, std::to_string(exit_code));
+        }
+    });
 }
 
 } // namespace dmake

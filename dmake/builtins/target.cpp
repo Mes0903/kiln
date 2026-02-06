@@ -1196,7 +1196,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("include_directories", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("include_directories() requires at least one directory argument");
             return;
         }
 
