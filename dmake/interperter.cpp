@@ -734,10 +734,17 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             interp.set_current_file(cmake_file.string());
 
             // Parse and interpret the subdirectory CMakeLists.txt
+            std::string subdir_filename = cmake_file.filename().string();
+
+            ProfileScope parse_profile("parse " + subdir + "/" + subdir_filename, "parse");
             Parser parser(content, cmake_file.string());
             auto ast = parser.parse();
+            parse_profile.stop();
+
             if (ast) {
+                ProfileScope interpret_profile("interpret " + subdir + "/" + subdir_filename, "interpret");
                 auto res = interp.interpret(ast.value());
+                interpret_profile.stop();
                 if (!res) {
                     interp.set_fatal_error(res.error());
                 } else {
@@ -972,10 +979,11 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-    ProfileScope file_profile("include " + std::filesystem::path(abs_path).filename().string(), "interpret");
-
+    ProfileScope parse_profile("parse " + abs_path, "parse");
     Parser parser(content, path.string());
     auto ast = parser.parse();
+    parse_profile.stop();
+
     if (!ast) {
         return std::unexpected(InterpreterError{path.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
     }
@@ -994,7 +1002,9 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     set_variable("CMAKE_CURRENT_LIST_DIR", abs_dir);
     set_current_file(abs_path);
 
+    ProfileScope interpret_profile("interpret " + abs_path, "interpret");
     auto res = interpret(ast.value());
+    interpret_profile.stop();
 
     set_variable("CMAKE_CURRENT_LIST_FILE", old_list_file);
     set_variable("CMAKE_CURRENT_LIST_DIR", old_list_dir);
