@@ -501,6 +501,13 @@ void register_target_builtins(Interpreter& interp) {
         // CMake allows an implicit command after the target name (and optional ALL):
         //   add_custom_target(name [ALL] cmd args... [DEPENDS ...])
         // We normalize this to the explicit COMMAND form before parsing.
+        //
+        // Undocumented CMake behaviour: implicit command args can be mixed with
+        // explicit COMMAND keywords. The implicit args become the first command
+        // and each COMMAND keyword adds another. MariaDB's build relies on this:
+        //   add_custom_target(coverage_report
+        //     lcov --capture ...
+        //     COMMAND genhtml ...)
         static const std::set<std::string> keywords = {
             "COMMAND", "DEPENDS", "WORKING_DIRECTORY", "COMMENT", "SOURCES",
             "VERBATIM", "COMMAND_EXPAND_LISTS", "ALL", "BYPRODUCTS", "JOB_POOL",
@@ -521,15 +528,17 @@ void register_target_builtins(Interpreter& interp) {
             while (i < args.size() && keywords.find(args[i]) == keywords.end()) {
                 implicit_cmd.push_back(args[i++]);
             }
-            // Check for mixing old and new syntax
             if (!implicit_cmd.empty()) {
-                // Check if there's also an explicit COMMAND keyword in remaining args
+                // Warn if mixing implicit args with explicit COMMAND (undocumented CMake behaviour)
+                bool has_explicit_command = false;
                 for (size_t j = i; j < args.size(); ++j) {
-                    if (args[j] == "COMMAND") {
-                        interp.set_fatal_error("add_custom_target(): cannot mix implicit command syntax "
-                            "(arguments after target name) with explicit COMMAND keyword");
-                        return;
-                    }
+                    if (args[j] == "COMMAND") { has_explicit_command = true; break; }
+                }
+                if (has_explicit_command) {
+                    interp.print_message("WARNING",
+                        "add_custom_target(" + args[0] + "): mixing implicit command arguments "
+                        "with explicit COMMAND keywords is undocumented CMake behaviour. "
+                        "Prefer using COMMAND for all commands.");
                 }
                 normalized_args.push_back("COMMAND");
                 normalized_args.insert(normalized_args.end(), implicit_cmd.begin(), implicit_cmd.end());
