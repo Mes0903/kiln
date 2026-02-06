@@ -564,7 +564,7 @@ void register_string_builtins(Interpreter& interp) {
                         matches.push_back(i->str());
                     }
 
-                    CMakeList result;
+                    CMakeArray result;
                     for (const auto& m : matches) {
                         result.append(m);
                     }
@@ -1205,7 +1205,7 @@ void register_string_builtins(Interpreter& interp) {
 
             if (has_separate_args) {
                 // Return [absolute_path, arg1, arg2, ...]
-                CMakeList result;
+                CMakeArray result;
                 result.append(program_path);
                 for (size_t i = 1; i < parsed_args.size(); ++i) {
                     result.append(parsed_args[i]);
@@ -1213,7 +1213,7 @@ void register_string_builtins(Interpreter& interp) {
                 interp.set_variable(var_name, result.to_string());
             } else {
                 // Return [absolute_path, remaining_args_as_string]
-                CMakeList result;
+                CMakeArray result;
                 result.append(program_path);
 
                 if (parsed_args.size() > 1) {
@@ -1229,7 +1229,7 @@ void register_string_builtins(Interpreter& interp) {
             }
         } else {
             // No PROGRAM option, just return parsed args as list
-            CMakeList result;
+            CMakeArray result;
             for (const auto& arg : parsed_args) {
                 result.append(arg);
             }

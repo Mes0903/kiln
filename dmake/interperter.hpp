@@ -16,7 +16,7 @@
 #include <expected>
 #include <optional>
 #include <filesystem>
-#include "CMakeList.hpp"
+#include "CMakeArray.hpp"
 #include "toolchain.hpp"
 #include "cache_store.hpp"
 #include "shadow_map.hpp"
@@ -348,7 +348,7 @@ public:
     friend void register_install_builtins(Interpreter& interp);
     friend void register_source_properties_builtins(Interpreter& interp);
 
-    CMakeList from_arguments(const std::vector<std::string>& args);
+    CMakeArray from_arguments(const std::vector<std::string>& args);
 
     void request_return() { return_requested_ = true; }
     bool is_return_requested() const { return return_requested_; }

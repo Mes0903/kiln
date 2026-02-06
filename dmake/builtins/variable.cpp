@@ -34,7 +34,7 @@ void register_variable_builtins(Interpreter& interp) {
             } else {
                 // Combine remaining arguments into value
                 std::vector<std::string> value_args(args.begin() + 1, args.end());
-                CMakeList value_list(value_args);
+                CMakeArray value_list(value_args);
                 setenv(env_var_name.c_str(), value_list.to_string().c_str(), 1);
             }
             return;
@@ -66,7 +66,7 @@ void register_variable_builtins(Interpreter& interp) {
         if (cache_it != args.end()) {
             // Value is everything between var_name and CACHE keyword
             std::vector<std::string> value_args(args.begin() + 1, cache_it);
-            CMakeList value_list(value_args);
+            CMakeArray value_list(value_args);
             std::string value = value_list.to_string();
 
             // Set in cache namespace only - CACHE variables are globally accessible
@@ -80,7 +80,7 @@ void register_variable_builtins(Interpreter& interp) {
         if (parent_it != args.end()) {
             // Value is everything between var_name and PARENT_SCOPE keyword
             std::vector<std::string> value_args(args.begin() + 1, parent_it);
-            CMakeList value_list(value_args);
+            CMakeArray value_list(value_args);
             std::string value = value_list.to_string();
 
             // Set in parent scope (handles both function and subdirectory contexts)
@@ -120,7 +120,7 @@ void register_variable_builtins(Interpreter& interp) {
         }
 
         std::vector<std::string> value_args(args.begin() + 1, args.end());
-        CMakeList value_list(value_args);
+        CMakeArray value_list(value_args);
         std::string value = value_list.to_string();
 
         interp.set_variable(var_name, value);
@@ -218,7 +218,7 @@ void register_variable_builtins(Interpreter& interp) {
         }
 
         std::string prefix;
-        CMakeList options, one_value_keywords, multi_value_keywords;
+        CMakeArray options, one_value_keywords, multi_value_keywords;
         std::vector<std::string> to_parse;
 
         // Determine which form we're using
@@ -246,9 +246,9 @@ void register_variable_builtins(Interpreter& interp) {
             }
 
             prefix = args[2];
-            options = CMakeList(args[3]);
-            one_value_keywords = CMakeList(args[4]);
-            multi_value_keywords = CMakeList(args[5]);
+            options = CMakeArray(args[3]);
+            one_value_keywords = CMakeArray(args[4]);
+            multi_value_keywords = CMakeArray(args[5]);
 
             // Read arguments from ARGV variables
             std::string argc_str = interp.get_variable("ARGC");
@@ -277,9 +277,9 @@ void register_variable_builtins(Interpreter& interp) {
             }
 
             prefix = args[0];
-            options = CMakeList(args[1]);
-            one_value_keywords = CMakeList(args[2]);
-            multi_value_keywords = CMakeList(args[3]);
+            options = CMakeArray(args[1]);
+            one_value_keywords = CMakeArray(args[2]);
+            multi_value_keywords = CMakeArray(args[3]);
 
             // Remaining arguments are what we parse
             to_parse.assign(args.begin() + 4, args.end());
@@ -351,7 +351,7 @@ void register_variable_builtins(Interpreter& interp) {
                 }
 
                 // Set variable (even if empty list)
-                CMakeList value_list(values);
+                CMakeArray value_list(values);
                 interp.set_variable(prefix + "_" + keyword, value_list.to_string());
                 continue;
             }
@@ -362,10 +362,10 @@ void register_variable_builtins(Interpreter& interp) {
         }
 
         // Set special output variables
-        CMakeList unparsed_list(unparsed);
+        CMakeArray unparsed_list(unparsed);
         interp.set_variable(prefix + "_UNPARSED_ARGUMENTS", unparsed_list.to_string());
 
-        CMakeList missing_list(keywords_missing_values);
+        CMakeArray missing_list(keywords_missing_values);
         interp.set_variable(prefix + "_KEYWORDS_MISSING_VALUES", missing_list.to_string());
     });
 

@@ -1,7 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
-#include "../CMakeList.hpp"
+#include "../CMakeArray.hpp"
 #include <filesystem>
 #include <algorithm>
 

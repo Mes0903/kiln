@@ -1,6 +1,6 @@
 #include "genex_evaluator.hpp"
 #include "target.hpp"
-#include "CMakeList.hpp"
+#include "CMakeArray.hpp"
 #include "language.hpp"
 #include <algorithm>
 #include <cctype>
@@ -675,10 +675,9 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
                 // This allows:
                 //   - $<1:-Wall -Wextra> to expand into multiple separate flags
                 //   - $<$<BOOL:ON>:${LIST_VAR}> to expand semicolon-separated lists
-                CMakeList list(*eval_result);
-                for (const auto& item : list) {
+                for (auto sv : CMakeArrayView(*eval_result)) {
                     // Further split by whitespace
-                    std::istringstream iss(item);
+                    std::istringstream iss{std::string(sv)};
                     std::string token;
                     while (iss >> token) {
                         result.push_back(token);

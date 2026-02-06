@@ -63,13 +63,13 @@ void fake_cmake_compiler_checks_and_init(
         interp.set_variable("CMAKE_COMPILER_IS_GNUCXX", "1");
     }
     if (!cxx_info.implicit_includes.empty()) {
-        interp.set_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeList(cxx_info.implicit_includes).to_string());
+        interp.set_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(cxx_info.implicit_includes).to_string());
     }
     if (!cxx_info.implicit_link_dirs.empty()) {
-        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", CMakeList(cxx_info.implicit_link_dirs).to_string());
+        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", CMakeArray(cxx_info.implicit_link_dirs).to_string());
     }
     if (!cxx_info.implicit_link_libs.empty()) {
-        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeList(cxx_info.implicit_link_libs).to_string());
+        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeArray(cxx_info.implicit_link_libs).to_string());
     }
 
     // C compiler platform info
@@ -81,13 +81,13 @@ void fake_cmake_compiler_checks_and_init(
         interp.set_variable("CMAKE_COMPILER_IS_GNUCC", "1");
     }
     if (!c_info.implicit_includes.empty()) {
-        interp.set_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeList(c_info.implicit_includes).to_string());
+        interp.set_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(c_info.implicit_includes).to_string());
     }
     if (!c_info.implicit_link_dirs.empty()) {
-        interp.set_variable("CMAKE_C_IMPLICIT_LINK_DIRECTORIES", CMakeList(c_info.implicit_link_dirs).to_string());
+        interp.set_variable("CMAKE_C_IMPLICIT_LINK_DIRECTORIES", CMakeArray(c_info.implicit_link_dirs).to_string());
     }
     if (!c_info.implicit_link_libs.empty()) {
-        interp.set_variable("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeList(c_info.implicit_link_libs).to_string());
+        interp.set_variable("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeArray(c_info.implicit_link_libs).to_string());
     }
 
     // System-level info (same for both compilers)
@@ -340,15 +340,15 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     }
 
     // Handle CMAKE_EXE_LINKER_FLAGS
-    CMakeList exe_flags_list(get_variable("CMAKE_EXE_LINKER_FLAGS"));
-    for (const auto& flag : exe_flags_list) {
-        if (!flag.empty()) exe_linker_flags.push_back(flag);
+    auto exe_flags_str = get_variable("CMAKE_EXE_LINKER_FLAGS");
+    for (auto sv : CMakeArrayView(exe_flags_str)) {
+        if (!sv.empty()) exe_linker_flags.emplace_back(sv);
     }
 
     // Handle CMAKE_SHARED_LINKER_FLAGS
-    CMakeList shared_flags_list(get_variable("CMAKE_SHARED_LINKER_FLAGS"));
-    for (const auto& flag : shared_flags_list) {
-        if (!flag.empty()) shared_linker_flags.push_back(flag);
+    auto shared_flags_str = get_variable("CMAKE_SHARED_LINKER_FLAGS");
+    for (auto sv : CMakeArrayView(shared_flags_str)) {
+        if (!sv.empty()) shared_linker_flags.emplace_back(sv);
     }
 
     {
@@ -922,8 +922,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
         // If not found, search CMAKE_MODULE_PATH
         if (!found_path) {
-            CMakeList module_paths(get_variable("CMAKE_MODULE_PATH"));
-            for (const auto& dir : module_paths) {
+            auto module_path_str = get_variable("CMAKE_MODULE_PATH");
+            for (auto dir : CMakeArrayView(module_path_str)) {
                 if (!dir.empty()) {
                     found_path = find_in_dir(dir, file_path);
                     if (found_path) break;
@@ -1150,9 +1150,8 @@ std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argumen
         } else {
             if (val.empty()) continue;
             // Split by semicolon for unquoted arguments (list expansion)
-            CMakeList lst(val);
-            for(const auto& item : lst) {
-                result.push_back(item);
+            for (auto item : CMakeArrayView(val)) {
+                result.emplace_back(item);
             }
         }
     }
@@ -1349,11 +1348,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         }
 
         // Evaluate all lists and find max length
-        std::vector<CMakeList> evaluated_lists;
+        std::vector<CMakeArray> evaluated_lists;
         size_t max_length = 0;
         for (const auto& list_arg : zip.lists) {
             std::string list_name = evaluate_argument(list_arg);
-            CMakeList list(get_variable(list_name));
+            CMakeArray list(get_variable(list_name));
             max_length = std::max(max_length, list.size());
             evaluated_lists.push_back(std::move(list));
         }
@@ -1441,7 +1440,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     }
 
     loop_depth_++;
-    CMakeList items;
+    CMakeArray items;
     if (std::holds_alternative<ForeachSimple>(block.params)) {
         items = from_arguments(expand_arguments(std::get<ForeachSimple>(block.params).items));
     } else if (std::holds_alternative<ForeachRange>(block.params)) {
@@ -1471,7 +1470,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
     } else if (std::holds_alternative<ForeachIn>(block.params)) {
         const auto& in = std::get<ForeachIn>(block.params);
-        for (const auto& l : in.lists) items.append(CMakeList(get_variable(evaluate_argument(l))));
+        for (const auto& l : in.lists) items.append(CMakeArray(get_variable(evaluate_argument(l))));
         items.append(from_arguments(expand_arguments(in.items)));
     }
 
@@ -1613,7 +1612,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     variables_.push_scope();
 
     // Set function parameters
-    CMakeList all(args);
+    CMakeArray all(args);
     variables_.set("ARGC", std::to_string(all.size()));
     variables_.set("ARGV", all.to_string());
     variables_.set("ARGN", all.sublist(func.parameters.size(), all.size()).to_string());
@@ -1684,7 +1683,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     // Save and set up macro parameter substitutions (text-replacement, not variables)
     std::map<std::string, std::string> saved_substitutions = macro_substitutions_;
 
-    CMakeList all(args);
+    CMakeArray all(args);
     macro_substitutions_["ARGC"] = std::to_string(all.size());
     macro_substitutions_["ARGV"] = all.to_string();
     macro_substitutions_["ARGN"] = all.sublist(macro.parameters.size(), all.size()).to_string();
@@ -2039,8 +2038,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
             std::string list_str = evaluate_token(condition[pos++]);
 
             // Parse the list (semicolon-separated) and check if value is in it
-            CMakeList list(list_str);
-            return list.contains(value);
+            return CMakeArrayView(list_str).contains(value);
         }
         // IS_NEWER_THAN - file timestamp comparison
         else if (op == "IS_NEWER_THAN") {
@@ -2402,8 +2400,8 @@ void Interpreter::print_message(const std::string& mode, const std::string& msg,
     }
 }
 
-CMakeList Interpreter::from_arguments(const std::vector<std::string>& args) {
-    return CMakeList(args);
+CMakeArray Interpreter::from_arguments(const std::vector<std::string>& args) {
+    return CMakeArray(args);
 }
 
 void Interpreter::check_start(const std::string& message) {

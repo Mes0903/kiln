@@ -2,7 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../profiler.hpp"
-#include "../CMakeList.hpp"
+#include "../CMakeArray.hpp"
 #include <filesystem>
 #include <functional>
 #include <optional>

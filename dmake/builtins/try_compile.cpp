@@ -5,7 +5,7 @@
 #include "../cache_store.hpp"
 #include "../profiler.hpp"
 #include "../utils.hpp"
-#include "../CMakeList.hpp"
+#include "../CMakeArray.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -430,39 +430,35 @@ void register_try_compile_builtins(Interpreter& interp) {
             if (var_name == "COMPILE_DEFINITIONS") {
                 // CMAKE_FLAGS COMPILE_DEFINITIONS can contain both definitions and compiler flags
                 // Definitions start with -D, everything else is a compiler flag
-                CMakeList items(value);
-                for (const auto& item : items) {
+                for (auto item : CMakeArrayView(value)) {
                     if (item.empty()) continue;
 
                     if (item.size() >= 2 && item.substr(0, 2) == "-D") {
                         // It's a definition - strip -D and add to compile_definitions
-                        compile_definitions.push_back(item.substr(2));
+                        compile_definitions.emplace_back(item.substr(2));
                     } else if (item[0] == '-') {
                         // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
                         // Add to raw_compile_flags to be passed as-is
-                        raw_compile_flags.push_back(item);
+                        raw_compile_flags.emplace_back(item);
                     } else {
                         // Plain definition without -D prefix
-                        compile_definitions.push_back(item);
+                        compile_definitions.emplace_back(item);
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
-                CMakeList libs(value);
-                for (const auto& lib : libs) {
-                    link_libraries.push_back(lib);
+                for (auto lib : CMakeArrayView(value)) {
+                    link_libraries.emplace_back(lib);
                 }
             } else if (var_name == "LINK_DIRECTORIES") {
                 // Add to link options as -L flags
-                CMakeList dirs(value);
-                for (const auto& dir : dirs) {
+                for (auto dir : CMakeArrayView(value)) {
                     if (!dir.empty()) {
-                        link_options.push_back("-L" + dir);
+                        link_options.push_back(std::string("-L").append(dir));
                     }
                 }
             } else if (var_name == "LINK_OPTIONS") {
-                CMakeList opts(value);
-                for (const auto& opt : opts) {
-                    link_options.push_back(opt);
+                for (auto opt : CMakeArrayView(value)) {
+                    link_options.emplace_back(opt);
                 }
             }
             // Ignore other CMAKE_FLAGS variables for now
@@ -872,37 +868,33 @@ void register_try_compile_builtins(Interpreter& interp) {
 
             if (var_name == "COMPILE_DEFINITIONS") {
                 // CMAKE_FLAGS COMPILE_DEFINITIONS can contain both definitions and compiler flags
-                CMakeList items(value);
-                for (const auto& item : items) {
+                for (auto item : CMakeArrayView(value)) {
                     if (item.empty()) continue;
 
                     if (item.size() >= 2 && item.substr(0, 2) == "-D") {
                         // It's a definition - strip -D and add to compile_definitions
-                        compile_definitions.push_back(item.substr(2));
+                        compile_definitions.emplace_back(item.substr(2));
                     } else if (item[0] == '-') {
                         // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
-                        raw_compile_flags.push_back(item);
+                        raw_compile_flags.emplace_back(item);
                     } else {
                         // Plain definition without -D prefix
-                        compile_definitions.push_back(item);
+                        compile_definitions.emplace_back(item);
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
-                CMakeList libs(value);
-                for (const auto& lib : libs) {
-                    link_libraries.push_back(lib);
+                for (auto lib : CMakeArrayView(value)) {
+                    link_libraries.emplace_back(lib);
                 }
             } else if (var_name == "LINK_DIRECTORIES") {
-                CMakeList dirs(value);
-                for (const auto& dir : dirs) {
+                for (auto dir : CMakeArrayView(value)) {
                     if (!dir.empty()) {
-                        link_options.push_back("-L" + dir);
+                        link_options.push_back(std::string("-L").append(dir));
                     }
                 }
             } else if (var_name == "LINK_OPTIONS") {
-                CMakeList opts(value);
-                for (const auto& opt : opts) {
-                    link_options.push_back(opt);
+                for (auto opt : CMakeArrayView(value)) {
+                    link_options.emplace_back(opt);
                 }
             }
         }
@@ -1130,9 +1122,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         if (is_cross_compiling) {
             std::string emulator = interp.get_variable("CMAKE_CROSSCOMPILING_EMULATOR");
             if (!emulator.empty()) {
-                CMakeList emulator_parts(emulator);
-                for (const auto& part : emulator_parts) {
-                    run_cmd.push_back(part);
+                for (auto part : CMakeArrayView(emulator)) {
+                    run_cmd.emplace_back(part);
                 }
             }
         }

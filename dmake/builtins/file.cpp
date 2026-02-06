@@ -41,7 +41,7 @@ bool matches_glob(const std::string& text, const std::string& pattern) {
 }
 
 void perform_glob(Interpreter& interp, const std::string& var, const std::vector<std::string>& patterns, bool recurse, const std::string& relative) {
-    CMakeList results;
+    CMakeArray results;
     std::filesystem::path base_path = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
 
     for (const auto& pattern : patterns) {
@@ -369,7 +369,7 @@ void register_file_builtins(Interpreter& interp) {
             }
 
             // Extract strings
-            CMakeList results;
+            CMakeArray results;
             std::string current_string;
             size_t bytes_read = 0;
             size_t output_bytes = 0;

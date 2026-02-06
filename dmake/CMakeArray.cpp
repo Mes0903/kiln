@@ -1,11 +1,11 @@
-#include "CMakeList.hpp"
+#include "CMakeArray.hpp"
 #include <sstream>
 #include <algorithm>
 #include <set>
 
 namespace dmake {
 
-std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
+std::vector<std::string> CMakeArray::split_by_semicolon(const std::string& str) {
     if (str.empty()) {
         return {};
     }
@@ -39,19 +39,19 @@ std::vector<std::string> CMakeList::split_by_semicolon(const std::string& str) {
     return result;
 }
 
-CMakeList::CMakeList(const std::string& semicolon_separated)
+CMakeArray::CMakeArray(const std::string& semicolon_separated)
     : items_(split_by_semicolon(semicolon_separated)) {
 }
 
-CMakeList::CMakeList(const std::vector<std::string>& items)
+CMakeArray::CMakeArray(const std::vector<std::string>& items)
     : items_(items) {
 }
 
-CMakeList::CMakeList(std::initializer_list<std::string> items)
+CMakeArray::CMakeArray(std::initializer_list<std::string> items)
     : items_(items) {
 }
 
-std::string CMakeList::to_string() const {
+std::string CMakeArray::to_string() const {
     std::string res;
     for (size_t i = 0; i < items_.size(); ++i) {
         if (i > 0) res += ";";
@@ -60,25 +60,25 @@ std::string CMakeList::to_string() const {
     return res;
 }
 
-std::vector<std::string> CMakeList::to_vector() const {
+std::vector<std::string> CMakeArray::to_vector() const {
     return items_;
 }
 
-void CMakeList::append(const std::string& item) {
+void CMakeArray::append(const std::string& item) {
     if (item.empty()) return;
     auto parts = split_by_semicolon(item);
     items_.insert(items_.end(), parts.begin(), parts.end());
 }
 
-void CMakeList::append(const CMakeList& other) {
+void CMakeArray::append(const CMakeArray& other) {
     items_.insert(items_.end(), other.items_.begin(), other.items_.end());
 }
 
-void CMakeList::insert(size_t idx, const std::vector<std::string>& items) {
+void CMakeArray::insert(size_t idx, const std::vector<std::string>& items) {
     items_.insert(items_.begin() + idx, items.begin(), items.end());
 }
 
-void CMakeList::reverse() {
+void CMakeArray::reverse() {
     std::reverse(items_.begin(), items_.end());
 }
 
@@ -130,7 +130,7 @@ static bool natural_compare(const std::string& a, const std::string& b) {
     return a.size() < b.size();
 }
 
-void CMakeList::sort(bool natural, bool descending) {
+void CMakeArray::sort(bool natural, bool descending) {
     if (natural) {
         if (descending) {
             std::sort(items_.begin(), items_.end(), [](const std::string& a, const std::string& b) {
@@ -148,7 +148,7 @@ void CMakeList::sort(bool natural, bool descending) {
     }
 }
 
-void CMakeList::remove_duplicates() {
+void CMakeArray::remove_duplicates() {
     std::set<std::string> seen;
     std::vector<std::string> unique_items;
     for (const auto& item : items_) {
@@ -160,15 +160,59 @@ void CMakeList::remove_duplicates() {
     items_ = std::move(unique_items);
 }
 
-CMakeList CMakeList::sublist(size_t begin_idx, size_t length) const {
-    if (begin_idx >= items_.size()) return CMakeList();
+CMakeArray CMakeArray::sublist(size_t begin_idx, size_t length) const {
+    if (begin_idx >= items_.size()) return CMakeArray();
     size_t count = std::min(length, items_.size() - begin_idx);
     std::vector<std::string> sub(items_.begin() + begin_idx, items_.begin() + begin_idx + count);
-    return CMakeList(sub);
+    return CMakeArray(sub);
 }
 
-bool CMakeList::contains(const std::string& item) const {
+bool CMakeArray::contains(const std::string& item) const {
     return std::find(items_.begin(), items_.end(), item) != items_.end();
+}
+
+// --- CMakeArrayView ---
+
+CMakeArrayView::CMakeArrayView(std::string_view semicolon_separated)
+    : source_(semicolon_separated) {
+    if (source_.empty()) return;
+
+    int genex_depth = 0;
+    for (size_t i = 0; i < source_.size(); ++i) {
+        char c = source_[i];
+        if (c == '$' && i + 1 < source_.size() && source_[i + 1] == '<') {
+            genex_depth++;
+        } else if (c == '>' && genex_depth > 0) {
+            genex_depth--;
+        } else if (c == ';' && genex_depth == 0) {
+            separators_.push_back(i);
+        }
+    }
+}
+
+size_t CMakeArrayView::size() const {
+    if (source_.empty()) return 0;
+    return separators_.size() + 1;
+}
+
+std::string_view CMakeArrayView::at(size_t idx) const {
+    if (idx >= size()) {
+        throw std::out_of_range("CMakeArrayView::at: index out of range");
+    }
+    return element_at(idx);
+}
+
+bool CMakeArrayView::contains(std::string_view item) const {
+    for (size_t i = 0; i < size(); ++i) {
+        if (element_at(i) == item) return true;
+    }
+    return false;
+}
+
+std::string_view CMakeArrayView::element_at(size_t i) const {
+    size_t start = (i == 0) ? 0 : separators_[i - 1] + 1;
+    size_t end = (i < separators_.size()) ? separators_[i] : source_.size();
+    return source_.substr(start, end - start);
 }
 
 }

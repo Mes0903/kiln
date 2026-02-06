@@ -4,7 +4,7 @@
 #include "../command_parser.hpp"
 #include "../genex_parser.hpp"
 #include "../compile_features.hpp"
-#include "../CMakeList.hpp"
+#include "../CMakeArray.hpp"
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
@@ -584,8 +584,8 @@ void register_target_builtins(Interpreter& interp) {
             for (auto& cmd_args : commands) {
                 std::vector<std::string> expanded_args;
                 for (const auto& arg : cmd_args) {
-                    // Use CMakeList to split by semicolons while respecting generator expressions
-                    CMakeList list(arg);
+                    // Use CMakeArray to split by semicolons while respecting generator expressions
+                    CMakeArray list(arg);
                     auto parts = list.to_vector();
                     expanded_args.insert(expanded_args.end(), parts.begin(), parts.end());
                 }
@@ -1084,11 +1084,11 @@ void register_target_builtins(Interpreter& interp) {
             // Helper to validate genex and append as INTERFACE property (uses append_property_from_string for splitting)
             auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
                 // Split first to validate each item
-                CMakeList items(value);
+                CMakeArrayView items(value);
 
                 // EARLY VALIDATION (Layer 1) - validate genex support
-                for (const auto& val : items) {
-                    auto validation = GenexParser::validate_genex_support(val);
+                for (auto sv : items) {
+                    auto validation = GenexParser::validate_genex_support(std::string(sv));
                     if (!validation) {
                         interp.set_fatal_error("set_target_properties: " + validation.error() +
                                              " in INTERFACE_" + base_prop_name + " property");
@@ -1292,9 +1292,8 @@ void register_target_builtins(Interpreter& interp) {
         // Build set of items to remove (args may be semicolon-separated lists)
         std::set<std::string> to_remove;
         for (const auto& arg : args) {
-            CMakeList items(arg);
-            for (const auto& item : items) {
-                std::string def = item;
+            for (auto sv : CMakeArrayView(arg)) {
+                std::string def(sv);
                 // Strip -D prefix if present (CMake compatibility)
                 if (def.size() >= 2 && def[0] == '-' && def[1] == 'D') {
                     def = def.substr(2);
@@ -1305,7 +1304,7 @@ void register_target_builtins(Interpreter& interp) {
 
         // Flatten accumulated defs (may contain semicolon-separated entries), filter, store back
         auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
-        CMakeList all_defs;
+        CMakeArray all_defs;
         for (const auto& d : defs) {
             all_defs.append(d);
         }

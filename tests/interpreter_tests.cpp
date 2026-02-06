@@ -569,7 +569,7 @@ TEST_CASE("list(REMOVE_ITEM) removes", "[interpreter][list]") {
     REQUIRE(output == "b;c;e\n");
 }
 
-TEST_CASE("CMakeList handles empty lists", "[interpreter][list]") {
+TEST_CASE("CMakeArray handles empty lists", "[interpreter][list]") {
     auto output = run_script(R"(
         set(EMPTY_LIST "")
         list(LENGTH EMPTY_LIST len)
@@ -578,7 +578,7 @@ TEST_CASE("CMakeList handles empty lists", "[interpreter][list]") {
     REQUIRE(output == "0\n");
 }
 
-TEST_CASE("CMakeList handles semicolons in variable references", "[interpreter][list]") {
+TEST_CASE("CMakeArray handles semicolons in variable references", "[interpreter][list]") {
     auto output = run_script(R"(
         set(LIST1 "a;b;c")
         list(LENGTH LIST1 len)

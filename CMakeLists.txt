@@ -39,7 +39,7 @@ add_library(dmake SHARED
     dmake/builtins/source_properties.cpp
     dmake/install_executor.cpp
     dmake/profiler.cpp
-    dmake/CMakeList.cpp
+    dmake/CMakeArray.cpp
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -70,7 +70,8 @@ if(BUILD_TESTING)
         tests/shadow_map_tests.cpp
         tests/genex_tests.cpp
         tests/compile_features_tests.cpp
-        tests/source_properties_tests.cpp)
+        tests/source_properties_tests.cpp
+        tests/cmake_array_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

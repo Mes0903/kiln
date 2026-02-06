@@ -3,7 +3,7 @@
 #include "../command_parser.hpp"
 #include "../utils.hpp"
 #include "../language.hpp"
-#include "../CMakeList.hpp"
+#include "../CMakeArray.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -362,7 +362,7 @@ void register_project_builtins(Interpreter& interp) {
 
         // Get current enabled languages
         std::string current = interp.get_global_properties()["ENABLED_LANGUAGES"];
-        CMakeList enabled_langs(current);
+        CMakeArray enabled_langs(current);
 
         // Add new languages (avoid duplicates)
         for (const auto& lang : languages) {
@@ -571,7 +571,7 @@ void register_project_builtins(Interpreter& interp) {
         }
 
         // Collect source files
-        CMakeList source_files;
+        CMakeArray source_files;
         try {
             for (const auto& entry : std::filesystem::directory_iterator(dir_path)) {
                 if (!entry.is_regular_file()) continue;

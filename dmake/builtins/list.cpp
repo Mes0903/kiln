@@ -48,7 +48,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             interp.set_variable(out_var, std::to_string(list.size()));
         } else if (operation == "GET") {
             CommandParser parser("list", "GET");
@@ -65,14 +65,14 @@ void register_list_builtins(Interpreter& interp) {
             out_var = indices.back();
             indices.pop_back();
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
 
             if (list.empty()) {
                 interp.set_variable(out_var, "NOTFOUND");
                 return;
             }
 
-            CMakeList result;
+            CMakeArray result;
             for (const auto& idx_str : indices) {
                 try {
                     long idx = std::stol(idx_str);
@@ -99,7 +99,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             std::string result;
             for (size_t i = 0; i < list.size(); ++i) {
                 if (i > 0) result += glue;
@@ -114,7 +114,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             for (const auto& item : items) list.append(item);
             interp.set_variable(list_var, list.to_string());
         } else if (operation == "PREPEND") {
@@ -125,7 +125,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             // Insert items at beginning in order
             list.insert(0, items);
             interp.set_variable(list_var, list.to_string());
@@ -137,7 +137,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(out_vars, "output variables");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
 
             if (list.empty()) {
                 interp.set_fatal_error("list(POP_BACK) cannot pop from empty list");
@@ -172,7 +172,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(out_vars, "output variables");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
 
             if (list.empty()) {
                 interp.set_fatal_error("list(POP_FRONT) cannot pop from empty list");
@@ -207,7 +207,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             try {
                 long idx = std::stol(index_str);
                 if (idx < 0) {
@@ -229,7 +229,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(list_var, "list variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             list.reverse();
             interp.set_variable(list_var, list.to_string());
         } else if (operation == "SORT") {
@@ -272,7 +272,7 @@ void register_list_builtins(Interpreter& interp) {
                 }
             }
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
 
             // Handle FILE_BASENAME comparison specially
             if (file_basename) {
@@ -285,9 +285,9 @@ void register_list_builtins(Interpreter& interp) {
                     }
                     return basename_a < basename_b;
                 });
-                list = CMakeList(vec);
+                list = CMakeArray(vec);
             } else {
-                // Note: CASE is handled inside CMakeList::sort if needed
+                // Note: CASE is handled inside CMakeArray::sort if needed
                 list.sort(natural, descending);
             }
             interp.set_variable(list_var, list.to_string());
@@ -297,7 +297,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(list_var, "list variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             list.remove_duplicates();
             interp.set_variable(list_var, list.to_string());
         } else if (operation == "SUBLIST") {
@@ -309,7 +309,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             try {
                 long start = std::stol(start_str);
                 long length = std::stol(length_str);
@@ -336,7 +336,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             long found_index = -1;
             for (size_t i = 0; i < list.size(); ++i) {
                 if (list[i] == value) {
@@ -353,7 +353,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
             std::set<std::string> items_set(items.begin(), items.end());
             std::vector<size_t> remove_idxs;
             for(size_t i=0;i<list.size();i++) {
@@ -374,7 +374,7 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(indices, "indices");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeList list(interp.get_variable(list_var));
+            CMakeArray list(interp.get_variable(list_var));
 
             std::vector<size_t> positive_indices;
             for (const auto& idx_str : indices) {
@@ -423,8 +423,8 @@ void register_list_builtins(Interpreter& interp) {
 
             try {
                 std::regex rx(pattern);
-                CMakeList list(interp.get_variable(list_var));
-                CMakeList result;
+                CMakeArray list(interp.get_variable(list_var));
+                CMakeArray result;
 
                 for (size_t i = 0; i < list.size(); ++i) {
                     bool matches = std::regex_match(list[i], rx);
@@ -500,8 +500,8 @@ void register_list_builtins(Interpreter& interp) {
                 ++i;
             }
 
-            CMakeList list(interp.get_variable(list_var));
-            CMakeList result = list;
+            CMakeArray list(interp.get_variable(list_var));
+            CMakeArray result = list;
 
             // Lambda to apply transformation to an element
             auto transform_element = [&](std::string& element) {
@@ -548,11 +548,11 @@ void register_list_builtins(Interpreter& interp) {
                 for (size_t idx = 0; idx < result.size(); ++idx) {
                     std::string elem = result[idx];
                     if (!transform_element(elem)) return;
-                    result = CMakeList(result.to_vector());
+                    result = CMakeArray(result.to_vector());
                     // Need to rebuild list after modification
                     auto vec = result.to_vector();
                     vec[idx] = elem;
-                    result = CMakeList(vec);
+                    result = CMakeArray(vec);
                 }
             } else if (selector_mode == "AT") {
                 // Transform at specific indices
@@ -571,7 +571,7 @@ void register_list_builtins(Interpreter& interp) {
                         return;
                     }
                 }
-                result = CMakeList(vec);
+                result = CMakeArray(vec);
             } else if (selector_mode == "REGEX") {
                 // Transform elements matching regex
                 if (selector_params.empty()) {
@@ -586,7 +586,7 @@ void register_list_builtins(Interpreter& interp) {
                             if (!transform_element(vec[idx])) return;
                         }
                     }
-                    result = CMakeList(vec);
+                    result = CMakeArray(vec);
                 } catch (const std::regex_error& e) {
                     interp.set_fatal_error("list(TRANSFORM) invalid REGEX selector: " + std::string(e.what()));
                     return;
@@ -652,7 +652,7 @@ void register_list_builtins(Interpreter& interp) {
                         }
                     }
 
-                    result = CMakeList(vec);
+                    result = CMakeArray(vec);
                 } catch (...) {
                     interp.set_fatal_error("list(TRANSFORM) invalid FOR parameters");
                     return;

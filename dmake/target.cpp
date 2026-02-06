@@ -6,7 +6,7 @@
 #include "genex_evaluator.hpp"
 #include "interperter.hpp"
 #include "compile_features.hpp"
-#include "CMakeList.hpp"
+#include "CMakeArray.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -50,7 +50,7 @@ void Target::append_property(const std::string& name, const std::vector<std::str
 }
 
 void Target::append_property_from_string(const std::string& name, const std::string& value, PropertyVisibility visibility) {
-    CMakeList list(value);  // Always split by semicolons
+    CMakeArray list(value);  // Always split by semicolons
     append_property(name, list.to_vector(), visibility);
 }
 
@@ -665,8 +665,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             // COMPILE_OPTIONS (semicolon-separated list)
             auto co_it = sp_it->second.find("COMPILE_OPTIONS");
             if (co_it != sp_it->second.end()) {
-                CMakeList list(co_it->second);
-                for (const auto& opt : list.to_vector()) {
+                for (auto sv : CMakeArrayView(co_it->second)) {
+                    std::string opt(sv);
                     // Evaluate genex if present (use source_evaluator for COMPILE_LANGUAGE support)
                     if (GenexParser::contains_genex(opt)) {
                         auto result = source_evaluator.evaluate(opt);
@@ -674,7 +674,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                             ctx.options.push_back(*result);
                         }
                     } else {
-                        ctx.options.push_back(opt);
+                        ctx.options.push_back(std::move(opt));
                     }
                 }
             }
@@ -682,18 +682,16 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             // COMPILE_DEFINITIONS (semicolon-separated list)
             auto cd_it = sp_it->second.find("COMPILE_DEFINITIONS");
             if (cd_it != sp_it->second.end()) {
-                CMakeList list(cd_it->second);
-                for (const auto& def : list.to_vector()) {
-                    ctx.definitions.push_back(def);
+                for (auto sv : CMakeArrayView(cd_it->second)) {
+                    ctx.definitions.emplace_back(sv);
                 }
             }
 
             // INCLUDE_DIRECTORIES (semicolon-separated list)
             auto id_it = sp_it->second.find("INCLUDE_DIRECTORIES");
             if (id_it != sp_it->second.end()) {
-                CMakeList list(id_it->second);
-                for (const auto& inc : list.to_vector()) {
-                    ctx.includes.push_back(inc);
+                for (auto sv : CMakeArrayView(id_it->second)) {
+                    ctx.includes.emplace_back(sv);
                 }
             }
         }
@@ -738,9 +736,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         if (sp_it != source_props.end()) {
             auto od_it = sp_it->second.find("OBJECT_DEPENDS");
             if (od_it != sp_it->second.end()) {
-                CMakeList list(od_it->second);
-                for (const auto& dep : list.to_vector()) {
-                    std::filesystem::path dep_path(dep);
+                for (auto sv : CMakeArrayView(od_it->second)) {
+                    std::filesystem::path dep_path(sv);
                     if (!dep_path.is_absolute()) {
                         dep_path = std::filesystem::path(source_dir_) / dep_path;
                     }
