@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <memory>
 #include "language.hpp"
 
@@ -116,7 +117,10 @@ protected:
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
                                bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
-                               class GenexEvaluator& evaluator, const class Interpreter& interp);
+                               class GenexEvaluator& evaluator, const class Interpreter& interp,
+                               const std::string& pre_build_task_id,
+                               const std::string& module_mapper_path,
+                               std::set<std::string>& generated_custom_tasks);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected

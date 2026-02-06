@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <functional>
 #include <set>
+#include <unordered_set>
 #include <unordered_map>
 #include <cassert>
 #include <iostream>
@@ -358,8 +359,9 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     // 2. Process Dependencies
     // link_only: when true (from $<LINK_ONLY:...>), link the library but don't propagate INTERFACE properties
     auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only, bool link_only) {
-        if (all_targets.count(lib_name)) {
-            auto dep = all_targets.at(lib_name);
+        auto dep_it = all_targets.find(lib_name);
+        if (dep_it != all_targets.end()) {
+            auto& dep = dep_it->second;
             dep->resolve(all_targets, interp);
 
             // Inherit for building THIS target (from dep's INTERFACE)
@@ -481,19 +483,225 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
     return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
 }
 
+// Resolve executable target names in the first argument of COMMAND clauses.
+// CMake replaces bare target names with the built binary path and adds an implicit dependency.
+static void resolve_command_target_references(
+    std::vector<std::vector<std::string>>& commands,
+    BuildTask& task,
+    const std::map<std::string, std::shared_ptr<Target>>& all_targets)
+{
+    for (auto& cmd : commands) {
+        if (cmd.empty()) continue;
+
+        std::shared_ptr<Target> resolved;
+
+        // Direct target name lookup (executables only)
+        auto it = all_targets.find(cmd[0]);
+        if (it != all_targets.end() && it->second->get_type() == TargetType::EXECUTABLE) {
+            resolved = it->second;
+        }
+
+        // Fall back: executable whose OUTPUT_NAME matches the command
+        if (!resolved) {
+            static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
+            static std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
+            if (&all_targets != cached_source) {
+                cached_source = &all_targets;
+                output_name_map.clear();
+                for (const auto& [name, target] : all_targets) {
+                    if (target->get_type() == TargetType::EXECUTABLE)
+                        output_name_map.emplace(target->get_output_name(), target);
+                }
+            }
+            auto oit = output_name_map.find(cmd[0]);
+            if (oit != output_name_map.end())
+                resolved = oit->second;
+        }
+
+        if (resolved) {
+            std::string output = resolved->get_output_path();
+            if (!output.empty()) {
+                cmd[0] = output;
+                task.dependencies.insert(output);
+            }
+        }
+    }
+}
+
+// Helper to generate a task for a custom command rule
+static void generate_custom_command_task(BuildGraph& graph, const CustomCommandRule& rule,
+                                         const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
+    BuildTask task;
+    task.id = rule.outputs[0];
+    task.working_dir = rule.working_dir;
+    task.always_run = false;
+
+    for (const auto& cmd : rule.commands) {
+        task.commands.push_back(cmd);
+    }
+
+    resolve_command_target_references(task.commands, task, all_targets);
+
+    for (const auto& out : rule.outputs) {
+        task.outputs.push_back(out);
+    }
+
+    for (const auto& dep : rule.depends) {
+        auto dep_it = all_targets.find(dep);
+        if (dep_it != all_targets.end()) {
+            std::string dep_out = dep_it->second->get_output_path();
+            if (!dep_out.empty()) {
+                task.dependencies.insert(dep_out);
+                task.inputs.push_back(dep_out);
+            } else {
+                task.dependencies.insert(dep);
+            }
+        } else {
+            std::filesystem::path p(dep);
+            if (!p.is_absolute()) {
+                p = std::filesystem::path(rule.source_dir) / dep;
+            }
+            task.inputs.push_back(p.lexically_normal().string());
+        }
+    }
+
+    graph.add_task(std::move(task));
+}
+
 void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
                                       bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
-                                      GenexEvaluator& evaluator, const Interpreter& interp) {
-    // Check if this target has any module sources (for module mapper path)
+                                      GenexEvaluator& evaluator, const Interpreter& interp,
+                                      const std::string& pre_build_task_id,
+                                      const std::string& module_mapper_path,
+                                      std::set<std::string>& generated_custom_tasks) {
+    // --- Hoist all loop-invariant computations ---
+
     bool target_has_modules = has_module_sources();
 
-    // Get source properties for per-source customization
     const auto& source_props = interp.get_source_properties();
     const auto& custom_rules = interp.get_custom_command_rules();
 
-    // SOURCES are essentially PRIVATE
-    // Evaluate genex in source paths first
+    // Cache isatty result (syscall)
+    const bool color_diag = isatty(STDOUT_FILENO);
+
+    // Pre-compute compile features standard requirement (same for all sources)
+    const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
+    int cxx_required_std = 0;
+    int c_required_std = 0;
+    if (!compile_features.empty()) {
+        const auto& features_db = CompileFeatures::instance();
+        cxx_required_std = features_db.get_required_standard(compile_features, Language::CXX);
+        c_required_std = features_db.get_required_standard(compile_features, Language::C);
+    }
+
+    // Compute effective standard per language (hoisted out of per-source loop)
+    auto effective_standard = [&](Language lang) -> std::string {
+        std::string base = get_language_standard(lang);
+        int required = (lang == Language::CXX) ? cxx_required_std : c_required_std;
+        if (required > 0) {
+            int current = base.empty() ? 0 : std::stoi(base);
+            if (required > current) return std::to_string(required);
+        }
+        return base;
+    };
+
+    // Pre-resolve manual dependencies (same for every source)
+    struct ResolvedDep { std::string id; };
+    std::vector<ResolvedDep> resolved_manual_deps;
+    for (const auto& dep_name : manually_added_dependencies_) {
+        auto it = all_targets.find(dep_name);
+        if (it != all_targets.end()) {
+            std::string dep_out = it->second->get_output_path();
+            resolved_manual_deps.push_back({dep_out.empty() ? dep_name : std::move(dep_out)});
+        }
+    }
+
+    // Pre-build CXX_MODULES file set for O(1) lookups instead of O(N*M) per-source
+    std::unordered_set<std::string> cxx_module_files;
+    for (const auto& fs : file_sets_) {
+        if (fs.type == "CXX_MODULES") {
+            for (const auto& file : fs.files) {
+                std::filesystem::path fs_path(file);
+                std::filesystem::path fs_abs = fs_path.is_absolute() ?
+                    fs_path : (std::filesystem::path(source_dir_) / fs_path);
+                cxx_module_files.insert(fs_abs.lexically_normal().string());
+                // Also add filename for filename-only matches
+                cxx_module_files.insert(fs_path.filename().string());
+            }
+        }
+    }
+
+    // Pre-check whether any resolved property contains deferred COMPILE_LANG genex.
+    // If not (common case), we skip per-source evaluation and vector copies entirely.
+    const auto& resolved_includes = get_resolved_property("INCLUDE_DIRECTORIES");
+    const auto& resolved_sys_includes = get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES");
+    const auto& resolved_definitions = get_resolved_property("COMPILE_DEFINITIONS");
+    const auto& resolved_options = get_resolved_property("COMPILE_OPTIONS");
+
+    auto has_deferred_genex = [](const std::vector<std::string>& vals) {
+        for (const auto& v : vals) {
+            if (v.find("$<COMPILE_LANG") != std::string::npos) return true;
+        }
+        return false;
+    };
+    bool needs_per_lang_eval = has_deferred_genex(resolved_includes) ||
+                               has_deferred_genex(resolved_sys_includes) ||
+                               has_deferred_genex(resolved_definitions) ||
+                               has_deferred_genex(resolved_options);
+
+    // If we have COMPILE_LANG genex, pre-evaluate for C and CXX once (not per-source)
+    struct PerLangProperties {
+        std::vector<std::string> includes;
+        std::vector<std::string> system_includes;
+        std::vector<std::string> definitions;
+        std::vector<std::string> options;
+    };
+    std::map<Language, PerLangProperties> per_lang_props;
+
+    // Base genex context for per-source evaluator (used for source-property genex)
+    GenexEvaluationContext source_genex_base;
+    source_genex_base.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+    source_genex_base.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+    source_genex_base.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+    source_genex_base.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    source_genex_base.all_targets = &all_targets;
+    source_genex_base.current_target = this;
+    source_genex_base.phase = GenexEvaluationContext::Phase::BUILD;
+
+    if (needs_per_lang_eval) {
+        auto eval_for_lang = [&](const std::vector<std::string>& values, GenexEvaluator& lang_eval) {
+            std::vector<std::string> result;
+            for (const auto& val : values) {
+                if (val.find("$<COMPILE_LANG") != std::string::npos) {
+                    auto eval_result = lang_eval.evaluate(val);
+                    if (eval_result && !eval_result->empty()) {
+                        result.push_back(*eval_result);
+                    }
+                } else {
+                    result.push_back(val);
+                }
+            }
+            return result;
+        };
+
+        for (Language lang : {Language::C, Language::CXX}) {
+            GenexEvaluationContext lang_ctx = source_genex_base;
+            lang_ctx.compile_language = lang;
+            GenexEvaluator lang_evaluator(lang_ctx);
+
+            auto& props = per_lang_props[lang];
+            props.includes = eval_for_lang(resolved_includes, lang_evaluator);
+            props.system_includes = eval_for_lang(resolved_sys_includes, lang_evaluator);
+            props.definitions = eval_for_lang(resolved_definitions, lang_evaluator);
+            props.options = eval_for_lang(resolved_options, lang_evaluator);
+        }
+    }
+
+    // Module mapper path (computed once, used if target has modules)
+    std::string module_mapper = target_has_modules ? get_module_mapper_path() : std::string{};
+
+    // --- Evaluate genex in source paths (single pass over sources) ---
     const auto& raw_sources = get_property_list("SOURCES", PropertyVisibility::PRIVATE);
     auto evaluated_sources_result = evaluator.evaluate_property_list(raw_sources);
     if (!evaluated_sources_result) {
@@ -501,11 +709,9 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     }
 
     for (const auto& src : *evaluated_sources_result) {
-        // Skip empty sources (genex that evaluated to empty)
         if (src.empty()) continue;
 
-        // Handle pre-compiled object files (e.g., from $<TARGET_OBJECTS:...>)
-        // These don't need compilation - just add them directly to obj_files for linking
+        // Handle pre-compiled object files
         std::filesystem::path src_path(src);
         if (src_path.extension() == ".o" || src_path.extension() == ".obj") {
             obj_files.push_back(src);
@@ -515,32 +721,47 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         // Determine if source is relative to source_dir or binary_dir
         std::filesystem::path src_abs;
         std::string src_normalized;
+        // For custom command discovery, we need both normalizations of relative paths
+        std::string normalized_src_dir, normalized_bin_dir;
 
         if (src_path.is_absolute()) {
             src_abs = src_path;
             src_normalized = src_path.lexically_normal().string();
+            normalized_src_dir = src_normalized;
+            normalized_bin_dir = src_normalized;
         } else {
-            // Check if this is a generated file (relative to binary_dir)
-            std::string normalized_bin = (std::filesystem::path(binary_dir_) / src_path).lexically_normal().string();
-            if (custom_rules.find(normalized_bin) != custom_rules.end()) {
-                // Generated file - use binary_dir
+            normalized_bin_dir = (std::filesystem::path(binary_dir_) / src_path).lexically_normal().string();
+            normalized_src_dir = (std::filesystem::path(source_dir_) / src_path).lexically_normal().string();
+
+            if (custom_rules.find(normalized_bin_dir) != custom_rules.end()) {
                 src_abs = std::filesystem::path(binary_dir_) / src_path;
-                src_normalized = normalized_bin;
+                src_normalized = normalized_bin_dir;
             } else {
-                // Regular file - use source_dir
                 src_abs = std::filesystem::path(source_dir_) / src_path;
-                src_normalized = src_abs.lexically_normal().string();
+                src_normalized = normalized_src_dir;
+            }
+        }
+
+        // --- Custom command discovery (merged from generate_tasks) ---
+        {
+            auto cc_it = custom_rules.find(normalized_src_dir);
+            if (cc_it == custom_rules.end()) {
+                cc_it = custom_rules.find(normalized_bin_dir);
+            }
+            if (cc_it != custom_rules.end() && !generated_custom_tasks.count(cc_it->second->outputs[0])) {
+                generate_custom_command_task(graph, *cc_it->second, all_targets);
+                generated_custom_tasks.insert(cc_it->second->outputs[0]);
             }
         }
 
         // Look up per-source properties
         auto sp_it = source_props.find(src_normalized);
 
-        // Check HEADER_FILE_ONLY - skip compilation entirely
+        // Check HEADER_FILE_ONLY
         if (sp_it != source_props.end()) {
             auto hfo_it = sp_it->second.find("HEADER_FILE_ONLY");
             if (hfo_it != sp_it->second.end() && !Interpreter::is_falsy(hfo_it->second)) {
-                continue; // Skip this source - don't compile it
+                continue;
             }
         }
 
@@ -561,98 +782,60 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             }
         }
 
-        if (lang_info.lang == Language::UNKNOWN) {
-            // CMake ignores unknown files
-            continue;
-        }
+        if (lang_info.lang == Language::UNKNOWN) continue;
 
-        // Override module interface detection if file is in CXX_MODULES file set
-        if (is_in_cxx_modules_file_set(src)) {
-            lang_info.is_module_interface = true;
+        // Check CXX_MODULES using pre-built set (O(1) vs O(N*M))
+        if (!cxx_module_files.empty()) {
+            if (cxx_module_files.count(src_normalized) ||
+                cxx_module_files.count(src_path.filename().string())) {
+                lang_info.is_module_interface = true;
+            }
         }
 
         const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
         if (!compiler) {
             throw std::runtime_error("No compiler available for language " + std::string(lang_info.name) + " in target '" + name_ + "'");
-            continue;
         }
 
         std::string obj = get_obj_path(binary_dir_, name_, src);
         obj_files.push_back(obj);
 
+        std::string src_abs_str = src_abs.string();
+
         CompileContext ctx;
-        ctx.source = src_abs.string();
+        ctx.source = src_abs_str;
         ctx.output = obj;
         ctx.is_shared = is_shared;
         ctx.pch_include = pch_include_arg;
-
-        // Determine standard: use highest of explicit standard or required by compile features
-        std::string base_standard = get_language_standard(lang_info.lang);
-        const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
-        if (!compile_features.empty()) {
-            const auto& features_db = CompileFeatures::instance();
-            int required_std = features_db.get_required_standard(compile_features, lang_info.lang);
-            if (required_std > 0) {
-                int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
-                if (required_std > current_std) {
-                    base_standard = std::to_string(required_std);
-                }
-            }
-        }
-        ctx.standard = base_standard;
+        ctx.standard = effective_standard(lang_info.lang);
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
-        ctx.color_diagnostics = isatty(STDOUT_FILENO);
+        ctx.color_diagnostics = color_diag;
 
-        // C++20 modules: if this is a module interface or target has modules,
-        // enable module support in compilation
         if (lang_info.is_module_interface || target_has_modules) {
             ctx.is_module_source = true;
-            // Module mapper will be written by the collator task
-            ctx.module_mapper_file = get_module_mapper_path();
+            ctx.module_mapper_file = module_mapper;
         }
 
         for (const auto& opt : get_language_flags(lang_info.lang)) ctx.options.push_back(opt);
 
-        // Create per-source evaluator with compile_language set for COMPILE_LANGUAGE/COMPILE_LANG_AND_ID genex
-        GenexEvaluationContext source_genex_ctx;
-        source_genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-        source_genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
-        source_genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
-        source_genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-        source_genex_ctx.all_targets = &all_targets;
-        source_genex_ctx.current_target = this;
-        source_genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
-        source_genex_ctx.compile_language = lang_info.lang;  // Set compile language for this source
-        GenexEvaluator source_evaluator(source_genex_ctx);
-
-        // Helper to evaluate deferred genex (COMPILE_LANGUAGE, COMPILE_LANG_AND_ID) per-source
-        auto evaluate_for_source = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
-            std::vector<std::string> result;
-            for (const auto& val : values) {
-                // Check if this value might contain deferred genex
-                if (val.find("$<COMPILE_LANG") != std::string::npos) {
-                    auto eval_result = source_evaluator.evaluate(val);
-                    if (eval_result && !eval_result->empty()) {
-                        result.push_back(*eval_result);
-                    }
-                    // Skip if evaluation returned empty (genex didn't match)
-                } else {
-                    result.push_back(val);
-                }
+        // Apply resolved properties — no copies in the common case (no COMPILE_LANG genex)
+        if (needs_per_lang_eval) {
+            auto pl_it = per_lang_props.find(lang_info.lang);
+            if (pl_it != per_lang_props.end()) {
+                for (const auto& dir : pl_it->second.includes) ctx.includes.push_back(dir);
+                for (const auto& dir : pl_it->second.system_includes) ctx.system_includes.push_back(dir);
+                for (const auto& def : pl_it->second.definitions) ctx.definitions.push_back(def);
+                for (const auto& opt : pl_it->second.options) ctx.options.push_back(opt);
             }
-            return result;
-        };
-
-        // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
-        for (const auto& dir : evaluate_for_source(get_resolved_property("INCLUDE_DIRECTORIES"))) ctx.includes.push_back(dir);
-        for (const auto& dir : evaluate_for_source(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))) ctx.system_includes.push_back(dir);
-
-        for (const auto& def : evaluate_for_source(get_resolved_property("COMPILE_DEFINITIONS"))) ctx.definitions.push_back(def);
-        for (const auto& opt : evaluate_for_source(get_resolved_property("COMPILE_OPTIONS"))) ctx.options.push_back(opt);
+        } else {
+            for (const auto& dir : resolved_includes) ctx.includes.push_back(dir);
+            for (const auto& dir : resolved_sys_includes) ctx.system_includes.push_back(dir);
+            for (const auto& def : resolved_definitions) ctx.definitions.push_back(def);
+            for (const auto& opt : resolved_options) ctx.options.push_back(opt);
+        }
 
         // Apply per-source properties
         if (sp_it != source_props.end()) {
-            // COMPILE_FLAGS (space-separated string)
             auto cf_it = sp_it->second.find("COMPILE_FLAGS");
             if (cf_it != sp_it->second.end()) {
                 std::istringstream iss(cf_it->second);
@@ -662,14 +845,19 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 }
             }
 
-            // COMPILE_OPTIONS (semicolon-separated list)
             auto co_it = sp_it->second.find("COMPILE_OPTIONS");
             if (co_it != sp_it->second.end()) {
+                // Lazily construct per-source evaluator only if genex present
+                std::optional<GenexEvaluator> src_eval_storage;
                 for (auto sv : CMakeArrayView(co_it->second)) {
                     std::string opt(sv);
-                    // Evaluate genex if present (use source_evaluator for COMPILE_LANGUAGE support)
                     if (GenexParser::contains_genex(opt)) {
-                        auto result = source_evaluator.evaluate(opt);
+                        if (!src_eval_storage) {
+                            GenexEvaluationContext ctx_copy = source_genex_base;
+                            ctx_copy.compile_language = lang_info.lang;
+                            src_eval_storage.emplace(ctx_copy);
+                        }
+                        auto result = src_eval_storage->evaluate(opt);
                         if (result && !result->empty()) {
                             ctx.options.push_back(*result);
                         }
@@ -679,7 +867,6 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 }
             }
 
-            // COMPILE_DEFINITIONS (semicolon-separated list)
             auto cd_it = sp_it->second.find("COMPILE_DEFINITIONS");
             if (cd_it != sp_it->second.end()) {
                 for (auto sv : CMakeArrayView(cd_it->second)) {
@@ -687,7 +874,6 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 }
             }
 
-            // INCLUDE_DIRECTORIES (semicolon-separated list)
             auto id_it = sp_it->second.find("INCLUDE_DIRECTORIES");
             if (id_it != sp_it->second.end()) {
                 for (auto sv : CMakeArrayView(id_it->second)) {
@@ -700,14 +886,13 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         task.id = obj;
         task.parent_target = this;
         task.commands.push_back(compiler->get_compile_command(ctx));
-        task.inputs.push_back(src_abs.string());
+        task.inputs.push_back(src_abs_str);
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
         task.is_compilation = true;
-        task.source_file = src_abs.string();
-        task.compile_language = lang_info.lang;  // For COMPILE_LANGUAGE genex
+        task.source_file = src_abs_str;
+        task.compile_language = lang_info.lang;
 
-        // Mark as module source if it's a module interface file
         if (lang_info.is_module_interface) {
             task.is_module_source = true;
         }
@@ -717,22 +902,12 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             task.inputs.push_back(pch_gch_path);
         }
 
-        // Add manually added dependencies to compile tasks
-        // This ensures custom targets that generate headers run before compilation
-        for (const auto& dep_name : manually_added_dependencies_) {
-            if (all_targets.count(dep_name)) {
-                auto dep_target = all_targets.at(dep_name);
-                std::string dep_out = dep_target->get_output_path();
-                if (!dep_out.empty()) {
-                    task.dependencies.insert(dep_out);
-                } else {
-                    // Utility target - depend on the target name itself
-                    task.dependencies.insert(dep_name);
-                }
-            }
+        // Pre-resolved manual dependencies (hoisted)
+        for (const auto& dep : resolved_manual_deps) {
+            task.dependencies.insert(dep.id);
         }
 
-        // Apply OBJECT_DEPENDS - extra file dependencies
+        // OBJECT_DEPENDS
         if (sp_it != source_props.end()) {
             auto od_it = sp_it->second.find("OBJECT_DEPENDS");
             if (od_it != sp_it->second.end()) {
@@ -744,6 +919,28 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                     task.inputs.push_back(dep_path.lexically_normal().string());
                 }
             }
+        }
+
+        // --- Dependency wiring (merged from generate_tasks) ---
+
+        // Depend on PRE_BUILD task
+        if (!pre_build_task_id.empty()) {
+            task.dependencies.insert(pre_build_task_id);
+        }
+
+        // Depend on custom command that generates this source
+        {
+            auto cc_it = custom_rules.find(src_normalized);
+            if (cc_it != custom_rules.end()) {
+                task.dependencies.insert(cc_it->second->outputs[0]);
+                task.inputs.push_back(cc_it->second->outputs[0]);
+            }
+        }
+
+        // Module mapper dependency
+        if (!module_mapper_path.empty()) {
+            task.dependencies.insert(module_mapper_path);
+            task.inputs.push_back(module_mapper_path);
         }
 
         graph.add_task(std::move(task));
@@ -869,95 +1066,6 @@ static std::pair<std::string, std::string> generate_pch_task(
     return {pch_gch_path, pch_include_arg};
 }
 
-// Resolve executable target names in the first argument of COMMAND clauses.
-// CMake replaces bare target names with the built binary path and adds an implicit dependency.
-static void resolve_command_target_references(
-    std::vector<std::vector<std::string>>& commands,
-    BuildTask& task,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets)
-{
-    for (auto& cmd : commands) {
-        if (cmd.empty()) continue;
-
-        std::shared_ptr<Target> resolved;
-
-        // Direct target name lookup (executables only)
-        auto it = all_targets.find(cmd[0]);
-        if (it != all_targets.end() && it->second->get_type() == TargetType::EXECUTABLE) {
-            resolved = it->second;
-        }
-
-        // Fall back: executable whose OUTPUT_NAME matches the command
-        if (!resolved) {
-            static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
-            static std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
-            if (&all_targets != cached_source) {
-                cached_source = &all_targets;
-                output_name_map.clear();
-                for (const auto& [name, target] : all_targets) {
-                    if (target->get_type() == TargetType::EXECUTABLE)
-                        output_name_map.emplace(target->get_output_name(), target);
-                }
-            }
-            auto oit = output_name_map.find(cmd[0]);
-            if (oit != output_name_map.end())
-                resolved = oit->second;
-        }
-
-        if (resolved) {
-            std::string output = resolved->get_output_path();
-            if (!output.empty()) {
-                cmd[0] = output;
-                task.dependencies.insert(output);
-            }
-        }
-    }
-}
-
-// Helper to generate a task for a custom command rule
-static void generate_custom_command_task(BuildGraph& graph, const CustomCommandRule& rule,
-                                         const std::map<std::string, std::shared_ptr<Target>>& all_targets) {
-    // Use first output as task ID
-    BuildTask task;
-    task.id = rule.outputs[0];
-    task.working_dir = rule.working_dir;
-    task.always_run = false;  // Custom commands can be cached based on inputs
-
-    for (const auto& cmd : rule.commands) {
-        task.commands.push_back(cmd);
-    }
-
-    resolve_command_target_references(task.commands, task, all_targets);
-
-    for (const auto& out : rule.outputs) {
-        task.outputs.push_back(out);
-    }
-
-    // Process dependencies
-    for (const auto& dep : rule.depends) {
-        // Check if it's a target
-        if (all_targets.count(dep)) {
-            auto dep_target = all_targets.at(dep);
-            std::string dep_out = dep_target->get_output_path();
-            if (!dep_out.empty()) {
-                task.dependencies.insert(dep_out);
-                task.inputs.push_back(dep_out);
-            } else {
-                task.dependencies.insert(dep);
-            }
-        } else {
-            // File dependency
-            std::filesystem::path p(dep);
-            if (!p.is_absolute()) {
-                p = std::filesystem::path(rule.source_dir) / dep;
-            }
-            task.inputs.push_back(p.lexically_normal().string());
-        }
-    }
-
-    graph.add_task(std::move(task));
-}
-
 void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
     if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
 
@@ -983,46 +1091,8 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         is_shared = true;  // Use -fPIC for position-independent code
     }
 
-    // Get custom command rules from interpreter
-    const auto& custom_rules = interp.get_custom_command_rules();
-
     // Track which custom command tasks we've created
     std::set<std::string> generated_custom_tasks;
-
-    // Evaluate genex in source paths
-    const auto& raw_sources = get_property_list("SOURCES", PropertyVisibility::PRIVATE);
-    auto evaluated_sources_result = evaluator.evaluate_property_list(raw_sources);
-    if (!evaluated_sources_result) {
-        throw std::runtime_error("Error evaluating genex in SOURCES for target '" + name_ + "': " + evaluated_sources_result.error());
-    }
-
-    // Check if any sources are generated by custom commands and create those tasks
-    for (const auto& src : *evaluated_sources_result) {
-        if (src.empty()) continue;  // Skip empty sources from failed genex conditions
-
-        std::filesystem::path src_path(src);
-        std::string normalized_src, normalized_bin;
-
-        if (src_path.is_absolute()) {
-            normalized_src = src_path.lexically_normal().string();
-            normalized_bin = normalized_src;
-        } else {
-            // Relative paths could be relative to source or binary dir
-            normalized_src = (std::filesystem::path(source_dir_) / src_path).lexically_normal().string();
-            normalized_bin = (std::filesystem::path(binary_dir_) / src_path).lexically_normal().string();
-        }
-
-        // Check both source and binary dir paths
-        auto it = custom_rules.find(normalized_src);
-        if (it == custom_rules.end()) {
-            it = custom_rules.find(normalized_bin);
-        }
-
-        if (it != custom_rules.end() && !generated_custom_tasks.count(it->second->outputs[0])) {
-            generate_custom_command_task(graph, *it->second, all_targets);
-            generated_custom_tasks.insert(it->second->outputs[0]);
-        }
-    }
 
     // Generate PRE_BUILD task if we have any pre-build commands
     std::string pre_build_task_id;
@@ -1048,6 +1118,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     // C++20 modules: generate scanner tasks first (they have no dependencies)
     bool has_modules = generate_module_scanner_tasks(graph, toolchain);
+    std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // Create CXX-specific evaluator for PCH (PCH is always C++)
     GenexEvaluationContext pch_genex_ctx;
@@ -1083,40 +1154,11 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
         evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")));
 
-    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, all_targets, evaluator, interp);
-
-    // Add dependencies for compile tasks: PRE_BUILD and custom command outputs
-    for (const auto& obj : obj_files) {
-        if (graph.has_task(obj)) {
-            auto& task = graph.get_task(obj);
-
-            // Depend on PRE_BUILD task if it exists
-            if (!pre_build_task_id.empty()) {
-                task.dependencies.insert(pre_build_task_id);
-            }
-
-            // Depend on custom command that generates source file
-            std::filesystem::path src_path(task.source_file);
-            std::string normalized_src = src_path.lexically_normal().string();
-            auto cc_it = custom_rules.find(normalized_src);
-            if (cc_it != custom_rules.end()) {
-                task.dependencies.insert(cc_it->second->outputs[0]);
-                task.inputs.push_back(cc_it->second->outputs[0]);
-            }
-        }
-    }
-
-    // If we have modules, compile tasks need to depend on the collator
-    if (has_modules) {
-        std::string mapper_path = get_module_mapper_path();
-        for (const auto& obj : obj_files) {
-            if (graph.has_task(obj)) {
-                auto& task = graph.get_task(obj);
-                task.dependencies.insert(mapper_path);
-                task.inputs.push_back(mapper_path);
-            }
-        }
-    }
+    // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
+    // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
+    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared,
+                          all_targets, evaluator, interp,
+                          pre_build_task_id, module_mapper_path, generated_custom_tasks);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 
@@ -1201,13 +1243,12 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     // Add manually added dependencies (from add_dependencies command)
     for (const auto& dep_name : manually_added_dependencies_) {
-        if (all_targets.count(dep_name)) {
-            auto dep_target = all_targets.at(dep_name);
-            std::string dep_out = dep_target->get_output_path();
+        auto dep_it = all_targets.find(dep_name);
+        if (dep_it != all_targets.end()) {
+            std::string dep_out = dep_it->second->get_output_path();
             if (!dep_out.empty()) {
                 link.dependencies.insert(dep_out);
             } else {
-                // Utility target - depend on the target name itself
                 link.dependencies.insert(dep_name);
             }
         }
@@ -1279,9 +1320,9 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
 
     // Handle DEPENDS from add_custom_target
     for (const auto& dep_name : custom_depends_) {
-        if (all_targets.count(dep_name)) {
-            auto dep_target = all_targets.at(dep_name);
-            std::string dep_out = dep_target->get_output_path();
+        auto dep_it = all_targets.find(dep_name);
+        if (dep_it != all_targets.end()) {
+            std::string dep_out = dep_it->second->get_output_path();
             if (!dep_out.empty()) {
                 task.dependencies.insert(dep_out);
                 task.inputs.push_back(dep_out);
@@ -1297,9 +1338,9 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
 
     // Handle manually added dependencies (from add_dependencies command)
     for (const auto& dep_name : manually_added_dependencies_) {
-        if (all_targets.count(dep_name)) {
-            auto dep_target = all_targets.at(dep_name);
-            std::string dep_out = dep_target->get_output_path();
+        auto dep_it = all_targets.find(dep_name);
+        if (dep_it != all_targets.end()) {
+            std::string dep_out = dep_it->second->get_output_path();
             if (!dep_out.empty()) {
                 task.dependencies.insert(dep_out);
             } else {
