@@ -1,0 +1,10 @@
+[STATUS] Parent INCLUDE_DIRECTORIES: /fake/parent/inc1;/fake/parent/inc2
+[STATUS] child1 inherited: /fake/parent/inc1;/fake/parent/inc2
+[STATUS] child1 after add: /fake/parent/inc1;/fake/parent/inc2;/fake/child1/inc
+[STATUS] child2 before clear: /fake/parent/inc1;/fake/parent/inc2
+[STATUS] child2 after clear: 
+[STATUS] child2 final: /fake/child2/inc
+[STATUS] Generating build graph...
+[STATUS] Starting debug build...
+    Finished build in 0.00s
+[STATUS] Build finished.

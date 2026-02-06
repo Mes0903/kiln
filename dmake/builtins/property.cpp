@@ -231,8 +231,8 @@ void register_property_builtins(Interpreter& interp) {
 
     // set_property() - Set property values for various scopes
     interp.add_builtin("set_property", [](Interpreter& interp, const std::vector<std::string>& args) {
-        if (args.size() < 4) {
-            interp.set_fatal_error("set_property() requires at least 4 arguments: <scope> <items...> PROPERTY <name> [values...]");
+        if (args.size() < 3) {
+            interp.set_fatal_error("set_property() requires at least 3 arguments: <scope> PROPERTY <name> [values...]");
             return;
         }
 
@@ -357,6 +357,23 @@ void register_property_builtins(Interpreter& interp) {
                         }
                     } else {
                         dir_props[property_name] = value;
+                    }
+
+                    // Sync with accumulated map (used by include_directories(), etc.)
+                    // In CMake these are the same property; in dmake they're stored separately.
+                    auto acc_it = target_ctx->accumulated.find(property_name);
+                    if (acc_it != target_ctx->accumulated.end() || property_values.empty()) {
+                        if (append) {
+                            for (const auto& v : property_values) {
+                                target_ctx->accumulated[property_name].push_back(v);
+                            }
+                        } else {
+                            // Replace: clear and set new values
+                            target_ctx->accumulated[property_name].clear();
+                            for (const auto& v : property_values) {
+                                target_ctx->accumulated[property_name].push_back(v);
+                            }
+                        }
                     }
                 }
                 break;
@@ -710,14 +727,8 @@ void register_property_builtins(Interpreter& interp) {
             return;
         }
 
-        // Check properties map
-        auto it = target_ctx->properties.find(prop_name);
-        if (it != target_ctx->properties.end()) {
-            interp.set_variable(var_name, it->second);
-            return;
-        }
-
-        // Check accumulated properties (INCLUDE_DIRECTORIES, etc.)
+        // Check accumulated properties first (INCLUDE_DIRECTORIES, etc.)
+        // These are the "live" values used by include_directories(), set_property(), etc.
         auto acc_it = target_ctx->accumulated.find(prop_name);
         if (acc_it != target_ctx->accumulated.end()) {
             std::string value;
@@ -726,6 +737,13 @@ void register_property_builtins(Interpreter& interp) {
                 value += acc_it->second[i];
             }
             interp.set_variable(var_name, value);
+            return;
+        }
+
+        // Check properties map (custom directory properties)
+        auto it = target_ctx->properties.find(prop_name);
+        if (it != target_ctx->properties.end()) {
+            interp.set_variable(var_name, it->second);
             return;
         }
 
