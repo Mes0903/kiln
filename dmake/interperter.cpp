@@ -565,32 +565,80 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 return;
             }
 
+            if (args.empty()) {
+                interp.set_fatal_error("add_test requires arguments");
+                return;
+            }
+
             // Warn if BUILD_TESTING is OFF but add_test is being called
             auto build_testing = interp.get_variable("BUILD_TESTING");
             if (Interpreter::is_falsy(build_testing)) {
                 interp.print_message("WARNING", "add_test() called but BUILD_TESTING is OFF. Tests may not have been built. Use -DBUILD_TESTING=ON");
             }
 
-            CommandParser parser("add_test");
             std::string name;
-            std::string command;
-            std::vector<std::string> cmd_args;
-            std::string working_dir;
             std::vector<std::string> raw_cmd;
+            std::string working_dir;
 
-            parser.value("NAME", name);
-            parser.list("COMMAND", raw_cmd);
-            parser.value("WORKING_DIRECTORY", working_dir);
+            // Detect legacy form: add_test(testname command [arg...])
+            // Legacy form is used when the first argument is NOT the "NAME" keyword
+            if (args[0] != "NAME") {
+                if (args.size() < 2) {
+                    interp.set_fatal_error("add_test requires at least a test name and command");
+                    return;
+                }
+                name = args[0];
+                raw_cmd.assign(args.begin() + 1, args.end());
+            } else {
+                // NAME form: add_test(NAME <name> COMMAND <cmd> [args...]
+                //             [CONFIGURATIONS <config>...]
+                //             [WORKING_DIRECTORY <dir>]
+                //             [COMMAND_EXPAND_LISTS])
+                CommandParser parser("add_test");
+                std::vector<std::string> configurations;
+                bool command_expand_lists = false;
 
-            auto parse_res = parser.parse(args);
-            if (!parse_res) {
-                interp.set_fatal_error(parse_res.error());
-                return;
-            }
+                parser.value("NAME", name);
+                parser.list("COMMAND", raw_cmd);
+                parser.value("WORKING_DIRECTORY", working_dir);
+                parser.list("CONFIGURATIONS", configurations);
+                parser.flag("COMMAND_EXPAND_LISTS", command_expand_lists);
 
-            if (name.empty() || raw_cmd.empty()) {
-                interp.set_fatal_error("add_test requires NAME and COMMAND");
-                return;
+                auto parse_res = parser.parse(args);
+                if (!parse_res) {
+                    interp.set_fatal_error(parse_res.error());
+                    return;
+                }
+
+                if (name.empty()) {
+                    interp.set_fatal_error("add_test NAME requires a non-empty test name");
+                    return;
+                }
+
+                if (raw_cmd.empty()) {
+                    interp.set_fatal_error("add_test requires COMMAND");
+                    return;
+                }
+
+                // Filter by CONFIGURATIONS if specified
+                if (!configurations.empty()) {
+                    auto build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+                    bool config_match = false;
+                    for (const auto& config : configurations) {
+                        // Case-insensitive comparison (CMake behavior)
+                        std::string config_lower = config;
+                        std::string build_type_lower = build_type;
+                        std::transform(config_lower.begin(), config_lower.end(), config_lower.begin(), ::tolower);
+                        std::transform(build_type_lower.begin(), build_type_lower.end(), build_type_lower.begin(), ::tolower);
+                        if (config_lower == build_type_lower) {
+                            config_match = true;
+                            break;
+                        }
+                    }
+                    if (!config_match) {
+                        return; // Skip test — not for this configuration
+                    }
+                }
             }
 
             TestDefinition test;
@@ -599,7 +647,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             for (size_t i = 1; i < raw_cmd.size(); ++i) {
                 test.args.push_back(raw_cmd[i]);
             }
-            test.working_dir = working_dir.empty() ? interp.get_variable("CMAKE_CURRENT_SOURCE_DIR") : working_dir;
+            test.working_dir = working_dir.empty() ? interp.get_variable("CMAKE_CURRENT_BINARY_DIR") : working_dir;
 
             interp.get_tests().push_back(std::move(test));
         });
