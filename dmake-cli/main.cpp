@@ -11,7 +11,7 @@
 #include <CLI/CLI.hpp>
 #include <unistd.h>
 #include <future>
-#include <regex>
+#include "dmake/regex.hpp"
 #include <chrono>
 #include <iomanip>
 
@@ -276,19 +276,19 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
     std::vector<dmake::TestDefinition*> selected_tests;
     std::set<std::string> targets_to_build;
 
-    std::regex filter;
+    std::optional<dmake::Regex> filter;
     bool has_filter = !pattern.empty();
     if (has_filter) {
-        try {
-            filter = std::regex(pattern);
-        } catch (const std::regex_error& e) {
-            std::cerr << "Error: Invalid test pattern regex: " << e.what() << std::endl;
+        auto re = dmake::Regex::compile(pattern);
+        if (!re) {
+            std::cerr << "Error: Invalid test pattern regex: " << re.error() << std::endl;
             return 1;
         }
+        filter = std::move(*re);
     }
 
     for (auto& test : tests) {
-        if (has_filter && !std::regex_search(test.name, filter)) {
+        if (has_filter && !filter->search(test.name)) {
             continue;
         }
         selected_tests.push_back(&test);

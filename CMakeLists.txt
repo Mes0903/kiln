@@ -39,10 +39,17 @@ add_library(dmake SHARED
     dmake/builtins/source_properties.cpp
     dmake/install_executor.cpp
     dmake/profiler.cpp
+    dmake/regex.cpp
     dmake/CMakeArray.cpp
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PCRE2 REQUIRED libpcre2-8)
+target_include_directories(dmake PUBLIC ${PCRE2_INCLUDE_DIRS})
+target_link_libraries(dmake PUBLIC ${PCRE2_LIBRARIES})
+
 find_package(CLI11 CONFIG REQUIRED)
 
 add_executable(dmake_cli dmake-cli/main.cpp)

@@ -1,7 +1,7 @@
 #include "module_scanner.hpp"
 #include <fstream>
 #include <sstream>
-#include <regex>
+#include "regex.hpp"
 #include <glaze/glaze.hpp>
 
 namespace dmake {
@@ -93,22 +93,22 @@ ModuleDependencyInfo parse_module_scan_output(const std::string& output, const s
 
     // Regex patterns for module declarations
     // Note: preprocessor output preserves these directives
-    static const std::regex export_module_regex(R"(^\s*export\s+module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*;)");
-    static const std::regex module_impl_regex(R"(^\s*module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)");
-    static const std::regex import_regex(R"(^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)");
-    static const std::regex import_partition_regex(R"(^\s*import\s+:([a-zA-Z_][a-zA-Z0-9_]*)\s*;)");
+    static auto export_module_re = Regex::compile(R"(^\s*export\s+module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*;)").value();
+    static auto module_impl_re = Regex::compile(R"(^\s*module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)").value();
+    static auto import_re = Regex::compile(R"(^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)").value();
+    static auto import_partition_re = Regex::compile(R"(^\s*import\s+:([a-zA-Z_][a-zA-Z0-9_]*)\s*;)").value();
 
     std::istringstream stream(output);
     std::string line;
-    std::smatch match;
+    std::vector<std::string> captures;
 
     while (std::getline(stream, line)) {
         // Check for export module declaration
-        if (std::regex_search(line, match, export_module_regex)) {
-            info.provides = match[1].str();
-            if (match[2].matched) {
+        if (export_module_re.search(line, captures)) {
+            info.provides = captures[1];
+            if (captures.size() > 2 && !captures[2].empty()) {
                 info.is_module_partition = true;
-                info.partition_name = match[2].str();
+                info.partition_name = captures[2];
                 // Full partition name is ModuleName:PartitionName
                 info.provides = info.provides + ":" + info.partition_name;
             }
@@ -116,10 +116,10 @@ ModuleDependencyInfo parse_module_scan_output(const std::string& output, const s
         }
 
         // Check for module implementation unit (module ModuleName;)
-        if (std::regex_search(line, match, module_impl_regex)) {
+        if (module_impl_re.search(line, captures)) {
             // Implementation unit doesn't provide the module, it just implements it
             // But it implicitly imports the module interface
-            std::string module_name = match[1].str();
+            std::string module_name = captures[1];
             // Add to imports if not already there and not the same as provides
             if (info.provides != module_name &&
                 std::find(info.imports.begin(), info.imports.end(), module_name) == info.imports.end()) {
@@ -129,8 +129,8 @@ ModuleDependencyInfo parse_module_scan_output(const std::string& output, const s
         }
 
         // Check for import declaration
-        if (std::regex_search(line, match, import_regex)) {
-            std::string module_name = match[1].str();
+        if (import_re.search(line, captures)) {
+            std::string module_name = captures[1];
             // Skip standard library module (we'll handle these separately)
             if (module_name == "std" || module_name.starts_with("std.")) {
                 // Still add to imports so we know about the dependency
@@ -142,10 +142,10 @@ ModuleDependencyInfo parse_module_scan_output(const std::string& output, const s
         }
 
         // Check for partition import (import :PartitionName;)
-        if (std::regex_search(line, match, import_partition_regex)) {
+        if (import_partition_re.search(line, captures)) {
             // Partition imports are relative to current module
             // We store them with : prefix to indicate they're partitions
-            std::string partition = ":" + match[1].str();
+            std::string partition = ":" + captures[1];
             if (std::find(info.imports.begin(), info.imports.end(), partition) == info.imports.end()) {
                 info.imports.push_back(partition);
             }

@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <iostream>
 #include <algorithm>
-#include <regex>
+#include "../regex.hpp"
 #include <string_view>
 #include <ctime>
 #include <chrono>
@@ -417,14 +417,14 @@ void register_file_builtins(Interpreter& interp) {
             }
 
             // Compile regex if provided
-            std::unique_ptr<std::regex> regex_filter;
+            std::optional<Regex> regex_filter;
             if (!regex_pattern.empty()) {
-                try {
-                    regex_filter = std::make_unique<std::regex>(regex_pattern);
-                } catch (const std::regex_error& e) {
-                    interp.set_fatal_error("file(STRINGS) invalid REGEX: " + std::string(e.what()));
+                auto rx = Regex::compile(regex_pattern);
+                if (!rx) {
+                    interp.set_fatal_error("file(STRINGS) invalid REGEX: " + rx.error());
                     return;
                 }
+                regex_filter = std::move(*rx);
             }
 
             // TODO: Handle encoding conversions (UTF-16, UTF-32) - for now only support default/UTF-8
@@ -458,16 +458,13 @@ void register_file_builtins(Interpreter& interp) {
 
                 // Apply regex filter - use regex_search for substring matching (not full match)
                 if (regex_filter) {
-                    std::smatch match;
-                    if (!std::regex_search(current_string, match, *regex_filter)) {
+                    std::vector<std::string> captures;
+                    if (!regex_filter->search(current_string, captures)) {
                         current_string.clear();
                         return;
                     }
                     // Store match groups for CMAKE_MATCH_* variables
-                    last_match_groups.clear();
-                    for (size_t i = 0; i < match.size(); ++i) {
-                        last_match_groups.push_back(match[i].str());
-                    }
+                    last_match_groups = std::move(captures);
                 }
 
                 // Check limits
@@ -1003,10 +1000,8 @@ void register_file_builtins(Interpreter& interp) {
                     if (matches_glob(filename, pattern)) return true;
                 }
                 for (const auto& rx_str : regexes) {
-                    try {
-                        std::regex rx(rx_str);
-                        if (std::regex_search(filename, rx)) return true;
-                    } catch (...) {}
+                    auto rx = Regex::compile(rx_str);
+                    if (rx && rx->search(filename)) return true;
                 }
                 return patterns.empty() && regexes.empty();
             };
@@ -1161,61 +1156,66 @@ void register_file_builtins(Interpreter& interp) {
                 out_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_BINARY_DIR")) / out_path;
             }
 
-            // Perform variable substitution
+            // Perform variable substitution using manual scanning
+            // (no regex needed — these are trivial fixed patterns)
+            auto is_ident_start = [](char c) { return std::isalpha((unsigned char)c) || c == '_'; };
+            auto is_ident_char = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+            auto escape_value = [&](const std::string& val) -> std::string {
+                if (!escape_quotes) return val;
+                std::string escaped;
+                for (char c : val) {
+                    if (c == '\\' || c == '"') escaped += '\\';
+                    escaped += c;
+                }
+                return escaped;
+            };
+
             std::string result = content;
 
             // Replace @VAR@ patterns
-            std::regex at_var_regex("@([A-Za-z_][A-Za-z0-9_]*)@");
-            std::string temp;
-            std::sregex_iterator it(result.begin(), result.end(), at_var_regex);
-            std::sregex_iterator end;
-            size_t last_pos = 0;
-            temp.reserve(result.size());
-
-            for (; it != end; ++it) {
-                temp.append(result, last_pos, it->position() - last_pos);
-                std::string var_name = (*it)[1].str();
-                std::string var_value = interp.get_variable(var_name);
-                if (escape_quotes) {
-                    // Escape backslashes and quotes
-                    std::string escaped;
-                    for (char c : var_value) {
-                        if (c == '\\' || c == '"') escaped += '\\';
-                        escaped += c;
+            {
+                std::string temp;
+                temp.reserve(result.size());
+                size_t i = 0;
+                while (i < result.size()) {
+                    if (result[i] == '@') {
+                        size_t j = i + 1;
+                        if (j < result.size() && is_ident_start(result[j])) {
+                            while (j < result.size() && is_ident_char(result[j])) ++j;
+                            if (j < result.size() && result[j] == '@') {
+                                std::string var_name = result.substr(i + 1, j - i - 1);
+                                temp += escape_value(interp.get_variable(var_name));
+                                i = j + 1;
+                                continue;
+                            }
+                        }
                     }
-                    var_value = escaped;
+                    temp += result[i++];
                 }
-                temp.append(var_value);
-                last_pos = it->position() + it->length();
+                result = std::move(temp);
             }
-            temp.append(result, last_pos, result.size() - last_pos);
-            result = temp;
 
             // Replace ${VAR} patterns (unless @ONLY)
             if (!at_only) {
-                std::regex dollar_var_regex("\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}");
-                temp.clear();
+                std::string temp;
                 temp.reserve(result.size());
-                std::sregex_iterator it2(result.begin(), result.end(), dollar_var_regex);
-                last_pos = 0;
-
-                for (; it2 != end; ++it2) {
-                    temp.append(result, last_pos, it2->position() - last_pos);
-                    std::string var_name = (*it2)[1].str();
-                    std::string var_value = interp.get_variable(var_name);
-                    if (escape_quotes) {
-                        std::string escaped;
-                        for (char c : var_value) {
-                            if (c == '\\' || c == '"') escaped += '\\';
-                            escaped += c;
+                size_t i = 0;
+                while (i < result.size()) {
+                    if (result[i] == '$' && i + 1 < result.size() && result[i + 1] == '{') {
+                        size_t j = i + 2;
+                        if (j < result.size() && is_ident_start(result[j])) {
+                            while (j < result.size() && is_ident_char(result[j])) ++j;
+                            if (j < result.size() && result[j] == '}') {
+                                std::string var_name = result.substr(i + 2, j - i - 2);
+                                temp += escape_value(interp.get_variable(var_name));
+                                i = j + 1;
+                                continue;
+                            }
                         }
-                        var_value = escaped;
                     }
-                    temp.append(var_value);
-                    last_pos = it2->position() + it2->length();
+                    temp += result[i++];
                 }
-                temp.append(result, last_pos, result.size() - last_pos);
-                result = temp;
+                result = std::move(temp);
             }
 
             // Handle newline style

@@ -3,7 +3,7 @@
 #include "../command_parser.hpp"
 #include <algorithm>
 #include <set>
-#include <regex>
+#include "../regex.hpp"
 
 namespace dmake {
 
@@ -421,23 +421,23 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
 
-            try {
-                std::regex rx(pattern);
-                CMakeArray list(interp.get_variable(list_var));
-                CMakeArray result;
-
-                for (size_t i = 0; i < list.size(); ++i) {
-                    bool matches = std::regex_match(list[i], rx);
-                    if ((mode == "INCLUDE" && matches) || (mode == "EXCLUDE" && !matches)) {
-                        result.append(list[i]);
-                    }
-                }
-
-                interp.set_variable(list_var, result.to_string());
-            } catch (const std::regex_error& e) {
-                interp.set_fatal_error("list(FILTER) invalid regex: " + std::string(e.what()));
+            auto rx = Regex::compile_match(pattern);
+            if (!rx) {
+                interp.set_fatal_error("list(FILTER) invalid regex: " + rx.error());
                 return;
             }
+
+            CMakeArray list(interp.get_variable(list_var));
+            CMakeArray result;
+
+            for (size_t i = 0; i < list.size(); ++i) {
+                bool matches = rx->match(list[i]);
+                if ((mode == "INCLUDE" && matches) || (mode == "EXCLUDE" && !matches)) {
+                    result.append(list[i]);
+                }
+            }
+
+            interp.set_variable(list_var, result.to_string());
         } else if (operation == "TRANSFORM") {
             // list(TRANSFORM <list> <ACTION> [<SELECTOR>] [OUTPUT_VARIABLE <output variable>])
             if (sub_args.size() < 2) {
@@ -528,13 +528,12 @@ void register_list_builtins(Interpreter& interp) {
                         interp.set_fatal_error("list(TRANSFORM REPLACE) requires regex and replacement string");
                         return false;
                     }
-                    try {
-                        std::regex rx(action_args[0]);
-                        element = std::regex_replace(element, rx, action_args[1]);
-                    } catch (const std::regex_error& e) {
-                        interp.set_fatal_error("list(TRANSFORM REPLACE) invalid regex: " + std::string(e.what()));
+                    auto rx = Regex::compile(action_args[0]);
+                    if (!rx) {
+                        interp.set_fatal_error("list(TRANSFORM REPLACE) invalid regex: " + rx.error());
                         return false;
                     }
+                    element = rx->replace_all(element, action_args[1]);
                 } else {
                     interp.set_fatal_error("list(TRANSFORM) unknown action: " + action);
                     return false;
@@ -578,19 +577,18 @@ void register_list_builtins(Interpreter& interp) {
                     interp.set_fatal_error("list(TRANSFORM) REGEX requires a pattern");
                     return;
                 }
-                try {
-                    std::regex rx(selector_params[0]);
-                    auto vec = result.to_vector();
-                    for (size_t idx = 0; idx < vec.size(); ++idx) {
-                        if (std::regex_match(vec[idx], rx)) {
-                            if (!transform_element(vec[idx])) return;
-                        }
-                    }
-                    result = CMakeArray(vec);
-                } catch (const std::regex_error& e) {
-                    interp.set_fatal_error("list(TRANSFORM) invalid REGEX selector: " + std::string(e.what()));
+                auto rx = Regex::compile_match(selector_params[0]);
+                if (!rx) {
+                    interp.set_fatal_error("list(TRANSFORM) invalid REGEX selector: " + rx.error());
                     return;
                 }
+                auto vec = result.to_vector();
+                for (size_t idx = 0; idx < vec.size(); ++idx) {
+                    if (rx->match(vec[idx])) {
+                        if (!transform_element(vec[idx])) return;
+                    }
+                }
+                result = CMakeArray(vec);
             } else if (selector_mode == "FOR") {
                 // Transform elements in range (start, stop[, step])
                 if (selector_params.empty()) {

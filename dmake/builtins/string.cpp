@@ -4,7 +4,7 @@
 #include "../utils.hpp"
 #include <algorithm>
 #include <cctype>
-#include <regex>
+#include "../regex.hpp"
 #include <sstream>
 #include <iomanip>
 #include <random>
@@ -95,14 +95,12 @@ std::string genex_strip(const std::string& str) {
 
 // Helper to apply regex replacement line by line
 // This matches CMake's behavior where . doesn't cross line boundaries
-// Each line is processed independently with std::regex_replace
 std::string regex_replace_line_by_line(const std::string& input,
-                                        const std::regex& re,
+                                        const Regex& re,
                                         const std::string& replacement) {
     // Check if input contains newlines
     if (input.find('\n') == std::string::npos) {
-        // Single line - use normal regex_replace
-        return std::regex_replace(input, re, replacement);
+        return re.replace_all(input, replacement);
     }
 
     // Multi-line input - process line by line
@@ -111,13 +109,8 @@ std::string regex_replace_line_by_line(const std::string& input,
     std::string check_line;
 
     while (std::getline(check_stream, check_line)) {
-        // Check if this line contains a match
-        std::smatch match;
-        if (std::regex_search(check_line, match, re)) {
-            // Found a match - return just the replaced result from this line
-            // This matches CMake behavior where patterns like .*PATTERN.* with multiline
-            // input return just the replacement when a match is found
-            return std::regex_replace(check_line, re, replacement);
+        if (re.search(check_line)) {
+            return re.replace_all(check_line, replacement);
         }
     }
 
@@ -132,55 +125,12 @@ std::string regex_replace_line_by_line(const std::string& input,
             result += '\n';
         }
         first_line = false;
-        result += std::regex_replace(line, re, replacement);
+        result += re.replace_all(line, replacement);
     }
 
     // Handle case where input ends with newline
     if (!input.empty() && input.back() == '\n' && (result.empty() || result.back() != '\n')) {
         result += '\n';
-    }
-
-    return result;
-}
-
-// Helper to convert CMake-style regex replacement string to C++ std::regex format
-// CMake uses \1, \2, etc. for capture groups, $ is literal
-// C++ std::regex_replace uses $1, $2, etc., $$ for literal $
-std::string cmake_to_cpp_replacement(const std::string& cmake_fmt) {
-    std::string result;
-    size_t i = 0;
-
-    while (i < cmake_fmt.size()) {
-        if (cmake_fmt[i] == '\\' && i + 1 < cmake_fmt.size()) {
-            char next = cmake_fmt[i + 1];
-
-            // Check if it's a capture group reference (\1, \2, ..., \9)
-            if (next >= '0' && next <= '9') {
-                result += '$';
-                result += next;
-                i += 2;
-                continue;
-            }
-
-            // Check for escaped backslash (\\)
-            if (next == '\\') {
-                result += '\\';
-                i += 2;
-                continue;
-            }
-
-            // Other escape sequences - preserve as-is
-            result += cmake_fmt[i];
-            i++;
-        } else if (cmake_fmt[i] == '$') {
-            // In CMake, $ is literal, but in C++ regex it's special
-            // so we need to escape it as $$
-            result += "$$";
-            i++;
-        } else {
-            result += cmake_fmt[i];
-            i++;
-        }
     }
 
     return result;
@@ -517,23 +467,21 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                try {
-                    std::regex re(pattern);
-                    std::smatch match;
-
-                    if (std::regex_search(input, match, re)) {
-                        interp.set_variable(out_var, match.str());
-                        // Also set CMAKE_MATCH_<n> variables
-                        for (size_t i = 0; i < match.size(); ++i) {
-                            interp.set_variable("CMAKE_MATCH_" + std::to_string(i), match[i].str());
-                        }
-                        interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(match.size() - 1));
-                    } else {
-                        interp.set_variable(out_var, "");
-                    }
-                } catch (const std::regex_error& e) {
-                    interp.set_fatal_error("string(REGEX MATCH) invalid regex: " + std::string(e.what()));
+                auto re = Regex::compile(pattern);
+                if (!re) {
+                    interp.set_fatal_error("string(REGEX MATCH) invalid regex: " + re.error());
                     return;
+                }
+
+                std::vector<std::string> captures;
+                if (re->search(input, captures)) {
+                    interp.set_variable(out_var, captures[0]);
+                    for (size_t i = 0; i < captures.size(); ++i) {
+                        interp.set_variable("CMAKE_MATCH_" + std::to_string(i), captures[i]);
+                    }
+                    interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(captures.size() - 1));
+                } else {
+                    interp.set_variable(out_var, "");
                 }
 
             } else if (regex_op == "MATCHALL") {
@@ -553,27 +501,19 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                try {
-                    std::regex re(pattern);
-                    std::vector<std::string> matches;
-
-                    auto begin = std::sregex_iterator(input.begin(), input.end(), re);
-                    auto end = std::sregex_iterator();
-
-                    for (std::sregex_iterator i = begin; i != end; ++i) {
-                        matches.push_back(i->str());
-                    }
-
-                    CMakeArray result;
-                    for (const auto& m : matches) {
-                        result.append(m);
-                    }
-
-                    interp.set_variable(out_var, result.to_string());
-                } catch (const std::regex_error& e) {
-                    interp.set_fatal_error("string(REGEX MATCHALL) invalid regex: " + std::string(e.what()));
+                auto re = Regex::compile(pattern);
+                if (!re) {
+                    interp.set_fatal_error("string(REGEX MATCHALL) invalid regex: " + re.error());
                     return;
                 }
+
+                auto all_matches = re->match_all(input);
+                CMakeArray result;
+                for (const auto& m : all_matches) {
+                    if (!m.empty()) result.append(m[0]);
+                }
+
+                interp.set_variable(out_var, result.to_string());
 
             } else if (regex_op == "REPLACE") {
                 CommandParser parser("string", "REGEX REPLACE");
@@ -593,17 +533,14 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                try {
-                    std::regex re(pattern);
-                    // Convert CMake-style replacement (\1, \2) to C++ style ($1, $2)
-                    std::string cpp_replacement = cmake_to_cpp_replacement(replacement);
-                    // Apply regex replacement line by line to match CMake behavior
-                    std::string result = regex_replace_line_by_line(input, re, cpp_replacement);
-                    interp.set_variable(out_var, result);
-                } catch (const std::regex_error& e) {
-                    interp.set_fatal_error("string(REGEX REPLACE) invalid regex: " + std::string(e.what()));
+                auto re = Regex::compile(pattern);
+                if (!re) {
+                    interp.set_fatal_error("string(REGEX REPLACE) invalid regex: " + re.error());
                     return;
                 }
+                // replace_all handles CMake \1 \2 syntax natively
+                std::string result = regex_replace_line_by_line(input, *re, replacement);
+                interp.set_variable(out_var, result);
 
             } else if (regex_op == "QUOTE") {
                 CommandParser parser("string", "REGEX QUOTE");

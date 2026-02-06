@@ -4,7 +4,7 @@
 #include <sstream>
 #include <array>
 #include <cstdio>
-#include <regex>
+#include "regex.hpp"
 
 #ifdef __unix__
 #include <sys/utsname.h>
@@ -246,10 +246,10 @@ public:
         // Get compiler version from g++ --version
         std::string version_output = detail::run_command(binary_ + " --version 2>&1");
         // Extract version number (pattern: X.Y.Z)
-        std::regex version_regex(R"((\d+\.\d+\.\d+))");
-        std::smatch match;
-        if (std::regex_search(version_output, match, version_regex)) {
-            info.compiler_version = match[1].str();
+        static auto version_re = Regex::compile(R"((\d+\.\d+\.\d+))").value();
+        std::vector<std::string> captures;
+        if (version_re.search(version_output, captures)) {
+            info.compiler_version = captures[1];
         }
 
         // System info from uname

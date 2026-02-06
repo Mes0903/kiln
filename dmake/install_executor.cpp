@@ -6,11 +6,30 @@
 #include <iostream>
 #include <sys/stat.h>
 #include <algorithm>
-#include <regex>
 
 namespace dmake {
 
 namespace {
+
+// Simple glob pattern matcher (*, ?, literal)
+bool matches_glob(const std::string& text, const std::string& pattern) {
+    size_t ti = 0, pi = 0;
+    size_t star_p = std::string::npos, star_t = 0;
+
+    while (ti < text.size()) {
+        if (pi < pattern.size() && (pattern[pi] == '?' || pattern[pi] == text[ti])) {
+            ++ti; ++pi;
+        } else if (pi < pattern.size() && pattern[pi] == '*') {
+            star_p = pi++; star_t = ti;
+        } else if (star_p != std::string::npos) {
+            pi = star_p + 1; ti = ++star_t;
+        } else {
+            return false;
+        }
+    }
+    while (pi < pattern.size() && pattern[pi] == '*') ++pi;
+    return pi == pattern.size();
+}
 
 // Convert CMake permissions to POSIX mode_t
 mode_t parse_permissions(const std::vector<std::string>& cmake_perms, mode_t default_mode) {
@@ -359,13 +378,7 @@ std::expected<void, std::string> execute_directory_rule(
             bool matches = rule.file_patterns.empty();  // If no patterns, match all
             if (!rule.file_patterns.empty()) {
                 for (const auto& pattern : rule.file_patterns) {
-                    // Simple glob matching (*.h, *.cpp, etc.)
-                    std::string pattern_regex = pattern;
-                    std::replace(pattern_regex.begin(), pattern_regex.end(), '.', '\\');
-                    std::replace(pattern_regex.begin(), pattern_regex.end(), '*', '.');
-                    pattern_regex = ".*" + pattern_regex.substr(1);  // Replace * with .*
-
-                    if (std::regex_match(file_path.filename().string(), std::regex(pattern_regex))) {
+                    if (matches_glob(file_path.filename().string(), pattern)) {
                         matches = true;
                         break;
                     }
@@ -374,12 +387,7 @@ std::expected<void, std::string> execute_directory_rule(
 
             // Check exclude patterns
             for (const auto& pattern : rule.exclude_patterns) {
-                std::string pattern_regex = pattern;
-                std::replace(pattern_regex.begin(), pattern_regex.end(), '.', '\\');
-                std::replace(pattern_regex.begin(), pattern_regex.end(), '*', '.');
-                pattern_regex = ".*" + pattern_regex.substr(1);
-
-                if (std::regex_match(file_path.filename().string(), std::regex(pattern_regex))) {
+                if (matches_glob(file_path.filename().string(), pattern)) {
                     matches = false;
                     break;
                 }

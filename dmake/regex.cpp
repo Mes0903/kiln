@@ -1,0 +1,226 @@
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include "regex.hpp"
+#include <pcre2.h>
+
+namespace dmake {
+
+struct Regex::Impl {
+    pcre2_code* code = nullptr;
+    pcre2_match_data* match_data = nullptr;
+
+    ~Impl() {
+        if (match_data) pcre2_match_data_free(match_data);
+        if (code) pcre2_code_free(code);
+    }
+};
+
+static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view pattern) {
+    int errcode;
+    PCRE2_SIZE erroffset;
+
+    auto* code = pcre2_compile(
+        reinterpret_cast<PCRE2_SPTR>(pattern.data()),
+        pattern.size(),
+        PCRE2_UTF | PCRE2_NO_UTF_CHECK,
+        &errcode, &erroffset, nullptr);
+
+    if (!code) {
+        PCRE2_UCHAR buf[256];
+        pcre2_get_error_message(errcode, buf, sizeof(buf));
+        return std::unexpected(std::string(reinterpret_cast<const char*>(buf)));
+    }
+
+    // JIT compile for speed (best-effort, fallback to interpreter on failure)
+    pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
+
+    auto* impl = new Regex::Impl;
+    impl->code = code;
+    impl->match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+
+    return impl;
+}
+
+std::expected<Regex, std::string> Regex::compile(std::string_view pattern) {
+    auto result = compile_pattern(pattern);
+    if (!result) return std::unexpected(result.error());
+    return Regex(*result);
+}
+
+std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern) {
+    // Wrap in ^(?:...)$ for full-match semantics
+    std::string anchored = "^(?:";
+    anchored.append(pattern);
+    anchored += ")$";
+    auto result = compile_pattern(anchored);
+    if (!result) return std::unexpected(result.error());
+    return Regex(*result);
+}
+
+Regex::~Regex() {
+    delete impl_;
+}
+
+Regex::Regex(Regex&& other) noexcept : impl_(other.impl_) {
+    other.impl_ = nullptr;
+}
+
+Regex& Regex::operator=(Regex&& other) noexcept {
+    if (this != &other) {
+        delete impl_;
+        impl_ = other.impl_;
+        other.impl_ = nullptr;
+    }
+    return *this;
+}
+
+static bool do_match(const Regex::Impl* impl, std::string_view input,
+                     std::vector<std::string>* captures) {
+    int rc = pcre2_match(
+        impl->code,
+        reinterpret_cast<PCRE2_SPTR>(input.data()),
+        input.size(), 0, 0,
+        impl->match_data, nullptr);
+
+    if (rc < 0) return false;
+
+    if (captures) {
+        captures->clear();
+        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl->match_data);
+        uint32_t count = pcre2_get_ovector_count(impl->match_data);
+
+        for (uint32_t i = 0; i < count; ++i) {
+            if (ovector[2 * i] == PCRE2_UNSET) {
+                captures->emplace_back();
+            } else {
+                captures->emplace_back(
+                    input.data() + ovector[2 * i],
+                    ovector[2 * i + 1] - ovector[2 * i]);
+            }
+        }
+    }
+
+    return true;
+}
+
+bool Regex::search(std::string_view input, std::vector<std::string>& captures) const {
+    return do_match(impl_, input, &captures);
+}
+
+bool Regex::search(std::string_view input) const {
+    return do_match(impl_, input, nullptr);
+}
+
+bool Regex::match(std::string_view input, std::vector<std::string>& captures) const {
+    return do_match(impl_, input, &captures);
+}
+
+bool Regex::match(std::string_view input) const {
+    return do_match(impl_, input, nullptr);
+}
+
+std::vector<std::vector<std::string>> Regex::match_all(std::string_view input) const {
+    std::vector<std::vector<std::string>> results;
+    PCRE2_SIZE offset = 0;
+
+    while (offset <= input.size()) {
+        int rc = pcre2_match(
+            impl_->code,
+            reinterpret_cast<PCRE2_SPTR>(input.data()),
+            input.size(), offset, 0,
+            impl_->match_data, nullptr);
+
+        if (rc < 0) break;
+
+        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl_->match_data);
+        uint32_t count = pcre2_get_ovector_count(impl_->match_data);
+
+        std::vector<std::string> groups;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (ovector[2 * i] == PCRE2_UNSET) {
+                groups.emplace_back();
+            } else {
+                groups.emplace_back(
+                    input.data() + ovector[2 * i],
+                    ovector[2 * i + 1] - ovector[2 * i]);
+            }
+        }
+        results.push_back(std::move(groups));
+
+        // Advance past the match; handle zero-length matches
+        PCRE2_SIZE match_end = ovector[1];
+        if (match_end == offset) {
+            offset++;
+        } else {
+            offset = match_end;
+        }
+    }
+
+    return results;
+}
+
+std::string Regex::replace_all(std::string_view input, std::string_view replacement) const {
+    // Convert CMake-style \1 \2 to PCRE2 $1 $2 syntax
+    std::string pcre2_repl;
+    pcre2_repl.reserve(replacement.size());
+
+    for (size_t i = 0; i < replacement.size(); ++i) {
+        if (replacement[i] == '\\' && i + 1 < replacement.size()) {
+            char next = replacement[i + 1];
+            if (next >= '0' && next <= '9') {
+                pcre2_repl += '$';
+                pcre2_repl += next;
+                ++i;
+                continue;
+            }
+            if (next == '\\') {
+                pcre2_repl += '\\';
+                ++i;
+                continue;
+            }
+            // Other escape — pass through
+            pcre2_repl += replacement[i];
+        } else if (replacement[i] == '$') {
+            // Literal $ needs escaping as $$
+            pcre2_repl += "$$";
+        } else {
+            pcre2_repl += replacement[i];
+        }
+    }
+
+    // First call to determine output length
+    PCRE2_SIZE out_len = 0;
+    int rc = pcre2_substitute(
+        impl_->code, reinterpret_cast<PCRE2_SPTR>(input.data()), input.size(),
+        0, PCRE2_SUBSTITUTE_GLOBAL | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH,
+        impl_->match_data, nullptr,
+        reinterpret_cast<PCRE2_SPTR>(pcre2_repl.data()), pcre2_repl.size(),
+        nullptr, &out_len);
+
+    if (rc == PCRE2_ERROR_NOMATCH) {
+        return std::string(input);
+    }
+
+    if (rc != PCRE2_ERROR_NOMEMORY && rc < 0) {
+        return std::string(input);
+    }
+
+    // Allocate and perform the substitution
+    PCRE2_SIZE result_len = out_len + 1; // pcre2 needs space for NUL
+    std::string result(result_len, '\0');
+
+    rc = pcre2_substitute(
+        impl_->code, reinterpret_cast<PCRE2_SPTR>(input.data()), input.size(),
+        0, PCRE2_SUBSTITUTE_GLOBAL,
+        impl_->match_data, nullptr,
+        reinterpret_cast<PCRE2_SPTR>(pcre2_repl.data()), pcre2_repl.size(),
+        reinterpret_cast<PCRE2_UCHAR*>(result.data()), &result_len);
+
+    if (rc < 0) {
+        return std::string(input);
+    }
+
+    result.resize(result_len);
+    return result;
+}
+
+} // namespace dmake

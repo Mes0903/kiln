@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <array>
-#include <regex>
+#include "regex.hpp"
 #include <sys/stat.h>
 #include "builtins/registry.hpp"
 
@@ -2070,18 +2070,21 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
                 return false;
             }
             std::string pattern = evaluate_token(condition[pos++]);
-            std::regex regex(pattern);
-            std::smatch match;
+            auto re = Regex::compile(pattern);
+            if (!re) {
+                error_msg = "MATCHES: invalid regex: " + re.error();
+                return false;
+            }
             std::string left = evaluate_token(condition[start_pos]);
-            bool result = std::regex_search(left, match, regex);
+            std::vector<std::string> captures;
+            bool result = re->search(left, captures);
 
             if (result) {
-                set_variable("CMAKE_MATCH_COUNT", std::to_string(match.size() - 1));
-                for (size_t i = 0; i < match.size() && i < 10; ++i) {
-                    set_variable("CMAKE_MATCH_" + std::to_string(i), match[i].str());
+                set_variable("CMAKE_MATCH_COUNT", std::to_string(captures.size() - 1));
+                for (size_t i = 0; i < captures.size() && i < 10; ++i) {
+                    set_variable("CMAKE_MATCH_" + std::to_string(i), captures[i]);
                 }
-                // Clear remaining matches if fewer than previous
-                 for (size_t i = match.size(); i < 10; ++i) {
+                for (size_t i = captures.size(); i < 10; ++i) {
                     set_variable("CMAKE_MATCH_" + std::to_string(i), "");
                 }
             } else {

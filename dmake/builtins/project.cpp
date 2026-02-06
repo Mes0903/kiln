@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <regex>
+#include "../regex.hpp"
 #include <cstdlib>
 #include <cstring>
 
@@ -121,25 +121,24 @@ std::string substitute_dollar_vars(Interpreter& interp, const std::string& conte
 
 // Process #cmakedefine and #cmakedefine01 directives
 std::string process_cmakedefine(Interpreter& interp, const std::string& content) {
+    static auto cmakedefine_re = Regex::compile_match(R"((\s*)#(\s*)cmakedefine\s+(\w+)(.*))").value();
+    static auto cmakedefine01_re = Regex::compile_match(R"((\s*)#(\s*)cmakedefine01\s+(\w+)\s*)").value();
+
     std::istringstream stream(content);
     std::ostringstream result;
     std::string line;
-
-    // Regex for #cmakedefine directives (supports whitespace between # and keyword)
-    std::regex cmakedefine_regex(R"(^(\s*)#(\s*)cmakedefine\s+(\w+)(.*)$)");
-    std::regex cmakedefine01_regex(R"(^(\s*)#(\s*)cmakedefine01\s+(\w+)\s*$)");
 
     bool first_line = true;
     while (std::getline(stream, line)) {
         if (!first_line) result << '\n';
         first_line = false;
 
-        std::smatch match;
+        std::vector<std::string> captures;
 
-        if (std::regex_match(line, match, cmakedefine01_regex)) {
-            std::string leading = match[1].str();
-            std::string hash_space = match[2].str();
-            std::string var_name = match[3].str();
+        if (cmakedefine01_re.match(line, captures)) {
+            std::string leading = captures[1];
+            std::string hash_space = captures[2];
+            std::string var_name = captures[3];
 
             std::string value = interp.get_variable(var_name);
             bool is_true = !is_falsy_for_cmakedefine(value);
@@ -147,11 +146,11 @@ std::string process_cmakedefine(Interpreter& interp, const std::string& content)
             result << leading << "#" << hash_space << "define " << var_name
                    << " " << (is_true ? "1" : "0");
         }
-        else if (std::regex_match(line, match, cmakedefine_regex)) {
-            std::string leading = match[1].str();
-            std::string hash_space = match[2].str();
-            std::string var_name = match[3].str();
-            std::string rest = match[4].str();
+        else if (cmakedefine_re.match(line, captures)) {
+            std::string leading = captures[1];
+            std::string hash_space = captures[2];
+            std::string var_name = captures[3];
+            std::string rest = captures[4];
 
             auto opt_value = interp.get_optional_variable(var_name);
             std::string value = opt_value.value_or("");
