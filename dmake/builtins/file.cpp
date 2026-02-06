@@ -1,5 +1,6 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../profiler.hpp"
 #include "../command_parser.hpp"
 #include <fstream>
 #include <filesystem>
@@ -201,6 +202,7 @@ void register_file_builtins(Interpreter& interp) {
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             interp.set_variable(var, content);
         } else if (operation == "GLOB" || operation == "GLOB_RECURSE") {
+            dmake::ProfileScope configure_profile("glob", "configure");
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(" + operation + ") requires a variable name");
                 return;
