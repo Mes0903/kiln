@@ -13,6 +13,7 @@ namespace dmake {
 // Subsystem identifiers for cache namespacing
 enum class CacheSubsystem {
     TryCompile,
+    TryRun,
     FileListing,
     FindResult,
     ExternalCommand,  // Generic external command caching (pkg-config, etc.)
@@ -24,6 +25,15 @@ struct TryCompileCacheEntry {
     bool success = false;                            // Compilation succeeded
     std::string output;                              // Compiler stdout/stderr
     std::map<std::string, int64_t> header_mtimes;   // Discovered header dependencies (path -> mtime)
+};
+
+// Cache entry for try_run results (compilation + execution)
+struct TryRunCacheEntry {
+    bool compile_success = false;
+    std::string compile_output;
+    int exit_code = 0;                               // Run exit code
+    std::string run_output;                           // Run stdout/stderr
+    std::map<std::string, int64_t> header_mtimes;    // Discovered header dependencies (path -> mtime)
 };
 
 // Cache entry for file listings (future use)
@@ -55,6 +65,7 @@ struct ExternalCommandCacheEntry {
 // Root structure for JSON serialization
 struct CacheRoot {
     std::map<std::string, TryCompileCacheEntry> try_compile_cache;
+    std::map<std::string, TryRunCacheEntry> try_run_cache;
     std::map<std::string, FileListingCacheEntry> file_listing_cache;
     std::map<std::string, FindResultCacheEntry> find_result_cache;
     std::map<std::string, ExternalCommandCacheEntry> external_command_cache;
@@ -76,18 +87,20 @@ public:
     template<CacheSubsystem S>
     std::optional<typename std::conditional<
         S == CacheSubsystem::TryCompile, TryCompileCacheEntry,
+        typename std::conditional<S == CacheSubsystem::TryRun, TryRunCacheEntry,
         typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
         typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
-        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type
+        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type>::type
     >::type> lookup(const std::string& signature);
 
     // Insert/update entry
     template<CacheSubsystem S>
     void insert(const std::string& signature, const typename std::conditional<
         S == CacheSubsystem::TryCompile, TryCompileCacheEntry,
+        typename std::conditional<S == CacheSubsystem::TryRun, TryRunCacheEntry,
         typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
         typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
-        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type
+        typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry, void>::type>::type>::type>::type
     >::type& entry);
 
     // Clear all entries for a subsystem
@@ -106,6 +119,16 @@ inline std::optional<TryCompileCacheEntry> CacheStore::lookup<CacheSubsystem::Tr
     std::lock_guard lock(mutex_);
     auto it = cache_data_.try_compile_cache.find(signature);
     if (it != cache_data_.try_compile_cache.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+template<>
+inline std::optional<TryRunCacheEntry> CacheStore::lookup<CacheSubsystem::TryRun>(const std::string& signature) {
+    std::lock_guard lock(mutex_);
+    auto it = cache_data_.try_run_cache.find(signature);
+    if (it != cache_data_.try_run_cache.end()) {
         return it->second;
     }
     return std::nullopt;
@@ -149,6 +172,12 @@ inline void CacheStore::insert<CacheSubsystem::TryCompile>(const std::string& si
 }
 
 template<>
+inline void CacheStore::insert<CacheSubsystem::TryRun>(const std::string& signature, const TryRunCacheEntry& entry) {
+    std::lock_guard lock(mutex_);
+    cache_data_.try_run_cache[signature] = entry;
+}
+
+template<>
 inline void CacheStore::insert<CacheSubsystem::FileListing>(const std::string& signature, const FileListingCacheEntry& entry) {
     std::lock_guard lock(mutex_);
     cache_data_.file_listing_cache[signature] = entry;
@@ -171,6 +200,12 @@ template<>
 inline void CacheStore::clear_subsystem<CacheSubsystem::TryCompile>() {
     std::lock_guard lock(mutex_);
     cache_data_.try_compile_cache.clear();
+}
+
+template<>
+inline void CacheStore::clear_subsystem<CacheSubsystem::TryRun>() {
+    std::lock_guard lock(mutex_);
+    cache_data_.try_run_cache.clear();
 }
 
 template<>

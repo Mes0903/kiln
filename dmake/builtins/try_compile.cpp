@@ -162,9 +162,9 @@ std::expected<std::string, std::string> add_header_deps_to_signature(
     return oss.str();
 }
 
-// Helper: Validate cache entry (check all header mtimes)
-bool validate_cache_entry(const TryCompileCacheEntry& entry) {
-    for (const auto& [header, cached_mtime] : entry.header_mtimes) {
+// Helper: Validate cached header mtimes (returns false if any header changed or was deleted)
+bool validate_cache_entry_mtimes(const std::map<std::string, int64_t>& header_mtimes) {
+    for (const auto& [header, cached_mtime] : header_mtimes) {
         auto current_mtime = get_file_mtime(header);
         if (!current_mtime) {
             return false;  // Header deleted or inaccessible
@@ -640,7 +640,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         auto cached = cache.lookup<CacheSubsystem::TryCompile>(base_signature);
         if (cached) {
             // Validate header mtimes
-            if (validate_cache_entry(*cached)) {
+            if (validate_cache_entry_mtimes(cached->header_mtimes)) {
                 // Cache hit!
                 if (profiling) {
                     auto dur = Profiler::instance().now_us() - profile_start;
@@ -926,14 +926,18 @@ void register_try_compile_builtins(Interpreter& interp) {
         }
 
         // Get compiler version
-        CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
-        if (version_cmd.exit_code != 0 || version_cmd.output.empty()) {
-            interp.set_fatal_error("Failed to get compiler version from " + compiler_path);
-            return;
-        }
-        std::string compiler_version = version_cmd.output;
-        if (!compiler_version.empty() && compiler_version.back() == '\n') {
-            compiler_version.pop_back();
+        std::string version_var = (language == "C") ? "CMAKE_C_COMPILER_VERSION" : "CMAKE_CXX_COMPILER_VERSION";
+        std::string compiler_version = interp.get_variable(version_var);
+        if (compiler_version.empty()) {
+            CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
+            if (version_cmd.exit_code == 0 && !version_cmd.output.empty()) {
+                compiler_version = version_cmd.output;
+                if (!compiler_version.empty() && compiler_version.back() == '\n') {
+                    compiler_version.pop_back();
+                }
+            } else {
+                compiler_version = "unknown";
+            }
         }
 
         // Get standard
@@ -1035,6 +1039,58 @@ void register_try_compile_builtins(Interpreter& interp) {
             raw_compile_flags.push_back(opt);
         }
 
+        // Compute signature for caching (compilation inputs + run args)
+        auto sig_result = compute_signature(
+            compiler_path, compiler_version, language, standard,
+            sources, inline_sources_map, compile_definitions,
+            resolved_link_libs, link_options
+        );
+        if (!sig_result) {
+            interp.set_fatal_error("Failed to compute signature: " + sig_result.error());
+            return;
+        }
+        // Extend with run-specific inputs
+        std::ostringstream run_sig;
+        run_sig << *sig_result;
+        for (const auto& arg : run_args) {
+            run_sig << "arg:" << arg << "|";
+        }
+        if (!working_directory.empty()) {
+            run_sig << "workdir:" << working_directory << "|";
+        }
+        for (const auto& flag : raw_compile_flags) {
+            run_sig << "cflag:" << flag << "|";
+        }
+        std::string base_signature = run_sig.str();
+
+        // Check cache
+        CacheStore& cache = interp.get_cache_store();
+        auto cached = cache.lookup<CacheSubsystem::TryRun>(base_signature);
+        if (cached) {
+            if (validate_cache_entry_mtimes(cached->header_mtimes)) {
+                // Cache hit
+                interp.set_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
+                if (!compile_output_variable.empty()) {
+                    interp.set_variable(compile_output_variable, cached->compile_output);
+                }
+                if (!cached->compile_success) {
+                    interp.set_variable(run_result_var, "FAILED_TO_RUN");
+                } else {
+                    interp.set_variable(run_result_var, std::to_string(cached->exit_code));
+                    if (!run_output_variable.empty()) {
+                        interp.set_variable(run_output_variable, cached->run_output);
+                    }
+                    if (!run_output_stdout_variable.empty()) {
+                        interp.set_variable(run_output_stdout_variable, cached->run_output);
+                    }
+                    if (!run_output_stderr_variable.empty()) {
+                        interp.set_variable(run_output_stderr_variable, cached->run_output);
+                    }
+                }
+                return;
+            }
+        }
+
         // Check for cross-compilation
         bool is_cross_compiling = (interp.get_variable("CMAKE_CROSSCOMPILING") == "TRUE" ||
                                      interp.get_variable("CMAKE_CROSSCOMPILING") == "ON" ||
@@ -1042,7 +1098,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Create temporary directory
         std::filesystem::path temp_dir = std::filesystem::path(bindir) / ".dmake_try_run" /
-                                         std::to_string(std::hash<std::string>{}(run_result_var + compile_result_var));
+                                         std::to_string(std::hash<std::string>{}(base_signature));
         std::error_code ec;
         std::filesystem::create_directories(temp_dir, ec);
         if (ec) {
@@ -1080,9 +1136,14 @@ void register_try_compile_builtins(Interpreter& interp) {
             interp.set_variable(compile_output_variable, compile_output);
         }
 
-        // If compilation failed, set run result to FAILED_TO_RUN
+        // If compilation failed, cache the failure and return
         if (!compile_success) {
             interp.set_variable(run_result_var, "FAILED_TO_RUN");
+            TryRunCacheEntry entry;
+            entry.compile_success = false;
+            entry.compile_output = compile_output;
+            entry.header_mtimes = compile_result->header_mtimes;
+            cache.insert<CacheSubsystem::TryRun>(base_signature, entry);
             return;
         }
 
@@ -1150,8 +1211,17 @@ void register_try_compile_builtins(Interpreter& interp) {
             interp.set_variable(run_output_stderr_variable, run_result.output);
         }
 
+        // Cache the result
+        TryRunCacheEntry entry;
+        entry.compile_success = true;
+        entry.compile_output = compile_output;
+        entry.exit_code = run_result.exit_code;
+        entry.run_output = run_result.output;
+        entry.header_mtimes = compile_result->header_mtimes;
+        cache.insert<CacheSubsystem::TryRun>(base_signature, entry);
+
         // Clean up temp directory on success
-        if (compile_success && run_result.exit_code == 0) {
+        if (run_result.exit_code == 0) {
             std::filesystem::remove_all(temp_dir, ec);
         }
     });
