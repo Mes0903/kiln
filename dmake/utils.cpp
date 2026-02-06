@@ -32,9 +32,9 @@ dmake::Hash256 dmake::sha256(const void* data, size_t len)
     return hash;
 }
 
-dmake::Hash160 dmake::md5(const void* data, size_t len)
+dmake::Hash128 dmake::md5(const void* data, size_t len)
 {
-    Hash160 hash;
+    Hash128 hash;
     MD5_CTX ctx;
     dmake_md5_init(&ctx);
     dmake_md5_update(&ctx, (const uint8_t*)data, len);
@@ -54,7 +54,7 @@ std::string dmake::Hash256::to_string() const
     return result;
 }
 
-std::string dmake::Hash160::to_string() const
+std::string dmake::Hash128::to_string() const
 {
     std::string result;
     result.reserve(2 * sizeof(bytes));
@@ -131,17 +131,56 @@ std::string dmake::escape_shell_arg(const std::string& arg) {
     return result;
 }
 
+// Check if arg starts with a shell redirection prefix.
+// Returns the length of the prefix (0 if none).
+// Handles: >>, 2>>, 2>, 1>, >, <
+static size_t shell_redirect_prefix_len(const std::string& arg) {
+    // Order matters: check longer prefixes first
+    if (arg.starts_with("2>>")) return 3;
+    if (arg.starts_with("1>>")) return 3;
+    if (arg.starts_with(">>"))  return 2;
+    if (arg.starts_with("2>"))  return 2;
+    if (arg.starts_with("1>"))  return 2;
+    if (arg.starts_with(">"))   return 1;
+    if (arg.starts_with("<"))   return 1;
+    return 0;
+}
+
+static bool is_shell_operator(const std::string& arg) {
+    return arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1";
+}
+
 std::string dmake::join_command(const std::vector<std::string>& args) {
     std::string result;
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) result += " ";
-        result += escape_shell_arg(args[i]);
+        if (is_shell_operator(args[i])) {
+            result += args[i];
+        } else if (size_t pfx = shell_redirect_prefix_len(args[i])) {
+            // Split redirection operator from path: ">file" → > + escaped(file)
+            result += args[i].substr(0, pfx);
+            std::string path = args[i].substr(pfx);
+            if (!path.empty()) {
+                result += escape_shell_arg(path);
+            }
+        } else {
+            result += escape_shell_arg(args[i]);
+        }
+    }
+    return result;
+}
+
+std::string dmake::join_command_raw(const std::vector<std::string>& args) {
+    std::string result;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) result += " ";
+        result += args[i];
     }
     return result;
 }
 
 dmake::CommandResult dmake::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
-    return run_command(join_command(command), working_dir);
+    return run_command(join_command_raw(command), working_dir);
 }
 
 std::string dmake::get_executable_path() {

@@ -339,16 +339,22 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         }
     }
 
-    // Handle CMAKE_EXE_LINKER_FLAGS
-    auto exe_flags_str = get_variable("CMAKE_EXE_LINKER_FLAGS");
-    for (auto sv : CMakeArrayView(exe_flags_str)) {
-        if (!sv.empty()) exe_linker_flags.emplace_back(sv);
+    // Handle CMAKE_EXE_LINKER_FLAGS (space-separated, not semicolon-separated)
+    {
+        std::istringstream iss(get_variable("CMAKE_EXE_LINKER_FLAGS"));
+        std::string flag;
+        while (iss >> flag) {
+            exe_linker_flags.push_back(flag);
+        }
     }
 
-    // Handle CMAKE_SHARED_LINKER_FLAGS
-    auto shared_flags_str = get_variable("CMAKE_SHARED_LINKER_FLAGS");
-    for (auto sv : CMakeArrayView(shared_flags_str)) {
-        if (!sv.empty()) shared_linker_flags.emplace_back(sv);
+    // Handle CMAKE_SHARED_LINKER_FLAGS (space-separated, not semicolon-separated)
+    {
+        std::istringstream iss(get_variable("CMAKE_SHARED_LINKER_FLAGS"));
+        std::string flag;
+        while (iss >> flag) {
+            shared_linker_flags.push_back(flag);
+        }
     }
 
     {

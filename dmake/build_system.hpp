@@ -23,6 +23,7 @@ struct BuildTask {
     std::vector<std::string> outputs;
     Target* parent_target = nullptr;
     bool always_run = false;
+    bool is_shell_command = false;  // Commands contain user shell syntax (custom commands) - don't escape
     std::string working_dir;
 
     // For compile_commands.json

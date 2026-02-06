@@ -13,9 +13,9 @@ struct Hash256
     std::string to_string() const;
 };
 
-struct Hash160
+struct Hash128
 {
-    unsigned char bytes[20];
+    unsigned char bytes[16];
 
     std::string to_string() const;
 };
@@ -41,8 +41,8 @@ inline Hash256 sha256(std::string_view str)
     return sha256(str.data(), str.size());
 }
 
-Hash160 md5(const void* data, size_t len);
-inline Hash160 md5(std::string_view str)
+Hash128 md5(const void* data, size_t len);
+inline Hash128 md5(std::string_view str)
 {
     return md5(str.data(), str.size());
 }
@@ -61,6 +61,12 @@ std::string escape_shell_arg(const std::string& arg);
  * @brief Joins a command vector into a single string, escaping each argument.
  */
 std::string join_command(const std::vector<std::string>& args);
+
+/**
+ * @brief Joins a command vector with spaces, no escaping.
+ * Used for custom commands where args contain user shell syntax.
+ */
+std::string join_command_raw(const std::vector<std::string>& args);
 
 /**
  * @brief Execute a shell command and capture its output.

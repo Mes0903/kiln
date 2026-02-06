@@ -561,6 +561,7 @@ static void generate_custom_command_task(BuildGraph& graph, const CustomCommandR
     task.id = rule.outputs[0];
     task.working_dir = rule.working_dir;
     task.always_run = false;
+    task.is_shell_command = true;
 
     for (const auto& cmd : rule.commands) {
         task.commands.push_back(cmd);
@@ -1331,6 +1332,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         post_build.id = post_build_task_id;
         post_build.parent_target = this;
         post_build.always_run = true;
+        post_build.is_shell_command = true;
         post_build.working_dir = binary_dir_;
 
         for (const auto& cmd : post_build_commands_) {
@@ -1354,6 +1356,7 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
     BuildTask task;
     task.id = name_;
     task.parent_target = this;
+    task.is_shell_command = true;
     task.always_run = true;
     task.working_dir = binary_dir_;
 

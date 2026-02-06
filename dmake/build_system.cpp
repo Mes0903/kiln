@@ -428,13 +428,14 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                           << artifact_name << "] " << target_display << std::endl;
                             }
 
-                            auto result = run_command(cmd, task.working_dir);
+                            auto cmd_str = task.is_shell_command ? join_command_raw(cmd) : join_command(cmd);
+                            auto result = dmake::run_command(cmd_str, task.working_dir);
                             if (result.exit_code != 0) {
                                 {
                                     std::lock_guard<std::mutex> lock(output_mutex_);
                                     if (!result.output.empty()) std::cerr << result.output << std::endl;
                                 }
-                                task_error = "Command failed: " + join_command(cmd);
+                                task_error = "Command failed: " + cmd_str;
                                 break;
                             } else if (!result.output.empty()) {
                                 std::lock_guard<std::mutex> lock(output_mutex_);

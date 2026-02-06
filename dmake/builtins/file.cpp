@@ -1701,6 +1701,43 @@ void register_file_builtins(Interpreter& interp) {
             }
             archive_read_close(a);
             archive_read_free(a);
+        } else if (operation == "SHA256" || operation == "MD5" || operation == "BLAKE2B") {
+            // file(<HASH> <filename> <variable>)
+            CommandParser parser("file", operation);
+            std::string filename, out_var;
+
+            parser.positional(filename, "filename");
+            parser.positional(out_var, "output variable");
+
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            std::filesystem::path file_path = filename;
+            if (!file_path.is_absolute()) {
+                file_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_path;
+            }
+
+            if (!std::filesystem::exists(file_path)) {
+                interp.set_fatal_error("file(" + operation + ") file does not exist: " + file_path.string());
+                return;
+            }
+
+            // Read file contents
+            std::ifstream ifs(file_path, std::ios::binary);
+            if (!ifs) {
+                interp.set_fatal_error("file(" + operation + ") could not read file: " + file_path.string());
+                return;
+            }
+            std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+            std::string hash;
+            if (operation == "SHA256") {
+                hash = dmake::sha256(content).to_string();
+            } else if (operation == "MD5") {
+                hash = dmake::md5(content).to_string();
+            } else {
+                hash = dmake::blake2b(content, "").to_string();
+            }
+            interp.set_variable(out_var, hash);
         } else {
             interp.set_fatal_error("file() sub-command not implemented: " + operation);
         }
