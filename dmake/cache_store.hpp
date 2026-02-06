@@ -36,10 +36,11 @@ struct TryRunCacheEntry {
     std::map<std::string, int64_t> header_mtimes;    // Discovered header dependencies (path -> mtime)
 };
 
-// Cache entry for file listings (future use)
+// Cache entry for directory listings - used by glob and find commands
 struct FileListingCacheEntry {
     int64_t dir_mtime = 0;                  // Directory modification time
-    std::vector<std::string> files;         // List of files in directory
+    std::vector<std::string> files;         // Regular files in directory
+    std::vector<std::string> subdirs;       // Subdirectories (for recursive glob)
 };
 
 // Cache entry for find_xxx results (find_file, find_library, find_path, find_program)

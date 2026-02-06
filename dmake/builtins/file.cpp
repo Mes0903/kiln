@@ -41,6 +41,35 @@ bool matches_glob(const std::string& text, const std::string& pattern) {
     }
 }
 
+// Recursively collect matching files using cached directory listings
+void glob_directory(Interpreter& interp, const std::filesystem::path& dir,
+                    const std::string& leaf_pattern, bool recurse,
+                    const std::string& relative, CMakeArray& results) {
+    auto* entries = interp.get_directory_listing(dir);
+    if (!entries) return;
+
+    auto* subdirs = interp.get_directory_subdirs(dir);
+
+    // Match files against pattern (skip directories)
+    for (const auto& name : *entries) {
+        if (subdirs && subdirs->contains(name)) continue;
+        if (!matches_glob(name, leaf_pattern)) continue;
+
+        if (!relative.empty()) {
+            results.append(std::filesystem::relative(dir / name, relative).string());
+        } else {
+            results.append((dir / name).string());
+        }
+    }
+
+    // Recurse into subdirectories
+    if (recurse && subdirs) {
+        for (const auto& subdir_name : *subdirs) {
+            glob_directory(interp, dir / subdir_name, leaf_pattern, true, relative, results);
+        }
+    }
+}
+
 void perform_glob(Interpreter& interp, const std::string& var, const std::vector<std::string>& patterns, bool recurse, const std::string& relative) {
     CMakeArray results;
     std::filesystem::path base_path = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
@@ -54,21 +83,12 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
             pattern_recurse = true;
         }
 
-        std::filesystem::path p(search_pattern);
-        std::filesystem::path search_dir;
-        std::string file_glob;
-
-        // Find the first part of the path that contains a wildcard
-        std::filesystem::path current_p;
-        std::filesystem::path remaining_p;
-        bool found_wildcard = false;
-
         std::filesystem::path pattern_path(search_pattern);
         if (!pattern_path.is_absolute()) {
             pattern_path = base_path / pattern_path;
         }
 
-        // Decompose path to find the base directory for search
+        // Decompose path to find the base directory (before first wildcard)
         std::vector<std::filesystem::path> components(pattern_path.begin(), pattern_path.end());
         size_t i = 0;
         std::filesystem::path base;
@@ -87,14 +107,13 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         while (i < components.size()) {
             std::string s = components[i].string();
             if (s.find('*') != std::string::npos || s.find('?') != std::string::npos) {
-                found_wildcard = true;
                 break;
             }
             base /= components[i];
             i++;
         }
 
-        search_dir = base;
+        std::filesystem::path search_dir = base;
         // The rest is the pattern to match against
         std::string remaining_pattern;
         bool first = true;
@@ -111,11 +130,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
             search_dir = search_dir.parent_path();
         }
 
-        if (!std::filesystem::exists(search_dir)) continue;
-
-        // Simplified: if it contains **, we match the filename against the part after the last **
-        // or if no ** we match filename.
-        // For a true CMake glob we'd need to match the whole relative path.
+        // Extract the leaf filename pattern for matching
         std::string leaf_pattern = remaining_pattern;
         size_t last_slash = remaining_pattern.find_last_of("/\\");
         if (last_slash != std::string::npos) {
@@ -124,28 +139,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         // If leaf is **, we match everything
         if (leaf_pattern == "**") leaf_pattern = "*";
 
-        auto process_entry = [&](const std::filesystem::directory_entry& entry) {
-            if (entry.is_directory()) return;
-            if (matches_glob(entry.path().filename().string(), leaf_pattern)) {
-                std::string path_str;
-                if (!relative.empty()) {
-                    path_str = std::filesystem::relative(entry.path(), relative).string();
-                } else {
-                    path_str = entry.path().string();
-                }
-                results.append(path_str);
-            }
-        };
-
-        if (pattern_recurse) {
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(search_dir)) {
-                process_entry(entry);
-            }
-        } else {
-            for (const auto& entry : std::filesystem::directory_iterator(search_dir)) {
-                process_entry(entry);
-            }
-        }
+        glob_directory(interp, search_dir, leaf_pattern, pattern_recurse, relative, results);
     }
 
     interp.set_variable(var, results.to_string());

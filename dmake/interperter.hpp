@@ -236,6 +236,10 @@ public:
     // Returns nullptr if directory doesn't exist or can't be read
     const std::unordered_set<std::string>* get_directory_listing(const std::filesystem::path& dir);
 
+    // Get subdirectory names within a directory (populates cache if needed)
+    // Returns nullptr if directory doesn't exist or can't be read
+    const std::unordered_set<std::string>* get_directory_subdirs(const std::filesystem::path& dir);
+
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
@@ -421,10 +425,11 @@ private:
     // Install property values: normalized_install_path -> property_name -> value
     std::map<std::string, std::map<std::string, std::string>> install_properties_;
 
-    // Directory scan cache for optimizing file lookups
+    // Directory scan cache for optimizing file lookups and glob
     struct DirectoryCacheEntry {
         std::filesystem::file_time_type mtime;           // Directory modification time
         std::unordered_set<std::string> entries;         // All entries (filenames only) - O(1) lookup
+        std::unordered_set<std::string> subdirs;         // Subdirectory names (for recursive glob)
     };
     std::unordered_map<std::string, DirectoryCacheEntry> dir_scan_cache_;  // Key: absolute directory path
 

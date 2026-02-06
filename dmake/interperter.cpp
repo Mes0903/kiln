@@ -1044,7 +1044,7 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(const 
         // Continue with fresh scan
     }
 
-    // Look up in cache
+    // Look up in session cache
     auto it = root->dir_scan_cache_.find(dir_key);
     if (it != root->dir_scan_cache_.end()) {
         // Cache hit - validate mtime
@@ -1055,25 +1055,81 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(const 
         root->dir_scan_cache_.erase(it);
     }
 
+    // Convert file_time_type to epoch seconds for persistent cache comparison
+    auto sys_tp = std::chrono::file_clock::to_sys(current_mtime);
+    int64_t mtime_sec = std::chrono::duration_cast<std::chrono::seconds>(sys_tp.time_since_epoch()).count();
+
+    // Check persistent cache
+    if (root->cache_store_) {
+        auto persistent = root->cache_store_->lookup<CacheSubsystem::FileListing>(dir_key);
+        if (persistent && persistent->dir_mtime == mtime_sec) {
+            // Populate session cache from persistent cache
+            DirectoryCacheEntry cache_entry;
+            cache_entry.mtime = current_mtime;
+            for (const auto& f : persistent->files) {
+                cache_entry.entries.insert(f);
+            }
+            for (const auto& d : persistent->subdirs) {
+                cache_entry.entries.insert(d);
+                cache_entry.subdirs.insert(d);
+            }
+            auto [ins_it, _] = root->dir_scan_cache_.emplace(dir_key, std::move(cache_entry));
+            return &ins_it->second.entries;
+        }
+    }
+
     // Cache miss - scan directory
     std::unordered_set<std::string> entries;
+    std::unordered_set<std::string> subdirs;
     try {
         for (const auto& entry : std::filesystem::directory_iterator(abs_dir, ec)) {
             if (ec) {
                 // Error during iteration - don't cache
                 return nullptr;
             }
-            entries.insert(entry.path().filename().string());
+            auto name = entry.path().filename().string();
+            entries.insert(name);
+            std::error_code ec2;
+            if (entry.is_directory(ec2) && !ec2) {
+                subdirs.insert(name);
+            }
         }
     } catch (...) {
         // Permission denied or other errors - don't cache
         return nullptr;
     }
 
-    // Store in cache
-    DirectoryCacheEntry cache_entry{current_mtime, std::move(entries)};
+    // Populate persistent cache
+    if (root->cache_store_) {
+        FileListingCacheEntry persistent_entry;
+        persistent_entry.dir_mtime = mtime_sec;
+        for (const auto& e : entries) {
+            if (subdirs.contains(e)) {
+                persistent_entry.subdirs.push_back(e);
+            } else {
+                persistent_entry.files.push_back(e);
+            }
+        }
+        root->cache_store_->insert<CacheSubsystem::FileListing>(dir_key, persistent_entry);
+    }
+
+    // Store in session cache
+    DirectoryCacheEntry cache_entry{current_mtime, std::move(entries), std::move(subdirs)};
     auto [inserted_it, _] = root->dir_scan_cache_.emplace(dir_key, std::move(cache_entry));
     return &inserted_it->second.entries;
+}
+
+const std::unordered_set<std::string>* Interpreter::get_directory_subdirs(const std::filesystem::path& dir) {
+    // Ensure the directory is cached (populates entries + subdirs)
+    if (!get_directory_listing(dir)) return nullptr;
+
+    std::error_code ec;
+    std::string dir_key = std::filesystem::absolute(dir, ec).string();
+    if (ec) return nullptr;
+
+    auto it = get_root()->dir_scan_cache_.find(dir_key);
+    if (it == get_root()->dir_scan_cache_.end()) return nullptr;
+    return &it->second.subdirs;
 }
 
 bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
