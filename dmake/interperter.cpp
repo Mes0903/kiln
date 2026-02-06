@@ -794,17 +794,22 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             auto ast = parser.parse();
             parse_profile.stop();
 
-            if (ast) {
-                ProfileScope interpret_profile("interpret " + subdir + "/" + subdir_filename, "interpret");
-                auto res = interp.interpret(ast.value());
-                interpret_profile.stop();
-                if (!res) {
-                    interp.set_fatal_error(res.error());
+            {
+                // return() in subdirectory shouldn't propagate to parent
+                ReturnGuard rg(interp);
+
+                if (ast) {
+                    ProfileScope interpret_profile("interpret " + subdir + "/" + subdir_filename, "interpret");
+                    auto res = interp.interpret(ast.value());
+                    interpret_profile.stop();
+                    if (!res) {
+                        interp.set_fatal_error(res.error());
+                    } else {
+                        interp.finalize_directory_targets();  // Apply retroactive properties
+                    }
                 } else {
-                    interp.finalize_directory_targets();  // Apply retroactive properties
+                    interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
                 }
-            } else {
-                interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
             }
 
             // Pop directory context and variable scope
@@ -1049,24 +1054,23 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     std::string old_list_file = get_variable("CMAKE_CURRENT_LIST_FILE");
     std::string old_list_dir = get_variable("CMAKE_CURRENT_LIST_DIR");
 
-    // Save return state - return() in included file shouldn't affect caller
-    bool saved_return = return_requested_;
-    return_requested_ = false;
-
     set_variable("CMAKE_CURRENT_LIST_FILE", abs_path);
     set_variable("CMAKE_CURRENT_LIST_DIR", abs_dir);
     set_current_file(abs_path);
 
-    ProfileScope interpret_profile("interpret " + abs_path, "interpret");
-    auto res = interpret(ast.value());
-    interpret_profile.stop();
+    std::expected<void, InterpreterError> res;
+    {
+        // return() in included file shouldn't propagate to caller
+        ReturnGuard rg(*this);
+
+        ProfileScope interpret_profile("interpret " + abs_path, "interpret");
+        res = interpret(ast.value());
+        interpret_profile.stop();
+    }
 
     set_variable("CMAKE_CURRENT_LIST_FILE", old_list_file);
     set_variable("CMAKE_CURRENT_LIST_DIR", old_list_dir);
     set_current_file(old_file);
-
-    // Restore return state - included file's return() doesn't propagate
-    return_requested_ = saved_return;
 
     return res;
 }
@@ -1750,7 +1754,6 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
 
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
-    bool saved_return = return_requested_;
     std::string saved_file = current_file_;
     // Save and clear macro substitutions - functions create a new scope so outer
     // macro parameters should not bleed into the function's variable lookups
@@ -1759,10 +1762,14 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
 
     loop_depth_ = 0;
     loop_control_ = LoopControl::NONE;
-    return_requested_ = false;
     current_file_ = func.definition_file;
 
-    auto res = interpret(func.body);
+    std::expected<void, InterpreterError> res;
+    {
+        // return() in function shouldn't propagate to caller
+        ReturnGuard rg(*this);
+        res = interpret(func.body);
+    }
 
     // Pop variable scope (automatic cleanup of all function-local variables)
     variables_.pop_scope();
@@ -1772,8 +1779,6 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
 
     if (!res) set_fatal_error(res.error());
 
-    // Functions create a new scope, so return() inside doesn't affect caller
-    return_requested_ = saved_return;
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
     current_file_ = saved_file;

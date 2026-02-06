@@ -461,4 +461,21 @@ private:
     bool has_send_errors_ = false;
 };
 
+// RAII guard that saves/clears return_requested_ on construction and restores it
+// on destruction. Use at scope boundaries (add_subdirectory, include, function)
+// so that return() in a child scope never leaks into the parent.
+struct ReturnGuard {
+    Interpreter& interp_;
+    bool saved_;
+    explicit ReturnGuard(Interpreter& interp) : interp_(interp), saved_(interp.is_return_requested()) {
+        interp_.clear_return_request();
+    }
+    ~ReturnGuard() {
+        interp_.clear_return_request();
+        if (saved_) interp_.request_return();
+    }
+    ReturnGuard(const ReturnGuard&) = delete;
+    ReturnGuard& operator=(const ReturnGuard&) = delete;
+};
+
 } // namespace dmake

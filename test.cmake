@@ -1,2 +1,5 @@
-find_package(Threads)
-message("${CMAKE_THREAD_LIBS_INIT}")
+IF(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64|powerpc64" OR CMAKE_SYSTEM_NAME MATCHES AIX)
+    message("On PPC")
+ELSE()
+    message("Not PPC")
+ENDIF()
