@@ -1259,7 +1259,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("link_directories", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("link_directories() requires at least one directory argument");
             return;
         }
 
@@ -1277,7 +1276,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("add_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("add_definitions() requires at least one definition");
             return;
         }
 
@@ -1294,7 +1292,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("remove_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("remove_definitions() requires at least one definition");
             return;
         }
 
@@ -1329,7 +1326,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("add_compile_definitions", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("add_compile_definitions() requires at least one definition");
             return;
         }
 
@@ -1340,7 +1336,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("add_compile_options", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("add_compile_options() requires at least one option");
             return;
         }
 
@@ -1350,7 +1345,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("add_link_options", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("add_link_options() requires at least one option");
             return;
         }
 
@@ -1360,7 +1354,6 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("link_libraries", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
-            interp.set_fatal_error("link_libraries() requires at least one library");
             return;
         }
 
