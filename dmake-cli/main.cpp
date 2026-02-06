@@ -4,6 +4,7 @@
 #include "dmake/utils.hpp"
 #include "dmake/install_executor.hpp"
 #include "dmake/profiler.hpp"
+#include "dmake/tool_mode.hpp"
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -11,9 +12,6 @@
 #include <filesystem>
 #include <CLI/CLI.hpp>
 #include <unistd.h>
-#include <fcntl.h>
-#include <archive.h>
-#include <archive_entry.h>
 #include <future>
 #include "dmake/regex.hpp"
 #include <chrono>
@@ -429,178 +427,7 @@ int main(int argc, char* argv[]) {
 
     if (e_cmd->parsed()) {
         auto e_args = e_cmd->remaining();
-        if (e_args.empty()) {
-            std::cerr << "Error: -E requires a command" << std::endl;
-            return 1;
-        }
-
-        std::string cmd = e_args[0];
-        if (cmd == "echo") {
-            for (size_t i = 1; i < e_args.size(); ++i) {
-                std::cout << e_args[i] << (i == e_args.size() - 1 ? "" : " ");
-            }
-            std::cout << std::endl;
-            return 0;
-        } else if (cmd == "echo_append") {
-            for (size_t i = 1; i < e_args.size(); ++i) {
-                std::cout << e_args[i] << (i == e_args.size() - 1 ? "" : " ");
-            }
-            return 0;
-        } else if (cmd == "touch") {
-            for (size_t i = 1; i < e_args.size(); ++i) {
-                std::ofstream f(e_args[i], std::ios::app);
-            }
-            return 0;
-        } else if (cmd == "remove") {
-            for (size_t i = 1; i < e_args.size(); ++i) {
-                std::filesystem::remove_all(e_args[i]);
-            }
-            return 0;
-        } else if (cmd == "make_directory") {
-            for (size_t i = 1; i < e_args.size(); ++i) {
-                std::filesystem::create_directories(e_args[i]);
-            }
-            return 0;
-        } else if (cmd == "create_symlink") {
-            if(e_args.size() != 3) {
-                std::cerr << "Error: create_symlink requires exactly two arguments" << std::endl;
-                return 1;
-            }
-
-            auto src = e_args[1];
-            auto dst = e_args[2];
-            bool exists = std::filesystem::exists(dst);
-            bool is_symlink = std::filesystem::is_symlink(dst);
-            if(exists && !is_symlink) {
-                std::cerr << "Error: Link destination " << dst << " already exists and is not a symlink" << std::endl;
-                return 1;
-            }
-            else if(exists && is_symlink) {
-                return 0;
-            }
-            std::filesystem::create_symlink(src, dst);
-            return 0;
-        } else if (cmd == "tar") {
-            // tar [cxt][vf][zjJ] file.tar [file/dir ...]
-            if (e_args.size() < 3) {
-                std::cerr << "Error: tar requires at least flags and archive name" << std::endl;
-                return 1;
-            }
-
-            std::string flags = e_args[1];
-            std::string archive_path = e_args[2];
-
-            bool create = flags.find('c') != std::string::npos;
-            bool extract = flags.find('x') != std::string::npos;
-            bool list = flags.find('t') != std::string::npos;
-            bool verbose = flags.find('v') != std::string::npos;
-            bool gzip = flags.find('z') != std::string::npos;
-            bool bzip2 = flags.find('j') != std::string::npos;
-            bool xz = flags.find('J') != std::string::npos;
-
-            int mode_count = (int)create + (int)extract + (int)list;
-            if (mode_count != 1) {
-                std::cerr << "Error: tar requires exactly one of c, x, or t" << std::endl;
-                return 1;
-            }
-
-            if (extract || list) {
-                struct archive* a = archive_read_new();
-                archive_read_support_format_all(a);
-                archive_read_support_filter_all(a);
-
-                if (archive_read_open_filename(a, archive_path.c_str(), 16384) != ARCHIVE_OK) {
-                    std::cerr << "Error: could not open archive: " << archive_path << ": " << archive_error_string(a) << std::endl;
-                    archive_read_free(a);
-                    return 1;
-                }
-
-                struct archive* ext = nullptr;
-                if (extract) {
-                    ext = archive_write_disk_new();
-                    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
-                    archive_write_disk_set_standard_lookup(ext);
-                }
-
-                struct archive_entry* entry;
-                while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
-                    if (verbose || list) {
-                        std::cout << archive_entry_pathname(entry) << std::endl;
-                    }
-                    if (extract) {
-                        int r = archive_write_header(ext, entry);
-                        if (r != ARCHIVE_OK) {
-                            std::cerr << "Error: " << archive_error_string(ext) << std::endl;
-                        } else {
-                            const void* buff;
-                            size_t size;
-                            la_int64_t offset;
-                            while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
-                                archive_write_data_block(ext, buff, size, offset);
-                            }
-                        }
-                        archive_write_finish_entry(ext);
-                    } else {
-                        archive_read_data_skip(a);
-                    }
-                }
-
-                if (ext) {
-                    archive_write_close(ext);
-                    archive_write_free(ext);
-                }
-                archive_read_close(a);
-                archive_read_free(a);
-                return 0;
-            } else {
-                // create mode
-                struct archive* a = archive_write_new();
-                if (gzip) archive_write_add_filter_gzip(a);
-                else if (bzip2) archive_write_add_filter_bzip2(a);
-                else if (xz) archive_write_add_filter_xz(a);
-                else archive_write_add_filter_none(a);
-                archive_write_set_format_pax_restricted(a);
-
-                if (archive_write_open_filename(a, archive_path.c_str()) != ARCHIVE_OK) {
-                    std::cerr << "Error: could not create archive: " << archive_path << ": " << archive_error_string(a) << std::endl;
-                    archive_write_free(a);
-                    return 1;
-                }
-
-                struct archive* disk = archive_read_disk_new();
-                archive_read_disk_set_standard_lookup(disk);
-
-                for (size_t i = 3; i < e_args.size(); ++i) {
-                    archive_read_disk_open(disk, e_args[i].c_str());
-                    struct archive_entry* entry;
-                    while (archive_read_next_header2(disk, entry = archive_entry_new()) == ARCHIVE_OK) {
-                        archive_read_disk_descend(disk);
-                        if (verbose) {
-                            std::cout << archive_entry_pathname(entry) << std::endl;
-                        }
-                        archive_write_header(a, entry);
-                        int fd = open(archive_entry_sourcepath(entry), O_RDONLY);
-                        if (fd >= 0) {
-                            char buff[16384];
-                            ssize_t len;
-                            while ((len = read(fd, buff, sizeof(buff))) > 0) {
-                                archive_write_data(a, buff, len);
-                            }
-                            close(fd);
-                        }
-                        archive_entry_free(entry);
-                    }
-                    archive_read_close(disk);
-                }
-                archive_read_free(disk);
-                archive_write_close(a);
-                archive_write_free(a);
-                return 0;
-            }
-        } else {
-            std::cerr << "Error: Unknown -E command: " << cmd << std::endl;
-            return 1;
-        }
+        return dmake::run_tool_mode(e_args);
     }
 
     if (!opt.script_path.empty()) {

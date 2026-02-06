@@ -42,6 +42,7 @@ add_library(dmake SHARED
     dmake/profiler.cpp
     dmake/regex.cpp
     dmake/CMakeArray.cpp
+    dmake/tool_mode.cpp
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
