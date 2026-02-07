@@ -85,6 +85,10 @@ std::expected<std::vector<std::string>, std::string> parse_deps_file(const std::
 }
 
 // Helper: Compute transparent signature (human-readable, not hashed)
+// When use_content_hash is false (default), source files are keyed by mtime for speed.
+// When true, source files are keyed by content hash — used as a fallback when the
+// mtime-based lookup misses because a file was rewritten with identical content
+// (e.g. DetermineGflagsNamespace.cmake rewrites the same .cxx with file(WRITE) each run).
 std::expected<std::string, std::string> compute_signature(
     const std::string& compiler_path,
     const std::string& compiler_version,
@@ -94,7 +98,8 @@ std::expected<std::string, std::string> compute_signature(
     const std::map<std::string, std::string>& inline_sources,  // name -> content
     const std::vector<std::string>& compile_defs,
     const std::vector<std::string>& link_libs,
-    const std::vector<std::string>& link_opts
+    const std::vector<std::string>& link_opts,
+    bool use_content_hash = false
 ) {
     std::ostringstream oss;
 
@@ -104,13 +109,18 @@ std::expected<std::string, std::string> compute_signature(
     oss << "lang:" << language << "|";
     oss << "std:" << standard << "|";
 
-    // Source files with mtimes
+    // Source files: mtime (fast path) or content hash (fallback for rewritten files)
     for (const auto& src : source_files) {
-        auto mtime_result = get_file_mtime(src);
-        if (!mtime_result) {
-            return std::unexpected(mtime_result.error());
+        if (use_content_hash) {
+            std::ifstream ifs(src, std::ios::binary);
+            if (!ifs) return std::unexpected("Cannot read source file: " + src);
+            std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+            oss << "src:" << src << ":hash:" << blake2b(content).to_string() << "|";
+        } else {
+            auto mtime_result = get_file_mtime(src);
+            if (!mtime_result) return std::unexpected(mtime_result.error());
+            oss << "src:" << src << ":" << *mtime_result << "|";
         }
-        oss << "src:" << src << ":" << *mtime_result << "|";
     }
 
     // Inline sources with content hashes
@@ -648,12 +658,10 @@ void register_try_compile_builtins(Interpreter& interp) {
         }
         std::string base_signature = *sig_result;
 
-        // Check cache (without header deps first)
-        auto cached = cache.lookup<CacheSubsystem::TryCompile>(base_signature);
-        if (cached) {
-            // Validate header mtimes
-            if (validate_cache_entry_mtimes(cached->header_mtimes)) {
-                // Cache hit!
+        // Check cache: first by mtime-based signature (fast), then by content-hash (handles rewritten files)
+        auto try_cache_hit = [&](const std::string& sig) -> bool {
+            auto cached = cache.lookup<CacheSubsystem::TryCompile>(sig);
+            if (cached && validate_cache_entry_mtimes(cached->header_mtimes)) {
                 if (profiling) {
                     auto dur = Profiler::instance().now_us() - profile_start;
                     Profiler::instance().add_complete("try_compile " + profile_src + " (cached)", "configure", profile_start, dur);
@@ -663,8 +671,21 @@ void register_try_compile_builtins(Interpreter& interp) {
                 if (!output_variable.empty()) {
                     interp.set_variable(output_variable, cached->output);
                 }
-                return;
+                return true;
             }
+            return false;
+        };
+
+        if (try_cache_hit(base_signature)) return;
+
+        // Mtime miss — try content-hash signature (source rewritten with same content?)
+        if (!sources.empty()) {
+            auto hash_sig = compute_signature(
+                compiler_path, compiler_version, language, standard,
+                sources, inline_sources_map, compile_definitions,
+                resolved_link_libs, link_options, /*use_content_hash=*/true
+            );
+            if (hash_sig && try_cache_hit(*hash_sig)) return;
         }
 
         // Cache miss - need to compile
@@ -732,13 +753,24 @@ void register_try_compile_builtins(Interpreter& interp) {
             artifact_path = compile_result->executable_path;
         }
 
-        // Store in cache using base_signature (lookup key must match storage key!)
-        // Header dependencies are stored in the entry itself, not in the signature
+        // Store in cache under both mtime and content-hash signatures so that
+        // future lookups hit regardless of whether the source file was rewritten
         TryCompileCacheEntry entry;
         entry.success = compile_success;
         entry.output = output;
         entry.header_mtimes = header_mtimes;
         cache.insert<CacheSubsystem::TryCompile>(base_signature, entry);
+
+        if (!sources.empty()) {
+            auto hash_sig = compute_signature(
+                compiler_path, compiler_version, language, standard,
+                sources, inline_sources_map, compile_definitions,
+                resolved_link_libs, link_options, /*use_content_hash=*/true
+            );
+            if (hash_sig && *hash_sig != base_signature) {
+                cache.insert<CacheSubsystem::TryCompile>(*hash_sig, entry);
+            }
+        }
 
         // Handle COPY_FILE if specified
         if (!copy_file.empty() && compile_success && !artifact_path.empty()) {
