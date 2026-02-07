@@ -21,7 +21,7 @@ static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view
     auto* code = pcre2_compile(
         reinterpret_cast<PCRE2_SPTR>(pattern.data()),
         pattern.size(),
-        PCRE2_UTF | PCRE2_NO_UTF_CHECK,
+        PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_DOTALL,
         &errcode, &erroffset, nullptr);
 
     if (!code) {
