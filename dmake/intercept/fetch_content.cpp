@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <fstream>
+#include <unordered_set>
+#include <unordered_map>
 
 namespace dmake {
 
@@ -35,8 +37,32 @@ static void do_populate(Interpreter& interp, const std::string& name) {
         return;
     }
 
-    // Parse the saved declaration (semicolon-separated key-value pairs)
-    // Format: KEY1;VALUE1;KEY2;VALUE2;...
+    // Parse the saved declaration (semicolon-separated tokens)
+    // Tokens are: KEYWORD val1 val2 ... KEYWORD val1 ...
+    // Some keywords (like PATCH_COMMAND) take multiple values, so we can't
+    // assume strict key-value pairs. Instead, collect values per keyword
+    // until the next known keyword.
+    static const std::unordered_set<std::string> known_keywords = {
+        "URL", "URL_HASH", "URL_MD5",
+        "GIT_REPOSITORY", "GIT_TAG", "GIT_SHALLOW", "GIT_CONFIG",
+        "GIT_REMOTE_NAME", "GIT_SUBMODULES", "GIT_SUBMODULES_RECURSE", "GIT_PROGRESS",
+        "SOURCE_DIR", "BINARY_DIR", "SOURCE_SUBDIR",
+        "PATCH_COMMAND", "UPDATE_COMMAND", "CONFIGURE_COMMAND",
+        "BUILD_COMMAND", "INSTALL_COMMAND", "TEST_COMMAND", "DOWNLOAD_COMMAND",
+        "CMAKE_ARGS", "CMAKE_CACHE_ARGS",
+        "DOWNLOAD_NO_EXTRACT", "DOWNLOAD_EXTRACT_TIMESTAMP",
+        "FIND_PACKAGE_ARGS", "OVERRIDE_FIND_PACKAGE",
+        "HTTPHEADER", "HTTP_HEADER", "TIMEOUT",
+        "PREFIX", "TMP_DIR", "STAMP_DIR", "DOWNLOAD_DIR",
+        "LOG_DOWNLOAD", "LOG_CONFIGURE", "LOG_BUILD", "LOG_INSTALL",
+        "LOG_UPDATE", "LOG_PATCH", "LOG_TEST",
+        "LOG_MERGED_STDOUTERR", "LOG_OUTPUT_ON_FAILURE",
+        "USES_TERMINAL_DOWNLOAD", "USES_TERMINAL_CONFIGURE",
+        "USES_TERMINAL_BUILD", "USES_TERMINAL_INSTALL",
+        "BUILD_IN_SOURCE", "EXCLUDE_FROM_ALL", "BUILD_ALWAYS",
+        "DEPENDS", "BUILD_BYPRODUCTS", "LIST_SEPARATOR",
+    };
+
     std::vector<std::string> detail_parts;
     {
         std::string_view details = it->second;
@@ -49,19 +75,44 @@ static void do_populate(Interpreter& interp, const std::string& name) {
         }
     }
 
-    // Extract known options from detail_parts
+    // Build keyword -> list of values map
+    std::unordered_map<std::string, std::vector<std::string>> detail_map;
+    std::string current_key;
+    for (const auto& part : detail_parts) {
+        if (known_keywords.count(part)) {
+            current_key = part;
+            if (!detail_map.count(current_key)) {
+                detail_map[current_key] = {};
+            }
+        } else if (!current_key.empty()) {
+            detail_map[current_key].push_back(part);
+        }
+    }
+
     auto get_detail = [&](const std::string& key) -> std::string {
-        for (size_t i = 0; i + 1 < detail_parts.size(); i += 2) {
-            if (detail_parts[i] == key) return detail_parts[i + 1];
+        auto map_it = detail_map.find(key);
+        if (map_it != detail_map.end() && !map_it->second.empty()) {
+            return map_it->second[0];
         }
         return "";
     };
 
     auto get_detail_flag = [&](const std::string& key) -> bool {
-        for (size_t i = 0; i < detail_parts.size(); ++i) {
-            if (detail_parts[i] == key) return true;
+        return detail_map.count(key) > 0;
+    };
+
+    // Get all values for a keyword, joined with spaces (for shell commands)
+    auto get_detail_command = [&](const std::string& key) -> std::string {
+        auto map_it = detail_map.find(key);
+        if (map_it == detail_map.end() || map_it->second.empty()) {
+            return "";
         }
-        return false;
+        std::string result;
+        for (const auto& v : map_it->second) {
+            if (!result.empty()) result += ' ';
+            result += v;
+        }
+        return result;
     };
 
     // Resolve source/binary dirs
@@ -171,13 +222,36 @@ static void do_populate(Interpreter& interp, const std::string& name) {
         }
     }
 
-    // Execute patch command if declared
-    std::string patch_cmd = get_detail("PATCH_COMMAND");
-    if (!patch_cmd.empty()) {
-        auto result = run_command(patch_cmd, source_dir);
-        if (result.exit_code != 0) {
-            interp.set_fatal_error("FetchContent: patch failed for " + name + ":\n" + result.output);
-            return;
+    // Execute patch command(s) if declared
+    // PATCH_COMMAND may contain multiple commands separated by "COMMAND" tokens
+    if (get_detail_flag("PATCH_COMMAND")) {
+        auto map_it = detail_map.find("PATCH_COMMAND");
+        if (map_it != detail_map.end() && !map_it->second.empty()) {
+            // Split on "COMMAND" tokens to get individual commands
+            std::vector<std::string> commands;
+            std::string current_cmd;
+            for (const auto& token : map_it->second) {
+                if (token == "COMMAND") {
+                    if (!current_cmd.empty()) {
+                        commands.push_back(std::move(current_cmd));
+                        current_cmd.clear();
+                    }
+                } else {
+                    if (!current_cmd.empty()) current_cmd += ' ';
+                    current_cmd += token;
+                }
+            }
+            if (!current_cmd.empty()) {
+                commands.push_back(std::move(current_cmd));
+            }
+
+            for (const auto& cmd : commands) {
+                auto result = run_command(cmd, source_dir);
+                if (result.exit_code != 0) {
+                    interp.set_fatal_error("FetchContent: patch failed for " + name + ":\n" + result.output);
+                    return;
+                }
+            }
         }
     }
 

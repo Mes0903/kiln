@@ -281,13 +281,34 @@ void register_external_project_builtins(Interpreter& interp) {
         }
 
         // 2. Patch step
+        // PATCH_COMMAND may contain multiple commands separated by "COMMAND" tokens
         if (!patch_command.empty()) {
             replace_tokens(patch_command, tokens);
             interp.print_message("STATUS", "  Patching " + name + "...");
-            auto result = run_command(patch_command, source_dir);
-            if (result.exit_code != 0) {
-                interp.set_fatal_error("ExternalProject_Add(" + name + ") patch failed:\n" + result.output);
-                return;
+
+            // Split on "COMMAND" tokens to get individual commands
+            std::vector<std::vector<std::string>> commands;
+            std::vector<std::string> current_cmd;
+            for (const auto& token : patch_command) {
+                if (token == "COMMAND") {
+                    if (!current_cmd.empty()) {
+                        commands.push_back(std::move(current_cmd));
+                        current_cmd.clear();
+                    }
+                } else {
+                    current_cmd.push_back(token);
+                }
+            }
+            if (!current_cmd.empty()) {
+                commands.push_back(std::move(current_cmd));
+            }
+
+            for (const auto& cmd : commands) {
+                auto result = run_command(cmd, source_dir);
+                if (result.exit_code != 0) {
+                    interp.set_fatal_error("ExternalProject_Add(" + name + ") patch failed:\n" + result.output);
+                    return;
+                }
             }
         }
 
