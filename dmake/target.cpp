@@ -70,6 +70,26 @@ const std::vector<std::string>& Target::get_property_list(const std::string& nam
     return (vis_it != prop_it->second.end()) ? vis_it->second : empty;
 }
 
+std::string Target::get_property_combined(const std::string& name) const {
+    // Check visibility-based list properties first
+    auto prop_it = list_properties_.find(name);
+    if (prop_it != list_properties_.end()) {
+        std::string result;
+        for (auto vis : {PropertyVisibility::PUBLIC, PropertyVisibility::PRIVATE, PropertyVisibility::INTERFACE}) {
+            auto vis_it = prop_it->second.find(vis);
+            if (vis_it != prop_it->second.end()) {
+                for (const auto& v : vis_it->second) {
+                    if (!result.empty()) result += ';';
+                    result += v;
+                }
+            }
+        }
+        if (!result.empty()) return result;
+    }
+    // Fall back to generic properties
+    return get_property(name);
+}
+
 const std::vector<std::string>& Target::get_resolved_property(const std::string& name) const {
     static const std::vector<std::string> empty;
     auto it = resolved_properties_.find(name);

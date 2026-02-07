@@ -716,6 +716,7 @@ void register_target_builtins(Interpreter& interp) {
         const auto& features_db = CompileFeatures::instance();
         auto validate_features = [&](const std::vector<std::string>& features, const char* visibility) -> bool {
             for (const auto& feature : features) {
+                if (GenexParser::contains_genex(feature)) continue;
                 if (!features_db.is_known_feature(feature)) {
                     interp.set_fatal_error("target_compile_features: Unknown compile feature '" + feature +
                                           "' in " + visibility + " scope for target '" + name + "'");
@@ -1039,13 +1040,16 @@ void register_target_builtins(Interpreter& interp) {
                 std::string prop_name = props[i];
                 std::string prop_value = props[i+1];
 
-                if (prop_name == "OUTPUT_NAME") {
+                // IMPORTED_LOCATION or IMPORTED_LOCATION_<CONFIG> → update dedicated field + generic storage
+                if (prop_name == "IMPORTED_LOCATION" || prop_name.starts_with("IMPORTED_LOCATION_")) {
+                    target->set_imported_location(prop_value);
+                    target->set_property(prop_name, prop_value);
+                } else if (prop_name == "OUTPUT_NAME") {
                     target->set_output_name(prop_value);
+                    target->set_property(prop_name, prop_value);
                 } else if (prop_name == "CXX_STANDARD") {
                     target->set_cxx_standard(prop_value);
-                } else if (prop_name == "IMPORTED_LOCATION" ||
-                           prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
-                    target->set_imported_location(prop_value);
+                    target->set_property(prop_name, prop_value);
                 } else if (prop_name == "COMPILE_DEFINITIONS") {
                     target->append_property_from_string("COMPILE_DEFINITIONS", prop_value, PropertyVisibility::PRIVATE);
                 } else if (prop_name == "COMPILE_OPTIONS") {

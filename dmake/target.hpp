@@ -71,6 +71,10 @@ public:
     void prepend_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility);
     const std::vector<std::string>& get_property_list(const std::string& name, PropertyVisibility visibility) const;
 
+    // Get combined property value as semicolon-separated string (all visibilities).
+    // Checks list_properties_ first, then falls back to generic properties_.
+    std::string get_property_combined(const std::string& name) const;
+
     // Helper for raw string inputs: splits by semicolon then appends
     void append_property_from_string(const std::string& name, const std::string& value, PropertyVisibility visibility);
 

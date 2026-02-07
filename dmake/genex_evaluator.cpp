@@ -436,8 +436,22 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return std::unexpected("TARGET_PROPERTY: target '" + target_name + "' not found");
             }
 
-            // Get the property value
-            std::string prop_value = target_it->second->get_property(property_name);
+            // Get the property value (checks list properties then generic)
+            std::string prop_value = target_it->second->get_property_combined(property_name);
+
+            // Recursively evaluate any nested genex in individual list elements
+            if (prop_value.find("$<") != std::string::npos) {
+                std::string result;
+                for (auto sv : CMakeArrayView(prop_value)) {
+                    auto eval = evaluate(std::string(sv));
+                    if (!eval) return eval;
+                    if (!eval->empty()) {
+                        if (!result.empty()) result += ';';
+                        result += *eval;
+                    }
+                }
+                return result;
+            }
             return prop_value;
         }
 

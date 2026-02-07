@@ -440,6 +440,11 @@ void register_property_builtins(Interpreter& interp) {
                         continue;
                     }
 
+                    // IMPORTED_LOCATION or IMPORTED_LOCATION_<CONFIG> → update dedicated field
+                    if (property_name == "IMPORTED_LOCATION" || property_name.starts_with("IMPORTED_LOCATION_")) {
+                        target->set_imported_location(value);
+                    }
+
                     // Generic property handling
                     if (append || append_string) {
                         std::string old_val = target->get_property(property_name);
