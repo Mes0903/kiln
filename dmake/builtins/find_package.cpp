@@ -87,6 +87,10 @@ void register_find_package_builtins(Interpreter& interp) {
         bool quiet = false;
         std::vector<std::string> components;
         std::vector<std::string> optional_components;
+        std::vector<std::string> hints;
+        std::vector<std::string> paths;
+        std::vector<std::string> path_suffixes;
+        bool no_default_path = false;
 
         parser.positional(package_name, "package name", true);
         parser.positional(version, "version", false);
@@ -94,8 +98,12 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.flag("CONFIG", config);
         parser.flag("NO_MODULE", no_module);
         parser.flag("QUIET", quiet);
+        parser.flag("NO_DEFAULT_PATH", no_default_path);
         parser.list("COMPONENTS", components);
         parser.list("OPTIONAL_COMPONENTS", optional_components);
+        parser.list("HINTS", hints);
+        parser.list("PATHS", paths);
+        parser.list("PATH_SUFFIXES", path_suffixes);
 
         PARSE_OR_RETURN(parser, interp, args);
 
@@ -263,26 +271,40 @@ void register_find_package_builtins(Interpreter& interp) {
         std::string dir_var = package_name + "_DIR";
         std::vector<std::filesystem::path> search_paths;
 
-        // 2.1 Check PackageName_DIR hint
+        // Helper: expand a base path with PATH_SUFFIXES (adds base + base/suffix for each suffix)
+        auto add_with_suffixes = [&](const std::filesystem::path& base) {
+            search_paths.push_back(base);
+            for (const auto& suffix : path_suffixes) {
+                search_paths.push_back(base / suffix);
+            }
+        };
+
+        // 2.1 Check PackageName_DIR hint (always checked, even with NO_DEFAULT_PATH)
         std::string hint_dir = interp.get_variable(dir_var);
         if (!hint_dir.empty()) {
-            search_paths.push_back(hint_dir);
+            add_with_suffixes(hint_dir);
         }
 
-        // 2.2 Check CMAKE_PREFIX_PATH
-        std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
-        if (!prefix_path.empty()) {
-            size_t start = 0;
-            size_t end = prefix_path.find(';');
-            while (end != std::string::npos) {
-                search_paths.push_back(prefix_path.substr(start, end - start));
-                start = end + 1;
-                end = prefix_path.find(';', start);
+        if (!no_default_path) {
+            // 2.2 Check CMAKE_PREFIX_PATH
+            std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
+            if (!prefix_path.empty()) {
+                size_t start = 0;
+                size_t end = prefix_path.find(';');
+                while (end != std::string::npos) {
+                    add_with_suffixes(prefix_path.substr(start, end - start));
+                    start = end + 1;
+                    end = prefix_path.find(';', start);
+                }
+                add_with_suffixes(prefix_path.substr(start));
             }
-            search_paths.push_back(prefix_path.substr(start));
         }
 
-        // 2.3 Standard system paths
+        // 2.3 HINTS paths (after CMAKE_PREFIX_PATH, before system roots)
+        for (const auto& h : hints) {
+            add_with_suffixes(h);
+        }
+
         std::vector<std::string> system_roots = {
             "/usr/lib/cmake",
             "/usr/share/cmake",
@@ -291,9 +313,17 @@ void register_find_package_builtins(Interpreter& interp) {
             "/usr/lib/x86_64-linux-gnu/cmake"
         };
 
-        for (const auto& root : system_roots) {
-            search_paths.push_back(std::filesystem::path(root) / package_name);
-            search_paths.push_back(root); // Also check the root itself
+        if (!no_default_path) {
+            // 2.4 Standard system paths
+            for (const auto& root : system_roots) {
+                add_with_suffixes(std::filesystem::path(root) / package_name);
+                add_with_suffixes(root); // Also check the root itself
+            }
+        }
+
+        // 2.5 PATHS (hard-coded guesses, after system roots)
+        for (const auto& p : paths) {
+            add_with_suffixes(p);
         }
 
         std::filesystem::path found_path;
