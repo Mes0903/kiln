@@ -19,5 +19,6 @@ void register_property_builtins(Interpreter& interp);
 void register_path_builtins(Interpreter& interp);
 void register_install_builtins(Interpreter& interp);
 void register_source_properties_builtins(Interpreter& interp);
+void register_system_info_builtins(Interpreter& interp);
 
 } // namespace dmake

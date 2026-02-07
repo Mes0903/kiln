@@ -37,6 +37,7 @@ add_library(dmake SHARED
     dmake/builtins/path.cpp
     dmake/builtins/install.cpp
     dmake/builtins/source_properties.cpp
+    dmake/builtins/system_info.cpp
     dmake/intercept/download_utils.cpp
     dmake/intercept/external_project.cpp
     dmake/intercept/fetch_content.cpp
