@@ -439,6 +439,12 @@ void register_string_builtins(Interpreter& interp) {
                     interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(captures.size() - 1));
                 } else {
                     interp.set_variable(out_var, "");
+                    // Clear CMAKE_MATCH_* variables on non-match (CMake behavior)
+                    interp.set_variable("CMAKE_MATCH_COUNT", "0");
+                    interp.set_variable("CMAKE_MATCH_0", "");
+                    for (int i = 1; i <= 9; ++i) {
+                        interp.set_variable("CMAKE_MATCH_" + std::to_string(i), "");
+                    }
                 }
 
             } else if (regex_op == "MATCHALL") {

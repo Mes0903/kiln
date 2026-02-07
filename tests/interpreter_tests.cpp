@@ -2071,6 +2071,24 @@ TEST_CASE("string() REGEX MATCH operation", "[interpreter][string]") {
     REQUIRE(output == "\n");
 }
 
+TEST_CASE("string() REGEX MATCH clears CMAKE_MATCH on non-match", "[interpreter][string][bugfix]") {
+    // Regression test: CMAKE_MATCH_* variables must be cleared when a REGEX MATCH
+    // fails to match. Previously, stale values from a prior successful match would
+    // persist, causing incorrect behavior in loops that check CMAKE_MATCH_1.
+    auto output = run_script(R"RAW(
+        string(REGEX MATCH "([0-9]+)" M "hello42world")
+        message("match1: ${CMAKE_MATCH_1}")
+        string(REGEX MATCH "([0-9]+)" M "no digits")
+        message("match2: ${CMAKE_MATCH_1}")
+        if(CMAKE_MATCH_1)
+            message("BUG: stale match")
+        else()
+            message("OK: cleared")
+        endif()
+    )RAW");
+    REQUIRE(output == "match1: 42\nmatch2: \nOK: cleared\n");
+}
+
 TEST_CASE("string() REGEX MATCHALL operation", "[interpreter][string]") {
     auto output = run_script(R"(
         string(REGEX MATCHALL "[0-9]+" result "abc123def456ghi789")
