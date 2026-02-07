@@ -246,13 +246,12 @@ void register_find_package_builtins(Interpreter& interp) {
 
         // Search order:
         // 1. CMAKE_MODULE_PATH Find modules (user-provided, always first)
-        // 2. Config mode (PackageConfig.cmake)
-        // 3. System Find modules (last resort fallback)
-        //
-        // This differs from CMake's default (module-first) but matches modern
-        // best practice. System Find modules depend on CMake internals that
-        // dmake doesn't implement, while config files are self-contained.
+        // 2. System Find modules (matches CMake's default module-first behavior)
+        // 3. Config mode (PackageConfig.cmake, fallback)
 
+        // CMP0167: Boost uses config-first (BoostConfig.cmake) instead of
+        // the legacy FindBoost.cmake module. All other packages use module-first.
+        bool prefer_config = (package_name == "Boost");
         bool try_module = !config && !no_module;
         bool try_config = !module_only;
 
@@ -304,7 +303,29 @@ void register_find_package_builtins(Interpreter& interp) {
             }
         }
 
-        // 2. Config Mode (skip if MODULE was explicitly requested)
+        // Helper: try system Find modules
+        auto try_system_find_modules = [&]() -> bool {
+            if (!try_module) return false;
+            std::vector<std::string> system_modules = {
+                "/usr/share/cmake/Modules",
+                "/usr/local/share/cmake/Modules",
+                "/usr/lib/cmake/Modules",
+                "/usr/lib/x86_64-linux-gnu/cmake/Modules"
+            };
+
+            std::string module_filename = "Find" + package_name + ".cmake";
+            for (const auto& path : system_modules) {
+                if (interp.cached_file_exists(path, module_filename)) {
+                    if (try_find_module(std::filesystem::path(path) / module_filename)) return true;
+                }
+            }
+            return false;
+        };
+
+        // 2. System Find modules (CMake default: module-first, except Boost per CMP0167)
+        if (!prefer_config && try_system_find_modules()) return;
+
+        // 3. Config Mode (skip if MODULE was explicitly requested)
         std::string dir_var = package_name + "_DIR";
         std::filesystem::path found_path;
 
@@ -508,22 +529,8 @@ void register_find_package_builtins(Interpreter& interp) {
             // Validate required components
             validate_components();
         } else {
-            // 3. System Find modules (last resort fallback)
-            if (try_module) {
-                std::vector<std::string> system_modules = {
-                    "/usr/share/cmake/Modules",
-                    "/usr/local/share/cmake/Modules",
-                    "/usr/lib/cmake/Modules",
-                    "/usr/lib/x86_64-linux-gnu/cmake/Modules"
-                };
-
-                std::string module_filename = "Find" + package_name + ".cmake";
-                for (const auto& path : system_modules) {
-                    if (interp.cached_file_exists(path, module_filename)) {
-                        if (try_find_module(std::filesystem::path(path) / module_filename)) return;
-                    }
-                }
-            }
+            // For config-preferred packages (Boost), fall back to system Find modules
+            if (prefer_config && try_system_find_modules()) return;
 
             // Nothing found
             interp.set_variable(found_var, "OFF");

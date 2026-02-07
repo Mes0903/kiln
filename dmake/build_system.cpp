@@ -197,6 +197,48 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         }
     }
 
+    // 1a. CMake compatibility: ALL custom targets implicitly run before compilation.
+    // CMake's Makefile generator orders ALL custom targets before regular targets,
+    // so projects often rely on generated headers being available without explicit
+    // add_dependencies(). We replicate this, skipping compilation tasks that are
+    // transitive dependencies of any ALL custom target (to avoid cycles).
+    {
+        std::vector<std::string> all_custom_task_ids;
+        std::set<std::string> excluded_tasks;  // union of transitive deps of all ALL custom targets
+
+        for (const auto& [id, task] : tasks_) {
+            if (!task.parent_target || !task.always_run) continue;
+            auto* custom = dynamic_cast<CustomTarget*>(task.parent_target);
+            if (!custom || !custom->is_build_by_default()) continue;
+
+            all_custom_task_ids.push_back(id);
+
+            // BFS to find all transitive dependencies
+            std::vector<std::string> stack = {id};
+            while (!stack.empty()) {
+                std::string cur = stack.back();
+                stack.pop_back();
+                if (!excluded_tasks.insert(cur).second) continue;
+                auto it = tasks_.find(cur);
+                if (it != tasks_.end()) {
+                    for (const auto& dep : it->second.dependencies) {
+                        stack.push_back(dep);
+                    }
+                }
+            }
+        }
+
+        if (!all_custom_task_ids.empty()) {
+            for (auto& [id, task] : tasks_) {
+                if (!task.is_compilation || excluded_tasks.count(id)) continue;
+                for (const auto& ct_id : all_custom_task_ids) {
+                    if (task.dependencies.count(ct_id)) continue;
+                    task.dependencies.insert(ct_id);
+                }
+            }
+        }
+    }
+
     auto cycle_err = check_for_cycles();
     if (cycle_err) return std::unexpected(*cycle_err);
 
@@ -333,11 +375,16 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                     std::string artifact_name = task.parent_target ? task.parent_target->get_name() : "unknown";
 
-                    // Pre-create output directories
-                    for (const auto& out : task.outputs) {
+                    // Pre-create output directories and working directory
+                    {
                         std::error_code ec;
-                        std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
-                        if (ec) { task_error = "Failed to create directory for " + out + ": " + ec.message(); break; }
+                        if (!task.working_dir.empty()) {
+                            std::filesystem::create_directories(task.working_dir, ec);
+                        }
+                        for (const auto& out : task.outputs) {
+                            std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
+                            if (ec) { task_error = "Failed to create directory for " + out + ": " + ec.message(); break; }
+                        }
                     }
                     if (!task_error.empty()) break;
 
@@ -428,14 +475,13 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                           << artifact_name << "] " << target_display << std::endl;
                             }
 
-                            auto cmd_str = task.is_shell_command ? join_command_raw(cmd) : join_command(cmd);
-                            auto result = dmake::run_command(cmd_str, task.working_dir);
+                            auto result = dmake::run_command(cmd, task.working_dir);
                             if (result.exit_code != 0) {
                                 {
                                     std::lock_guard<std::mutex> lock(output_mutex_);
                                     if (!result.output.empty()) std::cerr << result.output << std::endl;
                                 }
-                                task_error = "Command failed: " + cmd_str;
+                                task_error = "Command failed: " + join_command_raw(cmd);
                                 break;
                             } else if (!result.output.empty()) {
                                 std::lock_guard<std::mutex> lock(output_mutex_);
@@ -488,6 +534,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         if (w.joinable()) w.join();
     }
 
+    // Always save cache — even on failure, successful tasks should be cached
+    // so we don't redo them on the next build.
+    save_cache(build_dir, new_cache);
+
     if (!fatal_error.empty()) {
         return std::unexpected(fatal_error);
     }
@@ -501,7 +551,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 << std::fixed << std::setprecision(2) << duration.count() / 1000.0 << "s" << std::endl;
     }
 
-    return save_cache(build_dir, new_cache);
+    return {};
 }
 
 dmake::CommandResult BuildGraph::run_command(const std::vector<std::string>& command, const std::string& working_dir) {

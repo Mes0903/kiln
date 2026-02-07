@@ -268,7 +268,11 @@ std::expected<CompileResult, std::string> compile_sources(
 
         // Link libraries and options
         for (const auto& lib : params.resolved_link_libs) {
-            compile_cmd.push_back(lib);
+            if (!lib.empty() && lib[0] != '-' && lib[0] != '/' && !lib.ends_with(".a") && !lib.ends_with(".so")) {
+                compile_cmd.push_back("-l" + lib);
+            } else {
+                compile_cmd.push_back(lib);
+            }
         }
         for (const auto& opt : params.link_options) {
             compile_cmd.push_back(opt);
@@ -328,7 +332,11 @@ std::expected<CompileResult, std::string> compile_sources(
         link_cmd.push_back(exe_file);
 
         for (const auto& lib : params.resolved_link_libs) {
-            link_cmd.push_back(lib);
+            if (!lib.empty() && lib[0] != '-' && lib[0] != '/' && !lib.ends_with(".a") && !lib.ends_with(".so")) {
+                link_cmd.push_back("-l" + lib);
+            } else {
+                link_cmd.push_back(lib);
+            }
         }
         for (const auto& opt : params.link_options) {
             link_cmd.push_back(opt);

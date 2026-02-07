@@ -6,6 +6,7 @@
 #include "genex_evaluator.hpp"
 #include "interperter.hpp"
 #include "compile_features.hpp"
+#include "printing.hpp"
 #include "CMakeArray.hpp"
 #include <filesystem>
 #include <fstream>
@@ -372,6 +373,9 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
             if (dep->is_visiting()) {
                 if (dep->get_type() == TargetType::STATIC_LIBRARY ||
                     dep->get_type() == TargetType::OBJECT_LIBRARY) {
+                    dmake::print_message(std::cerr, "WARNING",
+                        "Circular dependency between static libraries '" + name_ +
+                        "' and '" + dep->get_name() + "'. Consider restructuring to avoid cycles.");
                     std::string dep_path = dep->get_output_path();
                     if (!dep_path.empty()) {
                         if (!is_interface_only) res_libs.push_back(dep_path);
@@ -771,6 +775,30 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         throw std::runtime_error("Error evaluating genex in SOURCES for target '" + name_ + "': " + evaluated_sources_result.error());
     }
 
+    // Pre-scan: discover custom command dependencies from all sources (including
+    // generated headers like bison .hh files) before emitting compilation tasks.
+    // This ensures that even if a generated header appears after a .cc source in
+    // the source list, its custom command is wired as a dependency for all tasks.
+    for (const auto& src : *evaluated_sources_result) {
+        if (src.empty()) continue;
+        std::filesystem::path src_path(src);
+        std::string norm_src, norm_bin;
+        if (src_path.is_absolute()) {
+            norm_src = norm_bin = src_path.lexically_normal().string();
+        } else {
+            norm_src = (std::filesystem::path(source_dir_) / src_path).lexically_normal().string();
+            norm_bin = (std::filesystem::path(binary_dir_) / src_path).lexically_normal().string();
+        }
+        auto cc_it = custom_rules.find(norm_src);
+        if (cc_it == custom_rules.end()) cc_it = custom_rules.find(norm_bin);
+        if (cc_it != custom_rules.end()) {
+            if (!generated_custom_tasks.count(cc_it->second->outputs[0])) {
+                generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated_custom_tasks);
+            }
+            resolved_manual_deps.push_back({cc_it->second->outputs[0]});
+        }
+    }
+
     for (const auto& src : *evaluated_sources_result) {
         if (src.empty()) continue;
 
@@ -805,16 +833,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             }
         }
 
-        // --- Custom command discovery (merged from generate_tasks) ---
-        {
-            auto cc_it = custom_rules.find(normalized_src_dir);
-            if (cc_it == custom_rules.end()) {
-                cc_it = custom_rules.find(normalized_bin_dir);
-            }
-            if (cc_it != custom_rules.end() && !generated_custom_tasks.count(cc_it->second->outputs[0])) {
-                generate_custom_command_task(graph, *cc_it->second, all_targets, custom_rules, generated_custom_tasks);
-            }
-        }
+        // Note: custom command discovery and dependency wiring is handled
+        // by the pre-scan loop above, before any compilation tasks are emitted.
 
         // Look up per-source properties
         auto sp_it = source_props.find(src_normalized);
@@ -894,6 +914,18 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             for (const auto& dir : resolved_sys_includes) ctx.system_includes.push_back(dir);
             for (const auto& def : resolved_definitions) ctx.definitions.push_back(def);
             for (const auto& opt : resolved_options) ctx.options.push_back(opt);
+        }
+
+        // Apply target-level COMPILE_FLAGS property (deprecated but still used)
+        {
+            std::string target_cf = get_property("COMPILE_FLAGS");
+            if (!target_cf.empty()) {
+                std::istringstream iss(target_cf);
+                std::string flag;
+                while (iss >> flag) {
+                    ctx.options.push_back(flag);
+                }
+            }
         }
 
         // Apply per-source properties
@@ -1226,6 +1258,44 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 
+    // Collect object files from OBJECT library dependencies.
+    // When a target links to an OBJECT library, it absorbs all its .o files
+    // directly (like CMake's $<TARGET_OBJECTS:name>).
+    // Walk all link library names (pre-resolution) to find OBJECT lib deps,
+    // since OBJECT libs have no output path and vanish during resolution.
+    {
+        std::function<void(const Target&, std::set<const Target*>&)> collect_object_deps;
+        collect_object_deps = [&](const Target& t, std::set<const Target*>& visited) {
+            auto collect_from = [&](PropertyVisibility vis) {
+                for (const auto& lib_name : t.get_property_list("LINK_LIBRARIES", vis)) {
+                    auto it = all_targets.find(lib_name);
+                    if (it == all_targets.end()) continue;
+                    auto& dep = it->second;
+                    if (!visited.insert(dep.get()).second) continue;
+                    if (dep->get_type() == TargetType::OBJECT_LIBRARY) {
+                        for (const auto& src : dep->get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+                            auto lang_info = LanguageClassifier::from_path(src);
+                            if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
+                                obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
+                            }
+                        }
+                        // Recurse: OBJECT libraries can depend on other OBJECT libraries
+                        collect_object_deps(*dep, visited);
+                    } else if (dep->get_type() == TargetType::STATIC_LIBRARY) {
+                        // Static libs may also link to OBJECT libraries
+                        collect_object_deps(*dep, visited);
+                    }
+                }
+            };
+            collect_from(PropertyVisibility::PUBLIC);
+            collect_from(PropertyVisibility::PRIVATE);
+            collect_from(PropertyVisibility::INTERFACE);
+        };
+        std::set<const Target*> visited;
+        visited.insert(this);
+        collect_object_deps(*this, visited);
+    }
+
     Language linker_lang = Language::C;
     for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
         if (LanguageClassifier::from_path(src).lang == Language::CXX) {
@@ -1234,15 +1304,77 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
     }
 
-    const Compiler* linker = toolchain.get_compiler_ptr(linker_lang);
-    if (!linker) {
-        throw std::runtime_error("No linker available for language in target '" + name_ + "'");
-    }
-
     std::string output_path = get_output_path();
     BuildTask link;
     link.id = output_path;
     link.parent_target = this;
+
+    // Collect link libraries by walking the dependency graph directly.
+    // We can't rely solely on resolved LINK_LIBRARIES because circular
+    // dependencies between static libraries cause the DFS resolution to
+    // miss transitive deps for whichever target hits the cycle first.
+    std::vector<std::string> full_link_libs;
+    if (type_ != TargetType::STATIC_LIBRARY) {
+        std::function<void(const Target&, std::set<const Target*>&)> collect_link_libs;
+        collect_link_libs = [&](const Target& t, std::set<const Target*>& visited) {
+            for (const auto& lib : t.get_resolved_property("LINK_LIBRARIES")) {
+                full_link_libs.push_back(lib);
+                // For static libraries, recurse to get THEIR transitive deps
+                // (which may have been missed due to cycles during resolve)
+                if (lib.ends_with(".a")) {
+                    for (const auto& [name, tgt] : all_targets) {
+                        if (tgt->get_output_path() == lib && visited.insert(tgt.get()).second) {
+                            collect_link_libs(*tgt, visited);
+                            break;
+                        }
+                    }
+                }
+            }
+        };
+        std::set<const Target*> visited;
+        visited.insert(this);
+        collect_link_libs(*this, visited);
+
+        // Deduplicate: shared libs and -l flags keep first occurrence only.
+        // Static libs (.a) keep first two occurrences (for cycle resolution).
+        std::unordered_map<std::string, int> seen_counts;
+        std::vector<std::string> deduped;
+        for (const auto& lib : full_link_libs) {
+            int& count = seen_counts[lib];
+            int max_allowed = lib.ends_with(".a") ? 2 : 1;
+            if (count < max_allowed) {
+                deduped.push_back(lib);
+            }
+            count++;
+        }
+        full_link_libs = std::move(deduped);
+
+        // If the target is C but links against libraries containing C++ code,
+        // upgrade to g++ for linking so C++ runtime symbols resolve.
+        if (linker_lang == Language::C) {
+            auto has_cxx = [&]() {
+                for (const auto& [name, tgt] : all_targets) {
+                    if (tgt.get() == this) continue;
+                    std::string tgt_output = tgt->get_output_path();
+                    if (tgt_output.empty()) continue;
+                    bool is_linked = std::any_of(full_link_libs.begin(), full_link_libs.end(),
+                        [&](const std::string& lib) { return lib == tgt_output; });
+                    if (!is_linked) continue;
+                    for (const auto& src : tgt->get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+                        if (LanguageClassifier::from_path(src).lang == Language::CXX)
+                            return true;
+                    }
+                }
+                return false;
+            };
+            if (has_cxx()) linker_lang = Language::CXX;
+        }
+    }
+
+    const Compiler* linker = toolchain.get_compiler_ptr(linker_lang);
+    if (!linker) {
+        throw std::runtime_error("No linker available for language in target '" + name_ + "'");
+    }
 
     if (type_ == TargetType::STATIC_LIBRARY) {
         link.commands.push_back(linker->get_archive_command(output_path, obj_files));
@@ -1275,8 +1407,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             ctx.linker_flags.push_back(opt);
         }
 
-        // Use pre-resolved link libraries
-        for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
+        for (const auto& lib : full_link_libs) {
              if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") ||
                  lib.find(".so") != std::string::npos ||
                  lib.find(".a") != std::string::npos) {
@@ -1301,7 +1432,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     // Static libraries are just .o archives — ar doesn't resolve symbols against
     // other libraries. Only executables/shared libraries need link-library deps.
     if (type_ != TargetType::STATIC_LIBRARY) {
-        for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
+        for (const auto& lib : full_link_libs) {
              if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
                  link.inputs.push_back(lib);
                  link.dependencies.insert(lib);

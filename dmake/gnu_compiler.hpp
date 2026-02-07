@@ -158,7 +158,23 @@ public:
         cmd.push_back("-o");
         cmd.push_back(ctx.output);
 
-        for (const auto& obj : ctx.objects) cmd.push_back(obj);
+        // Partition ctx.objects into: .o files, static libs (.a), shared libs (.so).
+        // GNU ld processes left-to-right: static libs only pull in objects for
+        // currently unresolved symbols, so shared libs that satisfy static lib
+        // references must come AFTER them.
+        std::vector<std::string> obj_files, static_libs, shared_libs;
+        for (const auto& obj : ctx.objects) {
+            if (obj.ends_with(".a"))
+                static_libs.push_back(obj);
+            else if (obj.find(".so") != std::string::npos)
+                shared_libs.push_back(obj);
+            else
+                obj_files.push_back(obj);
+        }
+
+        for (const auto& o : obj_files) cmd.push_back(o);
+        for (const auto& a : static_libs) cmd.push_back(a);
+        for (const auto& so : shared_libs) cmd.push_back(so);
 
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
         for (const auto& lib : ctx.libs) {

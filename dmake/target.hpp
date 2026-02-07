@@ -47,6 +47,7 @@ public:
     void set_imported(bool imported) { is_imported_ = imported; }
     bool is_imported() const { return is_imported_; }
     bool is_visiting() const { return visiting_; }
+    bool is_resolved() const { return resolved_; }
 
     void set_imported_location(std::string location) { imported_location_ = std::move(location); }
     const std::string& get_imported_location() const { return imported_location_; }

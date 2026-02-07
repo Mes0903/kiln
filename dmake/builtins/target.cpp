@@ -250,12 +250,20 @@ void register_target_builtins(Interpreter& interp) {
         // Detect which form based on first keyword
         if ((*parse_args)[0] == "OUTPUT") {
             // OUTPUT form - generates files
+            // Strip deprecated ARGS keyword - in CMake it's a no-op that means
+            // "the following are arguments to the preceding COMMAND". We remove it
+            // so its arguments stay part of the current COMMAND's multi_list entry.
+            std::vector<std::string> filtered_args;
+            filtered_args.reserve(parse_args->size());
+            for (const auto& a : *parse_args) {
+                if (a != "ARGS") filtered_args.push_back(a);
+            }
+
             CommandParser parser("add_custom_command");
             std::vector<std::string> outputs;
             std::vector<std::vector<std::string>> commands;
             std::vector<std::string> depends;
             std::vector<std::string> byproducts;
-            std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
             std::vector<std::string> comment_parts;
             bool append_flag = false;
@@ -264,7 +272,6 @@ void register_target_builtins(Interpreter& interp) {
 
             parser.list("OUTPUT", outputs);
             parser.multi_list("COMMAND", commands);
-            parser.list("ARGS", cmd_args);  // Deprecated, appends to last COMMAND
             parser.list("DEPENDS", depends);
             parser.list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
             parser.value("WORKING_DIRECTORY", working_dir);
@@ -272,7 +279,7 @@ void register_target_builtins(Interpreter& interp) {
             parser.flag("APPEND", append_flag);
             parser.flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
             parser.flag("COMMAND_EXPAND_LISTS", command_expand_lists);
-            PARSE_OR_RETURN(parser, interp, *parse_args);
+            PARSE_OR_RETURN(parser, interp, filtered_args);
 
             // APPEND can be first keyword or a flag within the command
             bool append = append_first || append_flag;
@@ -288,11 +295,6 @@ void register_target_builtins(Interpreter& interp) {
                     }
                     cmd_args = std::move(expanded_args);
                 }
-            }
-
-            // Handle deprecated ARGS keyword - append to last COMMAND
-            if (!cmd_args.empty() && !commands.empty()) {
-                commands.back().insert(commands.back().end(), cmd_args.begin(), cmd_args.end());
             }
 
             if (outputs.empty()) {
@@ -405,27 +407,24 @@ void register_target_builtins(Interpreter& interp) {
             auto target = it->second;
 
             // Parse remaining arguments
+            // Strip deprecated ARGS keyword (see OUTPUT form above)
+            std::vector<std::string> remaining_args;
+            for (auto it = parse_args->begin() + 3; it != parse_args->end(); ++it) {
+                if (*it != "ARGS") remaining_args.push_back(*it);
+            }
+
             CommandParser parser("add_custom_command");
             std::vector<std::vector<std::string>> commands;
-            std::vector<std::string> cmd_args;  // Deprecated ARGS keyword
             std::string working_dir;
             std::vector<std::string> comment_parts;
             bool verbatim = false;
 
             parser.multi_list("COMMAND", commands);
-            parser.list("ARGS", cmd_args);  // Deprecated, appends to last COMMAND
             parser.value("WORKING_DIRECTORY", working_dir);
             parser.list("COMMENT", comment_parts);
             parser.flag("VERBATIM", verbatim);
 
-            // Parse from index 3 onwards (skip TARGET <name> <timing>)
-            std::vector<std::string> remaining_args(parse_args->begin() + 3, parse_args->end());
             PARSE_OR_RETURN(parser, interp, remaining_args);
-
-            // Handle deprecated ARGS keyword - append to last COMMAND
-            if (!cmd_args.empty() && !commands.empty()) {
-                commands.back().insert(commands.back().end(), cmd_args.begin(), cmd_args.end());
-            }
 
             if (commands.empty()) {
                 interp.set_fatal_error("add_custom_command(TARGET) requires at least one COMMAND");
@@ -926,6 +925,8 @@ void register_target_builtins(Interpreter& interp) {
         parser.positional(name, "target name");
         parser.list("PUBLIC", pub);
         parser.list("PRIVATE", priv);
+        parser.list("LINK_PUBLIC", pub);    // Legacy alias for PUBLIC
+        parser.list("LINK_PRIVATE", priv);  // Legacy alias for PRIVATE
         parser.list("INTERFACE", inter);
         parser.positionals(def, "libraries");
         PARSE_OR_RETURN(parser, interp, args);
@@ -1133,15 +1134,27 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
+        bool before = false;
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         auto& dirs = interp.get_current_directory_context().accumulated["INCLUDE_DIRECTORIES"];
 
+        std::vector<std::string> resolved_dirs;
         for (const auto& arg : args) {
-            std::string dir = arg;
-            std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
-                std::filesystem::path(dir) :
-                std::filesystem::path(src_dir) / dir;
-            dirs.push_back(resolved.string());
+            // Handle keywords
+            if (arg == "BEFORE") { before = true; continue; }
+            if (arg == "AFTER") { continue; }  // AFTER is default
+            if (arg == "SYSTEM") { continue; }  // SYSTEM ignored for now
+
+            std::filesystem::path resolved = std::filesystem::path(arg).is_absolute() ?
+                std::filesystem::path(arg) :
+                std::filesystem::path(src_dir) / arg;
+            resolved_dirs.push_back(resolved.string());
+        }
+
+        if (before) {
+            dirs.insert(dirs.begin(), resolved_dirs.begin(), resolved_dirs.end());
+        } else {
+            dirs.insert(dirs.end(), resolved_dirs.begin(), resolved_dirs.end());
         }
     });
 

@@ -179,8 +179,207 @@ std::string dmake::join_command_raw(const std::vector<std::string>& args) {
     return result;
 }
 
+// Strip shell quoting from an argument.
+// Handles: 'literal' → literal, "with $vars" → with $vars, \'  → '
+// This undoes shell-level quoting that CMake source preserves in COMMAND args.
+static std::string strip_shell_quoting(const std::string& arg) {
+    std::string result;
+    result.reserve(arg.size());
+    for (size_t i = 0; i < arg.size(); ++i) {
+        if (arg[i] == '\'' ) {
+            // Single-quoted segment: everything until next ' is literal
+            size_t end = arg.find('\'', i + 1);
+            if (end != std::string::npos) {
+                result.append(arg, i + 1, end - i - 1);
+                i = end;
+            } else {
+                // Unmatched quote — keep as-is
+                result += arg[i];
+            }
+        } else if (arg[i] == '"') {
+            // Double-quoted segment: take content until next "
+            size_t end = arg.find('"', i + 1);
+            if (end != std::string::npos) {
+                result.append(arg, i + 1, end - i - 1);
+                i = end;
+            } else {
+                result += arg[i];
+            }
+        } else if (arg[i] == '\\' && i + 1 < arg.size()) {
+            // Backslash escape: take next char literally
+            result += arg[++i];
+        } else {
+            result += arg[i];
+        }
+    }
+    return result;
+}
+
 dmake::CommandResult dmake::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
-    return run_command(join_command(command), working_dir);
+    if (command.empty()) return {-1, "Empty command"};
+
+    // Parse command vector: separate program+args from redirections.
+    // This lets us handle redirects via dup2() without needing a shell.
+    //
+    // Shell-like tokenization: scan each arg for unquoted redirect operators
+    // anywhere in the string.  E.g. "foo>bar" → arg "foo", redirect ">", path "bar".
+    std::vector<std::string> argv_strs;
+    std::string stdin_file, stdout_file, stderr_file;
+    bool stdout_append = false;
+
+    // Re-tokenize command vector into shell-like tokens, splitting on
+    // unquoted redirect operators and pipe/logic operators.
+    std::vector<std::string> tokens;
+    for (const auto& arg : command) {
+        size_t i = 0;
+        size_t len = arg.size();
+        std::string cur;
+        while (i < len) {
+            char c = arg[i];
+            // Skip over quoted regions — they are literal, no redirect splitting
+            if (c == '\'' || c == '"') {
+                char quote = c;
+                cur += c;
+                ++i;
+                while (i < len && arg[i] != quote) { cur += arg[i]; ++i; }
+                if (i < len) { cur += arg[i]; ++i; }
+                continue;
+            }
+            if (c == '\\' && i + 1 < len) {
+                cur += c;
+                cur += arg[++i];
+                ++i;
+                continue;
+            }
+            // Check for redirect operators at this position
+            // Order matters: check longer prefixes first
+            std::string_view rest(arg.data() + i, len - i);
+            size_t redir_len = 0;
+            if (rest.starts_with("2>>")) redir_len = 3;
+            else if (rest.starts_with("1>>")) redir_len = 3;
+            else if (rest.starts_with(">>"))  redir_len = 2;
+            else if (rest.starts_with("2>") && !(rest.size() > 2 && rest[2] == '&')) redir_len = 2;
+            else if (rest.starts_with("1>"))  redir_len = 2;
+            else if (c == '>')                redir_len = 1;
+            else if (c == '<')                redir_len = 1;
+
+            if (redir_len > 0) {
+                // Flush any accumulated text as a separate token
+                if (!cur.empty()) { tokens.push_back(std::move(cur)); cur.clear(); }
+                // Emit the redirect operator + everything after it as one token
+                // (e.g. ">file" or just ">")
+                tokens.push_back(std::string(rest.substr(0, redir_len)) + std::string(rest.substr(redir_len)));
+                break;  // rest of this arg is consumed by the redirect path
+            }
+            cur += c;
+            ++i;
+        }
+        if (!cur.empty()) tokens.push_back(std::move(cur));
+    }
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const auto& tok = tokens[i];
+
+        if (tok == "|" || tok == "&&" || tok == "||" || tok == "2>&1") {
+            // Genuine shell pipeline/logic — fall back to shell
+            return run_command(join_command_raw(command), working_dir);
+        }
+
+        size_t pfx = shell_redirect_prefix_len(tok);
+        if (pfx > 0) {
+            std::string op = tok.substr(0, pfx);
+            std::string path = tok.substr(pfx);
+            // Path may be in next token if this token is just the operator
+            if (path.empty() && i + 1 < tokens.size()) {
+                path = tokens[++i];
+            }
+            path = strip_shell_quoting(path);
+
+            if (op == "<") stdin_file = path;
+            else if (op == ">>" || op == "1>>") { stdout_file = path; stdout_append = true; }
+            else if (op == ">" || op == "1>") stdout_file = path;
+            else if (op == "2>") stderr_file = path;
+            else if (op == "2>>") stderr_file = path;
+        } else {
+            argv_strs.push_back(strip_shell_quoting(tok));
+        }
+    }
+
+    if (argv_strs.empty()) return {-1, "Empty command after parsing"};
+
+    // Direct exec: fork + execvp, no shell involved.
+    int pipe_fd[2];
+    if (pipe(pipe_fd) != 0) {
+        return {-1, "Failed to create pipe"};
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        return {-1, "Failed to fork"};
+    }
+
+    if (pid == 0) {
+        // Child
+        close(pipe_fd[0]);
+
+        if (!working_dir.empty()) {
+            if (chdir(working_dir.c_str()) != 0) _exit(127);
+        }
+
+        // Handle redirections
+        if (!stdin_file.empty()) {
+            int fd = open(stdin_file.c_str(), O_RDONLY);
+            if (fd < 0) _exit(127);
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+        }
+        if (!stdout_file.empty()) {
+            int flags = O_WRONLY | O_CREAT | (stdout_append ? O_APPEND : O_TRUNC);
+            int fd = open(stdout_file.c_str(), flags, 0644);
+            if (fd < 0) _exit(127);
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        } else {
+            dup2(pipe_fd[1], STDOUT_FILENO);
+        }
+        if (!stderr_file.empty()) {
+            int fd = open(stderr_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) _exit(127);
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        } else {
+            dup2(pipe_fd[1], STDERR_FILENO);
+        }
+        close(pipe_fd[1]);
+
+        // Build argv
+        std::vector<const char*> argv;
+        argv.reserve(argv_strs.size() + 1);
+        for (const auto& a : argv_strs) argv.push_back(a.c_str());
+        argv.push_back(nullptr);
+
+        execvp(argv[0], const_cast<char* const*>(argv.data()));
+        _exit(127);  // exec failed
+    }
+
+    // Parent
+    close(pipe_fd[1]);
+
+    std::string output;
+    char buffer[4096];
+    ssize_t n;
+    while ((n = read(pipe_fd[0], buffer, sizeof(buffer))) > 0) {
+        output.append(buffer, n);
+    }
+    close(pipe_fd[0]);
+
+    int status;
+    waitpid(pid, &status, 0);
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    return {exit_code, output};
 }
 
 std::string dmake::get_executable_path() {

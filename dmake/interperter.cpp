@@ -538,6 +538,11 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
     variables_.set("CMAKE_STATIC_LIBRARY_PREFIX", "lib");
     variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
+    variables_.set("CMAKE_SHARED_LIBRARY_C_FLAGS", "-fPIC");
+    variables_.set("CMAKE_SHARED_LIBRARY_CXX_FLAGS", "-fPIC");
+#ifdef __linux__
+    variables_.set("CMAKE_DL_LIBS", "dl");
+#endif
 
     variables_.set("CMAKE_COMMAND", get_executable_path());
     variables_.set("CMAKE_GENERATOR", "dmake");
@@ -795,6 +800,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
             // Compute binary directory for the subdirectory
             std::filesystem::path binary_path = std::filesystem::path(current_binary_dir) / subdir;
+
+            // Create binary directory (CMake does this implicitly)
+            std::error_code ec;
+            std::filesystem::create_directories(binary_path, ec);
 
             if (!std::filesystem::exists(cmake_file)) {
                 interp.set_fatal_error("CMakeLists.txt not found in " + abs_source_path.string());
