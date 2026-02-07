@@ -92,6 +92,19 @@ void fake_cmake_compiler_checks_and_init(
         interp.set_variable("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeArray(c_info.implicit_link_libs).to_string());
     }
 
+    // Standard compile option flags (GNU compiler)
+    interp.set_variable("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
+    interp.set_variable("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
+    interp.set_variable("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
+    interp.set_variable("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
+    interp.set_variable("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
+    interp.set_variable("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
+    interp.set_variable("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
+    interp.set_variable("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
+    interp.set_variable("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
+    interp.set_variable("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
+    interp.set_variable("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+
     // System-level info (same for both compilers)
     interp.set_variable("CMAKE_SYSTEM_NAME", cxx_info.system_name);
     interp.set_variable("CMAKE_SYSTEM_PROCESSOR", cxx_info.system_processor);
@@ -113,7 +126,13 @@ void fake_cmake_compiler_checks_and_init(
         "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME", "CMAKE_HOST_SYSTEM_PROCESSOR",
         "CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_LIBRARIES",
         "CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_LIBRARIES",
-        "CMAKE_C_COMPILER_LOADED", "CMAKE_CXX_COMPILER_LOADED"
+        "CMAKE_C_COMPILER_LOADED", "CMAKE_CXX_COMPILER_LOADED",
+        "CMAKE_CXX98_STANDARD_COMPILE_OPTION", "CMAKE_CXX11_STANDARD_COMPILE_OPTION",
+        "CMAKE_CXX14_STANDARD_COMPILE_OPTION", "CMAKE_CXX17_STANDARD_COMPILE_OPTION",
+        "CMAKE_CXX20_STANDARD_COMPILE_OPTION", "CMAKE_CXX23_STANDARD_COMPILE_OPTION",
+        "CMAKE_C90_STANDARD_COMPILE_OPTION", "CMAKE_C99_STANDARD_COMPILE_OPTION",
+        "CMAKE_C11_STANDARD_COMPILE_OPTION", "CMAKE_C17_STANDARD_COMPILE_OPTION",
+        "CMAKE_C23_STANDARD_COMPILE_OPTION"
     };
     for (const auto& name : compiler_vars) {
         backup_vars[name] = interp.get_variable(name);

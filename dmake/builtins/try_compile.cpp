@@ -651,6 +651,7 @@ void register_try_compile_builtins(Interpreter& interp) {
                     Profiler::instance().add_complete("try_compile " + profile_src + " (cached)", "configure", profile_start, dur);
                 }
                 interp.set_variable(result_var, cached->success ? "TRUE" : "FALSE");
+                interp.set_cache_variable(result_var, cached->success ? "TRUE" : "FALSE");
                 if (!output_variable.empty()) {
                     interp.set_variable(output_variable, cached->output);
                 }
@@ -756,8 +757,9 @@ void register_try_compile_builtins(Interpreter& interp) {
             }
         }
 
-        // Set result variables
+        // Set result variables (both local and cache, so they survive function scope)
         interp.set_variable(result_var, compile_success ? "TRUE" : "FALSE");
+        interp.set_cache_variable(result_var, compile_success ? "TRUE" : "FALSE");
         if (!output_variable.empty()) {
             interp.set_variable(output_variable, output);
         }
@@ -1078,6 +1080,7 @@ void register_try_compile_builtins(Interpreter& interp) {
             if (validate_cache_entry_mtimes(cached->header_mtimes)) {
                 // Cache hit
                 interp.set_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
+                interp.set_cache_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
                 if (!compile_output_variable.empty()) {
                     interp.set_variable(compile_output_variable, cached->compile_output);
                 }
@@ -1138,8 +1141,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         bool compile_success = compile_result->success;
         std::string compile_output = compile_result->output;
 
-        // Set compile result
+        // Set compile result (both local and cache, so they survive function scope)
         interp.set_variable(compile_result_var, compile_success ? "TRUE" : "FALSE");
+        interp.set_cache_variable(compile_result_var, compile_success ? "TRUE" : "FALSE");
         if (!compile_output_variable.empty()) {
             interp.set_variable(compile_output_variable, compile_output);
         }
