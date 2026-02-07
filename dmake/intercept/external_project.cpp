@@ -255,20 +255,6 @@ void register_external_project_builtins(Interpreter& interp) {
                         return;
                     }
 
-                    // Many archives have a single top-level directory. Move contents up if so.
-                    std::vector<std::filesystem::directory_entry> entries;
-                    for (const auto& e : std::filesystem::directory_iterator(source_dir)) {
-                        entries.push_back(e);
-                    }
-                    if (entries.size() == 1 && entries[0].is_directory()) {
-                        std::string top_dir = entries[0].path().string();
-                        std::string temp_dir = source_dir + ".__tmp_move";
-                        std::filesystem::rename(top_dir, temp_dir);
-                        for (const auto& e : std::filesystem::directory_iterator(temp_dir)) {
-                            std::filesystem::rename(e.path(), std::filesystem::path(source_dir) / e.path().filename());
-                        }
-                        std::filesystem::remove_all(temp_dir);
-                    }
                 }
             } else if (!git_repository.empty()) {
                 interp.print_message("STATUS", "  Cloning " + name + " from " + git_repository + "...");
@@ -280,6 +266,24 @@ void register_external_project_builtins(Interpreter& interp) {
             }
         } else {
             interp.print_message("STATUS", "  " + name + " source directory already exists, skipping download.");
+        }
+
+        // Flatten single top-level directory (common in archives).
+        // Only count directories so archive files in source_dir don't prevent flattening.
+        {
+            std::vector<std::filesystem::directory_entry> dirs;
+            for (const auto& e : std::filesystem::directory_iterator(source_dir)) {
+                if (e.is_directory()) dirs.push_back(e);
+            }
+            if (dirs.size() == 1) {
+                std::string top_dir = dirs[0].path().string();
+                std::string temp_dir = source_dir + ".__tmp_move";
+                std::filesystem::rename(top_dir, temp_dir);
+                for (const auto& e : std::filesystem::directory_iterator(temp_dir)) {
+                    std::filesystem::rename(e.path(), std::filesystem::path(source_dir) / e.path().filename());
+                }
+                std::filesystem::remove_all(temp_dir);
+            }
         }
 
         // 2. Patch step (only on fresh download)
@@ -318,6 +322,7 @@ void register_external_project_builtins(Interpreter& interp) {
         bool configure_is_empty = (configure_command.size() == 1 && configure_command[0].empty());
         if (!configure_command.empty() && !configure_is_empty) {
             // Custom configure command
+            std::filesystem::create_directories(binary_dir);
             replace_tokens(configure_command, tokens);
             interp.print_message("STATUS", "  Configuring " + name + " (custom)...");
             auto result = run_command(configure_command, binary_dir);

@@ -180,7 +180,7 @@ std::string dmake::join_command_raw(const std::vector<std::string>& args) {
 }
 
 dmake::CommandResult dmake::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
-    return run_command(join_command_raw(command), working_dir);
+    return run_command(join_command(command), working_dir);
 }
 
 std::string dmake::get_executable_path() {
