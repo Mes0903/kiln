@@ -8,6 +8,33 @@ namespace dmake {
 
 namespace {
 
+// Map install TYPE keyword to default destination directory.
+// Checks CMAKE_INSTALL_*DIR variables first, falling back to GNUInstallDirs defaults.
+std::string resolve_install_type(Interpreter& interp, const std::string& type) {
+    static const struct { const char* type; const char* var; const char* fallback; } mappings[] = {
+        {"BIN",         "CMAKE_INSTALL_BINDIR",         "bin"},
+        {"SBIN",        "CMAKE_INSTALL_SBINDIR",        "sbin"},
+        {"LIB",         "CMAKE_INSTALL_LIBDIR",         "lib"},
+        {"INCLUDE",     "CMAKE_INSTALL_INCLUDEDIR",     "include"},
+        {"SYSCONF",     "CMAKE_INSTALL_SYSCONFDIR",     "etc"},
+        {"SHAREDSTATE", "CMAKE_INSTALL_SHAREDSTATEDIR", "com"},
+        {"LOCALSTATE",  "CMAKE_INSTALL_LOCALSTATEDIR",  "var"},
+        {"RUNSTATE",    "CMAKE_INSTALL_RUNSTATEDIR",    "run"},
+        {"DATA",        "CMAKE_INSTALL_DATADIR",        "share"},
+        {"INFO",        "CMAKE_INSTALL_INFODIR",        "share/info"},
+        {"LOCALE",      "CMAKE_INSTALL_LOCALEDIR",      "share/locale"},
+        {"MAN",         "CMAKE_INSTALL_MANDIR",         "share/man"},
+        {"DOC",         "CMAKE_INSTALL_DOCDIR",         "share/doc"},
+    };
+    for (const auto& m : mappings) {
+        if (type == m.type) {
+            auto val = interp.get_variable(m.var);
+            return val.empty() ? std::string(m.fallback) : val;
+        }
+    }
+    return {};
+}
+
 // Parse common destination properties
 void parse_destination_properties(
     CommandParser& parser,
@@ -180,8 +207,9 @@ void parse_install_files(
     size_t i = 0;
     while (i < parse_args.size()) {
         const auto& arg = parse_args[i];
-        if (arg == "DESTINATION" || arg == "PERMISSIONS" || arg == "CONFIGURATIONS" ||
-            arg == "COMPONENT" || arg == "OPTIONAL" || arg == "EXCLUDE_FROM_ALL") {
+        if (arg == "DESTINATION" || arg == "TYPE" || arg == "PERMISSIONS" ||
+            arg == "CONFIGURATIONS" || arg == "COMPONENT" || arg == "OPTIONAL" ||
+            arg == "EXCLUDE_FROM_ALL") {
             break;
         }
         // Resolve relative paths to absolute
@@ -211,6 +239,18 @@ void parse_install_files(
                 return;
             }
             rule->destination.destination = remaining_args[i + 1];
+            i += 2;
+        } else if (arg == "TYPE") {
+            if (i + 1 >= remaining_args.size()) {
+                interp.set_fatal_error("install() TYPE requires a value");
+                return;
+            }
+            auto dest = resolve_install_type(interp, remaining_args[i + 1]);
+            if (dest.empty()) {
+                interp.set_fatal_error("install() unknown TYPE: " + remaining_args[i + 1]);
+                return;
+            }
+            rule->destination.destination = dest;
             i += 2;
         } else if (arg == "PERMISSIONS") {
             ++i;
@@ -250,7 +290,7 @@ void parse_install_files(
     }
 
     if (rule->destination.destination.empty()) {
-        interp.set_fatal_error("install() requires DESTINATION");
+        interp.set_fatal_error(std::string("install(") + (is_programs ? "PROGRAMS" : "FILES") + ") requires DESTINATION or TYPE");
         return;
     }
 
@@ -280,8 +320,9 @@ void parse_install_directory(
     size_t i = 0;
     while (i < parse_args.size()) {
         const auto& arg = parse_args[i];
-        if (arg == "DESTINATION" || arg == "FILE_PERMISSIONS" || arg == "DIRECTORY_PERMISSIONS" ||
-            arg == "USE_SOURCE_PERMISSIONS" || arg == "FILES_MATCHING" || arg == "PATTERN" ||
+        if (arg == "DESTINATION" || arg == "TYPE" || arg == "FILE_PERMISSIONS" ||
+            arg == "DIRECTORY_PERMISSIONS" || arg == "USE_SOURCE_PERMISSIONS" ||
+            arg == "FILES_MATCHING" || arg == "PATTERN" ||
             arg == "CONFIGURATIONS" || arg == "COMPONENT" || arg == "OPTIONAL" ||
             arg == "EXCLUDE_FROM_ALL") {
             break;
@@ -313,6 +354,18 @@ void parse_install_directory(
                 return;
             }
             rule->destination.destination = remaining_args[i + 1];
+            i += 2;
+        } else if (arg == "TYPE") {
+            if (i + 1 >= remaining_args.size()) {
+                interp.set_fatal_error("install(DIRECTORY) TYPE requires a value");
+                return;
+            }
+            auto dest = resolve_install_type(interp, remaining_args[i + 1]);
+            if (dest.empty()) {
+                interp.set_fatal_error("install(DIRECTORY) unknown TYPE: " + remaining_args[i + 1]);
+                return;
+            }
+            rule->destination.destination = dest;
             i += 2;
         } else if (arg == "USE_SOURCE_PERMISSIONS") {
             rule->use_source_permissions = true;
@@ -368,7 +421,7 @@ void parse_install_directory(
     }
 
     if (rule->destination.destination.empty()) {
-        interp.set_fatal_error("install(DIRECTORY) requires DESTINATION");
+        interp.set_fatal_error("install(DIRECTORY) requires DESTINATION or TYPE");
         return;
     }
 
