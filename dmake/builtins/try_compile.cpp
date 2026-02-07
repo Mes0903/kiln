@@ -546,10 +546,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string standard;
         if (language == "C") {
             standard = c_standard.empty() ? interp.get_variable("CMAKE_C_STANDARD") : c_standard;
-            if (standard.empty()) standard = "11";
         } else {
             standard = cxx_standard.empty() ? interp.get_variable("CMAKE_CXX_STANDARD") : cxx_standard;
-            if (standard.empty()) standard = "17";
         }
 
         // Process inline sources
@@ -994,10 +992,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string standard;
         if (language == "C") {
             standard = c_standard.empty() ? interp.get_variable("CMAKE_C_STANDARD") : c_standard;
-            if (standard.empty()) standard = "11";
         } else {
             standard = cxx_standard.empty() ? interp.get_variable("CMAKE_CXX_STANDARD") : cxx_standard;
-            if (standard.empty()) standard = "17";
         }
 
         // Process inline sources
