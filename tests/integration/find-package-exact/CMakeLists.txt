@@ -1,0 +1,71 @@
+project(FindPackageExactTest)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# Test 1: Compatible version (not exact) should succeed in config mode
+message(STATUS "Test 1: Compatible version without EXACT")
+find_package(MockExact 2.0 NO_MODULE HINTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake_pkg")
+if(NOT MockExact_FOUND)
+    message(FATAL_ERROR "Test 1 failed: MockExact 2.0 compatible should be found")
+endif()
+message(STATUS "Test 1 passed: found MockExact ${MockExact_VERSION}")
+
+# Test 2: Exact version match should succeed
+unset(MockExact_FOUND)
+unset(MockExact_DIR)
+message(STATUS "Test 2: Exact version match")
+find_package(MockExact 2.3.4 EXACT NO_MODULE HINTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake_pkg")
+if(NOT MockExact_FOUND)
+    message(FATAL_ERROR "Test 2 failed: MockExact 2.3.4 EXACT should be found")
+endif()
+message(STATUS "Test 2 passed: found MockExact ${MockExact_VERSION}")
+
+# Test 3: Exact version mismatch should fail (compatible but not exact)
+unset(MockExact_FOUND)
+unset(MockExact_DIR)
+message(STATUS "Test 3: Exact version mismatch")
+find_package(MockExact 2.0.0 EXACT QUIET NO_MODULE HINTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake_pkg")
+if(MockExact_FOUND)
+    message(FATAL_ERROR "Test 3 failed: MockExact 2.0.0 EXACT should NOT be found")
+endif()
+message(STATUS "Test 3 passed: MockExact 2.0.0 EXACT correctly not found")
+
+# Test 4: NO_MODULE skips Find module and goes to config mode
+unset(MockExact_FOUND)
+unset(MockExact_DIR)
+unset(MockExact_VERSION)
+message(STATUS "Test 4: NO_MODULE skips module mode")
+find_package(MockExact NO_MODULE HINTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake_pkg")
+if(NOT MockExact_FOUND)
+    message(FATAL_ERROR "Test 4 failed: MockExact should be found in config mode")
+endif()
+if(MockExact_VERSION STREQUAL "module-mode")
+    message(FATAL_ERROR "Test 4 failed: NO_MODULE did not skip module mode!")
+endif()
+message(STATUS "Test 4 passed: NO_MODULE correctly used config mode (version=${MockExact_VERSION})")
+
+# Test 5: Without NO_MODULE, module mode is used first
+unset(MockExact_FOUND)
+unset(MockExact_DIR)
+unset(MockExact_VERSION)
+message(STATUS "Test 5: Default uses module mode first")
+find_package(MockExact)
+if(NOT MockExact_FOUND)
+    message(FATAL_ERROR "Test 5 failed: MockExact should be found via module mode")
+endif()
+if(NOT MockExact_VERSION STREQUAL "module-mode")
+    message(FATAL_ERROR "Test 5 failed: expected module mode but got version=${MockExact_VERSION}")
+endif()
+message(STATUS "Test 5 passed: module mode used (version=${MockExact_VERSION})")
+
+# Test 6: _FIND_VERSION_EXACT variable is set correctly
+unset(MockExact_FOUND)
+unset(MockExact_DIR)
+message(STATUS "Test 6: _FIND_VERSION_EXACT variable")
+find_package(MockExact 2.3.4 EXACT NO_MODULE HINTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake_pkg")
+if(NOT MockExact_FIND_VERSION_EXACT STREQUAL "TRUE")
+    message(FATAL_ERROR "Test 6 failed: MockExact_FIND_VERSION_EXACT should be TRUE, got '${MockExact_FIND_VERSION_EXACT}'")
+endif()
+message(STATUS "Test 6 passed: MockExact_FIND_VERSION_EXACT=${MockExact_FIND_VERSION_EXACT}")
+
+add_executable(main main.cpp)

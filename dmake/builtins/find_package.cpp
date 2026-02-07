@@ -91,6 +91,7 @@ void register_find_package_builtins(Interpreter& interp) {
         std::vector<std::string> paths;
         std::vector<std::string> path_suffixes;
         bool no_default_path = false;
+        bool exact = false;
 
         parser.positional(package_name, "package name", true);
         parser.positional(version, "version", false);
@@ -99,6 +100,7 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.flag("NO_MODULE", no_module);
         parser.flag("QUIET", quiet);
         parser.flag("NO_DEFAULT_PATH", no_default_path);
+        parser.flag("EXACT", exact);
         parser.list("COMPONENTS", components);
         parser.list("OPTIONAL_COMPONENTS", optional_components);
         parser.list("HINTS", hints);
@@ -149,6 +151,7 @@ void register_find_package_builtins(Interpreter& interp) {
             interp.set_variable(package_name + "_FIND_VERSION_PATCH", v_req.patch);
             interp.set_variable(package_name + "_FIND_VERSION_TWEAK", v_req.tweak);
             interp.set_variable(package_name + "_FIND_VERSION_COUNT", v_req.count);
+            interp.set_variable(package_name + "_FIND_VERSION_EXACT", exact ? "TRUE" : "FALSE");
         }
 
         // Helper to validate that all required components were found
@@ -359,6 +362,7 @@ void register_find_package_builtins(Interpreter& interp) {
                         interp.set_variable("PACKAGE_FIND_VERSION_PATCH", v_req.patch);
                         interp.set_variable("PACKAGE_FIND_VERSION_TWEAK", v_req.tweak);
                         interp.set_variable("PACKAGE_FIND_VERSION_COUNT", v_req.count);
+                        interp.set_variable("PACKAGE_FIND_VERSION_EXACT", exact ? "TRUE" : "FALSE");
 
                         // Execute version file
                         auto res = interp.include_file(version_path.string());
@@ -369,12 +373,19 @@ void register_find_package_builtins(Interpreter& interp) {
 
                         // Check result
                         std::string compatible = interp.get_variable("PACKAGE_VERSION_COMPATIBLE");
+                        std::string exact_match = interp.get_variable("PACKAGE_VERSION_EXACT");
 
-                        // Clear the compatibility result so it doesn't bleed into next check
+                        // Clear the compatibility results so they don't bleed into next check
                         interp.set_variable("PACKAGE_VERSION_COMPATIBLE", "");
+                        interp.set_variable("PACKAGE_VERSION_EXACT", "");
 
                         if (interp.is_falsy(compatible)) {
                             // Version not compatible
+                            continue;
+                        }
+
+                        if (exact && interp.is_falsy(exact_match)) {
+                            // Exact version required but not an exact match
                             continue;
                         }
                     } else {
