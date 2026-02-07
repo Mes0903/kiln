@@ -1045,6 +1045,16 @@ void register_target_builtins(Interpreter& interp) {
                 } else if (prop_name == "IMPORTED_LOCATION" ||
                            prop_name.rfind("IMPORTED_LOCATION_", 0) == 0) {
                     target->set_imported_location(prop_value);
+                } else if (prop_name == "COMPILE_DEFINITIONS") {
+                    target->append_property_from_string("COMPILE_DEFINITIONS", prop_value, PropertyVisibility::PRIVATE);
+                } else if (prop_name == "COMPILE_OPTIONS") {
+                    target->append_property_from_string("COMPILE_OPTIONS", prop_value, PropertyVisibility::PRIVATE);
+                } else if (prop_name == "INCLUDE_DIRECTORIES") {
+                    target->append_property_from_string("INCLUDE_DIRECTORIES", prop_value, PropertyVisibility::PRIVATE);
+                } else if (prop_name == "LINK_DIRECTORIES") {
+                    target->append_property_from_string("LINK_DIRECTORIES", prop_value, PropertyVisibility::PRIVATE);
+                } else if (prop_name == "LINK_OPTIONS") {
+                    target->append_property_from_string("LINK_OPTIONS", prop_value, PropertyVisibility::PRIVATE);
                 } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
                     parse_and_append_interface("LINK_LIBRARIES", prop_value);
                 } else if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
