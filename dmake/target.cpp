@@ -456,6 +456,21 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     process_link_libraries(PropertyVisibility::PRIVATE, false, false);
     process_link_libraries(PropertyVisibility::INTERFACE, false, true);
 
+    // Deduplicate non-order-sensitive properties (include dirs, definitions, options, etc.)
+    // Link libraries are NOT deduplicated - order and repetition matter for static lib resolution.
+    auto dedup = [](std::vector<std::string>& vec) {
+        std::unordered_set<std::string> seen;
+        auto it = std::remove_if(vec.begin(), vec.end(), [&](const std::string& s) {
+            return !seen.insert(s).second;
+        });
+        vec.erase(it, vec.end());
+    };
+
+    for (const auto& info : props_to_resolve) {
+        dedup(resolved_properties_[info.name]);
+        dedup(resolved_interface_properties_[info.name]);
+    }
+
     visiting_ = false;
     resolved_ = true;
 }

@@ -361,6 +361,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::vector<std::string> link_options;
         std::string cxx_standard;
         std::string c_standard;
+        std::string cxx_standard_required;
+        std::string c_standard_required;
         std::string output_variable;
         std::string copy_file;
         std::string copy_file_error;
@@ -379,6 +381,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.list("CMAKE_FLAGS", cmake_flags);
         parser.value("CXX_STANDARD", cxx_standard);
         parser.value("C_STANDARD", c_standard);
+        parser.value("CXX_STANDARD_REQUIRED", cxx_standard_required);
+        parser.value("C_STANDARD_REQUIRED", c_standard_required);
         parser.value("OUTPUT_VARIABLE", output_variable);
         parser.value("COPY_FILE", copy_file);
         parser.value("COPY_FILE_ERROR", copy_file_error);
@@ -786,6 +790,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::vector<std::string> link_options;
         std::string cxx_standard;
         std::string c_standard;
+        std::string cxx_standard_required;
+        std::string c_standard_required;
         std::string compile_output_variable;
         std::string run_output_variable;
         std::string run_output_stdout_variable;
@@ -809,6 +815,8 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.list("ARGS", run_args);
         parser.value("CXX_STANDARD", cxx_standard);
         parser.value("C_STANDARD", c_standard);
+        parser.value("CXX_STANDARD_REQUIRED", cxx_standard_required);
+        parser.value("C_STANDARD_REQUIRED", c_standard_required);
         parser.value("COMPILE_OUTPUT_VARIABLE", compile_output_variable);
         parser.value("RUN_OUTPUT_VARIABLE", run_output_variable);
         parser.value("RUN_OUTPUT_STDOUT_VARIABLE", run_output_stdout_variable);
