@@ -2136,6 +2136,20 @@ TEST_CASE("string() REGEX REPLACE with capture groups", "[interpreter][string]")
     REQUIRE(output4 == "The $100 is high\n");
 }
 
+TEST_CASE("string() REGEX REPLACE multiline dot matching", "[interpreter][string]") {
+    // Regression test: dot must match newlines (PCRE2_DOTALL) like CMake.
+    // Real-world pattern from ZMQ's CMakeLists.txt that extracts version
+    // numbers from a header file spanning multiple lines.
+    auto output = run_script(R"RAW(
+        set(header "#ifndef ZMQ_H\n#define ZMQ_H\n\n#define ZMQ_VERSION_MAJOR 4\n#define ZMQ_VERSION_MINOR 3\n#define ZMQ_VERSION_PATCH 5\n\n#endif")
+        string(REGEX REPLACE ".*#define ZMQ_VERSION_MAJOR ([0-9]+).*" "\\1" major "${header}")
+        string(REGEX REPLACE ".*#define ZMQ_VERSION_MINOR ([0-9]+).*" "\\1" minor "${header}")
+        string(REGEX REPLACE ".*#define ZMQ_VERSION_PATCH ([0-9]+).*" "\\1" patch "${header}")
+        message("${major}.${minor}.${patch}")
+    )RAW");
+    REQUIRE(output == "4.3.5\n");
+}
+
 TEST_CASE("string() REGEX QUOTE operation", "[interpreter][string]") {
     auto output = run_script(R"(
         string(REGEX QUOTE result "a.b*c?d[e]")
