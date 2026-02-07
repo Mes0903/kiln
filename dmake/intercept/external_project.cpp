@@ -104,6 +104,8 @@ void register_external_project_builtins(Interpreter& interp) {
         parser.value("DOWNLOAD_EXTRACT_TIMESTAMP", download_extract_timestamp);
         parser.list("HTTPHEADER", http_header);
         parser.list("HTTP_HEADER", http_header);
+        std::string cmake_generator;
+        parser.value("CMAKE_GENERATOR", cmake_generator);
 
         PARSE_OR_RETURN(parser, interp, args);
 

@@ -62,7 +62,7 @@ private:
                     throw std::runtime_error(std::string("Invalid operator: ") + c);
                 }
             } else {
-                throw std::runtime_error(std::string("Invalid character in expression: ") + c);
+                throw std::runtime_error(std::string("Invalid character in expression '" + expr_ + "': ") + c);
             }
         }
     }
@@ -154,7 +154,7 @@ private:
             if (consume() != ")") throw std::runtime_error("Expected ')'");
             return result;
         }
-        
+
         try {
             if (t.size() > 2 && (t[0] == '0' && (t[1] == 'x' || t[1] == 'X'))) {
                 return std::stoll(t, nullptr, 16);

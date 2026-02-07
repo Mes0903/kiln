@@ -82,8 +82,7 @@ void register_list_builtins(Interpreter& interp) {
                     if (idx >= 0 && static_cast<size_t>(idx) < list.size()) {
                         result.append(list[static_cast<size_t>(idx)]);
                     } else {
-                        interp.set_fatal_error("list(GET) index out of range: " + idx_str);
-                        return;
+                        result.append("NOTFOUND"); // match CMake behavior
                     }
                 } catch (...) {
                     interp.set_fatal_error("list(GET) invalid index: " + idx_str);

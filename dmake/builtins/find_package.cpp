@@ -83,6 +83,7 @@ void register_find_package_builtins(Interpreter& interp) {
         std::string version;
         bool required = false;
         bool config = false;
+        bool module_only = false;
         bool no_module = false;
         bool quiet = false;
         std::vector<std::string> components;
@@ -97,6 +98,7 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.positional(version, "version", false);
         parser.flag("REQUIRED", required);
         parser.flag("CONFIG", config);
+        parser.flag("MODULE", module_only);
         parser.flag("NO_MODULE", no_module);
         parser.flag("QUIET", quiet);
         parser.flag("NO_DEFAULT_PATH", no_default_path);
@@ -111,6 +113,48 @@ void register_find_package_builtins(Interpreter& interp) {
 
         std::string found_var = package_name + "_FOUND";
 
+        // Save and restore _FIND_* input variables so they don't leak between
+        // repeated find_package calls for the same package. We can't use
+        // push_scope/pop_scope because output variables (like _VERSION, _FOUND,
+        // targets) set by config files must survive.
+        struct FindVarGuard {
+            Interpreter& interp;
+            std::string pkg;
+            std::vector<std::pair<std::string, std::string>> saved;
+
+            FindVarGuard(Interpreter& i, const std::string& p) : interp(i), pkg(p) {
+                for (const char* suffix : {"_FIND_REQUIRED", "_FIND_QUIETLY",
+                                           "_FIND_COMPONENTS"}) {
+                    std::string name = pkg + suffix;
+                    saved.emplace_back(name, interp.get_variable(name));
+                }
+                saved.emplace_back("CMAKE_FIND_PACKAGE_NAME",
+                                   interp.get_variable("CMAKE_FIND_PACKAGE_NAME"));
+                // Save per-component FIND_REQUIRED vars
+                std::string comps = interp.get_variable(pkg + "_FIND_COMPONENTS");
+                if (!comps.empty()) {
+                    size_t start = 0, end;
+                    while ((end = comps.find(';', start)) != std::string::npos) {
+                        std::string n = pkg + "_FIND_REQUIRED_" + comps.substr(start, end - start);
+                        saved.emplace_back(n, interp.get_variable(n));
+                        start = end + 1;
+                    }
+                    std::string n = pkg + "_FIND_REQUIRED_" + comps.substr(start);
+                    saved.emplace_back(n, interp.get_variable(n));
+                }
+            }
+
+            ~FindVarGuard() {
+                for (const auto& [name, value] : saved) {
+                    if (value.empty()) {
+                        interp.unset_variable(name);
+                    } else {
+                        interp.set_variable(name, value);
+                    }
+                }
+            }
+        } find_var_guard(interp, package_name);
+
         // Set CMAKE_FIND_PACKAGE_NAME so Find modules know which package is being searched
         interp.set_variable("CMAKE_FIND_PACKAGE_NAME", package_name);
 
@@ -119,7 +163,6 @@ void register_find_package_builtins(Interpreter& interp) {
         all_components.insert(all_components.end(), optional_components.begin(), optional_components.end());
 
         if (!all_components.empty()) {
-            // Set <Package>_FIND_COMPONENTS to semicolon-separated list of all components
             std::string components_str;
             for (size_t i = 0; i < all_components.size(); ++i) {
                 if (i > 0) components_str += ";";
@@ -127,19 +170,19 @@ void register_find_package_builtins(Interpreter& interp) {
             }
             interp.set_variable(package_name + "_FIND_COMPONENTS", components_str);
 
-            // Set <Package>_FIND_REQUIRED_<Component> for each component
             for (const auto& comp : components) {
                 interp.set_variable(package_name + "_FIND_REQUIRED_" + comp, "TRUE");
             }
-            // No need to set false if not required - CMake only defines it when true
         }
 
         // Set <Package>_FIND_REQUIRED
-        if(required) {
+        if (required) {
             interp.set_variable(package_name + "_FIND_REQUIRED", "TRUE");
         }
         // Set <Package>_FIND_QUIETLY
-        interp.set_variable(package_name + "_FIND_QUIETLY", quiet ? "TRUE" : "FALSE");
+        if (quiet) {
+            interp.set_variable(package_name + "_FIND_QUIETLY", "TRUE");
+        }
 
         // Set version-related variables (needed by some Find modules like FindPython)
         // Only set these if a version is specified to avoid empty version range errors
@@ -201,77 +244,71 @@ void register_find_package_builtins(Interpreter& interp) {
             return true;
         };
 
-        // 1. Module Mode
-        // Unless NO_MODULE is specified, try to find a module first.
-        // CMake logic: If CONFIG is specified, skip Module mode.
-        // If neither CONFIG nor NO_MODULE is specified, try Module mode.
+        // Search order:
+        // 1. CMAKE_MODULE_PATH Find modules (user-provided, always first)
+        // 2. Config mode (PackageConfig.cmake)
+        // 3. System Find modules (last resort fallback)
+        //
+        // This differs from CMake's default (module-first) but matches modern
+        // best practice. System Find modules depend on CMake internals that
+        // dmake doesn't implement, while config files are self-contained.
+
         bool try_module = !config && !no_module;
+        bool try_config = !module_only;
 
+        // Helper to run a Find module and return true if it handled the package
+        auto try_find_module = [&](const std::filesystem::path& found_module) -> bool {
+            if (!quiet) {
+                interp.print_message("STATUS", "Found module: " + found_module.string());
+            }
+            auto res = interp.include_file(found_module.string());
+            if (!res) {
+                interp.set_fatal_error(res.error());
+                return true; // Handled (with error)
+            }
+
+            std::string found = interp.get_variable(found_var);
+            if (interp.is_falsy(found)) {
+                if (required) {
+                    interp.set_fatal_error("Could not find package " + package_name + " (missing: " + package_name + "_FOUND)");
+                } else if (!quiet) {
+                    interp.print_message("STATUS", "Could not find package " + package_name + " (Module mode)");
+                }
+                return true; // Handled (not found, but module ran)
+            }
+
+            validate_components();
+            return true; // Handled (found)
+        };
+
+        // 1. Check CMAKE_MODULE_PATH for user-provided Find modules
         if (try_module) {
-            std::vector<std::filesystem::path> module_paths;
-
-            // 1.1 Check CMAKE_MODULE_PATH
             std::string module_path_var = interp.get_variable("CMAKE_MODULE_PATH");
             if (!module_path_var.empty()) {
-                 size_t start = 0;
+                std::vector<std::filesystem::path> user_module_paths;
+                size_t start = 0;
                 size_t end = module_path_var.find(';');
                 while (end != std::string::npos) {
-                    module_paths.push_back(module_path_var.substr(start, end - start));
+                    user_module_paths.push_back(module_path_var.substr(start, end - start));
                     start = end + 1;
                     end = module_path_var.find(';', start);
                 }
-                module_paths.push_back(module_path_var.substr(start));
-            }
+                user_module_paths.push_back(module_path_var.substr(start));
 
-            // 1.2 System module paths
-            std::vector<std::string> system_modules = {
-                "/usr/share/cmake/Modules",
-                "/usr/local/share/cmake/Modules",
-                "/usr/lib/cmake/Modules",
-                "/usr/lib/x86_64-linux-gnu/cmake/Modules"
-            };
-            for(const auto& p : system_modules) module_paths.push_back(p);
-
-            std::string module_filename = "Find" + package_name + ".cmake";
-            std::filesystem::path found_module;
-
-            for(const auto& path : module_paths) {
-                if(interp.cached_file_exists(path, module_filename)) {
-                    found_module = path / module_filename;
-                    break;
-                }
-            }
-
-            if (!found_module.empty()) {
-                if (!quiet) {
-                     interp.print_message("STATUS", "Found module: " + found_module.string());
-                }
-                auto res = interp.include_file(found_module.string());
-                if (!res) {
-                    interp.set_fatal_error(res.error());
-                    return;
-                }
-
-                // The module is responsible for setting PackageName_FOUND
-                std::string found = interp.get_variable(found_var);
-                if (interp.is_falsy(found)) {
-                     if (required) {
-                        interp.set_fatal_error("Could not find package " + package_name + " (missing: " + package_name + "_FOUND)");
-                    } else if (!quiet) {
-                        interp.print_message("STATUS", "Could not find package " + package_name + " (Module mode)");
+                std::string module_filename = "Find" + package_name + ".cmake";
+                for (const auto& path : user_module_paths) {
+                    if (interp.cached_file_exists(path, module_filename)) {
+                        if (try_find_module(path / module_filename)) return;
                     }
-                    return;
                 }
-
-                // Validate required components
-                validate_components();
-                return; // Module mode executed, we are done.
             }
-            // If module not found, proceed to config mode (standard CMake behavior)
         }
 
-        // 2. Config Mode
+        // 2. Config Mode (skip if MODULE was explicitly requested)
         std::string dir_var = package_name + "_DIR";
+        std::filesystem::path found_path;
+
+        if (try_config) {
         std::vector<std::filesystem::path> search_paths;
 
         // Helper: expand a base path with PATH_SUFFIXES (adds base + base/suffix for each suffix)
@@ -329,7 +366,6 @@ void register_find_package_builtins(Interpreter& interp) {
             add_with_suffixes(p);
         }
 
-        std::filesystem::path found_path;
         std::string lower_name = to_lower(package_name);
 
         // Candidates for Config file and Version file (used in multiple places)
@@ -349,58 +385,61 @@ void register_find_package_builtins(Interpreter& interp) {
                 if (!interp.cached_file_exists(path, cand.config)) continue;
                 std::filesystem::path config_path = path / cand.config;
 
-                // Found a config file. If version checking is requested, look for version file.
-                if (!version.empty()) {
-                    if (interp.cached_file_exists(path, cand.version)) {
-                        std::filesystem::path version_path = path / cand.version;
+                // Run version file if it exists (always, for <Package>_VERSION)
+                if (interp.cached_file_exists(path, cand.version)) {
+                    std::filesystem::path version_path = path / cand.version;
 
-                        // Set variables for the version file
-                        interp.set_variable("PACKAGE_FIND_NAME", package_name);
-                        interp.set_variable("PACKAGE_FIND_VERSION", v_req.full);
-                        interp.set_variable("PACKAGE_FIND_VERSION_MAJOR", v_req.major);
-                        interp.set_variable("PACKAGE_FIND_VERSION_MINOR", v_req.minor);
-                        interp.set_variable("PACKAGE_FIND_VERSION_PATCH", v_req.patch);
-                        interp.set_variable("PACKAGE_FIND_VERSION_TWEAK", v_req.tweak);
-                        interp.set_variable("PACKAGE_FIND_VERSION_COUNT", v_req.count);
-                        interp.set_variable("PACKAGE_FIND_VERSION_EXACT", exact ? "TRUE" : "FALSE");
+                    // Set variables for the version file
+                    interp.set_variable("PACKAGE_FIND_NAME", package_name);
+                    interp.set_variable("PACKAGE_FIND_VERSION", v_req.full);
+                    interp.set_variable("PACKAGE_FIND_VERSION_MAJOR", v_req.major);
+                    interp.set_variable("PACKAGE_FIND_VERSION_MINOR", v_req.minor);
+                    interp.set_variable("PACKAGE_FIND_VERSION_PATCH", v_req.patch);
+                    interp.set_variable("PACKAGE_FIND_VERSION_TWEAK", v_req.tweak);
+                    interp.set_variable("PACKAGE_FIND_VERSION_COUNT", v_req.count);
+                    interp.set_variable("PACKAGE_FIND_VERSION_EXACT", exact ? "TRUE" : "FALSE");
 
-                        // Execute version file
-                        auto res = interp.include_file(version_path.string());
-                        if (!res) {
-                            interp.print_message("WARN", "Error processing version file " + version_path.string() + ": " + res.error().message);
-                            continue; // Treat as incompatible/error
-                        }
+                    auto res = interp.include_file(version_path.string());
+                    if (!res) {
+                        interp.print_message("WARN", "Error processing version file " + version_path.string() + ": " + res.error().message);
+                        continue;
+                    }
 
-                        // Check result
+                    // Map PACKAGE_VERSION* → <Package>_VERSION* (CMake does this automatically)
+                    std::string pkg_version = interp.get_variable("PACKAGE_VERSION");
+                    if (!pkg_version.empty()) {
+                        VersionComponents v_found = parse_version(pkg_version);
+                        interp.set_variable(package_name + "_VERSION", v_found.full);
+                        interp.set_variable(package_name + "_VERSION_MAJOR", v_found.major);
+                        interp.set_variable(package_name + "_VERSION_MINOR", v_found.minor);
+                        interp.set_variable(package_name + "_VERSION_PATCH", v_found.patch);
+                        interp.set_variable(package_name + "_VERSION_TWEAK", v_found.tweak);
+                        interp.set_variable(package_name + "_VERSION_COUNT", v_found.count);
+                    }
+
+                    // Check version compatibility if a version was requested
+                    if (!version.empty()) {
                         std::string compatible = interp.get_variable("PACKAGE_VERSION_COMPATIBLE");
                         std::string exact_match = interp.get_variable("PACKAGE_VERSION_EXACT");
 
-                        // Clear the compatibility results so they don't bleed into next check
                         interp.set_variable("PACKAGE_VERSION_COMPATIBLE", "");
                         interp.set_variable("PACKAGE_VERSION_EXACT", "");
 
                         if (interp.is_falsy(compatible)) {
-                            // Version not compatible
                             continue;
                         }
-
                         if (exact && interp.is_falsy(exact_match)) {
-                            // Exact version required but not an exact match
                             continue;
                         }
-                    } else {
-                        // Version requested but no version file found.
-                        // Standard CMake behavior is complex here, but usually it ignores the package
-                        // if strict versioning is expected.
-                        // For now, let's skip it to be safe.
-                        if (!quiet) {
-                             interp.print_message("STATUS", "Checking " + config_path.string() + ": No version file found, assuming incompatible.");
-                        }
-                        continue;
                     }
+                } else if (!version.empty()) {
+                    // Version requested but no version file found - skip
+                    if (!quiet) {
+                         interp.print_message("STATUS", "Checking " + config_path.string() + ": No version file found, assuming incompatible.");
+                    }
+                    continue;
                 }
 
-                // If we get here, it's either no version requested OR version check passed
                 found_path = config_path;
                 return true;
             }
@@ -422,29 +461,39 @@ void register_find_package_builtins(Interpreter& interp) {
             if (check_directory_for_config(path)) break;
         }
 
-        // Second pass: scan system roots for directories matching package name pattern
-        // This handles cases like Botan-3.10.0/ for package Botan
+        // Second pass: scan directories for subdirs matching package name pattern
+        // This handles cases like boost_system-1.89.0/ for package boost_system
+        // Scan HINTS first, then system roots
         if (found_path.empty()) {
-            for (const auto& root : system_roots) {
-                // Use cached directory listing
+            auto scan_root_for_package = [&](const std::string& root) -> bool {
                 auto* entries = interp.get_directory_listing(root);
-                if (!entries) continue;
+                if (!entries) return false;
 
-                // Check each entry that matches the package name pattern
                 for (const auto& entry_name : *entries) {
                     if (!directory_matches_package(entry_name, package_name)) continue;
 
                     std::filesystem::path subdir = std::filesystem::path(root) / entry_name;
-
-                    // Verify it's a directory (stat call, but only for matching entries)
                     std::error_code ec;
                     if (!std::filesystem::is_directory(subdir, ec)) continue;
 
-                    if (check_directory_for_config(subdir)) break;
+                    if (check_directory_for_config(subdir)) return true;
                 }
-                if (!found_path.empty()) break;
+                return false;
+            };
+
+            // Scan HINTS directories
+            for (const auto& h : hints) {
+                if (scan_root_for_package(h)) break;
+            }
+
+            // Scan system roots
+            if (found_path.empty()) {
+                for (const auto& root : system_roots) {
+                    if (scan_root_for_package(root)) break;
+                }
             }
         }
+        } // if (try_config)
 
         if (!found_path.empty()) {
             interp.set_variable(found_var, "ON");
@@ -459,9 +508,27 @@ void register_find_package_builtins(Interpreter& interp) {
             // Validate required components
             validate_components();
         } else {
+            // 3. System Find modules (last resort fallback)
+            if (try_module) {
+                std::vector<std::string> system_modules = {
+                    "/usr/share/cmake/Modules",
+                    "/usr/local/share/cmake/Modules",
+                    "/usr/lib/cmake/Modules",
+                    "/usr/lib/x86_64-linux-gnu/cmake/Modules"
+                };
+
+                std::string module_filename = "Find" + package_name + ".cmake";
+                for (const auto& path : system_modules) {
+                    if (interp.cached_file_exists(path, module_filename)) {
+                        if (try_find_module(std::filesystem::path(path) / module_filename)) return;
+                    }
+                }
+            }
+
+            // Nothing found
             interp.set_variable(found_var, "OFF");
             if (required) {
-                std::string error_msg = "Could not find package " + package_name + " in CONFIG mode";
+                std::string error_msg = "Could not find package " + package_name;
                 if (!version.empty()) {
                     error_msg += " with version " + version;
                 }
