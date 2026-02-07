@@ -280,9 +280,9 @@ void register_external_project_builtins(Interpreter& interp) {
             interp.print_message("STATUS", "  " + name + " source directory already exists, skipping download.");
         }
 
-        // 2. Patch step
+        // 2. Patch step (only on fresh download)
         // PATCH_COMMAND may contain multiple commands separated by "COMMAND" tokens
-        if (!patch_command.empty()) {
+        if (!patch_command.empty() && !source_dir_has_content) {
             replace_tokens(patch_command, tokens);
             interp.print_message("STATUS", "  Patching " + name + "...");
 

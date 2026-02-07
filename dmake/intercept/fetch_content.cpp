@@ -220,36 +220,36 @@ static void do_populate(Interpreter& interp, const std::string& name) {
             interp.set_fatal_error("FetchContent_Populate(" + name + "): no URL or GIT_REPOSITORY declared");
             return;
         }
-    }
 
-    // Execute patch command(s) if declared
-    // PATCH_COMMAND may contain multiple commands separated by "COMMAND" tokens
-    if (get_detail_flag("PATCH_COMMAND")) {
-        auto map_it = detail_map.find("PATCH_COMMAND");
-        if (map_it != detail_map.end() && !map_it->second.empty()) {
-            // Split on "COMMAND" tokens to get individual commands
-            std::vector<std::string> commands;
-            std::string current_cmd;
-            for (const auto& token : map_it->second) {
-                if (token == "COMMAND") {
-                    if (!current_cmd.empty()) {
-                        commands.push_back(std::move(current_cmd));
-                        current_cmd.clear();
+        // Execute patch command(s) if declared (only on fresh download)
+        // PATCH_COMMAND may contain multiple commands separated by "COMMAND" tokens
+        if (get_detail_flag("PATCH_COMMAND")) {
+            auto map_it = detail_map.find("PATCH_COMMAND");
+            if (map_it != detail_map.end() && !map_it->second.empty()) {
+                // Split on "COMMAND" tokens to get individual commands
+                std::vector<std::string> commands;
+                std::string current_cmd;
+                for (const auto& token : map_it->second) {
+                    if (token == "COMMAND") {
+                        if (!current_cmd.empty()) {
+                            commands.push_back(std::move(current_cmd));
+                            current_cmd.clear();
+                        }
+                    } else {
+                        if (!current_cmd.empty()) current_cmd += ' ';
+                        current_cmd += token;
                     }
-                } else {
-                    if (!current_cmd.empty()) current_cmd += ' ';
-                    current_cmd += token;
                 }
-            }
-            if (!current_cmd.empty()) {
-                commands.push_back(std::move(current_cmd));
-            }
+                if (!current_cmd.empty()) {
+                    commands.push_back(std::move(current_cmd));
+                }
 
-            for (const auto& cmd : commands) {
-                auto result = run_command(cmd, source_dir);
-                if (result.exit_code != 0) {
-                    interp.set_fatal_error("FetchContent: patch failed for " + name + ":\n" + result.output);
-                    return;
+                for (const auto& cmd : commands) {
+                    auto result = run_command(cmd, source_dir);
+                    if (result.exit_code != 0) {
+                        interp.set_fatal_error("FetchContent: patch failed for " + name + ":\n" + result.output);
+                        return;
+                    }
                 }
             }
         }
