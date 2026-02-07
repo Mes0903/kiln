@@ -827,9 +827,9 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
         // generator expression ($<...>), which may legally contain spaces
         // and nested parens, e.g. $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
         if (genex_depth > 0) {
-            // Inside a genex, only stop at '(' and '#' which can never
-            // appear inside a generator expression.
-            if (current == '(' || current == '#') {
+            // Inside a genex, spaces are legal so don't split on them.
+            // But ')', '(' and '#' always end an unquoted argument.
+            if (current == '(' || current == ')' || current == '#') {
                 break;
             }
         } else {
