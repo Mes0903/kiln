@@ -1,5 +1,16 @@
-find_package(OpenSSL)
+project(test C CXX)
 
-message("OPENSSL_LIBRARIES: ${OPENSSL_LIBRARIES}")
-message("OPENSSL_CRYPTO_LIBRARY: ${OPENSSL_CRYPTO_LIBRARY}")
-message("OPENSSL_SSL_LIBRARY: ${OPENSSL_SSL_LIBRARY}")
+get_property(_langs GLOBAL PROPERTY ENABLED_LANGUAGES)
+message("Before: ENABLED_LANGUAGES = '${_langs}'")
+
+include(CheckCXXSourceCompiles)
+
+function(test_func)
+  get_property(_langs GLOBAL PROPERTY ENABLED_LANGUAGES)
+  message("In function: ENABLED_LANGUAGES = '${_langs}'")
+
+  CHECK_CXX_SOURCE_COMPILES("int main() { return 0; }" TEST_VAR)
+  message("TEST_VAR = ${TEST_VAR}")
+endfunction()
+
+test_func()

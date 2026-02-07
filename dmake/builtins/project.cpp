@@ -254,7 +254,8 @@ void register_project_builtins(Interpreter& interp) {
                 }
             }
             // If no keyword, treat as language (for backward compatibility)
-            else if (i == 1 && args[i] != "VERSION" && args[i] != "DESCRIPTION" &&
+            // e.g. project(test C CXX) without the LANGUAGES keyword
+            else if (args[i] != "VERSION" && args[i] != "DESCRIPTION" &&
                      args[i] != "HOMEPAGE_URL" && args[i] != "LANGUAGES") {
                 languages.push_back(args[i]);
             }

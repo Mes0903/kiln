@@ -152,7 +152,7 @@ TEST_CASE("ShadowMap unset behavior", "[shadow_map]") {
         REQUIRE(map.get("VAR") == "");
     }
 
-    SECTION("Unset in nested scope reveals parent value") {
+    SECTION("Unset in nested scope masks parent value") {
         map.set("VAR", "outer");
 
         map.push_scope();
@@ -160,8 +160,8 @@ TEST_CASE("ShadowMap unset behavior", "[shadow_map]") {
         REQUIRE(map.get("VAR") == "inner");
 
         map.unset("VAR");
-        REQUIRE(map.get("VAR") == "outer");  // Parent visible again
-        REQUIRE(map.is_defined("VAR"));
+        REQUIRE(map.get("VAR") == "");  // Parent masked by tombstone
+        REQUIRE_FALSE(map.is_defined("VAR"));
     }
 
     SECTION("Unset non-existent variable is safe") {
@@ -177,12 +177,13 @@ TEST_CASE("ShadowMap unset behavior", "[shadow_map]") {
 
         map.push_scope();
         map.set("VAR", "depth2");
-        map.unset("VAR");  // Remove depth2 version
+        map.unset("VAR");  // Remove depth2 version, tombstone masks depth1
 
-        REQUIRE(map.get("VAR") == "depth1");  // depth1 now visible
+        REQUIRE(map.get("VAR") == "");  // Masked by tombstone
+        REQUIRE_FALSE(map.is_defined("VAR"));
 
         map.pop_scope();
-        REQUIRE(map.get("VAR") == "depth1");  // Still there
+        REQUIRE(map.get("VAR") == "depth1");  // Tombstone removed, depth1 visible
 
         map.pop_scope();
         REQUIRE(map.get("VAR") == "depth0");  // Back to root
@@ -345,13 +346,14 @@ TEST_CASE("ShadowMap mixed operations", "[shadow_map]") {
         REQUIRE(map.get("VAR2") == "level2_2");  // Shadowed
         REQUIRE(map.get("VAR3") == "level1_3");  // From parent
 
-        map.unset("VAR2");  // Remove shadow
-        REQUIRE(map.get("VAR2") == "root2");  // Root value visible
+        map.unset("VAR2");  // Remove shadow, tombstone masks root
+        REQUIRE(map.get("VAR2") == "");  // Masked by tombstone
+        REQUIRE_FALSE(map.is_defined("VAR2"));
 
         map.pop_scope();  // Back to level 1
 
         REQUIRE(map.get("VAR1") == "modified_level1_1");  // Was modified by child
-        REQUIRE(map.get("VAR2") == "root2");  // From root
+        REQUIRE(map.get("VAR2") == "root2");  // Tombstone gone, root visible
         REQUIRE(map.get("VAR3") == "level1_3");  // Local
 
         map.pop_scope();  // Back to root

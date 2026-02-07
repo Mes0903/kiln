@@ -124,6 +124,13 @@ public:
         if (versions.back().depth == current_depth_) {
             // Variable is at current depth - remove it
             versions.pop_back();
+            // If a parent version exists, insert a tombstone to mask it
+            if (!versions.empty() && versions.back().value.has_value()) {
+                versions.push_back({std::nullopt, current_depth_});
+                if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
+                    modified_per_depth_[current_depth_].insert(name);
+                }
+            }
         } else if (versions.back().depth < current_depth_ && versions.back().value.has_value()) {
             // Variable exists at parent depth and is visible - insert tombstone to mask it
             versions.push_back({std::nullopt, current_depth_});

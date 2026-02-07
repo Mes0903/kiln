@@ -62,9 +62,8 @@ void glob_directory(Interpreter& interp, const std::string& dir_str,
 
     auto* subdirs = interp.get_directory_subdirs(dir_str);
 
-    // Match files against pattern (skip directories)
+    // Match entries against pattern (files and directories)
     for (const auto& name : *entries) {
-        if (subdirs && subdirs->contains(name)) continue;
         if (!matches_glob(name, leaf_pattern)) continue;
 
         if (!relative.empty()) {
@@ -215,6 +214,8 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         }
     }
 
+    // CMake always returns FILE(GLOB) results sorted alphabetically
+    results.sort();
     interp.set_variable(var, results.to_string());
 }
 } // namespace
