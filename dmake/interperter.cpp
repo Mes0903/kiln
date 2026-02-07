@@ -515,7 +515,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 #endif
 
     variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
+    variables_.set("CMAKE_SHARED_LIBRARY_PREFIX", "lib");
     variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
+    variables_.set("CMAKE_STATIC_LIBRARY_PREFIX", "lib");
     variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
 
     variables_.set("CMAKE_COMMAND", get_executable_path());

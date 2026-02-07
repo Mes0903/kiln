@@ -823,11 +823,19 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     while (pos_ < content_.length()) {
         char current = content_[pos_];
 
-        // Stop at whitespace, parens, or comments
-        // CMake treats $< and > as ordinary characters at parse time;
-        // generator expressions are only evaluated during build.
-        if (std::isspace(current) || current == '(' || current == ')' || current == '#') {
-            break;
+        // Stop at whitespace, parens, or comments — but NOT inside a
+        // generator expression ($<...>), which may legally contain spaces
+        // and nested parens, e.g. $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+        if (genex_depth > 0) {
+            // Inside a genex, only stop at '(' and '#' which can never
+            // appear inside a generator expression.
+            if (current == '(' || current == '#') {
+                break;
+            }
+        } else {
+            if (std::isspace(current) || current == '(' || current == ')' || current == '#') {
+                break;
+            }
         }
 
         // Continue with normal parsing logic for special constructs
