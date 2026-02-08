@@ -36,7 +36,7 @@ void register_source_properties_builtins(Interpreter& interp) {
         }
 
         if (files.empty()) {
-            // CMake allows no sources (be a no-op)
+            interp.set_fatal_error("set_source_files_properties() requires at least one source file");
             return;
         }
 

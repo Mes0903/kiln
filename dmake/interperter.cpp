@@ -1363,27 +1363,11 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
     // Look up user functions/macros at root - CMake functions are globally visible
     auto fit = root->user_functions_.find(lower_identifier);
     if (fit != root->user_functions_.end()) {
-        // Move the unique_ptr out to keep the FunctionBlock alive if it gets redefined during execution
-        auto func_ptr = std::move(fit->second);
-        root->user_functions_.erase(fit);
-        auto result = invoke_user_function(*func_ptr, args);
-        // Put it back if not replaced by a new definition
-        if (root->user_functions_.find(lower_identifier) == root->user_functions_.end()) {
-            root->user_functions_[lower_identifier] = std::move(func_ptr);
-        }
-        return result;
+        return invoke_user_function(*fit->second, args);
     }
     auto mit = root->user_macros_.find(lower_identifier);
     if (mit != root->user_macros_.end()) {
-        // Move the unique_ptr out to keep the MacroBlock alive if it gets redefined during execution
-        auto macro_ptr = std::move(mit->second);
-        root->user_macros_.erase(mit);
-        auto result = invoke_user_macro(*macro_ptr, args);
-        // Put it back if not replaced by a new definition
-        if (root->user_macros_.find(lower_identifier) == root->user_macros_.end()) {
-            root->user_macros_[lower_identifier] = std::move(macro_ptr);
-        }
-        return result;
+        return invoke_user_macro(*mit->second, args);
     }
 
     set_fatal_error("Unknown command: " + identifier);
@@ -1462,7 +1446,28 @@ std::expected<void, InterpreterError> Interpreter::execute_function_block(const 
     std::string lower_name = to_lower(block.name);
     // Store at root - CMake functions/macros are globally visible
     Interpreter* root = get_root();
-    root->user_functions_[lower_name] = std::make_unique<FunctionBlock>(block);
+
+    // Single lookup: try to insert nullptr, get iterator to existing or new entry
+    auto [it, inserted] = root->user_functions_.try_emplace(lower_name, nullptr);
+    if (!inserted && it->second) {
+        // Replacing existing function - check if it's currently executing
+        const FunctionBlock* old_ptr = it->second.get();
+        size_t deepest_index = 0;
+        bool found = false;
+        for (size_t i = 0; i < root->frame_stack_.size(); ++i) {
+            if (root->frame_stack_[i].function_block == old_ptr) {
+                deepest_index = i;
+                found = true;
+            }
+        }
+        if (found) {
+            // Defer deletion until we've popped past this frame
+            size_t delete_when = root->frame_stack_.size() - (deepest_index + 1);
+            root->deferred_function_deletions_.emplace_back(delete_when, std::move(it->second));
+        }
+    }
+
+    it->second = std::make_unique<FunctionBlock>(block);
     root->user_macros_.erase(lower_name);
     return {};
 }
@@ -1471,7 +1476,19 @@ std::expected<void, InterpreterError> Interpreter::execute_macro_block(const Mac
     std::string lower_name = to_lower(block.name);
     // Store at root - CMake functions/macros are globally visible
     Interpreter* root = get_root();
-    root->user_macros_[lower_name] = std::make_unique<MacroBlock>(block);
+
+    // Single lookup: try to insert nullptr, get iterator to existing or new entry
+    auto [it, inserted] = root->user_macros_.try_emplace(lower_name, nullptr);
+    if (!inserted && it->second) {
+        // Replacing existing macro - check if it's currently executing
+        auto depth_it = root->macro_execution_depth_.find(lower_name);
+        if (depth_it != root->macro_execution_depth_.end() && depth_it->second > 0) {
+            // Macro is executing, defer deletion
+            root->deferred_macro_deletions_.emplace_back(depth_it->second, std::move(it->second));
+        }
+    }
+
+    it->second = std::make_unique<MacroBlock>(block);
     root->user_functions_.erase(lower_name);
     return {};
 }
@@ -1817,6 +1834,12 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     // Pop metadata frame
     frame_stack_.pop_front();
 
+    // Clean up any deferred function deletions we've passed
+    Interpreter* root = get_root();
+    std::erase_if(root->deferred_function_deletions_, [&](const auto& entry) {
+        return root->frame_stack_.size() <= entry.first;
+    });
+
     if (!res) set_fatal_error(res.error());
 
     loop_depth_ = saved_depth;
@@ -1863,9 +1886,24 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     std::string saved_file = current_file_;
     current_file_ = macro.definition_file;
 
+    // Track macro execution depth for deferred deletion
+    Interpreter* root = get_root();
+    std::string lower_name = to_lower(macro.name);
+    ++root->macro_execution_depth_[lower_name];
+
     if (debugger_) debugger_->push_call_depth();
     auto res = interpret(macro.body);
     if (debugger_) debugger_->pop_call_depth();
+
+    // Decrement and cleanup deferred deletions
+    int& depth = root->macro_execution_depth_[lower_name];
+    --depth;
+    std::erase_if(root->deferred_macro_deletions_, [depth](const auto& entry) {
+        return entry.first > depth;
+    });
+    if (depth == 0) {
+        root->macro_execution_depth_.erase(lower_name);
+    }
 
     current_file_ = saved_file;
     if (!res) set_fatal_error(res.error());

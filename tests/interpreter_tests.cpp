@@ -3952,10 +3952,8 @@ TEST_CASE("CMAKE_CURRENT_FUNCTION variables not set in macros", "[interpreter]")
     REQUIRE(output == "In function: 'test_func'\nIn macro: 'test_func'\n");
 }
 
-TEST_CASE("CMAKE_CURRENT_FUNCTION with recursive functions", "[interpreter][.broken]") {
+TEST_CASE("CMAKE_CURRENT_FUNCTION with recursive functions", "[interpreter]") {
     // Test that recursive functions correctly report their own name
-    // BROKEN! Because we have to fix the function body got killed by its own redefinition
-    SKIP("Recursive functions broken - function body lifetime issue");
     auto output = run_script(R"(
         function(recursive depth)
             message("Depth ${depth}: ${CMAKE_CURRENT_FUNCTION}")

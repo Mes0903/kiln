@@ -457,6 +457,12 @@ private:
     std::unordered_map<std::string, std::unique_ptr<FunctionBlock>> user_functions_;
     std::unordered_map<std::string, std::unique_ptr<MacroBlock>> user_macros_;
 
+    // Deferred deletion for functions/macros replaced during their own execution.
+    // Each entry records {delete_when_size_at_or_below, function_ptr}.
+    // When frame_stack_.size() drops to or below the threshold, the function is deleted.
+    std::vector<std::pair<size_t, std::unique_ptr<FunctionBlock>>> deferred_function_deletions_;
+    std::vector<std::pair<size_t, std::unique_ptr<MacroBlock>>> deferred_macro_deletions_;
+
     // Shadow Map-based variable scoping (O(1) access, automatic cleanup)
     ShadowMap variables_;  // Regular variables with scope tracking
 
@@ -478,6 +484,10 @@ private:
     // Macro parameter substitution (for text-replacement in macros)
     // Checked before variable lookup to implement CMake macro semantics
     std::map<std::string, std::string> macro_substitutions_;
+
+    // Tracks active macro invocations by name (lowercase) for deferred deletion.
+    // Incremented on entry, decremented on exit. If > 0 when replacing, defer deletion.
+    std::unordered_map<std::string, int> macro_execution_depth_;
 
     // CHECK_* message state (stack for nested checks)
     std::vector<std::string> check_stack_;
