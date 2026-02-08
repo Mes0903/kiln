@@ -281,6 +281,15 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return (ctx_.all_targets->find(node.raw_content) != ctx_.all_targets->end()) ? "1" : "0";
         }
 
+        case GenexNodeType::TARGET_NAME_IF_EXISTS: {
+            // $<TARGET_NAME_IF_EXISTS:target> returns target name if exists, empty string otherwise
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_NAME_IF_EXISTS requires all_targets context");
+            }
+            auto target_it = ctx_.all_targets->find(node.raw_content);
+            return (target_it != ctx_.all_targets->end()) ? node.raw_content : "";
+        }
+
         case GenexNodeType::TARGET_FILE: {
             // $<TARGET_FILE:target> returns full path to target output
             if (!ctx_.all_targets) {

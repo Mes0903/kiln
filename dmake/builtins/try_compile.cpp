@@ -6,6 +6,8 @@
 #include "../profiler.hpp"
 #include "../utils.hpp"
 #include "../CMakeArray.hpp"
+#include "../compiler.hpp"
+#include "../language.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -190,12 +192,15 @@ bool validate_cache_entry_mtimes(const std::map<std::string, int64_t>& header_mt
 
 // Shared structure for compilation parameters
 struct CompileParams {
-    std::string language;
-    std::string compiler_path;
+    const Compiler* compiler = nullptr;  // Compiler from toolchain (handles extensions, etc.)
+    Language lang = Language::CXX;       // Language enum
+    std::string compiler_path;           // Fallback if no compiler in toolchain
     std::string compiler_version;
     std::string standard;
+    bool use_extensions = true;  // Whether to use gnu11 vs c11 (default ON like CMake)
     std::vector<std::string> sources;
     std::map<std::string, std::string> inline_sources_map;
+    std::vector<std::string> include_dirs;     // Include directories
     std::vector<std::string> compile_definitions;
     std::vector<std::string> raw_compile_flags;  // Flags passed as-is (e.g., -Werror)
     std::vector<std::string> resolved_link_libs;
@@ -218,6 +223,10 @@ std::expected<CompileResult, std::string> compile_sources(
 ) {
     CompileResult result;
 
+    if (!params.compiler) {
+        return std::unexpected("No compiler available for try_compile");
+    }
+
     // Write inline sources to files
     std::vector<std::string> all_sources = params.sources;
     for (const auto& [name, content] : params.inline_sources_map) {
@@ -231,137 +240,91 @@ std::expected<CompileResult, std::string> compile_sources(
         all_sources.push_back(src_path.string());
     }
 
-    // Build compile command
-    std::vector<std::string> compile_cmd = {params.compiler_path};
-
-    // Standard
-    if (!params.standard.empty()) {
-        if (params.language == "C") {
-            compile_cmd.push_back("-std=c" + params.standard);
-        } else {
-            compile_cmd.push_back("-std=c++" + params.standard);
-        }
-    }
-
-    // Definitions
-    for (const auto& def : params.compile_definitions) {
-        auto trimmed = strip(def);
-        if (trimmed.empty()) continue;
-
-        // Items starting with - are already flags (compiler flags or -D definitions), pass as-is
-        // Other items are plain definitions, add -D prefix
-        if (trimmed[0] == '-') {
-            compile_cmd.push_back(std::string(trimmed));
-        } else {
-            compile_cmd.push_back("-D" + std::string(trimmed));
-        }
-    }
-
-    // Raw compile flags (passed as-is)
-    for (const auto& flag : params.raw_compile_flags) {
-        compile_cmd.push_back(flag);
-    }
-
-    // Generate dependency file
     std::string deps_file = (params.temp_dir / "test.d").string();
-    compile_cmd.push_back("-MD");
-    compile_cmd.push_back("-MF");
-    compile_cmd.push_back(deps_file);
+    std::vector<std::string> obj_files;
 
+    // Compile each source file to object
+    for (const auto& src : all_sources) {
+        std::filesystem::path src_path(src);
+        std::string obj_file = (params.temp_dir / (src_path.stem().string() + ".o")).string();
+        obj_files.push_back(obj_file);
+
+        // Build CompileContext for the Compiler
+        CompileContext ctx;
+        ctx.source = src;
+        ctx.output = obj_file;
+        ctx.standard = params.standard;
+        ctx.extensions_enabled = params.use_extensions;
+        ctx.includes = params.include_dirs;
+        // Filter empty definitions to avoid bare "-D" flags
+        for (const auto& def : params.compile_definitions) {
+            auto trimmed = strip(def);
+            if (!trimmed.empty()) {
+                ctx.definitions.emplace_back(trimmed);
+            }
+        }
+        ctx.options = params.raw_compile_flags;
+
+        std::vector<std::string> compile_cmd = params.compiler->get_compile_command(ctx);
+
+        // Execute compile command
+        CommandResult compile_result = run_command(compile_cmd, params.temp_dir.string());
+        if (compile_result.exit_code != 0) {
+            result.success = false;
+            result.output = compile_result.output;
+            return result;
+        }
+        result.output += compile_result.output;
+
+        // Parse header dependencies from .d file
+        std::string obj_deps = obj_file + ".d";
+        if (std::filesystem::exists(obj_deps)) {
+            auto headers_result = parse_deps_file(obj_deps);
+            if (headers_result) {
+                for (const auto& header : *headers_result) {
+                    bool is_generated = false;
+                    std::filesystem::path header_path(header);
+                    for (const auto& [inline_name, _] : params.inline_sources_map) {
+                        if (header_path.filename() == inline_name) {
+                            is_generated = true;
+                            break;
+                        }
+                    }
+                    if (!is_generated) {
+                        auto mtime = get_file_mtime(header);
+                        if (mtime) {
+                            result.header_mtimes[header] = *mtime;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Link if requested
     if (link_executable) {
-        // Compile and link directly to executable
         result.executable_path = (params.temp_dir / "test").string();
-        compile_cmd.push_back("-o");
-        compile_cmd.push_back(result.executable_path);
 
-        // Source files
-        for (const auto& src : all_sources) {
-            compile_cmd.push_back(src);
-        }
+        LinkContext lctx;
+        lctx.output = result.executable_path;
+        lctx.objects = obj_files;
+        lctx.libs = params.resolved_link_libs;
+        lctx.linker_flags = params.link_options;
+        lctx.standard = params.standard;
+        lctx.extensions_enabled = params.use_extensions;
 
-        // Link libraries and options
-        for (const auto& lib : params.resolved_link_libs) {
-            if (!lib.empty() && lib[0] != '-' && lib[0] != '/' && !lib.ends_with(".a") && !lib.ends_with(".so")) {
-                compile_cmd.push_back("-l" + lib);
-            } else {
-                compile_cmd.push_back(lib);
-            }
-        }
-        for (const auto& opt : params.link_options) {
-            compile_cmd.push_back(opt);
-        }
-    } else {
-        // Compile to object file only
-        std::string obj_file = (params.temp_dir / "test.o").string();
-        compile_cmd.push_back("-c");
-        compile_cmd.push_back("-o");
-        compile_cmd.push_back(obj_file);
-
-        // Source files
-        for (const auto& src : all_sources) {
-            compile_cmd.push_back(src);
-        }
-    }
-
-    // Execute compile command
-    CommandResult compile_result = run_command(compile_cmd, params.temp_dir.string());
-    result.success = (compile_result.exit_code == 0);
-    result.output = compile_result.output;
-
-    // Parse header dependencies if compilation succeeded
-    if (result.success && std::filesystem::exists(deps_file)) {
-        auto headers_result = parse_deps_file(deps_file);
-        if (headers_result) {
-            for (const auto& header : *headers_result) {
-                // Skip generated inline source files - they're already covered by content hash in signature
-                // and including them causes cache invalidation when temp_dir is cleaned up
-                bool is_generated = false;
-                std::filesystem::path header_path(header);
-                for (const auto& [inline_name, _] : params.inline_sources_map) {
-                    if (header_path.filename() == inline_name) {
-                        is_generated = true;
-                        break;
-                    }
-                }
-
-                if (!is_generated) {
-                    auto mtime = get_file_mtime(header);
-                    if (mtime) {
-                        result.header_mtimes[header] = *mtime;
-                    }
-                }
-            }
-        }
-    }
-
-    // If we compiled to object file and need linking, do the link step
-    if (!link_executable && result.success &&
-        (!params.resolved_link_libs.empty() || !params.link_options.empty())) {
-        std::string obj_file = (params.temp_dir / "test.o").string();
-        std::string exe_file = (params.temp_dir / "test").string();
-        std::vector<std::string> link_cmd = {params.compiler_path};
-        link_cmd.push_back(obj_file);
-        link_cmd.push_back("-o");
-        link_cmd.push_back(exe_file);
-
-        for (const auto& lib : params.resolved_link_libs) {
-            if (!lib.empty() && lib[0] != '-' && lib[0] != '/' && !lib.ends_with(".a") && !lib.ends_with(".so")) {
-                link_cmd.push_back("-l" + lib);
-            } else {
-                link_cmd.push_back(lib);
-            }
-        }
-        for (const auto& opt : params.link_options) {
-            link_cmd.push_back(opt);
-        }
+        std::vector<std::string> link_cmd = params.compiler->get_link_command(lctx);
 
         CommandResult link_result = run_command(link_cmd, params.temp_dir.string());
         if (link_result.exit_code != 0) {
             result.success = false;
             result.output += "\n" + link_result.output;
+            return result;
         }
+        result.output += link_result.output;
     }
 
+    result.success = true;
     return result;
 }
 
@@ -592,46 +555,42 @@ void register_try_compile_builtins(Interpreter& interp) {
         CacheStore& cache = interp.get_cache_store();
 
         // Detect language from first source file
-        std::string language = "CXX";
+        std::string language_str = "CXX";
         if (!sources.empty()) {
-            language = detect_language(sources[0]);
+            language_str = detect_language(sources[0]);
         } else if (!source_from_content.empty()) {
-            language = detect_language(source_from_content[0]);
+            language_str = detect_language(source_from_content[0]);
         } else if (!source_from_var.empty()) {
-            language = detect_language(source_from_var[0]);
+            language_str = detect_language(source_from_var[0]);
         } else if (!source_from_file.empty()) {
-            language = detect_language(source_from_file[0]);
+            language_str = detect_language(source_from_file[0]);
         }
 
-        // Get compiler path and version from variables
-        std::string compiler_var = (language == "C") ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER";
-        std::string compiler_path = interp.get_variable(compiler_var);
-        if (compiler_path.empty()) {
-            compiler_path = (language == "C") ? "gcc" : "g++";
+        // Convert to Language enum and get compiler from toolchain
+        Language lang = (language_str == "C") ? Language::C : Language::CXX;
+        const Compiler* compiler = interp.get_toolchain().get_compiler(lang);
+        if (!compiler) {
+            interp.set_fatal_error("No compiler configured for language: " + language_str);
+            return;
         }
 
-        std::string version_var = (language == "C") ? "CMAKE_C_COMPILER_VERSION" : "CMAKE_CXX_COMPILER_VERSION";
+        // Get compiler version for caching
+        std::string version_var = (lang == Language::C) ? "CMAKE_C_COMPILER_VERSION" : "CMAKE_CXX_COMPILER_VERSION";
         std::string compiler_version = interp.get_variable(version_var);
-        if (compiler_version.empty()) {
-            // Fallback: query compiler version if not set
-            CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
-            if (version_cmd.exit_code == 0 && !version_cmd.output.empty()) {
-                compiler_version = version_cmd.output;
-                if (!compiler_version.empty() && compiler_version.back() == '\n') {
-                    compiler_version.pop_back();
-                }
-            } else {
-                compiler_version = "unknown";
-            }
-        }
+        std::string compiler_path = interp.get_variable((lang == Language::C) ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER");
 
         // Get standard
         std::string standard;
-        if (language == "C") {
+        if (lang == Language::C) {
             standard = c_standard.empty() ? interp.get_variable("CMAKE_C_STANDARD") : c_standard;
         } else {
             standard = cxx_standard.empty() ? interp.get_variable("CMAKE_CXX_STANDARD") : cxx_standard;
         }
+
+        // Check if extensions are enabled (default ON)
+        std::string ext_var = (lang == Language::C) ? "CMAKE_C_EXTENSIONS" : "CMAKE_CXX_EXTENSIONS";
+        std::string ext_value = interp.get_variable(ext_var);
+        bool use_extensions = ext_value.empty() || !Interpreter::is_falsy(ext_value);
 
         // Process inline sources
         std::map<std::string, std::string> inline_sources_map;
@@ -729,7 +688,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Compute initial signature (without header deps)
         auto sig_result = compute_signature(
-            compiler_path, compiler_version, language, standard,
+            compiler_path, compiler_version, language_str, standard,
             sources, inline_sources_map, compile_definitions,
             resolved_link_libs, link_options
         );
@@ -762,7 +721,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         // Mtime miss — try content-hash signature (source rewritten with same content?)
         if (!sources.empty()) {
             auto hash_sig = compute_signature(
-                compiler_path, compiler_version, language, standard,
+                compiler_path, compiler_version, language_str, standard,
                 sources, inline_sources_map, compile_definitions,
                 resolved_link_libs, link_options, /*use_content_hash=*/true
             );
@@ -786,12 +745,15 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Prepare compilation parameters
         CompileParams params;
-        params.language = language;
+        params.compiler = compiler;
+        params.lang = lang;
         params.compiler_path = compiler_path;
         params.compiler_version = compiler_version;
         params.standard = standard;
+        params.use_extensions = use_extensions;
         params.sources = sources;
         params.inline_sources_map = inline_sources_map;
+        params.include_dirs = propagated_includes;
         params.compile_definitions = compile_definitions;
         params.raw_compile_flags = raw_compile_flags;
         params.resolved_link_libs = resolved_link_libs;
@@ -802,6 +764,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         // Default to linking to executable unless building static library
         // This is necessary for check_function_exists which needs to link against system libraries
         bool link_to_executable = !build_static_lib;
+
         auto compile_result = compile_sources(params, link_to_executable);
         if (!compile_result) {
             interp.set_fatal_error("Compilation failed: " + compile_result.error());
@@ -844,7 +807,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         if (!sources.empty()) {
             auto hash_sig = compute_signature(
-                compiler_path, compiler_version, language, standard,
+                compiler_path, compiler_version, language_str, standard,
                 sources, inline_sources_map, compile_definitions,
                 resolved_link_libs, link_options, /*use_content_hash=*/true
             );
@@ -1041,47 +1004,43 @@ void register_try_compile_builtins(Interpreter& interp) {
             return;
         }
 
-        // Detect language
-        std::string language = "CXX";
+        // Detect language from first source file
+        std::string language_str = "CXX";
         if (!sources.empty()) {
-            language = detect_language(sources[0]);
+            language_str = detect_language(sources[0]);
         } else if (!source_from_content.empty()) {
-            language = detect_language(source_from_content[0]);
+            language_str = detect_language(source_from_content[0]);
         } else if (!source_from_var.empty()) {
-            language = detect_language(source_from_var[0]);
+            language_str = detect_language(source_from_var[0]);
         } else if (!source_from_file.empty()) {
-            language = detect_language(source_from_file[0]);
+            language_str = detect_language(source_from_file[0]);
         }
 
-        // Get compiler
-        std::string compiler_var = (language == "C") ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER";
-        std::string compiler_path = interp.get_variable(compiler_var);
-        if (compiler_path.empty()) {
-            compiler_path = (language == "C") ? "gcc" : "g++";
+        // Convert to Language enum and get compiler from toolchain
+        Language lang = (language_str == "C") ? Language::C : Language::CXX;
+        const Compiler* compiler = interp.get_toolchain().get_compiler(lang);
+        if (!compiler) {
+            interp.set_fatal_error("No compiler configured for language: " + language_str);
+            return;
         }
 
-        // Get compiler version
-        std::string version_var = (language == "C") ? "CMAKE_C_COMPILER_VERSION" : "CMAKE_CXX_COMPILER_VERSION";
+        // Get compiler version for caching
+        std::string version_var = (lang == Language::C) ? "CMAKE_C_COMPILER_VERSION" : "CMAKE_CXX_COMPILER_VERSION";
         std::string compiler_version = interp.get_variable(version_var);
-        if (compiler_version.empty()) {
-            CommandResult version_cmd = run_command(compiler_path + " --version 2>/dev/null | head -n 1", "");
-            if (version_cmd.exit_code == 0 && !version_cmd.output.empty()) {
-                compiler_version = version_cmd.output;
-                if (!compiler_version.empty() && compiler_version.back() == '\n') {
-                    compiler_version.pop_back();
-                }
-            } else {
-                compiler_version = "unknown";
-            }
-        }
+        std::string compiler_path = interp.get_variable((lang == Language::C) ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER");
 
         // Get standard
         std::string standard;
-        if (language == "C") {
+        if (lang == Language::C) {
             standard = c_standard.empty() ? interp.get_variable("CMAKE_C_STANDARD") : c_standard;
         } else {
             standard = cxx_standard.empty() ? interp.get_variable("CMAKE_CXX_STANDARD") : cxx_standard;
         }
+
+        // Check if extensions are enabled (default ON)
+        std::string ext_var = (lang == Language::C) ? "CMAKE_C_EXTENSIONS" : "CMAKE_CXX_EXTENSIONS";
+        std::string ext_value = interp.get_variable(ext_var);
+        bool use_extensions = ext_value.empty() || !Interpreter::is_falsy(ext_value);
 
         // Process inline sources
         std::map<std::string, std::string> inline_sources_map;
@@ -1174,7 +1133,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Compute signature for caching (compilation inputs + run args)
         auto sig_result = compute_signature(
-            compiler_path, compiler_version, language, standard,
+            compiler_path, compiler_version, language_str, standard,
             sources, inline_sources_map, compile_definitions,
             resolved_link_libs, link_options
         );
@@ -1242,12 +1201,15 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Prepare compilation parameters
         CompileParams params;
-        params.language = language;
+        params.compiler = compiler;
+        params.lang = lang;
         params.compiler_path = compiler_path;
         params.compiler_version = compiler_version;
         params.standard = standard;
+        params.use_extensions = use_extensions;
         params.sources = sources;
         params.inline_sources_map = inline_sources_map;
+        params.include_dirs = propagated_includes;
         params.compile_definitions = compile_definitions;
         params.raw_compile_flags = raw_compile_flags;
         params.resolved_link_libs = resolved_link_libs;

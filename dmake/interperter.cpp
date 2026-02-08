@@ -821,6 +821,32 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             interp.set_current_file(saved_file);
         });
 
+        // Deprecated command - just calls add_subdirectory for each directory
+        add_builtin("subdirs", [](Interpreter& interp, const std::vector<std::string>& args) {
+            CommandParser parser("subdirs");
+            std::vector<std::string> dirs;
+            std::vector<std::string> exclude_dirs;
+            bool preorder = false;
+
+            parser.positionals(dirs, "directories");
+            parser.list("EXCLUDE_FROM_ALL", exclude_dirs);
+            parser.flag("PREORDER", preorder);
+
+            PARSE_OR_RETURN(parser, interp, args);
+
+            // Process normal directories
+            for (const auto& dir : dirs) {
+                auto res = interp.execute_command_with_args("add_subdirectory", {dir});
+                if (!res) return;
+            }
+
+            // Process EXCLUDE_FROM_ALL directories
+            for (const auto& dir : exclude_dirs) {
+                auto res = interp.execute_command_with_args("add_subdirectory", {dir, dir, "EXCLUDE_FROM_ALL"});
+                if (!res) return;
+            }
+        });
+
         add_builtin("include", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (args.empty()) { interp.set_fatal_error("include() requires an argument"); return; }
             bool optional = false;
