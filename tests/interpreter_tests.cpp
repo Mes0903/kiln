@@ -3254,14 +3254,39 @@ TEST_CASE("Empty list elements are preserved in string representation", "[interp
     REQUIRE(output == "a;b;;\n");
 }
 
-TEST_CASE("Empty list elements in foreach", "[interpreter][bugfix]") {
+TEST_CASE("Empty list elements filtered in unquoted foreach", "[interpreter][bugfix]") {
+    // CMake filters empty elements during unquoted list expansion in foreach
     auto output = run_script(R"(
         set(L a;;c)
         foreach(item ${L})
             message("${item}")
         endforeach()
     )");
+    REQUIRE(output == "a\nc\n");  // 2 iterations, empty element filtered
+}
+
+TEST_CASE("Empty list elements preserved in IN LISTS foreach", "[interpreter][bugfix]") {
+    // CMake preserves empty elements with IN LISTS syntax
+    auto output = run_script(R"(
+        set(L a;;c)
+        foreach(item IN LISTS L)
+            message("${item}")
+        endforeach()
+    )");
     REQUIRE(output == "a\n\nc\n");  // 3 iterations, empty element preserved
+}
+
+TEST_CASE("Empty prefix in list expansion like CHECK_INCLUDE_FILES", "[interpreter][bugfix]") {
+    // Simulates: SET(INCLUDES "") then CHECK_INCLUDE_FILES("${INCLUDES};header" ...)
+    // The leading empty element should be filtered in unquoted expansion
+    auto output = run_script(R"(
+        set(INCLUDES "")
+        set(header "sys/types.h")
+        foreach(FILE ${INCLUDES};${header})
+            message("${FILE}")
+        endforeach()
+    )");
+    REQUIRE(output == "sys/types.h\n");  // Empty element filtered, only header remains
 }
 
 TEST_CASE("Foreach variable is cleared after loop", "[interpreter][bugfix]") {

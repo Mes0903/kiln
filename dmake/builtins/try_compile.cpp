@@ -245,12 +245,15 @@ std::expected<CompileResult, std::string> compile_sources(
 
     // Definitions
     for (const auto& def : params.compile_definitions) {
+        auto trimmed = strip(def);
+        if (trimmed.empty()) continue;
+
         // Items starting with - are already flags (compiler flags or -D definitions), pass as-is
         // Other items are plain definitions, add -D prefix
-        if (!def.empty() && def[0] == '-') {
-            compile_cmd.push_back(def);
+        if (trimmed[0] == '-') {
+            compile_cmd.push_back(std::string(trimmed));
         } else {
-            compile_cmd.push_back("-D" + def);
+            compile_cmd.push_back("-D" + std::string(trimmed));
         }
     }
 
@@ -368,7 +371,9 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         std::string result_var;
         std::string bindir;
-        std::string old_style_srcfile;  // For old syntax: try_compile(result bindir srcfile)
+        std::string srcdir_or_srcfile;  // Could be source file (old syntax) or source directory (project mode)
+        std::string project_name;       // For project mode
+        std::string target_name;        // For project mode (optional)
         std::vector<std::string> sources;
         std::vector<std::string> source_from_content;  // Pairs: name, content, name, content...
         std::vector<std::string> source_from_var;      // Pairs: name, varname, name, varname...
@@ -388,7 +393,9 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         parser.positional(result_var, "result variable");
         parser.positional(bindir, "binary directory", false);  // Optional
-        parser.positional(old_style_srcfile, "source file (old syntax)", false);  // Optional
+        parser.positional(srcdir_or_srcfile, "source dir/file", false);  // Optional
+        parser.positional(project_name, "project name", false);  // Optional (project mode)
+        parser.positional(target_name, "target name", false);  // Optional (project mode)
         parser.list("SOURCES", sources);
         parser.list("SOURCE_FROM_CONTENT", source_from_content);
         parser.list("SOURCE_FROM_VAR", source_from_var);
@@ -407,13 +414,77 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         PARSE_OR_RETURN(parser, interp, args);
 
-        // Handle old-style syntax: try_compile(result bindir srcfile)
-        if (!old_style_srcfile.empty()) {
+        // Detect project mode vs source mode
+        bool project_mode = false;
+        if (!srcdir_or_srcfile.empty() && !project_name.empty()) {
+            // Project mode: try_compile(result bindir srcdir projectName [targetName])
+            std::filesystem::path srcdir_path(srcdir_or_srcfile);
+            if (std::filesystem::is_directory(srcdir_path)) {
+                project_mode = true;
+            }
+        }
+
+        if (project_mode) {
+            // Project mode: run cmake and make on the source directory
+            std::filesystem::path srcdir(srcdir_or_srcfile);
+            std::filesystem::path build_dir(bindir);
+
+            // Create build directory
+            std::error_code ec;
+            std::filesystem::create_directories(build_dir, ec);
+            if (ec) {
+                interp.set_fatal_error("Failed to create build directory: " + ec.message());
+                return;
+            }
+
+            // Build cmake command
+            std::vector<std::string> cmake_cmd = {"cmake"};
+            cmake_cmd.push_back(srcdir.string());
+
+            // Add CMAKE_FLAGS
+            for (const auto& flag : cmake_flags) {
+                cmake_cmd.push_back(flag);
+            }
+
+            // Run cmake
+            CommandResult cmake_result = run_command(cmake_cmd, build_dir.string());
+            std::string full_output = cmake_result.output;
+
+            if (cmake_result.exit_code != 0) {
+                interp.set_variable(result_var, "FALSE");
+                interp.set_cache_variable(result_var, "FALSE");
+                if (!output_variable.empty()) {
+                    interp.set_variable(output_variable, full_output);
+                }
+                return;
+            }
+
+            // Build make command
+            std::vector<std::string> make_cmd = {"make"};
+            if (!target_name.empty()) {
+                make_cmd.push_back(target_name);
+            }
+
+            // Run make
+            CommandResult make_result = run_command(make_cmd, build_dir.string());
+            full_output += make_result.output;
+
+            bool success = (make_result.exit_code == 0);
+            interp.set_variable(result_var, success ? "TRUE" : "FALSE");
+            interp.set_cache_variable(result_var, success ? "TRUE" : "FALSE");
+            if (!output_variable.empty()) {
+                interp.set_variable(output_variable, full_output);
+            }
+            return;
+        }
+
+        // Source mode: handle old-style syntax try_compile(result bindir srcfile)
+        if (!srcdir_or_srcfile.empty()) {
             if (bindir.empty()) {
                 interp.set_fatal_error("try_compile with source file requires binary directory");
                 return;
             }
-            sources.push_back(old_style_srcfile);
+            sources.push_back(srcdir_or_srcfile);
         }
 
         // Auto-generate bindir if not specified (CMake 3.25+ behavior)
@@ -487,6 +558,12 @@ void register_try_compile_builtins(Interpreter& interp) {
             } else if (var_name == "LINK_OPTIONS") {
                 for (auto opt : CMakeArrayView(value)) {
                     link_options.emplace_back(opt);
+                }
+            } else if (var_name == "INCLUDE_DIRECTORIES") {
+                for (auto dir : CMakeArrayView(value)) {
+                    if (!dir.empty()) {
+                        raw_compile_flags.push_back("-I" + std::string(dir));
+                    }
                 }
             }
             // Ignore other CMAKE_FLAGS variables for now
