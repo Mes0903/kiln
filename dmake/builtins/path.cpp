@@ -8,13 +8,6 @@ namespace dmake {
 
 namespace {
 
-// Helper to normalize path component names (case-insensitive matching)
-std::string to_upper(const std::string& s) {
-    std::string result = s;
-    std::transform(result.begin(), result.end(), result.begin(), ::toupper);
-    return result;
-}
-
 // Helper to convert path to CMake format (forward slashes)
 std::string to_cmake_path(const std::filesystem::path& p) {
     std::string s = p.string();
@@ -37,11 +30,11 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
 
     // args[1] is a variable name, dereference it to get the path value
     std::filesystem::path path(interp.get_variable(args[1]));
-    std::string component_upper = to_upper(args[2]);
+    std::string component_upper = dmake::to_upper(args[2]);
     std::string result;
 
     // Check for LAST_ONLY flag - if present, out_var is at args[4], otherwise args[3]
-    bool last_only = (args.size() > 4 && to_upper(args[3]) == "LAST_ONLY");
+    bool last_only = (args.size() > 4 && dmake::to_upper(args[3]) == "LAST_ONLY");
     std::string out_var = last_only ? args[4] : args[3];
 
     if (component_upper == "ROOT_NAME") {
@@ -105,7 +98,7 @@ void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
     // args[0] is the subcommand (HAS_FILENAME, etc.)
     // args[1] is a variable name, dereference it to get the path value
     // args[2] is the output variable
-    std::string subcommand_upper = to_upper(args[0]);
+    std::string subcommand_upper = dmake::to_upper(args[0]);
     std::filesystem::path path(interp.get_variable(args[1]));
     std::string out_var = args[2];
     bool result = false;
@@ -151,7 +144,7 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
     // args[0] is the subcommand (IS_ABSOLUTE, IS_RELATIVE, IS_PREFIX)
     // args[1] is a variable name, dereference it to get the path value
     // args[2] is the output variable
-    std::string subcommand_upper = to_upper(args[0]);
+    std::string subcommand_upper = dmake::to_upper(args[0]);
     std::filesystem::path path(interp.get_variable(args[1]));
     std::string out_var = args[2];
     bool result = false;
@@ -203,7 +196,7 @@ void handle_compare(Interpreter& interp, const std::vector<std::string>& args) {
 
     // args[1] and args[3] are variable names, dereference them
     std::filesystem::path path1(interp.get_variable(args[1]));
-    std::string op_upper = to_upper(args[2]);
+    std::string op_upper = dmake::to_upper(args[2]);
     std::filesystem::path path2(interp.get_variable(args[3]));
     std::string out_var = args[4];
     bool result = false;
@@ -233,7 +226,7 @@ void handle_set(Interpreter& interp, const std::vector<std::string>& args) {
 
     // Check for NORMALIZE flag
     for (size_t i = 3; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "NORMALIZE") {
+        if (dmake::to_upper(args[i]) == "NORMALIZE") {
             normalize = true;
         }
     }
@@ -259,7 +252,7 @@ void handle_append(Interpreter& interp, std::vector<std::string> args) {
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             output_var = args[i + 1];
             // Remove OUTPUT_VARIABLE and its value from processing
             std::vector<std::string> new_args(args.begin(), args.begin() + i);
@@ -290,7 +283,7 @@ void handle_append_string(Interpreter& interp, std::vector<std::string> args) {
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             output_var = args[i + 1];
             // Remove OUTPUT_VARIABLE and its value from processing
             std::vector<std::string> new_args(args.begin(), args.begin() + i);
@@ -320,7 +313,7 @@ void handle_remove_filename(Interpreter& interp, const std::vector<std::string>&
 
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
-    if (args.size() > 2 && to_upper(args[2]) == "OUTPUT_VARIABLE" && args.size() > 3) {
+    if (args.size() > 2 && dmake::to_upper(args[2]) == "OUTPUT_VARIABLE" && args.size() > 3) {
         output_var = args[3];
     }
 
@@ -341,7 +334,7 @@ void handle_replace_filename(Interpreter& interp, const std::vector<std::string>
 
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
-    if (args.size() > 3 && to_upper(args[3]) == "OUTPUT_VARIABLE" && args.size() > 4) {
+    if (args.size() > 3 && dmake::to_upper(args[3]) == "OUTPUT_VARIABLE" && args.size() > 4) {
         output_var = args[4];
     }
 
@@ -363,9 +356,9 @@ void handle_remove_extension(Interpreter& interp, const std::vector<std::string>
     // Check for LAST_ONLY and OUTPUT_VARIABLE
     std::string output_var = path_var;
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "LAST_ONLY") {
+        if (dmake::to_upper(args[i]) == "LAST_ONLY") {
             last_only = true;
-        } else if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        } else if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             output_var = args[i + 1];
         }
     }
@@ -407,9 +400,9 @@ void handle_replace_extension(Interpreter& interp, const std::vector<std::string
     // Check for LAST_ONLY and OUTPUT_VARIABLE
     std::string output_var = path_var;
     for (size_t i = 3; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "LAST_ONLY") {
+        if (dmake::to_upper(args[i]) == "LAST_ONLY") {
             last_only = true;
-        } else if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        } else if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             output_var = args[i + 1];
         }
     }
@@ -453,7 +446,7 @@ void handle_normal_path(Interpreter& interp, const std::vector<std::string>& arg
 
     // Check for OUTPUT_VARIABLE
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             out_var = args[i + 1];
             break;
         }
@@ -478,9 +471,9 @@ void handle_relative_path(Interpreter& interp, const std::vector<std::string>& a
     // Check for BASE_DIRECTORY and OUTPUT_VARIABLE
     std::filesystem::path base_dir(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "BASE_DIRECTORY" && i + 1 < args.size()) {
+        if (dmake::to_upper(args[i]) == "BASE_DIRECTORY" && i + 1 < args.size()) {
             base_dir = std::filesystem::path(args[i + 1]);
-        } else if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        } else if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             out_var = args[i + 1];
         }
     }
@@ -504,11 +497,11 @@ void handle_absolute_path(Interpreter& interp, const std::vector<std::string>& a
     // Check for BASE_DIRECTORY, NORMALIZE, and OUTPUT_VARIABLE
     std::filesystem::path base_dir(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "BASE_DIRECTORY" && i + 1 < args.size()) {
+        if (dmake::to_upper(args[i]) == "BASE_DIRECTORY" && i + 1 < args.size()) {
             base_dir = std::filesystem::path(args[i + 1]);
-        } else if (to_upper(args[i]) == "NORMALIZE") {
+        } else if (dmake::to_upper(args[i]) == "NORMALIZE") {
             normalize = true;
-        } else if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        } else if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             out_var = args[i + 1];
         }
     }
@@ -538,9 +531,9 @@ void handle_native_path(Interpreter& interp, const std::vector<std::string>& arg
     // Check for NORMALIZE and OUTPUT_VARIABLE
     bool normalize = false;
     for (size_t i = 2; i < args.size(); ++i) {
-        if (to_upper(args[i]) == "NORMALIZE") {
+        if (dmake::to_upper(args[i]) == "NORMALIZE") {
             normalize = true;
-        } else if (to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
+        } else if (dmake::to_upper(args[i]) == "OUTPUT_VARIABLE" && i + 1 < args.size()) {
             out_var = args[i + 1];
         }
     }
@@ -560,7 +553,7 @@ void handle_convert(Interpreter& interp, const std::vector<std::string>& args) {
     }
 
     std::string input = args[1];
-    std::string mode_upper = to_upper(args[2]);
+    std::string mode_upper = dmake::to_upper(args[2]);
     std::string out_var = args[3];
 
     if (mode_upper == "TO_CMAKE_PATH_LIST") {
@@ -760,7 +753,7 @@ void register_path_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string subcommand_upper = to_upper(args[0]);
+        std::string subcommand_upper = dmake::to_upper(args[0]);
 
         // GET subcommands
         if (subcommand_upper == "GET") {

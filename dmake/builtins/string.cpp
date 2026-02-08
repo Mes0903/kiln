@@ -18,34 +18,17 @@ namespace {
 
 // Helper to convert string to uppercase
 std::string to_upper(const std::string& str) {
-    std::string result = str;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
-    return result;
+    return dmake::to_upper(str);
 }
 
 // Helper to convert string to lowercase
 std::string to_lower(const std::string& str) {
-    std::string result = str;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    return result;
+    return dmake::to_lower(str);
 }
 
 // Helper to strip leading and trailing whitespace
 std::string strip(const std::string& str) {
-    size_t start = 0;
-    while (start < str.size() && std::isspace(static_cast<unsigned char>(str[start]))) {
-        start++;
-    }
-    if (start == str.size()) return "";
-
-    size_t end = str.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(str[end - 1]))) {
-        end--;
-    }
-
-    return str.substr(start, end - start);
+    return std::string(dmake::strip(str));
 }
 
 // Helper to escape regex special characters
@@ -384,16 +367,7 @@ void register_string_builtins(Interpreter& interp) {
             }
 
             // Replace all occurrences
-            std::string result;
-            size_t pos = 0;
-            size_t last_pos = 0;
-
-            while ((pos = input.find(match_str, last_pos)) != std::string::npos) {
-                result += input.substr(last_pos, pos - last_pos);
-                result += replace_str;
-                last_pos = pos + match_str.size();
-            }
-            result += input.substr(last_pos);
+            std::string result = dmake::replace_all(std::move(input), match_str, replace_str);
 
             interp.set_variable(out_var, result);
 

@@ -348,11 +348,7 @@ void register_external_project_builtins(Interpreter& interp) {
                 auto process_cmake_arg = [&](const std::string& arg) {
                     std::string processed = arg;
                     if (!list_separator.empty()) {
-                        size_t pos = 0;
-                        while ((pos = processed.find(list_separator, pos)) != std::string::npos) {
-                            processed.replace(pos, list_separator.length(), ";");
-                            pos += 1;
-                        }
+                        processed = dmake::replace_all(std::move(processed), list_separator, ";");
                     }
                     return processed;
                 };
@@ -361,22 +357,14 @@ void register_external_project_builtins(Interpreter& interp) {
                     std::string processed = process_cmake_arg(arg);
                     // Token replacement
                     for (const auto& [token, value] : tokens) {
-                        size_t pos = 0;
-                        while ((pos = processed.find(token, pos)) != std::string::npos) {
-                            processed.replace(pos, token.length(), value);
-                            pos += value.length();
-                        }
+                        processed = dmake::replace_all(std::move(processed), token, value);
                     }
                     cmd.push_back(processed);
                 }
                 for (const auto& arg : cmake_cache_args) {
                     std::string processed = process_cmake_arg(arg);
                     for (const auto& [token, value] : tokens) {
-                        size_t pos = 0;
-                        while ((pos = processed.find(token, pos)) != std::string::npos) {
-                            processed.replace(pos, token.length(), value);
-                            pos += value.length();
-                        }
+                        processed = dmake::replace_all(std::move(processed), token, value);
                     }
                     cmd.push_back(processed);
                 }

@@ -1,5 +1,6 @@
 #include "cmake-language.hpp"
 #include "printing.hpp"
+#include "utils.hpp"
 
 #include <cctype>
 #include <algorithm>
@@ -43,13 +44,11 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
         }
 
         auto next_command = peek_identifier();
-        std::string next_command_lower = next_command;
-        std::transform(next_command_lower.begin(), next_command_lower.end(), next_command_lower.begin(), ::tolower);
+        std::string next_command_lower = dmake::to_lower(next_command);
 
         bool terminated = false;
         for (const auto& term : terminators) {
-            std::string term_lower = term;
-            std::transform(term_lower.begin(), term_lower.end(), term_lower.begin(), ::tolower);
+            std::string term_lower = dmake::to_lower(term);
             if (next_command_lower == term_lower) {
                 terminated = true;
                 break;
@@ -126,8 +125,7 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
     
     while (true) {
         auto next_command = peek_identifier();
-        std::string next_command_lower = next_command;
-        std::transform(next_command_lower.begin(), next_command_lower.end(), next_command_lower.begin(), ::tolower);
+        std::string next_command_lower = dmake::to_lower(next_command);
 
         if (next_command_lower == "elseif") {
             auto elseif_command_or_error = parse_command_invocation();
@@ -164,8 +162,7 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
     if (!endif_command_or_error) {
          return std::unexpected(endif_command_or_error.error());
     }
-    std::string endif_lower = endif_command_or_error.value().identifier;
-    std::transform(endif_lower.begin(), endif_lower.end(), endif_lower.begin(), ::tolower);
+    std::string endif_lower = dmake::to_lower(endif_command_or_error.value().identifier);
     if (endif_lower != "endif") {
         return std::unexpected(ParseError{endif_command_or_error.value().row, endif_command_or_error.value().col, endif_command_or_error.value().offset, endif_command_or_error.value().length, "Expected 'endif'"});
     }

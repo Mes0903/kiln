@@ -11,16 +11,11 @@ namespace dmake {
 
 namespace {
 
-std::string to_lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-    return s;
-}
-
 // Check if a directory name matches a package name (case-insensitive prefix match)
 // e.g., "Botan-3.10.0" matches package "Botan" or "botan"
 bool directory_matches_package(const std::string& dir_name, const std::string& package_name) {
-    std::string lower_dir = to_lower(dir_name);
-    std::string lower_pkg = to_lower(package_name);
+    std::string lower_dir = dmake::to_lower(dir_name);
+    std::string lower_pkg = dmake::to_lower(package_name);
 
     // Exact match
     if (lower_dir == lower_pkg) return true;
@@ -387,7 +382,7 @@ void register_find_package_builtins(Interpreter& interp) {
             add_with_suffixes(p);
         }
 
-        std::string lower_name = to_lower(package_name);
+        std::string lower_name = dmake::to_lower(package_name);
 
         // Candidates for Config file and Version file (used in multiple places)
         struct Candidate {

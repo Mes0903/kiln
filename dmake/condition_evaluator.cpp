@@ -119,8 +119,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         // Don't dereference keywords (operators) or boolean constants or quoted strings
         // Check case-insensitively for both
-        std::string upper_token = token;
-        std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
+        std::string upper_token = dmake::to_upper(token);
         if (arg.quoted ||
             std::find(keywords.begin(), keywords.end(), upper_token) != keywords.end() ||
             std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {

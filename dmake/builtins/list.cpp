@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../utils.hpp"
 #include <algorithm>
 #include <set>
 #include "../regex.hpp"
@@ -10,13 +11,7 @@ namespace dmake {
 namespace {
     // Helper function to strip whitespace
     std::string strip(const std::string& str) {
-        const std::string whitespace = " \t\n\r\f\v";
-        size_t start = str.find_first_not_of(whitespace);
-        if (start == std::string::npos) {
-            return "";
-        }
-        size_t end = str.find_last_not_of(whitespace);
-        return str.substr(start, end - start + 1);
+        return std::string(dmake::strip(str));
     }
 
     // Helper function to extract basename from file path

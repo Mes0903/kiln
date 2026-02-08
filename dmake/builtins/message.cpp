@@ -24,8 +24,7 @@ enum class LogLevel {
 };
 
 LogLevel parse_log_level(const std::string& level_str) {
-    std::string upper = level_str;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    std::string upper = dmake::to_upper(level_str);
     if (upper == "ERROR") return LogLevel::ERROR;
     if (upper == "WARNING") return LogLevel::WARNING;
     if (upper == "NOTICE") return LogLevel::NOTICE;
@@ -58,8 +57,7 @@ void register_message_builtins(Interpreter& interp) {
         }
 
         std::string first_arg = args[0];
-        std::string mode_upper = first_arg;
-        std::transform(mode_upper.begin(), mode_upper.end(), mode_upper.begin(), ::toupper);
+        std::string mode_upper = dmake::to_upper(first_arg);
 
         std::string mode;
         LogLevel log_level = LogLevel::NOTICE;

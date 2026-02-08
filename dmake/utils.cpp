@@ -554,3 +554,53 @@ dmake::PipelineResult dmake::execute_pipeline(const std::vector<std::vector<std:
 
     return result;
 }
+
+std::string dmake::to_upper(std::string_view str) {
+    std::string result;
+    result.reserve(str.size());
+    for (char c : str) {
+        result += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return result;
+}
+
+std::string dmake::to_lower(std::string_view str) {
+    std::string result;
+    result.reserve(str.size());
+    for (char c : str) {
+        result += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return result;
+}
+
+std::string_view dmake::strip(std::string_view str) {
+    constexpr const char* whitespace = " \t\n\r\f\v";
+    size_t start = str.find_first_not_of(whitespace);
+    if (start == std::string_view::npos) return {};
+    size_t end = str.find_last_not_of(whitespace);
+    return str.substr(start, end - start + 1);
+}
+
+std::string_view dmake::lstrip(std::string_view str) {
+    constexpr const char* whitespace = " \t\n\r\f\v";
+    size_t start = str.find_first_not_of(whitespace);
+    if (start == std::string_view::npos) return {};
+    return str.substr(start);
+}
+
+std::string_view dmake::rstrip(std::string_view str) {
+    constexpr const char* whitespace = " \t\n\r\f\v";
+    size_t end = str.find_last_not_of(whitespace);
+    if (end == std::string_view::npos) return {};
+    return str.substr(0, end + 1);
+}
+
+std::string dmake::replace_all(std::string str, std::string_view from, std::string_view to) {
+    if (from.empty()) return str;
+    size_t pos = 0;
+    while ((pos = str.find(from, pos)) != std::string::npos) {
+        str.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return str;
+}

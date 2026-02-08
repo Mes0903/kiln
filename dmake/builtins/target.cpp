@@ -49,8 +49,7 @@ void register_target_builtins(Interpreter& interp) {
 
             std::string build_type = interp.get_variable("CMAKE_BUILD_TYPE");
             if (!build_type.empty()) {
-                std::string upper_type = build_type;
-                std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), [](unsigned char c){ return std::toupper(c); });
+                std::string upper_type = dmake::to_upper(build_type);
                 target->add_language_flags(lang, get_flags("CMAKE_" + lang_prefix + "_FLAGS_" + upper_type));
             }
         };

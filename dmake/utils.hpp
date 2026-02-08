@@ -110,4 +110,39 @@ struct PipelineResult {
  */
 PipelineResult execute_pipeline(const std::vector<std::vector<std::string>>& commands, const ProcessOptions& options = {});
 
+/**
+ * @brief Convert string to uppercase using current locale.
+ */
+std::string to_upper(std::string_view str);
+
+/**
+ * @brief Convert string to lowercase using current locale.
+ */
+std::string to_lower(std::string_view str);
+
+/**
+ * @brief Remove leading and trailing whitespace.
+ * @return View into input string (valid while input is alive)
+ */
+std::string_view strip(std::string_view str);
+
+/**
+ * @brief Remove leading whitespace.
+ */
+std::string_view lstrip(std::string_view str);
+
+/**
+ * @brief Remove trailing whitespace.
+ */
+std::string_view rstrip(std::string_view str);
+
+/**
+ * @brief Replace all occurrences of a substring with another.
+ * @param str Input string (will be copied)
+ * @param from Substring to find
+ * @param to Replacement substring
+ * @return New string with all replacements made
+ */
+std::string replace_all(std::string str, std::string_view from, std::string_view to);
+
 }

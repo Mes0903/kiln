@@ -16,8 +16,7 @@ void register_variable_builtins(Interpreter& interp) {
         std::string var_name = args[0];
 
         // INVALID: set(CACHE{VAR} value) - reject this (case-insensitive)
-        std::string var_name_upper = var_name;
-        std::transform(var_name_upper.begin(), var_name_upper.end(), var_name_upper.begin(), ::toupper);
+        std::string var_name_upper = dmake::to_upper(var_name);
         if (var_name_upper.find("CACHE{") == 0 && var_name_upper.back() == '}') {
             interp.set_fatal_error("set(CACHE{...} ...) is invalid. Use: set(VAR value CACHE TYPE \"doc\")");
             return;
@@ -43,17 +42,13 @@ void register_variable_builtins(Interpreter& interp) {
         // Check for CACHE keyword (case-insensitive)
         auto cache_it = std::find_if(args.begin() + 1, args.end(),
             [](const std::string& s) {
-                std::string upper = s;
-                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-                return upper == "CACHE";
+                return dmake::to_upper(s) == "CACHE";
             });
 
         // Check for PARENT_SCOPE keyword (case-insensitive)
         auto parent_it = std::find_if(args.begin() + 1, args.end(),
             [](const std::string& s) {
-                std::string upper = s;
-                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-                return upper == "PARENT_SCOPE";
+                return dmake::to_upper(s) == "PARENT_SCOPE";
             });
 
         // Cannot use both CACHE and PARENT_SCOPE
@@ -102,8 +97,7 @@ void register_variable_builtins(Interpreter& interp) {
         // Validate CMAKE_LINKER_TYPE
         if (var_name == "CMAKE_LINKER_TYPE" && args.size() > 1) {
             std::string linker_type = args[1];
-            std::string linker_type_upper = linker_type;
-            std::transform(linker_type_upper.begin(), linker_type_upper.end(), linker_type_upper.begin(), ::toupper);
+            std::string linker_type_upper = dmake::to_upper(linker_type);
 
             if (linker_type_upper != "BFD" && linker_type_upper != "GOLD" &&
                 linker_type_upper != "MOLD" && linker_type_upper != "LLD") {
@@ -153,17 +147,13 @@ void register_variable_builtins(Interpreter& interp) {
         // Check for CACHE keyword (case-insensitive)
         auto cache_it = std::find_if(args.begin() + 1, args.end(),
             [](const std::string& s) {
-                std::string upper = s;
-                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-                return upper == "CACHE";
+                return dmake::to_upper(s) == "CACHE";
             });
 
         // Check for PARENT_SCOPE keyword (case-insensitive)
         auto parent_it = std::find_if(args.begin() + 1, args.end(),
             [](const std::string& s) {
-                std::string upper = s;
-                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-                return upper == "PARENT_SCOPE";
+                return dmake::to_upper(s) == "PARENT_SCOPE";
             });
 
         // Cannot use both CACHE and PARENT_SCOPE

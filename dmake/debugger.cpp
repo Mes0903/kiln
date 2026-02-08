@@ -161,8 +161,7 @@ int Debugger::add_command_breakpoint(const std::string& command) {
     Breakpoint bp;
     bp.id = next_breakpoint_id_++;
     bp.type = Breakpoint::Type::COMMAND;
-    bp.command = command;
-    std::transform(bp.command.begin(), bp.command.end(), bp.command.begin(), ::tolower);
+    bp.command = dmake::to_lower(command);
     breakpoints_.push_back(bp);
     return bp.id;
 }
@@ -240,11 +239,7 @@ void Debugger::interactive_loop(const std::string& file, size_t row,
         std::string input = *result;
 
         // Trim whitespace
-        size_t start = input.find_first_not_of(" \t");
-        if (start == std::string::npos) continue;
-        input = input.substr(start);
-        size_t end = input.find_last_not_of(" \t");
-        if (end != std::string::npos) input = input.substr(0, end + 1);
+        input = std::string(dmake::strip(input));
 
         if (input.empty()) continue;
 
@@ -495,8 +490,7 @@ bool Debugger::execute_debugger_command(const std::string& input) {
 
 bool Debugger::should_break(const std::string& file, size_t row,
                             const std::string& identifier) const {
-    std::string lower_id = identifier;
-    std::transform(lower_id.begin(), lower_id.end(), lower_id.begin(), ::tolower);
+    std::string lower_id = dmake::to_lower(identifier);
 
     for (const auto& bp : breakpoints_) {
         if (!bp.enabled) continue;
@@ -569,10 +563,10 @@ void Debugger::warn_if_non_executable(const std::string& file, size_t line) {
     while (std::getline(in, content)) {
         if (cur == line) {
             // Trim leading whitespace
-            auto pos = content.find_first_not_of(" \t");
-            if (pos == std::string::npos) {
+            auto trimmed = dmake::lstrip(content);
+            if (trimmed.empty()) {
                 std::cerr << "Warning: line " << line << " is empty (breakpoint will never hit)\n";
-            } else if (content[pos] == '#') {
+            } else if (trimmed[0] == '#') {
                 std::cerr << "Warning: line " << line << " is a comment (breakpoint will never hit)\n";
             }
             return;

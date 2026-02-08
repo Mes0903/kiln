@@ -330,8 +330,7 @@ TokenClassifier make_parse_time_classifier() {
             return ConditionNode::Type::PRIMARY;
         }
 
-        std::string upper = std::get<std::string>(arg.parts[0]);
-        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+        std::string upper = dmake::to_upper(std::get<std::string>(arg.parts[0]));
 
         // Check for parentheses (special tokens, not keywords per se)
         if (upper == "(" || upper == ")") {

@@ -219,7 +219,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Sanity check CMAKE_BUILD_TYPE
     std::array<std::string, 4> stanard_build_types_lower = {"debug", "release", "minsize", "relwithdebinfo"};
     auto build_type = get_variable("CMAKE_BUILD_TYPE");
-    std::transform(build_type.begin(), build_type.end(), build_type.begin(), ::tolower);
+    build_type = to_lower(build_type);
     if (std::find(stanard_build_types_lower.begin(), stanard_build_types_lower.end(), build_type) == stanard_build_types_lower.end()) {
         print_message("WARN", "Build type '" + build_type + "' is not a standard build type. Things MIGHT go wrong.");
     }
@@ -304,13 +304,11 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Handle CMAKE_LINKER_TYPE (convert to -fuse-ld=<type>)
     std::string linker_type = get_variable("CMAKE_LINKER_TYPE");
     if (!linker_type.empty()) {
-        std::string linker_type_upper = linker_type;
-        std::transform(linker_type_upper.begin(), linker_type_upper.end(), linker_type_upper.begin(), ::toupper);
+        std::string linker_type_upper = to_upper(linker_type);
 
         if (linker_type_upper == "BFD" || linker_type_upper == "GOLD" ||
             linker_type_upper == "MOLD" || linker_type_upper == "LLD") {
-            std::string linker_type_lower = linker_type;
-            std::transform(linker_type_lower.begin(), linker_type_lower.end(), linker_type_lower.begin(), ::tolower);
+            std::string linker_type_lower = to_lower(linker_type);
             std::string flag = "-fuse-ld=" + linker_type_lower;
             exe_linker_flags.push_back(flag);
             shared_linker_flags.push_back(flag);
@@ -628,10 +626,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                     bool config_match = false;
                     for (const auto& config : configurations) {
                         // Case-insensitive comparison (CMake behavior)
-                        std::string config_lower = config;
-                        std::string build_type_lower = build_type;
-                        std::transform(config_lower.begin(), config_lower.end(), config_lower.begin(), ::tolower);
-                        std::transform(build_type_lower.begin(), build_type_lower.end(), build_type_lower.begin(), ::tolower);
+                        std::string config_lower = to_lower(config);
+                        std::string build_type_lower = to_lower(build_type);
                         if (config_lower == build_type_lower) {
                             config_match = true;
                             break;
@@ -1353,8 +1349,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
 
 std::expected<void, InterpreterError> Interpreter::execute_command_with_args(const std::string& identifier, const std::vector<std::string>& args) {
     Interpreter* root = get_root();
-    std::string lower_identifier = identifier;
-    std::transform(lower_identifier.begin(), lower_identifier.end(), lower_identifier.begin(), ::tolower);
+    std::string lower_identifier = to_lower(identifier);
 
     auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
@@ -1464,8 +1459,7 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
-    std::string lower_name = block.name;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+    std::string lower_name = to_lower(block.name);
     // Store at root - CMake functions/macros are globally visible
     Interpreter* root = get_root();
     root->user_functions_[lower_name] = std::make_unique<FunctionBlock>(block);
@@ -1474,8 +1468,7 @@ std::expected<void, InterpreterError> Interpreter::execute_function_block(const 
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
-    std::string lower_name = block.name;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+    std::string lower_name = to_lower(block.name);
     // Store at root - CMake functions/macros are globally visible
     Interpreter* root = get_root();
     root->user_macros_[lower_name] = std::make_unique<MacroBlock>(block);
@@ -1889,8 +1882,7 @@ bool Interpreter::is_falsy(const std::string& val) {
     // Exact match for "0" only (not "00", "0.0", "-0", etc.)
     if (val == "0") return true;
 
-    std::string upper_val = val;
-    std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
+    std::string upper_val = to_upper(val);
 
     // False constants (case-insensitive, exact match)
     if (upper_val == "OFF" || upper_val == "NO" ||
@@ -1913,8 +1905,7 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 }
 
 bool Interpreter::has_user_function(const std::string& name) const {
-    std::string lower_name = name;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+    std::string lower_name = to_lower(name);
     return get_root()->user_functions_.contains(lower_name);
 }
 

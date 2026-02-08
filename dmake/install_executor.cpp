@@ -187,10 +187,8 @@ bool should_skip_rule(
     if (!dest.configurations.empty()) {
         bool config_matches = false;
         for (const auto& config : dest.configurations) {
-            std::string config_lower = config;
-            std::string current_lower = current_config;
-            std::transform(config_lower.begin(), config_lower.end(), config_lower.begin(), ::tolower);
-            std::transform(current_lower.begin(), current_lower.end(), current_lower.begin(), ::tolower);
+            std::string config_lower = dmake::to_lower(config);
+            std::string current_lower = dmake::to_lower(current_config);
             if (config_lower == current_lower) {
                 config_matches = true;
                 break;

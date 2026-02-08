@@ -21,8 +21,7 @@ namespace {
 bool is_falsy_for_cmakedefine(const std::string& val) {
     if (val.empty()) return true;
 
-    std::string upper_val = val;
-    std::transform(upper_val.begin(), upper_val.end(), upper_val.begin(), ::toupper);
+    std::string upper_val = dmake::to_upper(val);
 
     // False constants (case-insensitive)
     if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
@@ -158,7 +157,7 @@ std::string process_cmakedefine(Interpreter& interp, const std::string& content)
             bool is_defined = opt_value.has_value() && !is_falsy_for_cmakedefine(value);
 
             if (is_defined) {
-                if (rest.empty() || rest.find_first_not_of(" \t") == std::string::npos) {
+                if (dmake::strip(rest).empty()) {
                     // No value after variable name
                     if (value.empty() || value == "ON" || value == "TRUE" ||
                         value == "YES" || value == "1") {

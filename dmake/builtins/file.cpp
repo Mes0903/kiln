@@ -227,8 +227,7 @@ void register_file_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string operation = args[0];
-        std::transform(operation.begin(), operation.end(), operation.begin(), [](unsigned char c){ return std::toupper(c); });
+        std::string operation = dmake::to_upper(args[0]);
         std::span<const std::string> sub_args(args.begin() + 1, args.end());
 
         if (operation == "WRITE" || operation == "APPEND") {

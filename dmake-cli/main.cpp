@@ -397,8 +397,7 @@ int main(int argc, char* argv[]) {
     app.add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
        ->default_val("debug")
        ->transform([](const std::string& value) -> std::string {
-           auto copy = value;
-           std::transform(copy.begin(), copy.end(), copy.begin(), ::tolower);
+           auto copy = dmake::to_lower(value);
            if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
                return copy;
            }
@@ -463,8 +462,7 @@ Examples:
         sub->add_option("--break-on-message", opt.break_on_message, "Break into debugger on message pattern");
         sub->add_option("-c,--config", opt.config, "Build configuration")
            ->transform([](const std::string& value) -> std::string {
-               auto copy = value;
-               std::transform(copy.begin(), copy.end(), copy.begin(), ::tolower);
+               auto copy = dmake::to_lower(value);
                if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
                    return copy;
                }

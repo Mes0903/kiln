@@ -215,11 +215,7 @@ void replace_tokens(std::vector<std::string>& command,
 {
     for (auto& arg : command) {
         for (const auto& [token, value] : replacements) {
-            size_t pos = 0;
-            while ((pos = arg.find(token, pos)) != std::string::npos) {
-                arg.replace(pos, token.length(), value);
-                pos += value.length();
-            }
+            arg = dmake::replace_all(std::move(arg), token, value);
         }
     }
 }
