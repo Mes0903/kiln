@@ -19,7 +19,8 @@ inline std::string run_command(const std::string& command) {
     std::array<char, 128> buffer;
     std::string result;
 
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+    FILE* p = popen(command.c_str(), "r");
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(p, pclose);
     if (!pipe) {
         return "";
     }
@@ -35,7 +36,7 @@ inline std::string run_command(const std::string& command) {
 
 class GnuCompiler : public Compiler {
 public:
-    explicit GnuCompiler(std::string binary, Language lang) 
+    explicit GnuCompiler(std::string binary, Language lang)
         : binary_(std::move(binary)), lang_(lang) {}
 
     std::vector<std::string> get_compile_command(const CompileContext& ctx) const override {
