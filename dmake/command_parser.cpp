@@ -49,6 +49,9 @@ std::expected<void, std::string> CommandParser::parse(std::span<const std::strin
         // Check if this is a keyword
         auto it = keywords_.find(arg);
         if (it != keywords_.end()) {
+            // Reset active_keyword before setting new one - this ensures empty lists are allowed
+            active_keyword = nullptr;
+
             if (it->second.type == KeywordType::FLAG) {
                 *static_cast<bool*>(it->second.target) = true;
                 // Flags don't become active (they take no arguments)

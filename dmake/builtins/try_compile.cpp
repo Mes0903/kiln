@@ -442,6 +442,12 @@ void register_try_compile_builtins(Interpreter& interp) {
             std::string var_name = def.substr(0, eq);
             std::string value = def.substr(eq + 1);
 
+            // Trim leading/trailing whitespace from value
+            // CMake modules often produce values with trailing spaces
+            // (e.g., "-DCOMPILE_DEFINITIONS:STRING=-DFOO=bar ")
+            while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.erase(value.begin());
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.pop_back();
+
             // Strip type annotation if present (e.g., VAR:STRING -> VAR)
             size_t colon = var_name.find(':');
             if (colon != std::string::npos) {
@@ -908,6 +914,10 @@ void register_try_compile_builtins(Interpreter& interp) {
 
             std::string var_name = def.substr(0, eq);
             std::string value = def.substr(eq + 1);
+
+            // Trim leading/trailing whitespace from value
+            while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.erase(value.begin());
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.pop_back();
 
             size_t colon = var_name.find(':');
             if (colon != std::string::npos) {
