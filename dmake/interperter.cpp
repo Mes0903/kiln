@@ -1333,8 +1333,23 @@ std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argumen
             result.push_back(val);
         } else {
             if (val.empty()) continue;
+
+            // Check if this argument contains a variable reference
+            // CMake filters empty elements only when expanding variable references
+            bool has_var_ref = false;
+            for (const auto& part : arg.parts) {
+                if (std::holds_alternative<VariableReference>(part)) {
+                    has_var_ref = true;
+                    break;
+                }
+            }
+
             // Split by semicolon for unquoted arguments (list expansion)
             for (auto item : CMakeArrayView(val)) {
+                // CMake removes empty elements when expanding variable references
+                if (has_var_ref && item.empty()) {
+                    continue;
+                }
                 result.emplace_back(item);
             }
         }

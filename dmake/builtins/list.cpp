@@ -480,10 +480,30 @@ void register_list_builtins(Interpreter& interp) {
                         interp.set_fatal_error("list(TRANSFORM) AT requires at least one index");
                         return;
                     }
-                } else if (arg_upper == "FOR" || arg_upper == "REGEX") {
+                } else if (arg_upper == "FOR") {
+                    selector_mode = arg_upper;
+                    // CMake FOR selector takes 2 or 3 separate arguments: start stop [step]
+                    ++i;
+                    while (i < sub_args.size() && selector_params.size() < 3) {
+                        std::string next = sub_args[i];
+                        std::string next_upper = next;
+                        std::transform(next_upper.begin(), next_upper.end(), next_upper.begin(), [](unsigned char c){ return std::toupper(c); });
+                        if (next_upper == "OUTPUT_VARIABLE" || next_upper == "AT" || next_upper == "REGEX") {
+                            --i; // Back up so the outer loop processes this keyword
+                            break;
+                        }
+                        selector_params.push_back(next);
+                        ++i;
+                    }
+                    if (selector_params.size() < 2) {
+                        interp.set_fatal_error("list(TRANSFORM) FOR requires at least start and stop");
+                        return;
+                    }
+                    --i;  // Compensate for the outer ++i
+                } else if (arg_upper == "REGEX") {
                     selector_mode = arg_upper;
                     if (i + 1 >= sub_args.size()) {
-                        interp.set_fatal_error("list(TRANSFORM) " + arg_upper + " requires a parameter");
+                        interp.set_fatal_error("list(TRANSFORM) REGEX requires a pattern");
                         return;
                     }
                     selector_params.push_back(sub_args[++i]);
@@ -585,34 +605,18 @@ void register_list_builtins(Interpreter& interp) {
                 result = CMakeArray(vec);
             } else if (selector_mode == "FOR") {
                 // Transform elements in range (start, stop[, step])
-                if (selector_params.empty()) {
-                    interp.set_fatal_error("list(TRANSFORM) FOR requires at least start and stop parameters");
-                    return;
-                }
-
-                // Parse FOR parameters: start, stop, [step]
-                std::vector<std::string> for_parts;
-                std::string combined = selector_params[0];
-
-                // Split by comma
-                size_t pos = 0;
-                while ((pos = combined.find(',')) != std::string::npos) {
-                    for_parts.push_back(strip(combined.substr(0, pos)));
-                    combined.erase(0, pos + 1);
-                }
-                for_parts.push_back(strip(combined));
-
-                if (for_parts.size() < 2 || for_parts.size() > 3) {
-                    interp.set_fatal_error("list(TRANSFORM) FOR requires start,stop or start,stop,step");
+                // CMake syntax: FOR <start> <stop> [<step>] (separate arguments)
+                if (selector_params.size() < 2) {
+                    interp.set_fatal_error("list(TRANSFORM) FOR requires at least start and stop");
                     return;
                 }
 
                 try {
-                    long start = std::stol(for_parts[0]);
-                    long stop = std::stol(for_parts[1]);
+                    long start = std::stol(selector_params[0]);
+                    long stop = std::stol(selector_params[1]);
                     long step = 1;
-                    if (for_parts.size() == 3) {
-                        step = std::stol(for_parts[2]);
+                    if (selector_params.size() >= 3) {
+                        step = std::stol(selector_params[2]);
                         if (step == 0) {
                             interp.set_fatal_error("list(TRANSFORM) FOR step cannot be zero");
                             return;

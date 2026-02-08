@@ -480,8 +480,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         return std::unexpected(*interp.get_fatal_error());
     }
 
-    // Lenient handling of leftover tokens (CMake compatibility)
-    // CMake returns FALSE for malformed conditions instead of erroring
+    // CMake treats leftover tokens in conditions as an error
     if (pos < condition.size()) {
         std::string remaining;
         for (size_t i = pos; i < condition.size(); ++i) {
@@ -508,14 +507,11 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         remaining = remaining.substr(start, end - start);
 
-        // Only warn if there are actual non-whitespace tokens
+        // Error if there are actual non-whitespace tokens (CMake behavior)
         if (!remaining.empty()) {
-            interp.print_message("AUTHOR_WARNING",
-                          "Malformed if() condition - unexpected tokens: " + remaining +
-                          "\n  Condition evaluates to FALSE (CMake compatibility mode)" +
-                          "\n  in " + interp.get_current_file() + ":" + std::to_string(row + 1));
+            return std::unexpected(InterpreterError{
+                "if() condition has unexpected tokens: " + remaining});
         }
-        return false;
     }
 
     return result;

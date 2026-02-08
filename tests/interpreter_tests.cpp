@@ -764,7 +764,7 @@ TEST_CASE("list(TRANSFORM) with REGEX selector", "[interpreter][list]") {
 TEST_CASE("list(TRANSFORM) with FOR selector", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "0" "1" "2" "3" "4" "5" "6" "7" "8" "9")
-        list(TRANSFORM MY_LIST APPEND "_item" FOR "2,5")
+        list(TRANSFORM MY_LIST APPEND "_item" FOR 2 5)
         message("${MY_LIST}")
     )");
     REQUIRE(output == "0;1;2_item;3_item;4_item;5_item;6;7;8;9\n");
@@ -773,7 +773,7 @@ TEST_CASE("list(TRANSFORM) with FOR selector", "[interpreter][list]") {
 TEST_CASE("list(TRANSFORM) with FOR selector and step", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "a" "b" "c" "d" "e" "f" "g" "h" "i" "j")
-        list(TRANSFORM MY_LIST TOUPPER FOR "0,8,2")
+        list(TRANSFORM MY_LIST TOUPPER FOR 0 8 2)
         message("${MY_LIST}")
     )");
     REQUIRE(output == "A;b;C;d;E;f;G;h;I;j\n");
@@ -782,7 +782,7 @@ TEST_CASE("list(TRANSFORM) with FOR selector and step", "[interpreter][list]") {
 TEST_CASE("list(TRANSFORM) with FOR selector negative step", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "a" "b" "c" "d" "e")
-        list(TRANSFORM MY_LIST TOUPPER FOR "4,1,-1")
+        list(TRANSFORM MY_LIST TOUPPER FOR 4 1 -1)
         message("${MY_LIST}")
     )");
     REQUIRE(output == "a;B;C;D;E\n");
@@ -1531,9 +1531,8 @@ TEST_CASE("if condition: complex expressions", "[interpreter][if]") {
 }
 
 TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
-    // if(A B C) - unconsumed tokens: CMake compatibility mode returns false
-    // No exception thrown, condition evaluates to false (else branch taken)
-    auto output = run_script(R"(
+    // if(A B C) - unconsumed tokens: CMake errors on this
+    REQUIRE_THROWS_AS(run_script(R"(
         set(A "10")
         set(B "20")
         set(C "15")
@@ -1542,9 +1541,7 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
         else()
             message("else-branch")
         endif()
-    )");
-    REQUIRE(output.find("else-branch") != std::string::npos);
-    REQUIRE(output.find("if-branch") == std::string::npos);
+    )"), std::runtime_error);
 
     // if(A EQUAL) should error - missing right operand
     REQUIRE_THROWS_AS(run_script(R"(
@@ -1555,21 +1552,19 @@ TEST_CASE("if condition: invalid conditions", "[interpreter][if][negative]") {
     )"), std::runtime_error);
 
     // if(AND B) - AND at start treated as variable name, B is unconsumed
-    // CMake compatibility: evaluates to false
-    output = run_script(R"(
+    // CMake errors on unconsumed tokens
+    REQUIRE_THROWS_AS(run_script(R"(
         set(B "10")
         if(AND B)
             message("if-branch")
         else()
             message("else-branch")
         endif()
-    )");
-    REQUIRE(output.find("else-branch") != std::string::npos);
-    REQUIRE(output.find("if-branch") == std::string::npos);
+    )"), std::runtime_error);
 
     // if(NOT) - CMake compatibility: NOT without operand treated as primary value
     // evaluates to false (NOT is not a boolean constant, dereferenced as empty variable)
-    output = run_script(R"(
+    auto output = run_script(R"(
         if(NOT)
             message("if-branch")
         else()
@@ -3106,6 +3101,20 @@ TEST_CASE("cmake_parse_arguments edge cases", "[interpreter]") {
     )");
     REQUIRE(output == "REQUIRED\n");
 
+    // Test one-value keyword followed by another one-value keyword (missing value)
+    // This is the pattern used by FindPackageHandleStandardArgs when an empty value
+    // is passed for REASON_FAILURE_MESSAGE and the next keyword is VERSION_VAR
+    output = run_script(R"(
+        cmake_parse_arguments(FPHSA "" "REASON_FAILURE_MESSAGE;VERSION_VAR" "REQUIRED_VARS"
+            REQUIRED_VARS PKG_CONFIG_EXECUTABLE REASON_FAILURE_MESSAGE VERSION_VAR PkgConfig_VERSION)
+        message("${FPHSA_REQUIRED_VARS}")
+        message("REASON:'${FPHSA_REASON_FAILURE_MESSAGE}'")
+        message("VERSION:'${FPHSA_VERSION_VAR}'")
+        message("UNPARSED:'${FPHSA_UNPARSED_ARGUMENTS}'")
+        message("MISSING:'${FPHSA_KEYWORDS_MISSING_VALUES}'")
+    )");
+    REQUIRE(output == "PKG_CONFIG_EXECUTABLE\nREASON:''\nVERSION:'PkgConfig_VERSION'\nUNPARSED:''\nMISSING:'REASON_FAILURE_MESSAGE'\n");
+
     // Test multi-value with no values (next token is keyword)
     output = run_script(R"(
         cmake_parse_arguments(MY "OPT" "" "ITEMS" ITEMS OPT)
@@ -4630,7 +4639,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(HAS_FILENAME mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("HAS_EXTENSION") {
@@ -4639,7 +4648,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(HAS_EXTENSION mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("IS_ABSOLUTE") {
@@ -4648,7 +4657,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(IS_ABSOLUTE mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("IS_RELATIVE") {
@@ -4657,7 +4666,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(IS_RELATIVE mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("IS_PREFIX") {
@@ -4667,7 +4676,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(IS_PREFIX prefix result fullpath)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("COMPARE EQUAL") {
@@ -4677,7 +4686,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(COMPARE path1 EQUAL path2 result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("COMPARE NOT_EQUAL") {
@@ -4687,7 +4696,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(COMPARE path1 NOT_EQUAL path2 result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("SET with NORMALIZE") {
@@ -4938,7 +4947,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(IS_PREFIX prefix result fullpath)
             message("${result}")
         )");
-        REQUIRE(output == "FALSE\n");
+        REQUIRE(output == "OFF\n");
     }
 
     SECTION("IS_PREFIX with exact match") {
@@ -4948,7 +4957,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(IS_PREFIX prefix result fullpath)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("HAS_PARENT_PATH on root") {
@@ -4957,7 +4966,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(HAS_PARENT_PATH mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "FALSE\n");
+        REQUIRE(output == "OFF\n");
     }
 
     SECTION("Complex extension handling - multiple dots") {
@@ -5080,7 +5089,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             message("absolute:${result2}")
             message("relative:${result3}")
         )");
-        REQUIRE(output == "has_file:FALSE\nabsolute:FALSE\nrelative:TRUE\n");
+        REQUIRE(output == "has_file:OFF\nabsolute:OFF\nrelative:ON\n");
     }
 
     SECTION("COMPARE with normalized vs non-normalized") {
@@ -5091,7 +5100,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             message("${result}")
         )");
         // COMPARE does NOT normalize, lexical comparison only
-        REQUIRE(output == "FALSE\n");
+        REQUIRE(output == "OFF\n");
     }
 
     SECTION("Multiple APPEND calls") {
@@ -5130,7 +5139,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(HAS_ROOT_DIRECTORY mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "TRUE\n");
+        REQUIRE(output == "ON\n");
     }
 
     SECTION("HAS_ROOT_DIRECTORY on relative path") {
@@ -5139,7 +5148,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
             cmake_path(HAS_ROOT_DIRECTORY mypath result)
             message("${result}")
         )");
-        REQUIRE(output == "FALSE\n");
+        REQUIRE(output == "OFF\n");
     }
 }
 

@@ -314,11 +314,23 @@ void register_variable_builtins(Interpreter& interp) {
             // Check if it's a one-value keyword
             if (one_value_keywords.contains(arg)) {
                 if (i + 1 < to_parse.size()) {
-                    // Next argument is the value
-                    interp.set_variable(prefix + "_" + arg, to_parse[i + 1]);
-                    i += 2;
+                    // Check if next argument is also a keyword - if so, this keyword has no value
+                    const std::string& next_arg = to_parse[i + 1];
+                    if (options.contains(next_arg) ||
+                        one_value_keywords.contains(next_arg) ||
+                        multi_value_keywords.contains(next_arg)) {
+                        // Next arg is a keyword, so this one-value keyword has no value
+                        interp.set_variable(prefix + "_" + arg, "");
+                        keywords_missing_values.push_back(arg);
+                        i++;
+                    } else {
+                        // Next argument is the value
+                        interp.set_variable(prefix + "_" + arg, to_parse[i + 1]);
+                        i += 2;
+                    }
                 } else {
                     // Keyword at end with no value
+                    interp.set_variable(prefix + "_" + arg, "");
                     keywords_missing_values.push_back(arg);
                     i++;
                 }

@@ -129,7 +129,7 @@ void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
         return;
     }
 
-    interp.set_variable(out_var, result ? "TRUE" : "FALSE");
+    interp.set_variable(out_var, result ? "ON" : "OFF");
 }
 
 // IS_ABSOLUTE, IS_RELATIVE, IS_PREFIX
@@ -184,7 +184,7 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
         return;
     }
 
-    interp.set_variable(out_var, result ? "TRUE" : "FALSE");
+    interp.set_variable(out_var, result ? "ON" : "OFF");
 }
 
 // COMPARE
@@ -210,7 +210,7 @@ void handle_compare(Interpreter& interp, const std::vector<std::string>& args) {
         return;
     }
 
-    interp.set_variable(out_var, result ? "TRUE" : "FALSE");
+    interp.set_variable(out_var, result ? "ON" : "OFF");
 }
 
 // SET
