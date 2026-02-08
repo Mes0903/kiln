@@ -413,7 +413,14 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
             if (!is_interface_only) {
                 if (!link_only) {
                     for (const auto& info : props_to_resolve) {
-                        merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                        // CMake treats IMPORTED target interface includes as system includes
+                        // (they use -isystem instead of -I to suppress warnings from external headers)
+                        if (dep->is_imported() && info.name == "INCLUDE_DIRECTORIES") {
+                            merge(resolved_properties_["SYSTEM_INCLUDE_DIRECTORIES"],
+                                  dep->get_resolved_interface_property(info.name));
+                        } else {
+                            merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                        }
                     }
                 }
 
@@ -436,7 +443,13 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                 // If link_only, only propagate LINK_LIBRARIES (skip INCLUDE_DIRECTORIES, COMPILE_OPTIONS, etc.)
                 if (!link_only) {
                     for (const auto& info : props_to_resolve) {
-                        merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                        // CMake treats IMPORTED target interface includes as system includes
+                        if (dep->is_imported() && info.name == "INCLUDE_DIRECTORIES") {
+                            merge(resolved_interface_properties_["SYSTEM_INCLUDE_DIRECTORIES"],
+                                  dep->get_resolved_interface_property(info.name));
+                        } else {
+                            merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
+                        }
                     }
                 }
 
@@ -660,7 +673,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                                       GenexEvaluator& evaluator, const Interpreter& interp,
                                       const std::string& pre_build_task_id,
                                       const std::string& module_mapper_path,
-                                      std::set<std::string>& generated_custom_tasks) {
+                                      std::set<std::string>& generated_custom_tasks,
+                                      const std::set<std::string>& implicit_includes) {
     // --- Hoist all loop-invariant computations ---
 
     bool target_has_modules = has_module_sources();
@@ -924,14 +938,22 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         if (needs_per_lang_eval) {
             auto pl_it = per_lang_props.find(lang_info.lang);
             if (pl_it != per_lang_props.end()) {
-                for (const auto& dir : pl_it->second.includes) ctx.includes.push_back(dir);
-                for (const auto& dir : pl_it->second.system_includes) ctx.system_includes.push_back(dir);
+                for (const auto& dir : pl_it->second.includes) {
+                    if (!implicit_includes.contains(dir)) ctx.includes.push_back(dir);
+                }
+                for (const auto& dir : pl_it->second.system_includes) {
+                    if (!implicit_includes.contains(dir)) ctx.system_includes.push_back(dir);
+                }
                 for (const auto& def : pl_it->second.definitions) ctx.definitions.push_back(def);
                 for (const auto& opt : pl_it->second.options) ctx.options.push_back(opt);
             }
         } else {
-            for (const auto& dir : resolved_includes) ctx.includes.push_back(dir);
-            for (const auto& dir : resolved_sys_includes) ctx.system_includes.push_back(dir);
+            for (const auto& dir : resolved_includes) {
+                if (!implicit_includes.contains(dir)) ctx.includes.push_back(dir);
+            }
+            for (const auto& dir : resolved_sys_includes) {
+                if (!implicit_includes.contains(dir)) ctx.system_includes.push_back(dir);
+            }
             for (const auto& def : resolved_definitions) ctx.definitions.push_back(def);
             for (const auto& opt : resolved_options) ctx.options.push_back(opt);
         }
@@ -1197,6 +1219,16 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
     GenexEvaluator evaluator(genex_ctx);
 
+    // Get implicit include directories to filter out (CMake doesn't pass these to compiler)
+    // These are directories already in the compiler's default search path
+    std::set<std::string> implicit_includes;
+    for (const auto& dir : CMakeArray(interp.get_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES"))) {
+        implicit_includes.insert(dir);
+    }
+    for (const auto& dir : CMakeArray(interp.get_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES"))) {
+        implicit_includes.insert(dir);
+    }
+
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
 
@@ -1264,9 +1296,18 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         return result;
     };
 
+    // Filter out implicit includes for PCH
+    auto filter_implicit = [&](const std::vector<std::string>& dirs) {
+        std::vector<std::string> result;
+        for (const auto& dir : dirs) {
+            if (!implicit_includes.contains(dir)) result.push_back(dir);
+        }
+        return result;
+    };
+
     auto [pch_gch_path, pch_include_arg] = generate_pch_task(graph, toolchain, this, is_shared,
-        evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES")),
-        evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES")),
+        filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
+        filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
         evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
         evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")));
 
@@ -1274,7 +1315,8 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
     generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared,
                           all_targets, evaluator, interp,
-                          pre_build_task_id, module_mapper_path, generated_custom_tasks);
+                          pre_build_task_id, module_mapper_path, generated_custom_tasks,
+                          implicit_includes);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 

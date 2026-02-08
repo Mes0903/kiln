@@ -314,7 +314,6 @@ std::expected<CompileResult, std::string> compile_sources(
         lctx.extensions_enabled = params.use_extensions;
 
         std::vector<std::string> link_cmd = params.compiler->get_link_command(lctx);
-
         CommandResult link_result = run_command(link_cmd, params.temp_dir.string());
         if (link_result.exit_code != 0) {
             result.success = false;
@@ -800,10 +799,20 @@ void register_try_compile_builtins(Interpreter& interp) {
         if (build_static_lib && compile_success) {
             // compile_sources with link_to_executable=false creates .o files
             // We need to find the object file(s) and create a static library
-            std::string obj_file = (temp_dir / "test.o").string();
-            std::string lib_file = (temp_dir / "libtest.a").string();
+            // Object files are named after source file stems (e.g., src.c -> src.o)
+            std::vector<std::string> obj_files;
+            for (const auto& src : sources) {
+                std::filesystem::path src_path(src);
+                obj_files.push_back((temp_dir / (src_path.stem().string() + ".o")).string());
+            }
+            for (const auto& [name, _] : inline_sources_map) {
+                std::filesystem::path src_path(name);
+                obj_files.push_back((temp_dir / (src_path.stem().string() + ".o")).string());
+            }
 
-            std::vector<std::string> ar_cmd = {"ar", "rcs", lib_file, obj_file};
+            std::string lib_file = (temp_dir / "libtest.a").string();
+            std::vector<std::string> ar_cmd = {"ar", "rcs", lib_file};
+            ar_cmd.insert(ar_cmd.end(), obj_files.begin(), obj_files.end());
             CommandResult ar_result = run_command(ar_cmd, temp_dir.string());
 
             if (ar_result.exit_code != 0) {

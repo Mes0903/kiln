@@ -126,7 +126,8 @@ protected:
                                class GenexEvaluator& evaluator, const class Interpreter& interp,
                                const std::string& pre_build_task_id,
                                const std::string& module_mapper_path,
-                               std::set<std::string>& generated_custom_tasks);
+                               std::set<std::string>& generated_custom_tasks,
+                               const std::set<std::string>& implicit_includes);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected
