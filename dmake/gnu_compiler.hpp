@@ -19,8 +19,7 @@ inline std::string run_command(const std::string& command) {
     std::array<char, 128> buffer;
     std::string result;
 
-    FILE* p = popen(command.c_str(), "r");
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(p, pclose);
+    std::unique_ptr<FILE, int(*)(FILE*)> pipe(popen(command.c_str(), "r"), pclose);
     if (!pipe) {
         return "";
     }
