@@ -114,9 +114,10 @@ private:
     std::vector<Breakpoint> breakpoints_;
     int next_breakpoint_id_ = 1;
     std::optional<std::string> break_on_message_;
-    std::string current_file_;  // Set on entering interactive_loop
-    size_t current_row_ = 0;   // Set on entering interactive_loop
-    int selected_frame_ = -1;  // -1 = current position, 0 = top of stack
+    std::string current_file_;     // Set on entering interactive_loop
+    size_t current_row_ = 0;      // Set on entering interactive_loop
+    std::string current_cmd_;      // Set on entering interactive_loop
+    int selected_frame_ = 0;      // 0 = current command, 1..N = callers
     struct sigaction old_sigint_action_{};  // Saved for restoration in destructor
     InputFunction input_fn_;   // Pluggable input (default: std::getline)
 };
