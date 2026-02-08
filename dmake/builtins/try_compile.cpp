@@ -377,6 +377,26 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         PARSE_OR_RETURN(parser, interp, args);
 
+        // Filter COMPILE_DEFINITIONS: items starting with '-' (but not '-D') are compiler flags
+        // CMake modules like CheckCCompilerFlag pass -Wall etc. as COMPILE_DEFINITIONS
+        {
+            std::vector<std::string> filtered_defs;
+            for (const auto& item : compile_definitions) {
+                if (item.empty()) continue;
+                if (item.size() >= 2 && item.substr(0, 2) == "-D") {
+                    // -DFOO -> FOO (strip the -D prefix)
+                    filtered_defs.push_back(item.substr(2));
+                } else if (item[0] == '-') {
+                    // Compiler flag like -Wall, -Werror, etc.
+                    raw_compile_flags.push_back(item);
+                } else {
+                    // Plain definition
+                    filtered_defs.push_back(item);
+                }
+            }
+            compile_definitions = std::move(filtered_defs);
+        }
+
         // Detect project mode vs source mode
         bool project_mode = false;
         if (!srcdir_or_srcfile.empty() && !project_name.empty()) {
@@ -910,6 +930,26 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.value("WORKING_DIRECTORY", working_directory);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Filter COMPILE_DEFINITIONS: items starting with '-' (but not '-D') are compiler flags
+        // CMake modules like CheckCCompilerFlag pass -Wall etc. as COMPILE_DEFINITIONS
+        {
+            std::vector<std::string> filtered_defs;
+            for (const auto& item : compile_definitions) {
+                if (item.empty()) continue;
+                if (item.size() >= 2 && item.substr(0, 2) == "-D") {
+                    // -DFOO -> FOO (strip the -D prefix)
+                    filtered_defs.push_back(item.substr(2));
+                } else if (item[0] == '-') {
+                    // Compiler flag like -Wall, -Werror, etc.
+                    raw_compile_flags.push_back(item);
+                } else {
+                    // Plain definition
+                    filtered_defs.push_back(item);
+                }
+            }
+            compile_definitions = std::move(filtered_defs);
+        }
 
         // Handle old-style syntax
         if (!old_style_srcfile.empty()) {

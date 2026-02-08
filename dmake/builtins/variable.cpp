@@ -81,7 +81,9 @@ void register_variable_builtins(Interpreter& interp) {
             // Set in parent scope (handles both function and subdirectory contexts)
             auto result = interp.set_variable_parent_scope(var_name, value);
             if (!result) {
-                interp.set_fatal_error("set() " + result.error());
+                // CMake issues a dev warning (not fatal error) when no parent scope exists
+                interp.print_message("AUTHOR_WARNING",
+                    "Cannot set \"" + var_name + "\": current scope has no parent.", false);
             }
             return;
         }
@@ -172,7 +174,9 @@ void register_variable_builtins(Interpreter& interp) {
         if (parent_it != args.end()) {
             auto result = interp.unset_variable_parent_scope(var_name);
             if (!result) {
-                interp.set_fatal_error("unset() " + result.error());
+                // CMake issues a dev warning (not fatal error) when no parent scope exists
+                interp.print_message("AUTHOR_WARNING",
+                    "Cannot unset \"" + var_name + "\": current scope has no parent.", false);
             }
             return;
         }

@@ -1942,13 +1942,87 @@ TEST_CASE("namespace error cases", "[interpreter][namespace][errors]") {
         Catch::Matchers::ContainsSubstring("cannot use both CACHE and PARENT_SCOPE")
     );
 
-    // Test PARENT_SCOPE outside function
-    CHECK_THROWS_WITH(
-        run_script(R"(
-            set(VAR "value" PARENT_SCOPE)
-        )"),
-        Catch::Matchers::ContainsSubstring("requires a parent scope")
-    );
+    // Test PARENT_SCOPE outside function - CMake issues a warning, not an error
+    // Script continues execution, just logs a warning
+    auto output = run_script(R"(
+        set(VAR "value" PARENT_SCOPE)
+        message("script continued")
+    )");
+    REQUIRE_THAT(output, Catch::Matchers::ContainsSubstring("script continued"));
+}
+
+TEST_CASE("PARENT_SCOPE does not affect current scope", "[interpreter][parent_scope][scoping]") {
+    SECTION("set PARENT_SCOPE preserves current scope view") {
+        // CMake semantics: PARENT_SCOPE modifies parent but current scope unchanged
+        auto output = run_script(R"(
+            set(VAR "outer")
+            function(test_func)
+                message("before=${VAR}")
+                set(VAR "modified" PARENT_SCOPE)
+                message("after=${VAR}")
+            endfunction()
+            test_func()
+            message("outside=${VAR}")
+        )");
+        REQUIRE(output == "before=outer\nafter=outer\noutside=modified\n");
+    }
+
+    SECTION("unset PARENT_SCOPE preserves current scope view") {
+        // CMake semantics: unset PARENT_SCOPE removes from parent but current scope unchanged
+        auto output = run_script(R"(
+            set(VAR "outer")
+            function(test_func)
+                message("before=${VAR}")
+                unset(VAR PARENT_SCOPE)
+                message("after=${VAR}")
+            endfunction()
+            test_func()
+            if(DEFINED VAR)
+                message("outside=${VAR}")
+            else()
+                message("outside=undefined")
+            endif()
+        )");
+        REQUIRE(output == "before=outer\nafter=outer\noutside=undefined\n");
+    }
+
+    SECTION("new variable via PARENT_SCOPE not visible in current scope") {
+        // CMake semantics: a new variable created via PARENT_SCOPE is not visible until exit
+        auto output = run_script(R"(
+            function(test_func)
+                if(DEFINED NEW_VAR)
+                    message("before=defined")
+                else()
+                    message("before=undefined")
+                endif()
+                set(NEW_VAR "value" PARENT_SCOPE)
+                if(DEFINED NEW_VAR)
+                    message("after=defined")
+                else()
+                    message("after=undefined")
+                endif()
+            endfunction()
+            test_func()
+            message("outside=${NEW_VAR}")
+        )");
+        REQUIRE(output == "before=undefined\nafter=undefined\noutside=value\n");
+    }
+
+    SECTION("multiple PARENT_SCOPE calls preserve current scope") {
+        auto output = run_script(R"(
+            set(VAR "initial")
+            function(test_func)
+                message("start=${VAR}")
+                set(VAR "first" PARENT_SCOPE)
+                message("after_first=${VAR}")
+                set(VAR "second" PARENT_SCOPE)
+                message("after_second=${VAR}")
+            endfunction()
+            test_func()
+            message("outside=${VAR}")
+        )");
+        REQUIRE(output == "start=initial\nafter_first=initial\nafter_second=initial\noutside=second\n");
+    }
 }
 
 TEST_CASE("nested variables with namespaces", "[interpreter][nested][namespaces]") {
@@ -3746,7 +3820,8 @@ TEST_CASE("if condition: EXISTS with unquoted paths", "[interpreter][if][bugfix]
 }
 
 TEST_CASE("Interpreter block() scope", "[interpreter][block]") {
-    SECTION("Empty block is no-op") {
+    SECTION("block() creates variable scope by default") {
+        // CMake 3.25+: block() with no arguments creates both variable and policy scopes
         auto output = run_script(R"(
             set(var "value")
             block()
@@ -3754,10 +3829,11 @@ TEST_CASE("Interpreter block() scope", "[interpreter][block]") {
             endblock()
             message("var=${var}")
         )");
-        REQUIRE(output == "var=modified\n");
+        REQUIRE(output == "var=value\n");
     }
 
-    SECTION("SCOPE_FOR POLICIES is no-op") {
+    SECTION("SCOPE_FOR POLICIES does not create variable scope") {
+        // block(SCOPE_FOR POLICIES) only creates policy scope, not variable scope
         auto output = run_script(R"(
             set(var "value")
             block(SCOPE_FOR POLICIES)
@@ -3864,7 +3940,8 @@ TEST_CASE("Interpreter block() scope", "[interpreter][block]") {
         REQUIRE(output == "inside=inner\noutside=outer\n");
     }
 
-    SECTION("No shadowing without SCOPE_FOR VARIABLES") {
+    SECTION("block() creates variable scope by default") {
+        // CMake 3.25+ behavior: block() with no arguments creates a variable scope
         auto output = run_script(R"(
             set(var "outer")
             block()
@@ -3873,7 +3950,7 @@ TEST_CASE("Interpreter block() scope", "[interpreter][block]") {
             endblock()
             message("outside=${var}")
         )");
-        REQUIRE(output == "inside=modified\noutside=modified\n");
+        REQUIRE(output == "inside=modified\noutside=outer\n");
     }
 
     SECTION("PROPAGATE with undefined variable") {
@@ -6209,4 +6286,154 @@ TEST_CASE("if condition: undefined variable in MATCHES is literal", "[interprete
         endif()
     )");
     REQUIRE(output == "not ppc\n");
+}
+
+TEST_CASE("if condition: undefined variable before binary operator", "[interpreter][if][bugfix]") {
+    // When ${UNDEFINED} expands to nothing, a binary operator can end up
+    // at the start of the condition or after NOT. CMake handles these cases:
+    // 1. MATCHES without left operand -> false (special case)
+    // 2. NOT followed by binary operator -> NOT becomes left operand of the operator
+
+    SECTION("MATCHES without left operand returns false") {
+        // if(${UNDEFINED} MATCHES "pat") -> if(MATCHES "pat") -> false
+        auto output = run_script(R"(
+            if(MATCHES "pattern")
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        REQUIRE(output == "N\n");
+    }
+
+    SECTION("NOT followed by STREQUAL: NOT becomes left operand") {
+        // if(NOT ${UNDEFINED} STREQUAL "X") -> if(NOT STREQUAL "X")
+        // CMake interprets this as: "NOT" STREQUAL "X" = false
+        auto output = run_script(R"(
+            if(NOT STREQUAL "X")
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        REQUIRE(output == "N\n");
+    }
+
+    SECTION("NOT followed by MATCHES: NOT becomes left operand") {
+        // if(NOT ${UNDEFINED} MATCHES "pat") -> if(NOT MATCHES "pat")
+        // CMake interprets this as: "NOT" MATCHES "pat" = false (no match)
+        auto output = run_script(R"(
+            if(NOT MATCHES "pattern")
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        REQUIRE(output == "N\n");
+    }
+
+    SECTION("NOT followed by EQUAL: NOT becomes left operand") {
+        // if(NOT ${UNDEFINED} EQUAL 0) -> if(NOT EQUAL 0)
+        // CMake interprets this as: "NOT" EQUAL 0 = false (string can't compare as number)
+        auto output = run_script(R"(
+            if(NOT EQUAL 0)
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        REQUIRE(output == "N\n");
+    }
+
+    SECTION("MySQL pattern: NOT ${VAR} STREQUAL empty") {
+        // Real-world pattern from MySQL: if(NOT ${PLUGIN_${name}} STREQUAL "")
+        // When the nested variable is undefined, this should evaluate correctly
+        auto output = run_script(R"(
+            set(target_name "my_plugin")
+            # PLUGIN_my_plugin is NOT defined
+            if(NOT ${PLUGIN_${target_name}} STREQUAL "")
+                message("plugin defined")
+            else()
+                message("plugin not defined")
+            endif()
+        )");
+        REQUIRE(output == "plugin not defined\n");
+
+        // Now with the plugin defined
+        output = run_script(R"(
+            set(target_name "my_plugin")
+            set(PLUGIN_my_plugin "dynamic")
+            if(NOT ${PLUGIN_${target_name}} STREQUAL "")
+                message("plugin defined")
+            else()
+                message("plugin not defined")
+            endif()
+        )");
+        REQUIRE(output == "plugin defined\n");
+    }
+
+    SECTION("Bare NOT evaluates as truthy string") {
+        // if(NOT) should evaluate NOT as a string value (truthy)
+        auto output = run_script(R"(
+            if(NOT)
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        // NOT as a bare word is truthy (non-empty string), but in condition context
+        // it's treated as an operator without operand, which falls back to evaluating
+        // NOT itself. Since it's not a defined variable, it's falsy.
+        REQUIRE(output == "N\n");
+    }
+
+    SECTION("Regular NOT negation still works") {
+        // Make sure normal NOT operator still works
+        auto output = run_script(R"(
+            set(VAR "value")
+            if(NOT VAR)
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        REQUIRE(output == "N\n");  // VAR is truthy, NOT VAR is false
+
+        output = run_script(R"(
+            if(NOT UNDEFINED_VAR)
+                message("Y")
+            else()
+                message("N")
+            endif()
+        )");
+        REQUIRE(output == "Y\n");  // UNDEFINED_VAR is falsy, NOT UNDEFINED_VAR is true
+    }
+
+    SECTION("Binary operator without left operand errors (except MATCHES)") {
+        // if(STREQUAL "") should error - missing left operand
+        // This matches CMake behavior: "Unknown arguments specified"
+        CHECK_THROWS_WITH(run_script(R"(
+            if(STREQUAL "")
+                message("Y")
+            endif()
+        )"), Catch::Matchers::ContainsSubstring("missing left operand"));
+
+        CHECK_THROWS_WITH(run_script(R"(
+            if(EQUAL 5)
+                message("Y")
+            endif()
+        )"), Catch::Matchers::ContainsSubstring("missing left operand"));
+
+        CHECK_THROWS_WITH(run_script(R"(
+            if(LESS 5)
+                message("Y")
+            endif()
+        )"), Catch::Matchers::ContainsSubstring("missing left operand"));
+
+        CHECK_THROWS_WITH(run_script(R"(
+            if(VERSION_LESS "1.0")
+                message("Y")
+            endif()
+        )"), Catch::Matchers::ContainsSubstring("missing left operand"));
+    }
 }

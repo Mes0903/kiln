@@ -519,7 +519,7 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
     block_block.row = block_command.row;
     block_block.col = block_command.col;
     block_block.offset = block_command.offset;
-    block_block.scope_for_variables = false;  // Default to false (no scope unless explicitly requested)
+    block_block.scope_for_variables = true;  // CMake default: block() creates a variable scope
 
     // Parse optional arguments: [SCOPE_FOR VARIABLES] [PROPAGATE var1 var2...]
     size_t idx = 0;
@@ -533,30 +533,34 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
         }
 
         if (keyword == "SCOPE_FOR") {
-            idx++;
-            // Next argument should be VARIABLES or POLICIES
-            if (idx >= block_command.arguments.size()) {
-                return std::unexpected(ParseError{block_command.row, block_command.col, block_command.offset, block_command.length, "block(SCOPE_FOR) requires VARIABLES or POLICIES keyword"});
-            }
+            // When SCOPE_FOR is explicitly specified, switch from default (both scopes)
+            // to only what's explicitly requested
+            block_block.scope_for_variables = false;  // Will be set true if VARIABLES is specified
 
-            std::string scope_keyword;
-            if (!block_command.arguments[idx].quoted &&
-                block_command.arguments[idx].parts.size() == 1 &&
-                std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
-                scope_keyword = std::get<std::string>(block_command.arguments[idx].parts[0]);
-                std::transform(scope_keyword.begin(), scope_keyword.end(), scope_keyword.begin(), ::toupper);
-            }
-
-            if (scope_keyword == "VARIABLES") {
-                block_block.scope_for_variables = true;
-            } else if (scope_keyword == "POLICIES") {
-                // Policies not supported, but we accept for compatibility
-                // Just treat as no-op since we don't have policies
-                // Don't set scope_for_variables = true
-            } else {
-                return std::unexpected(ParseError{block_command.row, block_command.col, block_command.offset, block_command.length, "block(SCOPE_FOR) expected VARIABLES or POLICIES keyword"});
-            }
             idx++;
+            // Next arguments should be VARIABLES and/or POLICIES
+            while (idx < block_command.arguments.size()) {
+                std::string scope_keyword;
+                if (!block_command.arguments[idx].quoted &&
+                    block_command.arguments[idx].parts.size() == 1 &&
+                    std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
+                    scope_keyword = std::get<std::string>(block_command.arguments[idx].parts[0]);
+                    std::transform(scope_keyword.begin(), scope_keyword.end(), scope_keyword.begin(), ::toupper);
+                }
+
+                if (scope_keyword == "VARIABLES") {
+                    block_block.scope_for_variables = true;
+                    idx++;
+                } else if (scope_keyword == "POLICIES") {
+                    // Policies not supported, but we accept for compatibility
+                    idx++;
+                } else {
+                    // Not VARIABLES or POLICIES - break to outer loop
+                    break;
+                }
+            }
+            // Continue to check for PROPAGATE
+            continue;
         } else if (keyword == "PROPAGATE") {
             // PROPAGATE implies variable scoping
             block_block.scope_for_variables = true;

@@ -68,6 +68,13 @@ public:
     /**
      * Set a variable at the parent scope (depth - 1).
      * Used for CMake's PARENT_SCOPE modifier.
+     *
+     * CMake semantics: PARENT_SCOPE modifies the parent scope but does NOT
+     * affect the current scope's view of the variable. To achieve this, if
+     * the variable is visible from the parent but has no local entry, we
+     * first "snapshot" the current value into a local entry before modifying
+     * the parent.
+     *
      * Returns: expected<bool, string>
      *   - true: replaced existing variable
      *   - false: created new variable
@@ -82,6 +89,19 @@ public:
         int target_depth = current_depth_ - 1;
         auto& versions = variables_[name];
 
+        // CMake semantics: PARENT_SCOPE should NOT affect current scope's view.
+        // If the variable is visible from a parent depth but has no local entry,
+        // we need to "snapshot" the current visible value into a local entry first.
+        bool has_local_entry = !versions.empty() && versions.back().depth == current_depth_;
+        if (!has_local_entry && !versions.empty() && versions.back().value.has_value()) {
+            // Variable is visible from parent - snapshot current value to preserve local view
+            std::string current_value = *versions.back().value;
+            versions.push_back({std::optional<std::string>(current_value), current_depth_});
+            if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
+                modified_per_depth_[current_depth_].insert(name);
+            }
+        }
+
         // Search for existing entry at parent depth and modify
         for (auto& ver : versions) {
             if (ver.depth == target_depth) {
@@ -90,9 +110,22 @@ public:
             }
         }
 
-        // No existing entry - insert new version at parent depth
-        // We need to maintain the invariant that versions are sorted by depth
-        // Find the insertion point
+        // No existing entry at parent depth - this is a NEW variable being created
+        // CMake semantics: a variable created via PARENT_SCOPE is NOT visible in
+        // the current scope until we exit.
+
+        // Only insert tombstone if there's no local entry already
+        // (If there's a local entry, the current scope's view is already established)
+        if (!has_local_entry) {
+            // Insert tombstone at current depth to hide the new parent variable
+            versions.push_back({std::nullopt, current_depth_});
+            if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
+                modified_per_depth_[current_depth_].insert(name);
+            }
+        }
+
+        // Insert the actual value at parent depth
+        // Find the insertion point to maintain depth ordering
         auto insert_pos = versions.begin();
         while (insert_pos != versions.end() && insert_pos->depth < target_depth) {
             ++insert_pos;
@@ -100,7 +133,7 @@ public:
 
         versions.insert(insert_pos, {std::optional<std::string>(value), target_depth});
 
-        // Track modification
+        // Track modification at parent depth
         if (target_depth < static_cast<int>(modified_per_depth_.size())) {
             modified_per_depth_[target_depth].insert(name);
         }
@@ -144,6 +177,13 @@ public:
     /**
      * Unset a variable at the parent scope (depth - 1).
      * Used for CMake's unset(VAR PARENT_SCOPE).
+     *
+     * CMake semantics: unset(VAR PARENT_SCOPE) removes the variable from the
+     * parent scope but does NOT affect the current scope's view. To achieve
+     * this, if the variable is visible from the parent but has no local entry,
+     * we first "snapshot" the current value into a local entry before unsetting
+     * the parent.
+     *
      * Returns: expected<bool, string>
      *   - true: variable was found and removed
      *   - false: variable was not found at parent scope
@@ -162,6 +202,20 @@ public:
         }
 
         auto& versions = it->second;
+
+        // CMake semantics: unset PARENT_SCOPE should NOT affect current scope's view.
+        // If the variable is visible from a parent depth but has no local entry,
+        // we need to "snapshot" the current visible value into a local entry first.
+        bool has_local_entry = !versions.empty() && versions.back().depth == current_depth_;
+        if (!has_local_entry && !versions.empty() && versions.back().value.has_value()) {
+            // Variable is visible from parent - snapshot current value to preserve local view
+            std::string current_value = *versions.back().value;
+            versions.push_back({std::optional<std::string>(current_value), current_depth_});
+            if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
+                modified_per_depth_[current_depth_].insert(name);
+            }
+        }
+
         // Find and remove the entry at parent depth
         for (auto ver_it = versions.begin(); ver_it != versions.end(); ++ver_it) {
             if (ver_it->depth == target_depth) {

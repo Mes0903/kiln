@@ -148,6 +148,20 @@ std::expected<bool, InterpreterError> evaluate_condition(
         return opt.has_value() ? *opt : token;
     };
 
+    // Set of binary operator keywords
+    static constexpr std::array binary_operators = {
+        "EQUAL", "GREATER", "GREATER_EQUAL", "IN_LIST", "IS_NEWER_THAN",
+        "LESS", "LESS_EQUAL", "MATCHES", "NOT_EQUAL", "STREQUAL",
+        "STRGREATER", "STRGREATER_EQUAL", "STRLESS", "STRLESS_EQUAL",
+        "VERSION_EQUAL", "VERSION_GREATER", "VERSION_GREATER_EQUAL",
+        "VERSION_LESS", "VERSION_LESS_EQUAL"
+    };
+
+    auto is_binary_operator = [&](const std::string& token) -> bool {
+        std::string upper = dmake::to_upper(token);
+        return std::find(binary_operators.begin(), binary_operators.end(), upper) != binary_operators.end();
+    };
+
     // Recursive descent parser with proper CMake precedence
     // Precedence (high to low): unary tests > binary tests > NOT > AND/OR
     size_t pos = 0;
@@ -210,11 +224,15 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         std::string token = get_token_string(condition[pos]);
         if (token == "NOT") {
-            // Check if there's a valid operand after NOT
-            // NOT followed by nothing or by AND/OR should be treated as a primary value
-            // (CMake compatibility - NOT without operand evaluates to false)
+            // CMake compatibility: If NOT is followed by a binary operator,
+            // treat NOT as a value (left operand), not as a negation operator.
+            // Example: if(NOT STREQUAL "X") -> "NOT" STREQUAL "X" = false
             if (pos + 1 < condition.size()) {
                 std::string next_token = get_token_string(condition[pos + 1]);
+                if (is_binary_operator(next_token)) {
+                    // NOT is actually a left operand here, not a negation
+                    return parse_comparison();
+                }
                 if (next_token != "AND" && next_token != "OR") {
                     // Valid operand exists - NOT is an operator
                     pos++;
@@ -229,6 +247,24 @@ std::expected<bool, InterpreterError> evaluate_condition(
     // Binary comparison operators (EQUAL, LESS, STREQUAL, etc.)
     parse_comparison = [&]() -> bool {
         if (pos >= condition.size()) return false;
+
+        // CMake special case: MATCHES without left operand returns false
+        // Example: if(${UNDEFINED} MATCHES "pat") where UNDEFINED expands to nothing
+        // becomes if(MATCHES "pat") which CMake evaluates as false
+        std::string current_token = get_token_string(condition[pos]);
+        if (current_token == "MATCHES" && pos + 1 < condition.size()) {
+            // Consume MATCHES and the pattern, return false
+            pos += 2;
+            return false;
+        }
+
+        // CMake error case: other binary operators without left operand
+        // Example: if(STREQUAL "") -> error "Unknown arguments specified"
+        // Note: This does NOT apply when NOT precedes the operator (handled in parse_not)
+        if (is_binary_operator(current_token) && pos + 1 < condition.size()) {
+            error_msg = "if given arguments: \"" + current_token + "\" - missing left operand";
+            return false;
+        }
 
         // Save start position in case this isn't a comparison
         size_t start_pos = pos;
@@ -392,6 +428,11 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // Parentheses for grouping
         if (token == "(") {
             pos++;
+            // CMake behavior: empty parentheses () evaluate to false
+            if (pos < condition.size() && get_token_string(condition[pos]) == ")") {
+                pos++;
+                return false;
+            }
             bool result = parse_or();
             if (pos >= condition.size() || get_token_string(condition[pos]) != ")") {
                 error_msg = "Expected ')' to close group";
@@ -450,17 +491,23 @@ std::expected<bool, InterpreterError> evaluate_condition(
         const Argument& arg = condition[pos++];
         std::string token_str = get_token_string(arg);
 
-        // If it's quoted or a numeric constant, use it as-is
-        if (arg.quoted || is_numeric_constant(token_str)) {
-            return !Interpreter::is_falsy(token_str);
-        }
-
         // Check if this is a boolean constant (case-insensitive)
-        // These have fixed truthiness and should not be dereferenced as variables
+        // These have fixed truthiness regardless of quoting
         std::string upper_token = token_str;
         std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
         if (std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
             return !Interpreter::is_falsy(token_str);
+        }
+
+        // Check if it's a numeric constant
+        if (is_numeric_constant(token_str)) {
+            return !Interpreter::is_falsy(token_str);
+        }
+
+        // CMake behavior for quoted strings: if not a boolean constant or number,
+        // return FALSE. Quoted strings cannot be variable lookups.
+        if (arg.quoted) {
+            return false;
         }
 
         // For all other cases (plain literals or concatenations like Prefix_${Suffix}),

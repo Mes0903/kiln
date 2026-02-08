@@ -127,7 +127,7 @@ struct WhileBlock {
 };
 
 struct BlockBlock {
-    bool scope_for_variables = false;  // Default: no scope (empty block() is a no-op)
+    bool scope_for_variables = true;  // CMake default: block() creates a variable scope
     std::vector<std::string> propagate_vars;  // Variables to propagate back to parent scope
     std::vector<AstNode> body;
     size_t row = 0;

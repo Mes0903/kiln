@@ -201,9 +201,9 @@ TEST_CASE("ShadowMap PARENT_SCOPE", "[shadow_map]") {
         REQUIRE(result.has_value());
         REQUIRE(result.value() == true);  // Replaced existing
 
-        // Parent value is modified, but we're still in child scope
-        // The child scope doesn't have its own value, so parent is visible
-        REQUIRE(map.get("VAR") == "modified_parent");
+        // CMake semantics: PARENT_SCOPE does NOT affect current scope's view
+        // The current scope sees the snapshotted "original" value
+        REQUIRE(map.get("VAR") == "original");
 
         map.pop_scope();
         REQUIRE(map.get("VAR") == "modified_parent");  // Parent was modified
@@ -215,11 +215,13 @@ TEST_CASE("ShadowMap PARENT_SCOPE", "[shadow_map]") {
         REQUIRE(result.has_value());
         REQUIRE(result.value() == false);  // Created new
 
-        // We're in child scope, parent value is visible
-        REQUIRE(map.get("NEW_VAR") == "parent_value");
+        // CMake semantics: a new variable created via PARENT_SCOPE is NOT
+        // visible in the current scope - only after exiting
+        REQUIRE(map.get("NEW_VAR") == "");
+        REQUIRE_FALSE(map.is_defined("NEW_VAR"));
 
         map.pop_scope();
-        REQUIRE(map.get("NEW_VAR") == "parent_value");  // Exists in parent
+        REQUIRE(map.get("NEW_VAR") == "parent_value");  // Now visible in parent
     }
 
     SECTION("Set parent scope with local shadow") {
@@ -255,7 +257,9 @@ TEST_CASE("ShadowMap PARENT_SCOPE", "[shadow_map]") {
         REQUIRE(result.has_value());
         REQUIRE(result.value() == true);  // Replaced existing
 
-        REQUIRE(map.get("VAR") == "modified_depth1");  // depth1 was modified
+        // CMake semantics: depth2 sees the snapshotted value ("depth1") from
+        // before PARENT_SCOPE was called, NOT the modified parent value
+        REQUIRE(map.get("VAR") == "depth1");
 
         map.pop_scope();  // back to depth 1
         REQUIRE(map.get("VAR") == "modified_depth1");  // depth1 has new value
@@ -342,7 +346,9 @@ TEST_CASE("ShadowMap mixed operations", "[shadow_map]") {
         REQUIRE(result.has_value());
         REQUIRE(result.value() == true);  // Replaced existing
 
-        REQUIRE(map.get("VAR1") == "modified_level1_1");  // Parent was modified
+        // CMake semantics: PARENT_SCOPE does NOT affect current scope's view
+        // Level 2 sees snapshotted value from before the PARENT_SCOPE call
+        REQUIRE(map.get("VAR1") == "level1_1");  // Snapshotted value at level 2
         REQUIRE(map.get("VAR2") == "level2_2");  // Shadowed
         REQUIRE(map.get("VAR3") == "level1_3");  // From parent
 
