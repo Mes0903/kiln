@@ -5,6 +5,8 @@
 #include "dmake/install_executor.hpp"
 #include "dmake/profiler.hpp"
 #include "dmake/tool_mode.hpp"
+#include "dmake/debugger.hpp"
+#include <linenoise.h>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -27,6 +29,10 @@ struct GlobalOptions {
     std::string script_path;
     std::string source_dir_str;  // -S flag for ExternalProject recursive invocation
     bool profile = false;
+    bool trace = false;
+    bool trace_expand = false;
+    bool debugger = false;
+    std::string break_on_message;
 };
 
 void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<dmake::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
@@ -96,7 +102,7 @@ void set_default_flags(dmake::Interpreter& interpreter, const std::vector<std::s
     }
 }
 
-std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action(const GlobalOptions& opt, const std::string& project_dir, const std::vector<std::string>& targets, bool is_test_mode = false) {
+std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action(const GlobalOptions& opt, dmake::DebugController& debug_controller, const std::string& project_dir, const std::vector<std::string>& targets, bool is_test_mode = false) {
     try {
         std::filesystem::path project_path = std::filesystem::canonical(project_dir);
         std::filesystem::path cmake_lists = project_path / "CMakeLists.txt";
@@ -138,6 +144,7 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         dmake::ProfileScope configure_profile("configure", "configure");
         auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string());
         interpreter->set_current_file(cmake_lists.string());
+        debug_controller.attach(*interpreter);
 
         // Set BUILD_TESTING before user definitions (user can override with -D)
         interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
@@ -383,6 +390,10 @@ int main(int argc, char* argv[]) {
     app.add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
     app.add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
     app.add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
+    app.add_flag("--trace", opt.trace, "Print each command as it is executed (raw arguments)");
+    app.add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
+    app.add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
+    app.add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
     app.add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
        ->default_val("debug")
        ->transform([](const std::string& value) -> std::string {
@@ -446,6 +457,10 @@ Examples:
         sub->add_option("-B", opt.build_dir_str, "Build directory");
         sub->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE)");
         sub->add_flag("--profile", opt.profile, "Generate build profile");
+        sub->add_flag("--trace", opt.trace, "Print each command as it is executed");
+        sub->add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
+        sub->add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
+        sub->add_option("--break-on-message", opt.break_on_message, "Break into debugger on message pattern");
         sub->add_option("-c,--config", opt.config, "Build configuration")
            ->transform([](const std::string& value) -> std::string {
                auto copy = value;
@@ -467,6 +482,41 @@ Examples:
 
     if (opt.profile) {
         dmake::Profiler::instance().enable();
+    }
+
+    // Set up debug/trace controller
+    dmake::DebugOptions debug_opts{opt.trace, opt.trace_expand, opt.debugger, opt.break_on_message};
+    dmake::DebugController debug_controller(debug_opts);
+
+    if (debug_opts.any_enabled()) {
+        // Set up linenoise-based input for interactive debugger
+        static const char* dbg_commands[] = {
+            "break", "break-on-message", "continue", "step", "next", "print",
+            "backtrace", "list", "frame", "up", "down", "info variables",
+            "info breakpoints", "watch", "delete", "quit", "help", nullptr
+        };
+        linenoiseSetCompletionCallback([](const char* buf, linenoiseCompletions* lc) {
+            std::string_view prefix(buf);
+            for (const char** cmd = dbg_commands; *cmd; ++cmd) {
+                if (std::string_view(*cmd).starts_with(prefix)) {
+                    linenoiseAddCompletion(lc, *cmd);
+                }
+            }
+        });
+        linenoiseHistorySetMaxLen(100);
+
+        debug_controller.set_input_function([](const char* prompt, int& key_type) -> std::optional<std::string> {
+            key_type = 0;
+            char* raw = linenoise(prompt);
+            if (!raw) {
+                key_type = linenoiseKeyType();  // 1=Ctrl+C, 2=Ctrl+D
+                return std::nullopt;
+            }
+            std::string line(raw);
+            free(raw);
+            linenoiseHistoryAdd(line.c_str());
+            return line;
+        });
     }
 
     if (e_cmd->parsed()) {
@@ -494,6 +544,7 @@ Examples:
 
             dmake::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr);
             interpreter.set_current_file(script_abs.string());
+            debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
 
             auto result = interpreter.interpret(ast_or_error.value());
@@ -521,7 +572,7 @@ Examples:
 
     if (install_cmd->parsed()) {
         // Build project first
-        auto build_res = run_build_action(opt, install_project_dir, {});
+        auto build_res = run_build_action(opt, debug_controller, install_project_dir, {});
         if (!build_res) {
             std::cerr << "Build failed: " << build_res.error() << std::endl;
             return 1;
@@ -566,7 +617,7 @@ Examples:
                 run_project_dir = ".";
             }
         }
-        auto build_res = run_build_action(opt, run_project_dir, {run_target});
+        auto build_res = run_build_action(opt, debug_controller, run_project_dir, {run_target});
         if (!build_res) {
             std::cerr << "Error: " << build_res.error() << std::endl;
             return 1;
@@ -613,7 +664,7 @@ Examples:
             }
         }
 
-        auto build_res = run_build_action(opt, test_project_dir, {}, true);
+        auto build_res = run_build_action(opt, debug_controller, test_project_dir, {}, true);
         if (!build_res) {
             std::cerr << "Error: " << build_res.error() << std::endl;
             return 1;
@@ -624,7 +675,7 @@ Examples:
 
     // Handle -S flag: override project_dir with the source directory
     if (!opt.source_dir_str.empty()) {
-        auto build_res = run_build_action(opt, opt.source_dir_str, {});
+        auto build_res = run_build_action(opt, debug_controller, opt.source_dir_str, {});
         if (!build_res) {
             std::cerr << "Error: " << build_res.error() << std::endl;
             return 1;
@@ -652,7 +703,7 @@ Examples:
         }
     }
 
-    auto build_res = run_build_action(opt, project_dir, targets);
+    auto build_res = run_build_action(opt, debug_controller, project_dir, targets);
     if (!build_res) {
         std::cerr << "Error: " << build_res.error() << std::endl;
         return 1;

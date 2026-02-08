@@ -369,6 +369,23 @@ void register_variable_builtins(Interpreter& interp) {
         interp.set_variable(prefix + "_KEYWORDS_MISSING_VALUES", missing_list.to_string());
     });
 
+    interp.add_builtin("variable_watch", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("variable_watch() requires at least one argument (variable name)");
+            return;
+        }
+        if (args.size() > 2) {
+            interp.set_fatal_error("variable_watch() takes at most 2 arguments (variable name, optional callback)");
+            return;
+        }
+
+        std::optional<std::string> callback;
+        if (args.size() == 2) {
+            callback = args[1];
+        }
+        interp.add_variable_watch(args[0], std::move(callback));
+    });
+
     interp.add_builtin("site_name", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.size() != 1) {
             interp.set_fatal_error("site_name() requires exactly one argument");

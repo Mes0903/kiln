@@ -47,6 +47,9 @@ add_library(dmake SHARED
     dmake/regex.cpp
     dmake/CMakeArray.cpp
     dmake/tool_mode.cpp
+    dmake/condition_evaluator.cpp
+    dmake/ast_cache.cpp
+    dmake/debugger.cpp
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -63,10 +66,12 @@ pkg_check_modules(ARCHIVE REQUIRED libarchive)
 target_include_directories(dmake PUBLIC ${ARCHIVE_INCLUDE_DIRS})
 target_link_libraries(dmake PUBLIC ${ARCHIVE_LIBRARIES})
 
+find_library(LINENOISE_LIBRARY NAMES linenoise REQUIRED)
+
 find_package(CLI11 CONFIG REQUIRED)
 
 add_executable(dmake_cli dmake-cli/main.cpp)
-target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11)
+target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11 ${LINENOISE_LIBRARY})
 
 set_target_properties(dmake_cli PROPERTIES
     OUTPUT_NAME dmake

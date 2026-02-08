@@ -21,6 +21,8 @@
 #include "cache_store.hpp"
 #include "shadow_map.hpp"
 #include "printing.hpp"
+#include "ast_cache.hpp"
+#include "debugger.hpp"
 
 namespace dmake {
 
@@ -353,6 +355,30 @@ public:
     // Call a user-defined function by name (returns false if function doesn't exist or execution failed)
     bool call_user_function(const std::string& name, const std::vector<std::string>& args);
 
+    // Check if a user-defined function exists (case-insensitive)
+    bool has_user_function(const std::string& name) const;
+
+    // Variable watch support (for variable_watch() CMake command)
+    struct VariableWatch {
+        std::string variable;
+        std::optional<std::string> callback_function;
+    };
+    void add_variable_watch(const std::string& var_name, std::optional<std::string> callback = std::nullopt);
+    void fire_variable_watch(const std::string& name, const std::string& access_type, const std::string& value);
+
+    // Access fatal error state (used by condition evaluator and debugger)
+    std::optional<InterpreterError> get_fatal_error() const;
+
+    Interpreter* get_root();
+    const Interpreter* get_root() const;
+
+    // Trace stack accessor (for debugger backtrace and source listing)
+    const std::vector<CallLocation>& get_trace_stack() const { return get_root()->trace_stack_; }
+
+    // Debugger accessor (may be null if debug/trace not enabled)
+    Debugger* get_debugger() { return debugger_.get(); }
+    void set_debugger(std::unique_ptr<Debugger> dbg) { debugger_ = std::move(dbg); }
+
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
     std::expected<void, InterpreterError> execute_command_with_args(const std::string& identifier, const std::vector<std::string>& args);
@@ -367,12 +393,7 @@ private:
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);
     std::string evaluate_variable_reference(const VariableReference& ref);
 
-    std::optional<InterpreterError> get_fatal_error() const;
     void clear_fatal_error();
-
-    Interpreter* get_root();
-    const Interpreter* get_root() const;
-
 
     std::string build_dir_;
     std::ostream* out_;
@@ -395,6 +416,8 @@ private:
 
     Toolchain toolchain_;
     std::unique_ptr<CacheStore> cache_store_;
+    AstCache ast_cache_;
+    std::unique_ptr<Debugger> debugger_;
     std::set<std::string> global_guarded_files_;
     std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
 
@@ -461,6 +484,9 @@ private:
 
     // SEND_ERROR accumulation
     bool has_send_errors_ = false;
+
+    // Variable watches (for variable_watch() CMake command)
+    std::map<std::string, VariableWatch> variable_watches_;
 };
 
 // RAII guard that saves/clears return_requested_ on construction and restores it
