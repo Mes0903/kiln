@@ -66,9 +66,10 @@ void register_external_project_builtins(Interpreter& interp) {
 
         parser.list("DEPENDS", depends);
         parser.list("BUILD_BYPRODUCTS", build_byproducts);
-        parser.flag("BUILD_IN_SOURCE", build_in_source);
-        parser.flag("EXCLUDE_FROM_ALL", exclude_from_all);
-        parser.flag("BUILD_ALWAYS", build_always);
+        std::string build_in_source_str, exclude_from_all_str, build_always_str;
+        parser.value("BUILD_IN_SOURCE", build_in_source_str);
+        parser.value("EXCLUDE_FROM_ALL", exclude_from_all_str);
+        parser.value("BUILD_ALWAYS", build_always_str);
         parser.value("DOWNLOAD_NO_EXTRACT", download_no_extract_str);
 
         // Ignored options (accepted but not used)
@@ -108,6 +109,10 @@ void register_external_project_builtins(Interpreter& interp) {
         parser.value("CMAKE_GENERATOR", cmake_generator);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        build_in_source = !build_in_source_str.empty() && !Interpreter::is_falsy(build_in_source_str);
+        exclude_from_all = !exclude_from_all_str.empty() && !Interpreter::is_falsy(exclude_from_all_str);
+        build_always = !build_always_str.empty() && !Interpreter::is_falsy(build_always_str);
 
         if (name.empty()) {
             interp.set_fatal_error("ExternalProject_Add requires a name");

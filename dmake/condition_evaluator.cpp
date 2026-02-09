@@ -449,8 +449,16 @@ std::expected<bool, InterpreterError> evaluate_condition(
             // DEFINED takes a variable name (don't dereference it)
             std::string var_name = get_token_string(condition[pos++]);
 
-            // Check if variable is defined in any scope
-            return interp.get_variables().is_defined(var_name);
+            // Check DEFINED CACHE{VAR} syntax - checks only cache variables
+            if (var_name.size() > 6 &&
+                var_name.compare(0, 6, "CACHE{") == 0 &&
+                var_name.back() == '}') {
+                std::string cache_var = var_name.substr(6, var_name.size() - 7);
+                return interp.get_cache_variables().contains(cache_var);
+            }
+
+            // Check if variable is defined in any scope (local + cache)
+            return interp.is_variable_set(var_name);
         } else if (token == "TARGET" && pos + 1 < condition.size()) {
             pos++;
             std::string target_name = get_token_string(condition[pos++]);

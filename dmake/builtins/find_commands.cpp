@@ -624,7 +624,8 @@ void register_find_command(
         }
 
         if (opts.names.empty()) {
-            interp.set_fatal_error(cmd_name + " requires at least one name to search for");
+            // CMake silently fails when no names are provided (e.g. from empty variable expansion)
+            interp.set_variable(opts.var_name, opts.var_name + "-NOTFOUND");
             return;
         }
 

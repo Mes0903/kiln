@@ -160,11 +160,23 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_MINSIZEREL", "-Os -DNDEBUG");
         configure_profile.stop();
 
+        // Save subsystem cache on all exit paths where the interpreter exists.
+        // Cache entries (try_compile, find_*, globs) are valid regardless of
+        // whether later commands fail, so persisting them avoids redundant work
+        // when re-running after a configuration or build error.
+        auto save_cache = [&]() {
+            auto cache_save_result = interpreter->get_cache_store().save();
+            if (!cache_save_result) {
+                std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_YELLOW) << "warning:" << dmake::c(std::cerr, dmake::colors::RESET) << " Failed to save cache: " << cache_save_result.error() << std::endl;
+            }
+        };
+
         {
             dmake::ProfileScope scope("interpret " + cmake_lists.filename().string(), "interpret");
             auto interpret_result = interpreter->interpret(ast_or_error.value());
             if (!interpret_result) {
                 print_error_context(interpret_result.error());
+                save_cache();
                 return std::unexpected("Interpretation error");
             }
 
@@ -175,14 +187,11 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         auto build_result = interpreter->run_build(opt.jobs, targets);
         if (!build_result) {
             std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_RED) << "error:" << dmake::c(std::cerr, dmake::colors::RESET) << " " << build_result.error().message << std::endl;
+            save_cache();
             return std::unexpected("Build failed");
         }
 
-        // Save cache after successful build
-        auto cache_save_result = interpreter->get_cache_store().save();
-        if (!cache_save_result) {
-            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_YELLOW) << "warning:" << dmake::c(std::cerr, dmake::colors::RESET) << " Failed to save cache: " << cache_save_result.error() << std::endl;
-        }
+        save_cache();
 
         // Write profile if enabled
         if (dmake::g_profiling_enabled.load(std::memory_order_relaxed)) {

@@ -1,1 +1,1 @@
-find_package(LibArchive)
+include(OurFindPythonInterp.cmake)
