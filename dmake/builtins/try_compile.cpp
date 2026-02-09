@@ -193,37 +193,28 @@ std::expected<std::string, std::string> compute_signature(
     return oss.str();
 }
 
-// Helper: Add header mtimes to signature
-std::expected<std::string, std::string> add_header_deps_to_signature(
-    const std::string& base_signature,
-    const std::map<std::string, int64_t>& header_mtimes
-) {
-    std::ostringstream oss;
-    oss << base_signature;
 
-    // Sort headers by path for consistency
-    std::vector<std::pair<std::string, int64_t>> sorted_headers(header_mtimes.begin(), header_mtimes.end());
-    std::sort(sorted_headers.begin(), sorted_headers.end());
-
-    for (const auto& [header, mtime] : sorted_headers) {
-        oss << "dep:" << header << ":" << mtime << "|";
-    }
-
-    return oss.str();
-}
-
-// Helper: Validate cached header mtimes (returns false if any header changed or was deleted)
-bool validate_cache_entry_mtimes(const std::map<std::string, int64_t>& header_mtimes) {
-    for (const auto& [header, cached_mtime] : header_mtimes) {
+// Helper: Validate cached header deps.
+// Check mtime first (cheap). If mtime changed, compare content hash.
+// Returns empty string if all headers are unchanged, or a diagnostic reason string.
+std::string validate_header_deps(const std::map<std::string, HeaderDep>& header_deps) {
+    for (const auto& [header, dep] : header_deps) {
         auto current_mtime = get_file_mtime(header);
         if (!current_mtime) {
-            return false;  // Header deleted or inaccessible
+            return "header deleted: " + header;
         }
-        if (*current_mtime != cached_mtime) {
-            return false;  // Header modified
+        if (*current_mtime != dep.mtime) {
+            // Mtime changed — fall back to content hash
+            std::ifstream ifs(header, std::ios::binary);
+            if (!ifs) return "header unreadable: " + header;
+            std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+            if (blake2b(content).to_string() != dep.hash) {
+                return "header content changed: " + header;
+            }
+            // Content identical despite mtime change — still valid
         }
     }
-    return true;
+    return {};
 }
 
 } // anonymous namespace
@@ -250,7 +241,7 @@ struct CompileParams {
 struct CompileResult {
     bool success = false;
     std::string output;
-    std::map<std::string, int64_t> header_mtimes;
+    std::map<std::string, HeaderDep> header_deps;
     std::string executable_path;  // For try_run
 };
 
@@ -320,20 +311,28 @@ std::expected<CompileResult, std::string> compile_sources(
             auto headers_result = parse_deps_file(obj_deps);
             if (headers_result) {
                 for (const auto& header : *headers_result) {
-                    bool is_generated = false;
+                    // Skip inline sources (already captured by signature content hash)
+                    bool is_inline = false;
                     std::filesystem::path header_path(header);
                     for (const auto& [inline_name, _] : params.inline_sources_map) {
                         if (header_path.filename() == inline_name) {
-                            is_generated = true;
+                            is_inline = true;
                             break;
                         }
                     }
-                    if (!is_generated) {
-                        auto mtime = get_file_mtime(header);
-                        if (mtime) {
-                            result.header_mtimes[header] = *mtime;
-                        }
-                    }
+                    if (is_inline) continue;
+
+                    auto mtime = get_file_mtime(header);
+                    if (!mtime) continue;
+
+                    std::ifstream ifs(header, std::ios::binary);
+                    if (!ifs) continue;
+                    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+                    result.header_deps[header] = HeaderDep{
+                        .mtime = *mtime,
+                        .hash = blake2b(content).to_string(),
+                    };
                 }
             }
         }
@@ -763,24 +762,42 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string base_signature = *sig_result;
 
         // Check cache: first by mtime-based signature (fast), then by content-hash (handles rewritten files)
-        auto try_cache_hit = [&](const std::string& sig) -> bool {
+        // Track diagnostic info for profiling
+        std::string cache_status;    // "cached", "miss", "invalidated"
+        std::string cache_reason;    // details when invalidated or missed
+
+        auto try_cache_hit = [&](const std::string& sig, const char* sig_type) -> bool {
             auto cached = cache.lookup<CacheSubsystem::TryCompile>(sig);
-            if (cached && validate_cache_entry_mtimes(cached->header_mtimes)) {
-                if (profiling) {
-                    auto dur = Profiler::instance().now_us() - profile_start;
-                    Profiler::instance().add_complete("try_compile " + profile_src + " (cached)", "configure", profile_start, dur);
-                }
-                interp.set_variable(result_var, cached->success ? "TRUE" : "FALSE");
-                interp.set_cache_variable(result_var, cached->success ? "TRUE" : "FALSE");
-                if (!output_variable.empty()) {
-                    interp.set_variable(output_variable, cached->output);
-                }
-                return true;
+            if (!cached) {
+                cache_status = "miss";
+                cache_reason = std::string("no cache entry (") + sig_type + ")";
+                return false;
             }
-            return false;
+            auto reason = validate_header_deps(cached->header_deps);
+            if (!reason.empty()) {
+                cache_status = "invalidated";
+                cache_reason = reason;
+                return false;
+            }
+            cache_status = "cached";
+            if (profiling) {
+                auto dur = Profiler::instance().now_us() - profile_start;
+                Profiler::Args pargs = std::map<std::string, std::string>{
+                    {"status", "cached"},
+                    {"sig_type", sig_type},
+                    {"source", profile_src},
+                };
+                Profiler::instance().add_complete("try_compile " + profile_src + " (cached)", "configure", profile_start, dur, std::move(pargs));
+            }
+            interp.set_variable(result_var, cached->success ? "TRUE" : "FALSE");
+            interp.set_cache_variable(result_var, cached->success ? "TRUE" : "FALSE");
+            if (!output_variable.empty()) {
+                interp.set_variable(output_variable, cached->output);
+            }
+            return true;
         };
 
-        if (try_cache_hit(base_signature)) return;
+        if (try_cache_hit(base_signature, "mtime")) return;
 
         // Mtime miss — try content-hash signature (source rewritten with same content?)
         if (!sources.empty()) {
@@ -789,7 +806,7 @@ void register_try_compile_builtins(Interpreter& interp) {
                 sources, inline_sources_map, compile_definitions,
                 resolved_link_libs, link_options, /*use_content_hash=*/true
             );
-            if (hash_sig && try_cache_hit(*hash_sig)) return;
+            if (hash_sig && try_cache_hit(*hash_sig, "content-hash")) return;
         }
 
         // Cache miss - need to compile
@@ -837,7 +854,7 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         bool compile_success = compile_result->success;
         std::string output = compile_result->output;
-        std::map<std::string, int64_t> header_mtimes = compile_result->header_mtimes;
+        auto header_deps = compile_result->header_deps;
         std::string artifact_path;
 
         // For static library, create the .a file
@@ -876,7 +893,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         TryCompileCacheEntry entry;
         entry.success = compile_success;
         entry.output = output;
-        entry.header_mtimes = header_mtimes;
+        entry.header_deps = header_deps;
         cache.insert<CacheSubsystem::TryCompile>(base_signature, entry);
 
         if (!sources.empty()) {
@@ -924,7 +941,14 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         if (profiling) {
             auto dur = Profiler::instance().now_us() - profile_start;
-            Profiler::instance().add_complete("try_compile " + profile_src, "configure", profile_start, dur);
+            Profiler::Args pargs = std::map<std::string, std::string>{
+                {"status", cache_status},
+                {"reason", cache_reason},
+                {"source", profile_src},
+                {"result", compile_success ? "TRUE" : "FALSE"},
+                {"signature", base_signature},
+            };
+            Profiler::instance().add_complete("try_compile " + profile_src, "configure", profile_start, dur, std::move(pargs));
         }
 
         // Clean up temp directory on success (keep on failure for debugging)
@@ -1260,7 +1284,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         CacheStore& cache = interp.get_cache_store();
         auto cached = cache.lookup<CacheSubsystem::TryRun>(base_signature);
         if (cached) {
-            if (validate_cache_entry_mtimes(cached->header_mtimes)) {
+            if (validate_header_deps(cached->header_deps).empty()) {
                 // Cache hit
                 interp.set_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
                 interp.set_cache_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
@@ -1340,7 +1364,7 @@ void register_try_compile_builtins(Interpreter& interp) {
             TryRunCacheEntry entry;
             entry.compile_success = false;
             entry.compile_output = compile_output;
-            entry.header_mtimes = compile_result->header_mtimes;
+            entry.header_deps = compile_result->header_deps;
             cache.insert<CacheSubsystem::TryRun>(base_signature, entry);
             return;
         }
@@ -1415,7 +1439,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         entry.compile_output = compile_output;
         entry.exit_code = run_result.exit_code;
         entry.run_output = run_result.output;
-        entry.header_mtimes = compile_result->header_mtimes;
+        entry.header_deps = compile_result->header_deps;
         cache.insert<CacheSubsystem::TryRun>(base_signature, entry);
 
         // Clean up temp directory on success

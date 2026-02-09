@@ -633,6 +633,9 @@ void register_file_builtins(Interpreter& interp) {
             // Recursively removes files and directories
             for (const auto& file_arg : sub_args) {
                 std::filesystem::path path = file_arg;
+                if(path.string() == "/") {
+                    interp.print_message("FATAL_ERRPR", "Trying to remove / (the root folder) is a terrible idea. dmake does not support this operation.");
+                }
                 if (!path.is_absolute()) {
                     path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
                 }

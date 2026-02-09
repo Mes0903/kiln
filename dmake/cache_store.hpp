@@ -21,11 +21,17 @@ enum class CacheSubsystem {
     // Future: ModuleScanning, etc.
 };
 
+// Tracked header dependency: mtime for fast validation, hash for content-based fallback
+struct HeaderDep {
+    int64_t mtime = 0;
+    std::string hash;  // blake2b of file content
+};
+
 // Cache entry for try_compile results
 struct TryCompileCacheEntry {
     bool success = false;                            // Compilation succeeded
     std::string output;                              // Compiler stdout/stderr
-    std::map<std::string, int64_t> header_mtimes;   // Discovered header dependencies (path -> mtime)
+    std::map<std::string, HeaderDep> header_deps;   // Discovered header dependencies
 };
 
 // Cache entry for try_run results (compilation + execution)
@@ -34,7 +40,7 @@ struct TryRunCacheEntry {
     std::string compile_output;
     int exit_code = 0;                               // Run exit code
     std::string run_output;                           // Run stdout/stderr
-    std::map<std::string, int64_t> header_mtimes;    // Discovered header dependencies (path -> mtime)
+    std::map<std::string, HeaderDep> header_deps;    // Discovered header dependencies
 };
 
 // Cache entry for directory listings - used by glob and find commands
