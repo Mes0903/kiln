@@ -403,7 +403,12 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
 
     // 2. Process Dependencies
     // link_only: when true (from $<LINK_ONLY:...>), link the library but don't propagate INTERFACE properties
-    auto process_dependency = [&](const std::string& lib_name, bool is_public, bool is_interface_only, bool link_only) {
+    auto process_dependency = [&](const std::string& raw_lib_name, bool is_public, bool is_interface_only, bool link_only) {
+        // Resolve aliases at build-graph time, not at interpretation time.
+        // CMake resolves target_link_libraries lazily (at generation time), so
+        // forward references like Boost::type_traits work even when the alias
+        // hasn't been created yet during interpretation.
+        std::string lib_name = interp.resolve_target_alias(raw_lib_name);
         auto dep_it = all_targets.find(lib_name);
         if (dep_it != all_targets.end()) {
             auto& dep = dep_it->second;

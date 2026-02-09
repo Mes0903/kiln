@@ -25,8 +25,11 @@ static std::optional<PropertyScope> parse_property_scope(const std::string& scop
 
 // Helper to get target by name (used in multiple places)
 static std::shared_ptr<Target> get_target_from_name(Interpreter& interp, const std::string& name, const std::string& cmd_name) {
+    // Resolve alias first
+    std::string resolved_name = interp.resolve_target_alias(name);
+
     auto& targets = interp.get_targets();
-    auto it = targets.find(name);
+    auto it = targets.find(resolved_name);
     if (it == targets.end()) {
         interp.set_fatal_error(cmd_name + "() called on unknown target '" + name + "'");
         return nullptr;
