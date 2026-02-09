@@ -260,7 +260,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time
 
     // 2b. Pre-scan: count tasks that need to execute (for progress display)
-    int dirty_task_count = 0;
+    // We must propagate dirtiness through dependencies: if a compilation task
+    // is dirty, its output gets a new mtime, which changes the signature of
+    // any task depending on it (e.g. the linker). Without propagation the
+    // progress counter underestimates the total (e.g. [3/2]).
+    std::set<std::string> dirty_set;
     for (const auto& [id, task] : tasks_) {
         // Skip marker tasks
         if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) continue;
@@ -273,15 +277,36 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         }
 
         if (!outputs_exist || task.always_run) {
-            dirty_task_count++;
+            dirty_set.insert(id);
             continue;
         }
 
         auto sig_res = calculate_signature(task);
         if (!sig_res || !(cache.count(id) && cache[id] == *sig_res)) {
-            dirty_task_count++;
+            dirty_set.insert(id);
         }
     }
+
+    // Propagate: any non-marker task with a dirty dependency will also be dirty
+    // (its input mtimes will change once the dependency rebuilds).
+    if (!dirty_set.empty()) {
+        bool changed;
+        do {
+            changed = false;
+            for (const auto& [id, task] : tasks_) {
+                if (dirty_set.count(id)) continue;
+                if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) continue;
+                for (const auto& dep : task.dependencies) {
+                    if (dirty_set.count(dep)) {
+                        dirty_set.insert(id);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } while (changed);
+    }
+    int dirty_task_count = static_cast<int>(dirty_set.size());
 
     bool stdout_is_tty = isatty(STDOUT_FILENO);
     ProgressBar progress(dirty_task_count, stdout_is_tty);
