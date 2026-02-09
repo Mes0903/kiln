@@ -14,13 +14,79 @@ struct Regex::Impl {
     }
 };
 
-static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view pattern) {
+// Normalize CMake regex patterns for PCRE2 compatibility.
+//
+// CMake regex spec: \<char> matches the literal character <char>.
+// Special regex chars: ^ $ . \ [ ] * + ? | ( )
+// Escaping non-special chars is allowed: \a matches a, \h matches h, etc.
+//
+// PCRE2 gives special meaning to escapes like \t (tab), \n (newline), \d (digit),
+// \s (whitespace), \h (horizontal space), and errors on unknown escapes like \o.
+//
+// This function converts CMake regex to PCRE2-compatible form:
+// - \<metachar> stays as \<metachar> (escaping special chars)
+// - \<other> becomes just <other> (CMake treats as literal)
+static std::string normalize_cmake_regex(std::string_view pattern, std::string* warning_out = nullptr) {
+    // CMake regex metacharacters: ^ $ . \ [ ] * + ? | ( )
+    auto is_cmake_metachar = [](char c) -> bool {
+        switch (c) {
+            case '^': case '$': case '.': case '\\':
+            case '[': case ']': case '*': case '+':
+            case '?': case '|': case '(': case ')':
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    std::string result;
+    result.reserve(pattern.size());
+    std::string normalized_escapes; // Track which escapes were normalized
+
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        if (pattern[i] == '\\' && i + 1 < pattern.size()) {
+            char next = pattern[i + 1];
+            if (is_cmake_metachar(next)) {
+                // Escaping a metacharacter - keep the escape for PCRE2
+                result += '\\';
+                result += next;
+            } else {
+                // CMake: \<non-meta> matches the literal char
+                // Just output the character without backslash
+                result += next;
+                // Record the first few unique normalized escapes for warning
+                if (normalized_escapes.size() < 30) {
+                    std::string esc = "\\";
+                    esc += next;
+                    if (normalized_escapes.find(esc) == std::string::npos) {
+                        if (!normalized_escapes.empty()) normalized_escapes += " ";
+                        normalized_escapes += esc;
+                    }
+                }
+            }
+            ++i;
+        } else {
+            result += pattern[i];
+        }
+    }
+
+    if (warning_out && !normalized_escapes.empty()) {
+        *warning_out = "Regex contains non-special escape sequences (" + normalized_escapes +
+                       ") - these match literal characters in CMake regex";
+    }
+    return result;
+}
+
+static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view pattern, std::string* warning) {
+    // Normalize the pattern for PCRE2 compatibility
+    std::string normalized = normalize_cmake_regex(pattern, warning);
+
     int errcode;
     PCRE2_SIZE erroffset;
 
     auto* code = pcre2_compile(
-        reinterpret_cast<PCRE2_SPTR>(pattern.data()),
-        pattern.size(),
+        reinterpret_cast<PCRE2_SPTR>(normalized.data()),
+        normalized.size(),
         PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_DOTALL,
         &errcode, &erroffset, nullptr);
 
@@ -40,18 +106,18 @@ static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view
     return impl;
 }
 
-std::expected<Regex, std::string> Regex::compile(std::string_view pattern) {
-    auto result = compile_pattern(pattern);
+std::expected<Regex, std::string> Regex::compile(std::string_view pattern, std::string* warning) {
+    auto result = compile_pattern(pattern, warning);
     if (!result) return std::unexpected(result.error());
     return Regex(*result);
 }
 
-std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern) {
+std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern, std::string* warning) {
     // Wrap in ^(?:...)$ for full-match semantics
     std::string anchored = "^(?:";
     anchored.append(pattern);
     anchored += ")$";
-    auto result = compile_pattern(anchored);
+    auto result = compile_pattern(anchored, warning);
     if (!result) return std::unexpected(result.error());
     return Regex(*result);
 }

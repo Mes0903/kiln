@@ -559,6 +559,8 @@ void register_find_package_builtins(Interpreter& interp) {
         if (!found_path.empty()) {
             interp.set_variable(found_var, "ON");
             interp.set_variable(dir_var, found_path.parent_path().string());
+            // Set <Package>_CONFIG to the full path of the config file (CMake compatibility)
+            interp.set_variable(package_name + "_CONFIG", found_path.string());
 
             auto res = interp.include_file(found_path.string());
             if (!res) {

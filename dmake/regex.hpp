@@ -17,10 +17,11 @@ private:
 
 public:
     // Compile pattern, returns error string on failure
-    static std::expected<Regex, std::string> compile(std::string_view pattern);
+    // If warning is provided, it will be set if pattern required normalization
+    static std::expected<Regex, std::string> compile(std::string_view pattern, std::string* warning = nullptr);
 
     // Compile with full-match semantics (anchors pattern with ^(?:...)$)
-    static std::expected<Regex, std::string> compile_match(std::string_view pattern);
+    static std::expected<Regex, std::string> compile_match(std::string_view pattern, std::string* warning = nullptr);
 
     ~Regex();
     Regex(Regex&& other) noexcept;

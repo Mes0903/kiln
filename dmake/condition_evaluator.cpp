@@ -354,10 +354,14 @@ std::expected<bool, InterpreterError> evaluate_condition(
                 return false;
             }
             std::string pattern = evaluate_token(condition[pos++]);
-            auto re = Regex::compile(pattern);
+            std::string regex_warning;
+            auto re = Regex::compile(pattern, &regex_warning);
             if (!re) {
                 error_msg = "MATCHES: invalid regex: " + re.error();
                 return false;
+            }
+            if (!regex_warning.empty()) {
+                interp.print_message("WARNING", regex_warning);
             }
             std::string left = evaluate_token(condition[start_pos]);
             std::vector<std::string> captures;
