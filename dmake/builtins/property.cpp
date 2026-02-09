@@ -386,18 +386,45 @@ void register_property_builtins(Interpreter& interp) {
                     return;
                 }
 
-                // Helper to handle INTERFACE properties
-                auto handle_interface_property = [](const std::shared_ptr<Target>& target,
-                                                     const std::string& prop_name,
-                                                     const std::vector<std::string>& values,
-                                                     bool append_mode) -> bool {
+                // Helper to handle list properties with visibility
+                auto handle_list_property = [](const std::shared_ptr<Target>& target,
+                                               const std::string& prop_name,
+                                               const std::vector<std::string>& values,
+                                               bool append_mode) -> bool {
                     std::string base_prop;
-                    if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") base_prop = "INCLUDE_DIRECTORIES";
-                    else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") base_prop = "COMPILE_DEFINITIONS";
-                    else if (prop_name == "INTERFACE_COMPILE_OPTIONS") base_prop = "COMPILE_OPTIONS";
-                    else if (prop_name == "INTERFACE_LINK_LIBRARIES") base_prop = "LINK_LIBRARIES";
-                    else if (prop_name == "INTERFACE_LINK_DIRECTORIES") base_prop = "LINK_DIRECTORIES";
-                    else return false;
+                    PropertyVisibility visibility = PropertyVisibility::PRIVATE;
+
+                    // Check for INTERFACE_ prefix first
+                    if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
+                        base_prop = "INCLUDE_DIRECTORIES";
+                        visibility = PropertyVisibility::INTERFACE;
+                    } else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") {
+                        base_prop = "COMPILE_DEFINITIONS";
+                        visibility = PropertyVisibility::INTERFACE;
+                    } else if (prop_name == "INTERFACE_COMPILE_OPTIONS") {
+                        base_prop = "COMPILE_OPTIONS";
+                        visibility = PropertyVisibility::INTERFACE;
+                    } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
+                        base_prop = "LINK_LIBRARIES";
+                        visibility = PropertyVisibility::INTERFACE;
+                    } else if (prop_name == "INTERFACE_LINK_DIRECTORIES") {
+                        base_prop = "LINK_DIRECTORIES";
+                        visibility = PropertyVisibility::INTERFACE;
+                    }
+                    // Non-INTERFACE versions use PRIVATE visibility
+                    else if (prop_name == "INCLUDE_DIRECTORIES") {
+                        base_prop = "INCLUDE_DIRECTORIES";
+                    } else if (prop_name == "COMPILE_DEFINITIONS") {
+                        base_prop = "COMPILE_DEFINITIONS";
+                    } else if (prop_name == "COMPILE_OPTIONS") {
+                        base_prop = "COMPILE_OPTIONS";
+                    } else if (prop_name == "LINK_LIBRARIES") {
+                        base_prop = "LINK_LIBRARIES";
+                    } else if (prop_name == "LINK_DIRECTORIES") {
+                        base_prop = "LINK_DIRECTORIES";
+                    } else {
+                        return false;
+                    }
 
                     std::vector<std::string> items;
                     for (const auto& v : values) {
@@ -409,10 +436,12 @@ void register_property_builtins(Interpreter& interp) {
                     }
 
                     if (!items.empty()) {
-                        target->append_property(base_prop, items, PropertyVisibility::INTERFACE);
+                        target->append_property(base_prop, items, visibility);
                     }
                     return true;
                 };
+                // Keep old name for compatibility
+                auto handle_interface_property = handle_list_property;
 
                 for (const auto& target_name : items) {
                     auto target = get_target_from_name(interp, target_name, "set_property");

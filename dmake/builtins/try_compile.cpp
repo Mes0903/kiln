@@ -42,6 +42,44 @@ std::string detect_language(const std::string& path) {
     return "CXX";  // Default to C++
 }
 
+// Helper: Shell-style split that handles single and double quotes
+std::vector<std::string> shell_split(std::string_view input) {
+    std::vector<std::string> result;
+    std::string current;
+    char quote_char = 0;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+
+        if (quote_char) {
+            // Inside quotes
+            if (c == quote_char) {
+                quote_char = 0;  // End quote
+            } else {
+                current += c;
+            }
+        } else {
+            // Outside quotes
+            if (c == '"' || c == '\'') {
+                quote_char = c;  // Start quote
+            } else if (c == ' ' || c == '\t') {
+                if (!current.empty()) {
+                    result.push_back(std::move(current));
+                    current.clear();
+                }
+            } else {
+                current += c;
+            }
+        }
+    }
+
+    if (!current.empty()) {
+        result.push_back(std::move(current));
+    }
+
+    return result;
+}
+
 // Helper: Parse .d file to extract header dependencies
 std::expected<std::vector<std::string>, std::string> parse_deps_file(const std::string& deps_file) {
     std::ifstream file(deps_file);
@@ -314,6 +352,7 @@ std::expected<CompileResult, std::string> compile_sources(
         lctx.extensions_enabled = params.use_extensions;
 
         std::vector<std::string> link_cmd = params.compiler->get_link_command(lctx);
+
         CommandResult link_result = run_command(link_cmd, params.temp_dir.string());
         if (link_result.exit_code != 0) {
             result.success = false;
@@ -509,21 +548,27 @@ void register_try_compile_builtins(Interpreter& interp) {
 
             // Apply based on variable name
             if (var_name == "COMPILE_DEFINITIONS") {
-                // CMAKE_FLAGS COMPILE_DEFINITIONS can contain both definitions and compiler flags
-                // Definitions start with -D, everything else is a compiler flag
-                for (auto item : CMakeArrayView(value)) {
-                    if (item.empty()) continue;
+                // CMAKE_FLAGS COMPILE_DEFINITIONS can be:
+                // 1. A CMake list (semicolon-separated): FOO;BAR;BAZ
+                // 2. Shell-style command line: -DFOO -DBAR "-DBAZ=hello world"
+                // 3. A mix: items separated by semicolons, each potentially space-separated
+                // First split on semicolons, then shell-split each item
+                for (auto list_item : CMakeArrayView(value)) {
+                    // Shell-split this item to handle spaces and quotes
+                    for (const auto& item : shell_split(list_item)) {
+                        if (item.empty()) continue;
 
-                    if (item.size() >= 2 && item.substr(0, 2) == "-D") {
-                        // It's a definition - strip -D and add to compile_definitions
-                        compile_definitions.emplace_back(item.substr(2));
-                    } else if (item[0] == '-') {
-                        // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
-                        // Add to raw_compile_flags to be passed as-is
-                        raw_compile_flags.emplace_back(item);
-                    } else {
-                        // Plain definition without -D prefix
-                        compile_definitions.emplace_back(item);
+                        if (item.size() >= 2 && item.substr(0, 2) == "-D") {
+                            // It's a definition - strip -D and add to compile_definitions
+                            compile_definitions.emplace_back(item.substr(2));
+                        } else if (item[0] == '-') {
+                            // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
+                            // Add to raw_compile_flags to be passed as-is
+                            raw_compile_flags.emplace_back(item);
+                        } else {
+                            // Plain definition without -D prefix
+                            compile_definitions.emplace_back(item);
+                        }
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
@@ -1014,19 +1059,26 @@ void register_try_compile_builtins(Interpreter& interp) {
             }
 
             if (var_name == "COMPILE_DEFINITIONS") {
-                // CMAKE_FLAGS COMPILE_DEFINITIONS can contain both definitions and compiler flags
-                for (auto item : CMakeArrayView(value)) {
-                    if (item.empty()) continue;
+                // CMAKE_FLAGS COMPILE_DEFINITIONS can be:
+                // 1. A CMake list (semicolon-separated): FOO;BAR;BAZ
+                // 2. Shell-style command line: -DFOO -DBAR "-DBAZ=hello world"
+                // 3. A mix: items separated by semicolons, each potentially space-separated
+                // First split on semicolons, then shell-split each item
+                for (auto list_item : CMakeArrayView(value)) {
+                    // Shell-split this item to handle spaces and quotes
+                    for (const auto& item : shell_split(list_item)) {
+                        if (item.empty()) continue;
 
-                    if (item.size() >= 2 && item.substr(0, 2) == "-D") {
-                        // It's a definition - strip -D and add to compile_definitions
-                        compile_definitions.emplace_back(item.substr(2));
-                    } else if (item[0] == '-') {
-                        // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
-                        raw_compile_flags.emplace_back(item);
-                    } else {
-                        // Plain definition without -D prefix
-                        compile_definitions.emplace_back(item);
+                        if (item.size() >= 2 && item.substr(0, 2) == "-D") {
+                            // It's a definition - strip -D and add to compile_definitions
+                            compile_definitions.emplace_back(item.substr(2));
+                        } else if (item[0] == '-') {
+                            // It's a compiler flag (e.g., -Werror=..., -fPIC, etc.)
+                            raw_compile_flags.emplace_back(item);
+                        } else {
+                            // Plain definition without -D prefix
+                            compile_definitions.emplace_back(item);
+                        }
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
