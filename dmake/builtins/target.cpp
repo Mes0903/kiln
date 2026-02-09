@@ -56,6 +56,9 @@ void register_target_builtins(Interpreter& interp) {
 
         configure_lang(Language::CXX, "CXX");
         configure_lang(Language::C, "C");
+        if (!interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
+            configure_lang(Language::ASM, "ASM");
+        }
 
         // Set POSITION_INDEPENDENT_CODE from CMAKE_POSITION_INDEPENDENT_CODE
         std::string pic = interp.get_variable("CMAKE_POSITION_INDEPENDENT_CODE");

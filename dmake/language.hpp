@@ -8,6 +8,7 @@ enum class Language {
     C,
     CXX,
     CUDA,
+    ASM,
     HEADER,
     UNKNOWN
 };

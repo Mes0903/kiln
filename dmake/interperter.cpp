@@ -48,6 +48,10 @@ void fake_cmake_compiler_checks_and_init(
         auto c_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_C_COMPILER"), Language::C);
         toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
         toolchain.set_compiler(Language::C, std::move(c_compiler));
+        if (!interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
+            auto asm_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_ASM_COMPILER"), Language::ASM);
+            toolchain.set_compiler(Language::ASM, std::move(asm_compiler));
+        }
         return;
     }
 
@@ -127,7 +131,10 @@ void fake_cmake_compiler_checks_and_init(
         "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME", "CMAKE_HOST_SYSTEM_PROCESSOR",
         "CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_LIBRARIES",
         "CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_LIBRARIES",
-        "CMAKE_C_COMPILER_LOADED", "CMAKE_CXX_COMPILER_LOADED",
+        "CMAKE_C_COMPILER_LOADED", "CMAKE_CXX_COMPILER_LOADED", "CMAKE_ASM_COMPILER_LOADED",
+        "CMAKE_ASM_COMPILER", "CMAKE_ASM_COMPILER_ID", "CMAKE_ASM_COMPILER_VERSION",
+        "CMAKE_ASM_FLAGS", "CMAKE_ASM_FLAGS_DEBUG", "CMAKE_ASM_FLAGS_RELEASE",
+        "CMAKE_ASM_FLAGS_RELWITHDEBINFO", "CMAKE_ASM_FLAGS_MINSIZEREL",
         "CMAKE_CXX98_STANDARD_COMPILE_OPTION", "CMAKE_CXX11_STANDARD_COMPILE_OPTION",
         "CMAKE_CXX14_STANDARD_COMPILE_OPTION", "CMAKE_CXX17_STANDARD_COMPILE_OPTION",
         "CMAKE_CXX20_STANDARD_COMPILE_OPTION", "CMAKE_CXX23_STANDARD_COMPILE_OPTION",

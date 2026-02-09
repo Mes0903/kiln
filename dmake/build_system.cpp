@@ -555,6 +555,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         Profiler::instance().add_complete(profile_name, "build", profile_start, dur, std::move(args));
                     }
 
+                    // Invalidate stat cache for outputs so downstream tasks
+                    // see fresh mtimes (e.g. link task sees recompiled .o)
+                    {
+                        std::lock_guard<std::mutex> lock(state_mutex_);
+                        for (const auto& out : task.outputs) {
+                            stat_cache_.erase(out);
+                        }
+                    }
+
                     // Recalculate signature after compilation (now .d files exist)
                     if (!task.always_run) {
                         auto new_sig_res = calculate_signature(task);
@@ -783,8 +792,9 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
     }
 
     // 3. If no .d file exists but it's a compile task, use g++ -H (slow but accurate path)
+    // Skip for ASM tasks - g++ -H doesn't work reliably with raw .s files
     auto is_compile_task = task.is_compilation;
-    if (!found_deps && is_compile_task) {
+    if (!found_deps && is_compile_task && task.compile_language != std::optional{Language::ASM}) {
         auto headers_res = get_headers_via_h_flag(task.commands);
         if (!headers_res) return std::unexpected(headers_res.error());
         for (const auto& header : *headers_res) {

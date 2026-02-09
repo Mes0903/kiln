@@ -42,7 +42,7 @@ public:
         std::vector<std::string> cmd;
         cmd.push_back(binary_);
 
-        if (!ctx.standard.empty()) {
+        if (!ctx.standard.empty() && lang_ != Language::ASM) {
             std::string std_prefix = (lang_ == Language::C ? "c" : "c++");
             // Use "gnu" prefix if extensions are enabled (gnu11 vs c11)
             if (ctx.extensions_enabled) {
@@ -302,7 +302,7 @@ public:
         info.sizeof_void_p = std::to_string(sizeof(void*));
 
         // Get implicit include directories from g++ -E -v
-        std::string lang_flag = (lang_ == Language::C) ? "c" : "c++";
+        std::string lang_flag = (lang_ == Language::C || lang_ == Language::ASM) ? "c" : "c++";
         std::string verbose_output = detail::run_command(
             "echo | " + binary_ + " -E -v -x " + lang_flag + " - 2>&1");
 

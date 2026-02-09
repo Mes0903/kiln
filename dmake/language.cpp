@@ -18,6 +18,9 @@ LanguageInfo LanguageClassifier::from_extension(std::string_view ext) {
     if (ext == ".cu") {
         return {Language::CUDA, "CUDA", true, false, false};
     }
+    if (ext == ".s" || ext == ".S" || ext == ".asm" || ext == ".sx") {
+        return {Language::ASM, "ASM", true, false, false};
+    }
     if (ext == ".h" || ext == ".hpp" || ext == ".hxx" || ext == ".hh") {
         return {Language::HEADER, "HEADER", false, true, false};
     }

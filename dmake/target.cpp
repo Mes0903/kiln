@@ -688,6 +688,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
 
     // Compute effective standard per language (hoisted out of per-source loop)
     auto effective_standard = [&](Language lang) -> std::string {
+        if (lang == Language::ASM) return "";
         std::string base = get_language_standard(lang);
         int required = (lang == Language::CXX) ? cxx_required_std : c_required_std;
         if (required > 0) {
@@ -776,7 +777,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             return result;
         };
 
-        for (Language lang : {Language::C, Language::CXX}) {
+        for (Language lang : {Language::C, Language::CXX, Language::ASM}) {
             GenexEvaluationContext lang_ctx = source_genex_base;
             lang_ctx.compile_language = lang;
             GenexEvaluator lang_evaluator(lang_ctx);
@@ -884,6 +885,9 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 } else if (lang_it->second == "C") {
                     lang_info.lang = Language::C;
                     lang_info.is_header = false;
+                } else if (lang_it->second == "ASM") {
+                    lang_info.lang = Language::ASM;
+                    lang_info.is_header = false;
                 }
             }
         }
@@ -912,12 +916,12 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.source = src_abs_str;
         ctx.output = obj;
         ctx.is_shared = is_shared;
-        ctx.pch_include = pch_include_arg;
+        ctx.pch_include = (lang_info.lang == Language::ASM) ? "" : pch_include_arg;
         ctx.standard = effective_standard(lang_info.lang);
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = color_diag;
 
-        if (lang_info.is_module_interface || target_has_modules) {
+        if (lang_info.lang != Language::ASM && (lang_info.is_module_interface || target_has_modules)) {
             ctx.is_module_source = true;
             ctx.module_mapper_file = module_mapper;
         }

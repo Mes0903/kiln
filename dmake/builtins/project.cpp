@@ -4,6 +4,7 @@
 #include "../utils.hpp"
 #include "../language.hpp"
 #include "../CMakeArray.hpp"
+#include "../gnu_compiler.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -266,9 +267,9 @@ void register_project_builtins(Interpreter& interp) {
         }
 
         for (const auto& lang : languages) {
-            if (lang != "C" && lang != "CXX" && lang != "NONE") {
+            if (lang != "C" && lang != "CXX" && lang != "ASM" && lang != "NONE") {
                 interp.set_fatal_error("project() unsupported language: " + lang +
-                                     " (only C, CXX, and NONE are supported)");
+                                     " (only C, CXX, ASM, and NONE are supported)");
                 return;
             }
         }
@@ -345,15 +346,15 @@ void register_project_builtins(Interpreter& interp) {
             return;
         }
 
-        // Validate languages - we only support C and CXX
+        // Validate languages - we support C, CXX, and ASM
         for (const auto& lang : languages) {
-            if (lang != "C" && lang != "CXX") {
+            if (lang != "C" && lang != "CXX" && lang != "ASM") {
                 if (optional) {
                     // Silently ignore unsupported optional languages
                     continue;
                 } else {
                     interp.set_fatal_error("enable_language() unsupported language: " + lang +
-                                         " (only C and CXX are supported)");
+                                         " (only C, CXX, and ASM are supported)");
                     return;
                 }
             }
@@ -368,6 +369,30 @@ void register_project_builtins(Interpreter& interp) {
             if (lang == "C" || lang == "CXX") {
                 if (!enabled_langs.contains(lang)) {
                     enabled_langs.append(lang);
+                }
+            } else if (lang == "ASM") {
+                if (!enabled_langs.contains(lang)) {
+                    enabled_langs.append(lang);
+                }
+                // Initialize ASM compiler from C compiler (GAS uses gcc as driver)
+                if (interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
+                    std::string c_compiler = interp.get_variable("CMAKE_C_COMPILER");
+                    if (c_compiler.empty()) {
+                        interp.set_fatal_error("enable_language(ASM) requires C language to be enabled first");
+                        return;
+                    }
+                    interp.set_variable("CMAKE_ASM_COMPILER", c_compiler);
+                    interp.set_variable("CMAKE_ASM_COMPILER_ID", interp.get_variable("CMAKE_C_COMPILER_ID"));
+                    interp.set_variable("CMAKE_ASM_COMPILER_VERSION", interp.get_variable("CMAKE_C_COMPILER_VERSION"));
+                    interp.set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
+                    interp.set_variable("CMAKE_ASM_FLAGS", "");
+                    interp.set_variable("CMAKE_ASM_FLAGS_DEBUG", "-g");
+                    interp.set_variable("CMAKE_ASM_FLAGS_RELEASE", "");
+                    interp.set_variable("CMAKE_ASM_FLAGS_RELWITHDEBINFO", "");
+                    interp.set_variable("CMAKE_ASM_FLAGS_MINSIZEREL", "");
+
+                    auto asm_compiler = std::make_unique<GnuCompiler>(c_compiler, Language::ASM);
+                    interp.get_toolchain().set_compiler(Language::ASM, std::move(asm_compiler));
                 }
             }
         }
