@@ -256,13 +256,17 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         }
     }
 
-    // 1c. Validate build graph: all inputs must exist or be produced by a task
+    // 1c. Validate build graph: inputs that don't exist and aren't produced by
+    // any task are warned about but not fatal. CMake's Ninja generator resolves
+    // DEPENDS target names at generation time; unresolved names become file
+    // inputs that may or may not exist. We match that behavior.
     for (const auto& [id, task] : tasks_) {
         for (const auto& in : task.inputs) {
             if (!std::filesystem::exists(in) && !file_to_task.count(in)) {
-                return std::unexpected(
-                    "Build graph error: Task '" + id + "' requires '" + in +
-                    "' which doesn't exist and isn't produced by any task");
+                dmake::print_message(std::cerr, "WARNING",
+                    "Task '" + id + "' references '" + in +
+                    "' which doesn't exist and isn't produced by any task "
+                    "(CMake/Ninja resolves DEPENDS at generation time)");
             }
         }
     }

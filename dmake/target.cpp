@@ -1405,45 +1405,18 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     link.id = output_path;
     link.parent_target = this;
 
-    // Collect link libraries by walking the dependency graph directly.
-    // We can't rely solely on resolved LINK_LIBRARIES because circular
-    // dependencies between static libraries cause the DFS resolution to
-    // miss transitive deps for whichever target hits the cycle first.
+    // Use resolved LINK_LIBRARIES directly — resolve() already flattened
+    // transitive deps. Circular static lib deps (e.g. MariaDB) are handled
+    // at link time via --start-group/--end-group in the linker command.
     std::vector<std::string> full_link_libs;
     if (type_ != TargetType::STATIC_LIBRARY) {
-        std::function<void(const Target&, std::set<const Target*>&)> collect_link_libs;
-        collect_link_libs = [&](const Target& t, std::set<const Target*>& visited) {
-            for (const auto& lib : t.get_resolved_property("LINK_LIBRARIES")) {
+        // Deduplicate while preserving order.
+        std::unordered_set<std::string> seen;
+        for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
+            if (seen.insert(lib).second) {
                 full_link_libs.push_back(lib);
-                // For static libraries, recurse to get THEIR transitive deps
-                // (which may have been missed due to cycles during resolve)
-                if (lib.ends_with(".a")) {
-                    for (const auto& [name, tgt] : all_targets) {
-                        if (tgt->get_output_path() == lib && visited.insert(tgt.get()).second) {
-                            collect_link_libs(*tgt, visited);
-                            break;
-                        }
-                    }
-                }
             }
-        };
-        std::set<const Target*> visited;
-        visited.insert(this);
-        collect_link_libs(*this, visited);
-
-        // Deduplicate: shared libs and -l flags keep first occurrence only.
-        // Static libs (.a) keep first two occurrences (for cycle resolution).
-        std::unordered_map<std::string, int> seen_counts;
-        std::vector<std::string> deduped;
-        for (const auto& lib : full_link_libs) {
-            int& count = seen_counts[lib];
-            int max_allowed = lib.ends_with(".a") ? 2 : 1;
-            if (count < max_allowed) {
-                deduped.push_back(lib);
-            }
-            count++;
         }
-        full_link_libs = std::move(deduped);
 
         // If the target is C but links against libraries containing C++ code,
         // upgrade to g++ for linking so C++ runtime symbols resolve.

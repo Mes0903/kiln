@@ -184,7 +184,13 @@ public:
         }
 
         for (const auto& o : obj_files) cmd.push_back(o);
-        for (const auto& a : static_libs) cmd.push_back(a);
+        // Wrap static libs in --start-group/--end-group so the linker
+        // rescans and resolves circular dependencies between archives.
+        if (!static_libs.empty()) {
+            cmd.push_back("-Wl,--start-group");
+            for (const auto& a : static_libs) cmd.push_back(a);
+            cmd.push_back("-Wl,--end-group");
+        }
         for (const auto& so : shared_libs) cmd.push_back(so);
 
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
