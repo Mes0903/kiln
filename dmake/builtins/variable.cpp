@@ -195,7 +195,7 @@ void register_variable_builtins(Interpreter& interp) {
         parser.positional(initial_value, "initial value", false);
         PARSE_OR_RETURN(parser, interp, args);
 
-        std::string value = initial_value.empty() ? "OFF" : initial_value;
+        std::string value = Interpreter::is_truthy(initial_value) ? "ON" : "OFF";
         if(!interp.is_variable_set(option_name)) {
             interp.set_variable(option_name, value);
         }

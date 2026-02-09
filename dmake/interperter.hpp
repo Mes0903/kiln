@@ -201,6 +201,7 @@ public:
     bool unset_variable(const std::string& var_name);
     bool is_variable_set(const std::string& var_name) const;
     static bool is_falsy(const std::string& val);
+    static bool is_truthy(const std::string& val);
     void set_cache_variable(const std::string& var_name, const std::string& value);
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);

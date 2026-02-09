@@ -5,12 +5,50 @@
 #include <map>
 #include <set>
 #include <memory>
+#include <string_view>
+#include <algorithm>
 #include "language.hpp"
 
 namespace dmake {
 
 enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY, CUSTOM };
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
+
+// Single source of truth for all list properties that use visibility (PUBLIC/PRIVATE/INTERFACE).
+// Used by resolve(), generate_dump_info(), set_target_properties(), set_property(TARGET).
+struct PropertyMeta {
+    std::string_view name;
+    bool is_path;       // needs absolutification during resolve
+    bool transitive;    // resolved across dependencies
+};
+
+inline constexpr PropertyMeta kListProperties[] = {
+    {"INCLUDE_DIRECTORIES",        true,  true},
+    {"SYSTEM_INCLUDE_DIRECTORIES", true,  true},
+    {"COMPILE_DEFINITIONS",        false, true},
+    {"COMPILE_OPTIONS",            false, true},
+    {"COMPILE_FEATURES",           false, true},
+    {"LINK_LIBRARIES",             false, true},
+    {"LINK_DIRECTORIES",           true,  true},
+    {"LINK_OPTIONS",               false, true},
+    {"PRECOMPILE_HEADERS",         false, true},
+    {"SOURCES",                    false, false},
+};
+
+// Check if a property name is a known list property (returns pointer or nullptr)
+inline const PropertyMeta* find_list_property(std::string_view name) {
+    for (const auto& meta : kListProperties) {
+        if (meta.name == name) return &meta;
+    }
+    return nullptr;
+}
+
+// Check if a property name is an INTERFACE_ prefixed version of a known list property.
+// If so, returns pointer to the base property meta. E.g. "INTERFACE_COMPILE_OPTIONS" → &COMPILE_OPTIONS meta.
+inline const PropertyMeta* find_interface_list_property(std::string_view name) {
+    if (!name.starts_with("INTERFACE_")) return nullptr;
+    return find_list_property(name.substr(10));  // len("INTERFACE_") == 10
+}
 
 struct FileSet {
     std::string name;
@@ -131,7 +169,7 @@ protected:
 
     // C++20 modules task generation
     // Returns true if any module sources were detected
-    bool generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain);
+    bool generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain, int cxx_default_std = 0);
 
     // Generate the collator task that depends on all scanner tasks
     // The collator parses DDI files and injects module dependencies into compile tasks

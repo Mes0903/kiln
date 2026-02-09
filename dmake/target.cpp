@@ -23,6 +23,33 @@
 
 namespace dmake {
 
+// Compute the effective language standard, avoiding unnecessary -std= flags when the
+// compiler default already satisfies the requirement (e.g. don't emit -std=gnu++11
+// when the compiler defaults to C++17).
+//
+// explicit_standard: from target's CXX_STANDARD/C_STANDARD (e.g. "17", or "" if unset)
+// features_required: minimum standard required by compile features (e.g. 11, or 0)
+// compiler_default:  compiler's default standard (e.g. 17, or 0 if unknown)
+//
+// Returns the standard string to use (e.g. "17"), or "" if no flag needed.
+static std::string compute_effective_standard(
+    const std::string& explicit_standard,
+    int features_required,
+    int compiler_default)
+{
+    int explicit_val = explicit_standard.empty() ? 0 : std::stoi(explicit_standard);
+    int effective = std::max(explicit_val, features_required);
+
+    if (effective <= 0) return explicit_standard;  // nothing required
+
+    // If no explicit standard was set (only features drove the requirement),
+    // and the compiler default already meets it, don't add a flag.
+    if (explicit_val == 0 && compiler_default > 0 && effective <= compiler_default)
+        return "";
+
+    return std::to_string(effective);
+}
+
 // --- Generic Property Implementation ---
 
 void Target::set_property(const std::string& name, const std::string& value) {
@@ -138,12 +165,11 @@ std::string Target::generate_dump_info() const {
     }
     output += "\n";
 
-    // Print unresolved properties
-    std::vector<std::string> prop_names = {
-        "SOURCES", "INCLUDE_DIRECTORIES", "COMPILE_DEFINITIONS",
-        "COMPILE_OPTIONS", "LINK_LIBRARIES", "LINK_DIRECTORIES",
-        "LINK_OPTIONS", "PRECOMPILE_HEADERS"
-    };
+    // Print unresolved properties (derived from shared metadata table)
+    std::vector<std::string> prop_names;
+    for (const auto& meta : kListProperties) {
+        prop_names.emplace_back(meta.name);
+    }
 
     output += "--- Unresolved Properties ---\n";
     for (const auto& prop : prop_names) {
@@ -285,22 +311,20 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         target.insert(target.end(), source.begin(), source.end());
     };
 
-    // Properties to resolve
-    // "SOURCES" is purposefully excluded as it is not transitive in the same way
+    // Build list of transitive properties to resolve from the shared metadata table.
+    // "SOURCES" is excluded (not transitive).
+    // "LINK_LIBRARIES" is excluded because it has specialized handling below
+    // (process_dependency walks the target graph and resolves target names to paths).
     struct PropInfo {
         std::string name;
         bool is_path;
     };
-    std::vector<PropInfo> props_to_resolve = {
-        {"INCLUDE_DIRECTORIES", true},
-        {"SYSTEM_INCLUDE_DIRECTORIES", true},  // -isystem includes (no warnings)
-        {"COMPILE_DEFINITIONS", false},
-        {"COMPILE_OPTIONS", false},
-        {"COMPILE_FEATURES", false},
-        {"LINK_DIRECTORIES", true},
-        {"LINK_OPTIONS", false},
-        {"PRECOMPILE_HEADERS", false} // Note: PCH logic might need specialized handling, but we carry it for now
-    };
+    std::vector<PropInfo> props_to_resolve;
+    for (const auto& meta : kListProperties) {
+        if (meta.transitive && meta.name != "LINK_LIBRARIES") {
+            props_to_resolve.push_back({std::string(meta.name), meta.is_path});
+        }
+    }
 
     // Prepare genex evaluator (needed before processing properties)
     GenexEvaluationContext genex_ctx;
@@ -686,16 +710,22 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         c_required_std = features_db.get_required_standard(compile_features, Language::C);
     }
 
+    // Read compiler default standards (to suppress unnecessary -std= flags)
+    int cxx_default_std = 0;
+    int c_default_std = 0;
+    {
+        const std::string& cxx_def = interp.get_variable("CMAKE_CXX_STANDARD_DEFAULT");
+        if (!cxx_def.empty()) cxx_default_std = std::stoi(cxx_def);
+        const std::string& c_def = interp.get_variable("CMAKE_C_STANDARD_DEFAULT");
+        if (!c_def.empty()) c_default_std = std::stoi(c_def);
+    }
+
     // Compute effective standard per language (hoisted out of per-source loop)
     auto effective_standard = [&](Language lang) -> std::string {
         if (lang == Language::ASM) return "";
-        std::string base = get_language_standard(lang);
         int required = (lang == Language::CXX) ? cxx_required_std : c_required_std;
-        if (required > 0) {
-            int current = base.empty() ? 0 : std::stoi(base);
-            if (required > current) return std::to_string(required);
-        }
-        return base;
+        int compiler_default = (lang == Language::CXX) ? cxx_default_std : c_default_std;
+        return compute_effective_standard(get_language_standard(lang), required, compiler_default);
     };
 
     // Pre-resolve manual dependencies (same for every source)
@@ -1085,7 +1115,8 @@ static std::pair<std::string, std::string> generate_pch_task(
     const std::vector<std::string>& includes,
     const std::vector<std::string>& system_includes,
     const std::vector<std::string>& definitions,
-    const std::vector<std::string>& options) {
+    const std::vector<std::string>& options,
+    int compiler_default_standard) {
 
     // Using PCH property name "PRECOMPILE_HEADERS"
     auto private_pchs = target->get_property_list("PRECOMPILE_HEADERS", PropertyVisibility::PRIVATE);
@@ -1141,19 +1172,15 @@ static std::pair<std::string, std::string> generate_pch_task(
     ctx.is_shared = is_shared;
 
     // Determine standard: use highest of explicit standard or required by compile features
-    std::string base_standard = target->get_language_standard(pch_lang);
-    const auto& compile_features = target->get_resolved_property("COMPILE_FEATURES");
-    if (!compile_features.empty()) {
-        const auto& features_db = CompileFeatures::instance();
-        int required_std = features_db.get_required_standard(compile_features, pch_lang);
-        if (required_std > 0) {
-            int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
-            if (required_std > current_std) {
-                base_standard = std::to_string(required_std);
-            }
+    {
+        int required_std = 0;
+        const auto& cf = target->get_resolved_property("COMPILE_FEATURES");
+        if (!cf.empty()) {
+            required_std = CompileFeatures::instance().get_required_standard(cf, pch_lang);
         }
+        ctx.standard = compute_effective_standard(
+            target->get_language_standard(pch_lang), required_std, compiler_default_standard);
     }
-    ctx.standard = base_standard;
     ctx.extensions_enabled = target->get_language_extensions(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
     ctx.options.push_back("-x");
@@ -1257,8 +1284,18 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         graph.add_task(std::move(pre_build));
     }
 
+    // Read compiler default standards (for suppressing unnecessary -std= flags)
+    int cxx_default_std = 0;
+    int c_default_std = 0;
+    {
+        const std::string& cxx_def = interp.get_variable("CMAKE_CXX_STANDARD_DEFAULT");
+        if (!cxx_def.empty()) cxx_default_std = std::stoi(cxx_def);
+        const std::string& c_def = interp.get_variable("CMAKE_C_STANDARD_DEFAULT");
+        if (!c_def.empty()) c_default_std = std::stoi(c_def);
+    }
+
     // C++20 modules: generate scanner tasks first (they have no dependencies)
-    bool has_modules = generate_module_scanner_tasks(graph, toolchain);
+    bool has_modules = generate_module_scanner_tasks(graph, toolchain, cxx_default_std);
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // Create CXX-specific evaluator for PCH (PCH is always C++)
@@ -1303,7 +1340,8 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
         filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
         evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
-        evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")));
+        evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
+        cxx_default_std);
 
     // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
@@ -1438,19 +1476,16 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.is_shared = is_shared;
 
         // Determine standard: use highest of explicit standard or required by compile features
-        std::string base_standard = get_language_standard(linker_lang);
-        const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
-        if (!compile_features.empty()) {
-            const auto& features_db = CompileFeatures::instance();
-            int required_std = features_db.get_required_standard(compile_features, linker_lang);
-            if (required_std > 0) {
-                int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
-                if (required_std > current_std) {
-                    base_standard = std::to_string(required_std);
-                }
+        {
+            int required_std = 0;
+            const auto& cf = get_resolved_property("COMPILE_FEATURES");
+            if (!cf.empty()) {
+                required_std = CompileFeatures::instance().get_required_standard(cf, linker_lang);
             }
+            int compiler_default = (linker_lang == Language::CXX) ? cxx_default_std : c_default_std;
+            ctx.standard = compute_effective_standard(
+                get_language_standard(linker_lang), required_std, compiler_default);
         }
-        ctx.standard = base_standard;
         ctx.extensions_enabled = get_language_extensions(linker_lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
@@ -1668,7 +1703,7 @@ bool Target::has_module_sources() const {
     return false;
 }
 
-bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain) {
+bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain, int cxx_default_std) {
     std::vector<std::string> scanner_ids;
 
     for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
@@ -1696,19 +1731,15 @@ bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& t
         ctx.output = ddi_path;
 
         // Determine standard: use highest of explicit standard or required by compile features
-        std::string base_standard = get_language_standard(lang_info.lang);
-        const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
-        if (!compile_features.empty()) {
-            const auto& features_db = CompileFeatures::instance();
-            int required_std = features_db.get_required_standard(compile_features, lang_info.lang);
-            if (required_std > 0) {
-                int current_std = base_standard.empty() ? 0 : std::stoi(base_standard);
-                if (required_std > current_std) {
-                    base_standard = std::to_string(required_std);
-                }
+        {
+            int required_std = 0;
+            const auto& cf = get_resolved_property("COMPILE_FEATURES");
+            if (!cf.empty()) {
+                required_std = CompileFeatures::instance().get_required_standard(cf, lang_info.lang);
             }
+            ctx.standard = compute_effective_standard(
+                get_language_standard(lang_info.lang), required_std, cxx_default_std);
         }
-        ctx.standard = base_standard;
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
 

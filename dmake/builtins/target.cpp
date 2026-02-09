@@ -1042,7 +1042,7 @@ void register_target_builtins(Interpreter& interp) {
                 std::string prop_name = props[i];
                 std::string prop_value = props[i+1];
 
-                // IMPORTED_LOCATION or IMPORTED_LOCATION_<CONFIG> → update dedicated field + generic storage
+                // Special-case: scalar properties with dedicated setters
                 if (prop_name == "IMPORTED_LOCATION" || prop_name.starts_with("IMPORTED_LOCATION_")) {
                     target->set_imported_location(prop_value);
                     target->set_property(prop_name, prop_value);
@@ -1050,30 +1050,27 @@ void register_target_builtins(Interpreter& interp) {
                     target->set_output_name(prop_value);
                     target->set_property(prop_name, prop_value);
                 } else if (prop_name == "CXX_STANDARD") {
-                    target->set_cxx_standard(prop_value);
+                    target->set_language_standard(Language::CXX, prop_value);
                     target->set_property(prop_name, prop_value);
-                } else if (prop_name == "COMPILE_DEFINITIONS") {
-                    target->append_property_from_string("COMPILE_DEFINITIONS", prop_value, PropertyVisibility::PRIVATE);
-                } else if (prop_name == "COMPILE_OPTIONS") {
-                    target->append_property_from_string("COMPILE_OPTIONS", prop_value, PropertyVisibility::PRIVATE);
-                } else if (prop_name == "INCLUDE_DIRECTORIES") {
-                    target->append_property_from_string("INCLUDE_DIRECTORIES", prop_value, PropertyVisibility::PRIVATE);
-                } else if (prop_name == "LINK_DIRECTORIES") {
-                    target->append_property_from_string("LINK_DIRECTORIES", prop_value, PropertyVisibility::PRIVATE);
-                } else if (prop_name == "LINK_OPTIONS") {
-                    target->append_property_from_string("LINK_OPTIONS", prop_value, PropertyVisibility::PRIVATE);
-                } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
-                    parse_and_append_interface("LINK_LIBRARIES", prop_value);
-                } else if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
-                    parse_and_append_interface("INCLUDE_DIRECTORIES", prop_value);
-                } else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") {
-                    parse_and_append_interface("COMPILE_DEFINITIONS", prop_value);
-                } else if (prop_name == "INTERFACE_COMPILE_OPTIONS") {
-                    parse_and_append_interface("COMPILE_OPTIONS", prop_value);
-                } else if (prop_name == "INTERFACE_LINK_DIRECTORIES") {
-                    parse_and_append_interface("LINK_DIRECTORIES", prop_value);
+                } else if (prop_name == "C_STANDARD") {
+                    target->set_language_standard(Language::C, prop_value);
+                    target->set_property(prop_name, prop_value);
+                } else if (prop_name == "CXX_EXTENSIONS") {
+                    target->set_language_extensions(Language::CXX, !Interpreter::is_falsy(prop_value));
+                    target->set_property(prop_name, prop_value);
+                } else if (prop_name == "C_EXTENSIONS") {
+                    target->set_language_extensions(Language::C, !Interpreter::is_falsy(prop_value));
+                    target->set_property(prop_name, prop_value);
+                } else if (auto* meta = find_list_property(prop_name);
+                           meta && meta->name != "LINK_LIBRARIES" && meta->name != "SOURCES") {
+                    // Known list property → append with PRIVATE visibility
+                    // (LINK_LIBRARIES and SOURCES are excluded - they use dedicated commands)
+                    target->append_property_from_string(prop_name, prop_value, PropertyVisibility::PRIVATE);
+                } else if (auto* iface_meta = find_interface_list_property(prop_name)) {
+                    // INTERFACE_ prefix of a known list property → append with INTERFACE visibility
+                    parse_and_append_interface(std::string(iface_meta->name), prop_value);
                 } else {
-                    // Fallback: Generic property set
+                    // Fallback: Generic scalar property
                     target->set_property(prop_name, prop_value);
                 }
             }

@@ -353,6 +353,44 @@ public:
         // Implicit link libraries - common for GCC
         info.implicit_link_libs = {"stdc++", "m", "gcc_s", "c"};
 
+        // Detect compiler default language standard from predefined macros.
+        // For C++ we check __cplusplus, for C we check __STDC_VERSION__.
+        // The binary_ could be g++ or gcc; we use -x to force the language.
+        auto detect_default_standard = [&](const std::string& x_lang, const std::string& macro_name) -> int {
+            std::string output = detail::run_command(binary_ + " -dM -E -x " + x_lang + " /dev/null 2>/dev/null");
+            std::istringstream iss2(output);
+            std::string macro_line;
+            while (std::getline(iss2, macro_line)) {
+                if (macro_line.find(macro_name + " ") != std::string::npos) {
+                    auto pos = macro_line.rfind(' ');
+                    if (pos == std::string::npos) break;
+                    std::string val = macro_line.substr(pos + 1);
+                    if (!val.empty() && val.back() == 'L') val.pop_back();
+                    long v = 0;
+                    try { v = std::stol(val); } catch (...) { break; }
+                    if (x_lang == "c++") {
+                        if (v >= 202602L)      return 26;
+                        if (v >= 202302L)      return 23;
+                        if (v >= 202002L)      return 20;
+                        if (v >= 201703L)      return 17;
+                        if (v >= 201402L)      return 14;
+                        if (v >= 201103L)      return 11;
+                        return 98;
+                    } else {
+                        if (v >= 202311L)      return 23;
+                        if (v >= 201710L)      return 17;
+                        if (v >= 201112L)      return 11;
+                        if (v >= 199901L)      return 99;
+                        return 90;
+                    }
+                }
+            }
+            return 0;
+        };
+
+        info.default_cxx_standard = detect_default_standard("c++", "__cplusplus");
+        info.default_c_standard = detect_default_standard("c", "__STDC_VERSION__");
+
         return info;
     }
 

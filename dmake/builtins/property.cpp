@@ -382,7 +382,7 @@ void register_property_builtins(Interpreter& interp) {
                     return;
                 }
 
-                // Helper to handle list properties with visibility
+                // Handle list properties generically using the shared property metadata table
                 auto handle_list_property = [](const std::shared_ptr<Target>& target,
                                                const std::string& prop_name,
                                                const std::vector<std::string>& values,
@@ -390,34 +390,12 @@ void register_property_builtins(Interpreter& interp) {
                     std::string base_prop;
                     PropertyVisibility visibility = PropertyVisibility::PRIVATE;
 
-                    // Check for INTERFACE_ prefix first
-                    if (prop_name == "INTERFACE_INCLUDE_DIRECTORIES") {
-                        base_prop = "INCLUDE_DIRECTORIES";
+                    // Check INTERFACE_ prefix first, then plain name
+                    if (auto* iface_meta = find_interface_list_property(prop_name)) {
+                        base_prop = std::string(iface_meta->name);
                         visibility = PropertyVisibility::INTERFACE;
-                    } else if (prop_name == "INTERFACE_COMPILE_DEFINITIONS") {
-                        base_prop = "COMPILE_DEFINITIONS";
-                        visibility = PropertyVisibility::INTERFACE;
-                    } else if (prop_name == "INTERFACE_COMPILE_OPTIONS") {
-                        base_prop = "COMPILE_OPTIONS";
-                        visibility = PropertyVisibility::INTERFACE;
-                    } else if (prop_name == "INTERFACE_LINK_LIBRARIES") {
-                        base_prop = "LINK_LIBRARIES";
-                        visibility = PropertyVisibility::INTERFACE;
-                    } else if (prop_name == "INTERFACE_LINK_DIRECTORIES") {
-                        base_prop = "LINK_DIRECTORIES";
-                        visibility = PropertyVisibility::INTERFACE;
-                    }
-                    // Non-INTERFACE versions use PRIVATE visibility
-                    else if (prop_name == "INCLUDE_DIRECTORIES") {
-                        base_prop = "INCLUDE_DIRECTORIES";
-                    } else if (prop_name == "COMPILE_DEFINITIONS") {
-                        base_prop = "COMPILE_DEFINITIONS";
-                    } else if (prop_name == "COMPILE_OPTIONS") {
-                        base_prop = "COMPILE_OPTIONS";
-                    } else if (prop_name == "LINK_LIBRARIES") {
-                        base_prop = "LINK_LIBRARIES";
-                    } else if (prop_name == "LINK_DIRECTORIES") {
-                        base_prop = "LINK_DIRECTORIES";
+                    } else if (auto* meta = find_list_property(prop_name)) {
+                        base_prop = std::string(meta->name);
                     } else {
                         return false;
                     }
@@ -436,7 +414,6 @@ void register_property_builtins(Interpreter& interp) {
                     }
                     return true;
                 };
-                // Keep old name for compatibility
                 auto handle_interface_property = handle_list_property;
 
                 for (const auto& target_name : items) {

@@ -58,6 +58,8 @@ struct PlatformInfo {
     std::vector<std::string> implicit_includes; // Implicit include directories
     std::vector<std::string> implicit_link_dirs;// Implicit link directories
     std::vector<std::string> implicit_link_libs;// Implicit link libraries
+    int default_cxx_standard = 0;               // Compiler's default C++ standard (e.g. 17)
+    int default_c_standard = 0;                 // Compiler's default C standard (e.g. 17)
 };
 
 class Compiler {

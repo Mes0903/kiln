@@ -97,6 +97,12 @@ void fake_cmake_compiler_checks_and_init(
         interp.set_variable("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeArray(c_info.implicit_link_libs).to_string());
     }
 
+    // Compiler default language standards (used to suppress unnecessary -std= flags)
+    if (cxx_info.default_cxx_standard > 0)
+        interp.set_variable("CMAKE_CXX_STANDARD_DEFAULT", std::to_string(cxx_info.default_cxx_standard));
+    if (c_info.default_c_standard > 0)
+        interp.set_variable("CMAKE_C_STANDARD_DEFAULT", std::to_string(c_info.default_c_standard));
+
     // Standard compile option flags (GNU compiler)
     interp.set_variable("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
     interp.set_variable("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
@@ -140,7 +146,8 @@ void fake_cmake_compiler_checks_and_init(
         "CMAKE_CXX20_STANDARD_COMPILE_OPTION", "CMAKE_CXX23_STANDARD_COMPILE_OPTION",
         "CMAKE_C90_STANDARD_COMPILE_OPTION", "CMAKE_C99_STANDARD_COMPILE_OPTION",
         "CMAKE_C11_STANDARD_COMPILE_OPTION", "CMAKE_C17_STANDARD_COMPILE_OPTION",
-        "CMAKE_C23_STANDARD_COMPILE_OPTION"
+        "CMAKE_C23_STANDARD_COMPILE_OPTION",
+        "CMAKE_CXX_STANDARD_DEFAULT", "CMAKE_C_STANDARD_DEFAULT"
     };
     for (const auto& name : compiler_vars) {
         backup_vars[name] = interp.get_variable(name);
@@ -1963,6 +1970,16 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     macro_substitutions_ = saved_substitutions;
 
     return res;
+}
+
+// Allowlist-based truthy check matching CMake's cmIsOn().
+// Only 1/Y/ON/YES/TRUE (case-insensitive) are truthy.
+// This is NOT the inverse of is_falsy() — values like "/usr/local/bin"
+// are neither is_truthy() nor is_falsy().
+bool Interpreter::is_truthy(const std::string& val) {
+    auto upper = to_upper(val);
+    return upper == "1" || upper == "Y" || upper == "ON" ||
+           upper == "YES" || upper == "TRUE";
 }
 
 bool Interpreter::is_falsy(const std::string& val) {
