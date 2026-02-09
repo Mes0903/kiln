@@ -945,7 +945,10 @@ void register_file_builtins(Interpreter& interp) {
             }
 
             auto rel = std::filesystem::relative(file_p, dir_p);
-            interp.set_variable(var, rel.string());
+            if (rel == ".")
+                interp.set_variable(var, "");
+            else
+                interp.set_variable(var, rel.string());
         } else if (operation == "TO_CMAKE_PATH") {
             // file(TO_CMAKE_PATH "<path>" <variable>)
             // Converts native path separators to forward slashes
