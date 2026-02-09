@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../container_utils.hpp"
 #include <string>
 #include <vector>
 #include <fstream>
@@ -200,12 +201,9 @@ std::string query_system_info(const std::string& key) {
     if (key == "DISTRIB_INFO") {
         auto info = parse_os_release();
         // Return semicolon-separated key=value pairs
-        std::string result;
-        for (auto& [k, v] : info) {
-            if (!result.empty()) result += ';';
-            result += k + "=" + v;
-        }
-        return result;
+        return join(info, ";", [](const auto& p) {
+            return p.first + "=" + p.second;
+        });
     }
     // DISTRIB_<name> queries specific os-release keys (e.g., DISTRIB_ID → ID)
     if (key.starts_with("DISTRIB_")) {
@@ -272,17 +270,9 @@ void register_system_info_builtins(Interpreter& interp) {
                 return;
             }
 
-            if (queries.size() == 1) {
-                interp.set_variable(result_var, query_system_info(queries[0]));
-            } else {
-                // Multiple queries → semicolon-separated list
-                std::string result;
-                for (auto& q : queries) {
-                    if (!result.empty()) result += ';';
-                    result += query_system_info(q);
-                }
-                interp.set_variable(result_var, result);
-            }
+            interp.set_variable(result_var, join(queries, ";", [](const auto& q) {
+                return query_system_info(q);
+            }));
         });
 }
 

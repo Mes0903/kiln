@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
+#include "../container_utils.hpp"
 #include <algorithm>
 #include <set>
 #include "../regex.hpp"
@@ -94,12 +95,7 @@ void register_list_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             CMakeArray list(interp.get_variable(list_var));
-            std::string result;
-            for (size_t i = 0; i < list.size(); ++i) {
-                if (i > 0) result += glue;
-                result += list[i];
-            }
-            interp.set_variable(out_var, result);
+            interp.set_variable(out_var, join(list, glue));
         } else if (operation == "APPEND") {
             CommandParser parser("list", "APPEND");
             std::string list_var;

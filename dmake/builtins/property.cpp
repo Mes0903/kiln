@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../target.hpp"
 #include "../command_parser.hpp"
+#include "../container_utils.hpp"
 #include <filesystem>
 #include <algorithm>
 
@@ -137,12 +138,7 @@ void register_property_builtins(Interpreter& interp) {
                         components.insert(rule->export_rule->component);
                 }
             }
-            bool first = true;
-            for (const auto& comp : components) {
-                if (!first) result += ";";
-                result += comp;
-                first = false;
-            }
+            result = join(components, ";");
         } else if (property == "MACROS") {
             // CMake allows querying defined macros
             // We don't currently expose user_macros_, so return empty for now

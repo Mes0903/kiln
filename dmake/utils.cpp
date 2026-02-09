@@ -1,4 +1,5 @@
 #include "utils.hpp"
+#include "container_utils.hpp"
 #include "inner/blake2b.h"
 #include "inner/sha256.h"
 #include "inner/md5.h"
@@ -171,12 +172,7 @@ std::string dmake::join_command(const std::vector<std::string>& args) {
 }
 
 std::string dmake::join_command_raw(const std::vector<std::string>& args) {
-    std::string result;
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (i > 0) result += " ";
-        result += args[i];
-    }
-    return result;
+    return join(args, " ");
 }
 
 // Strip shell quoting from an argument.

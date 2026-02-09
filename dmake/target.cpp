@@ -13,6 +13,7 @@
 #include <sstream>
 #include <unistd.h>
 #include <algorithm>
+#include "container_utils.hpp"
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -106,11 +107,9 @@ std::string Target::generate_dump_info() const {
     // Helper to print a vector
     auto print_vec = [](const std::string& indent, const std::vector<std::string>& vec) -> std::string {
         if (vec.empty()) return indent + "(empty)";
-        std::string result;
-        for (const auto& item : vec) {
-            result += indent + "- " + item + "\n";
-        }
-        return result;
+        return join(vec, "", [&](const std::string& item) {
+            return indent + "- " + item + "\n";
+        });
     };
 
     // Helper to get type name
@@ -495,17 +494,9 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
 
     // Deduplicate non-order-sensitive properties (include dirs, definitions, options, etc.)
     // Link libraries are NOT deduplicated - order and repetition matter for static lib resolution.
-    auto dedup = [](std::vector<std::string>& vec) {
-        std::unordered_set<std::string> seen;
-        auto it = std::remove_if(vec.begin(), vec.end(), [&](const std::string& s) {
-            return !seen.insert(s).second;
-        });
-        vec.erase(it, vec.end());
-    };
-
     for (const auto& info : props_to_resolve) {
-        dedup(resolved_properties_[info.name]);
-        dedup(resolved_interface_properties_[info.name]);
+        remove_duplicates(resolved_properties_[info.name]);
+        remove_duplicates(resolved_interface_properties_[info.name]);
     }
 
     visiting_ = false;
@@ -740,10 +731,9 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     const auto& resolved_options = get_resolved_property("COMPILE_OPTIONS");
 
     auto has_deferred_genex = [](const std::vector<std::string>& vals) {
-        for (const auto& v : vals) {
-            if (v.find("$<COMPILE_LANG") != std::string::npos) return true;
-        }
-        return false;
+        return std::any_of(vals.begin(), vals.end(), [](const std::string& v) {
+            return v.find("$<COMPILE_LANG") != std::string::npos;
+        });
     };
     bool needs_per_lang_eval = has_deferred_genex(resolved_includes) ||
                                has_deferred_genex(resolved_sys_includes) ||
@@ -1358,13 +1348,10 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         collect_object_deps(*this, visited);
     }
 
-    Language linker_lang = Language::C;
-    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
-        if (LanguageClassifier::from_path(src).lang == Language::CXX) {
-            linker_lang = Language::CXX;
-            break;
-        }
-    }
+    const auto& sources_list = get_property_list("SOURCES", PropertyVisibility::PRIVATE);
+    Language linker_lang = std::any_of(sources_list.begin(), sources_list.end(),
+        [](const std::string& src) { return LanguageClassifier::from_path(src).lang == Language::CXX; })
+        ? Language::CXX : Language::C;
 
     std::string output_path = get_output_path();
     BuildTask link;

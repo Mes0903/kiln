@@ -1,6 +1,7 @@
 #include "build_system.hpp"
 #include "target.hpp"
 #include "utils.hpp"
+#include "container_utils.hpp"
 #include "module_scanner.hpp"
 #include "genex_evaluator.hpp"
 #include "profiler.hpp"
@@ -29,19 +30,19 @@ struct CompileCommand {
 };
 
 std::expected<void, std::string> BuildGraph::generate_compile_commands(const std::string& build_dir) {
-    std::vector<CompileCommand> commands;
     std::string current_dir = std::filesystem::current_path().string();
 
-    for (const auto& [id, task] : tasks_) {
-        if (task.is_compilation && !task.commands.empty()) {
-            commands.push_back({
+    auto commands = filter_map(tasks_,
+        [](const auto& pair) { return pair.second.is_compilation && !pair.second.commands.empty(); },
+        [&](const auto& pair) -> CompileCommand {
+            const auto& task = pair.second;
+            return {
                 .directory = current_dir,
                 .command = join_command(task.commands[0]),
                 .file = task.source_file,
                 .output = task.outputs.empty() ? "" : task.outputs[0]
-            });
-        }
-    }
+            };
+        });
 
     std::string json;
     if (auto ec = glz::write_json(commands, json)) {

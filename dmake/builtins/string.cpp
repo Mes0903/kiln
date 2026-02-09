@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
+#include "../container_utils.hpp"
 #include <algorithm>
 #include <cctype>
 #include "../regex.hpp"
@@ -569,13 +570,7 @@ void register_string_builtins(Interpreter& interp) {
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            std::string result;
-            for (size_t i = 0; i < inputs.size(); ++i) {
-                if (i > 0) result += glue;
-                result += inputs[i];
-            }
-
-            interp.set_variable(out_var, result);
+            interp.set_variable(out_var, join(inputs, glue));
 
         } else if (operation == "TOLOWER") {
             CommandParser parser("string", "TOLOWER");
