@@ -43,6 +43,7 @@ add_library(dmake SHARED
     dmake/intercept/fetch_content.cpp
     dmake/install_executor.cpp
     dmake/printing.cpp
+    dmake/progress_bar.cpp
     dmake/profiler.cpp
     dmake/regex.cpp
     dmake/CMakeArray.cpp

@@ -6,6 +6,7 @@
 #include "genex_evaluator.hpp"
 #include "profiler.hpp"
 #include "printing.hpp"
+#include "progress_bar.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -258,6 +259,33 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cache = load_cache(build_dir);
     std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time
 
+    // 2b. Pre-scan: count tasks that need to execute (for progress display)
+    int dirty_task_count = 0;
+    for (const auto& [id, task] : tasks_) {
+        // Skip marker tasks
+        if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) continue;
+
+        bool outputs_exist = !task.outputs.empty();
+        if (outputs_exist) {
+            for (const auto& out : task.outputs) {
+                if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+            }
+        }
+
+        if (!outputs_exist || task.always_run) {
+            dirty_task_count++;
+            continue;
+        }
+
+        auto sig_res = calculate_signature(task);
+        if (!sig_res || !(cache.count(id) && cache[id] == *sig_res)) {
+            dirty_task_count++;
+        }
+    }
+
+    bool stdout_is_tty = isatty(STDOUT_FILENO);
+    ProgressBar progress(dirty_task_count, stdout_is_tty);
+
     // 3. Parallel execution with fixed worker threads
     std::set<std::string> completed;
     std::set<std::string> running;
@@ -283,7 +311,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     workers.reserve(jobs);
 
     for (int w = 0; w < jobs; w++) {
-        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &is_ready]() {
+        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &is_ready, &progress, stdout_is_tty]() {
             while (true) {
                 std::string id;
 
@@ -330,9 +358,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 }
 
                 // Execute the task (outside lock)
-                const auto& task = tasks_.at(id);
+                auto& task = tasks_.at(id);
                 std::string sig;
                 std::string task_error;
+                std::string active_display_name;  // tracks name in progress bar's active list
+                auto task_start = std::chrono::steady_clock::now();
 
                 do { // do-while(false) for break-on-error
                     // Check if outputs exist
@@ -389,13 +419,35 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     }
                     if (!task_error.empty()) break;
 
+                    // Helper: print a permanent build status line
+                    // On TTY: erase progress bar, print line, request redraw
+                    // On non-TTY: prefix with [N/M] counter
+                    auto print_status = [&](std::string_view verb, std::string_view target_display) {
+                        int done = progress.mark_completed();
+                        active_display_name = std::string(target_display);
+                        progress.task_started(active_display_name);
+
+                        std::lock_guard<std::mutex> lock(output_mutex_);
+                        progress.erase();
+                        if (stdout_is_tty) {
+                            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << verb
+                                      << dmake::c(std::cout, dmake::colors::RESET) << " ["
+                                      << artifact_name << "] " << target_display << std::endl;
+                        } else {
+                            int tot = progress.total();
+                            int width = static_cast<int>(std::to_string(tot).size());
+                            std::cout << "   [" << std::setw(width) << done << "/" << tot << "] "
+                                      << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << verb
+                                      << dmake::c(std::cout, dmake::colors::RESET) << " ["
+                                      << artifact_name << "] " << target_display << std::endl;
+                        }
+                        progress.request_redraw();
+                        progress.redraw();
+                    };
+
                     // C++20 modules: handle collator tasks specially (in-process execution)
                     if (task.is_module_collator) {
-                        {
-                            std::lock_guard<std::mutex> lock(output_mutex_);
-                            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << "Collating" << dmake::c(std::cout, dmake::colors::RESET) << " ["
-                                      << artifact_name << "] modules" << std::endl;
-                        }
+                        print_status("Collating", "modules");
 
                         std::map<std::string, std::string> module_to_task;
                         std::map<std::string, std::vector<std::string>> task_requires;
@@ -435,12 +487,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         inject_module_dependencies(module_to_task, task_requires);
 
                     } else if (task.is_module_scanner) {
-                        {
-                            std::lock_guard<std::mutex> lock(output_mutex_);
-                            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << "Scanning" << dmake::c(std::cout, dmake::colors::RESET) << " ["
-                                      << artifact_name << "] "
-                                      << std::filesystem::path(task.source_file).filename().string() << std::endl;
-                        }
+                        std::string scan_display = std::filesystem::path(task.source_file).filename().string();
+                        print_status("Scanning", scan_display);
 
                         auto result = run_command(task.commands[0], task.working_dir);
                         ModuleDependencyInfo ddi = parse_module_scan_output(result.output, task.source_file);
@@ -451,42 +499,42 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                     } else {
                         // Regular task execution
+                        std::string verb = "Running";
+                        std::string target_display = task.source_file.empty() ?
+                            std::filesystem::path(id).filename().string() :
+                            std::filesystem::path(task.source_file).filename().string();
+
+                        if (task.is_compilation) {
+                             verb = "Compiling";
+                        } else if (task.parent_target && id == task.parent_target->get_output_path() && task.parent_target->get_type() != TargetType::CUSTOM) {
+                            verb = "  Linking";
+                        }
+
+                        if (task.parent_target && task.parent_target->get_type() == TargetType::CUSTOM) {
+                            std::string comment = task.parent_target->get_property("COMMENT");
+                            if (!comment.empty()) {
+                                target_display = comment;
+                            }
+                        }
+
+                        print_status(verb, target_display);
+
                         for (const auto& cmd : task.commands) {
-                            std::string verb = "Running";
-                            std::string target_display = task.source_file.empty() ?
-                                std::filesystem::path(id).filename().string() :
-                                std::filesystem::path(task.source_file).filename().string();
-
-                            if (task.is_compilation) {
-                                 verb = "Compiling";
-                            } else if (task.parent_target && id == task.parent_target->get_output_path() && task.parent_target->get_type() != TargetType::CUSTOM) {
-                                verb = "  Linking";
-                            }
-
-                            if (task.parent_target && task.parent_target->get_type() == TargetType::CUSTOM) {
-                                std::string comment = task.parent_target->get_property("COMMENT");
-                                if (!comment.empty()) {
-                                    target_display = comment;
-                                }
-                            }
-
-                            {
-                                std::lock_guard<std::mutex> lock(output_mutex_);
-                                std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << verb << dmake::c(std::cout, dmake::colors::RESET) << " ["
-                                          << artifact_name << "] " << target_display << std::endl;
-                            }
-
                             auto result = dmake::run_command(cmd, task.working_dir);
                             if (result.exit_code != 0) {
                                 {
                                     std::lock_guard<std::mutex> lock(output_mutex_);
+                                    progress.erase();
                                     if (!result.output.empty()) std::cerr << result.output << std::endl;
                                 }
                                 task_error = "Command failed: " + join_command_raw(cmd);
                                 break;
                             } else if (!result.output.empty()) {
                                 std::lock_guard<std::mutex> lock(output_mutex_);
+                                progress.erase();
                                 std::cout << result.output << std::endl;
+                                progress.request_redraw();
+                                progress.redraw();
                             }
                         }
                         if (!task_error.empty()) break;
@@ -515,9 +563,19 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     }
                 } while (false);
 
+                // Remove from active task list if we added it
+                if (!active_display_name.empty()) {
+                    progress.task_finished(active_display_name);
+                }
+
                 // Mark task complete (or failed)
                 {
                     std::lock_guard<std::mutex> lock(loop_mutex);
+
+                    // Record execution time for critical path computation
+                    auto task_end = std::chrono::steady_clock::now();
+                    task.execution_time_s = std::chrono::duration<double>(task_end - task_start).count();
+
                     if (!task_error.empty()) {
                         fatal_error = task_error;
                     } else {
@@ -539,6 +597,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     // so we don't redo them on the next build.
     save_cache(build_dir, new_cache);
 
+    progress.finish();
+
     if (!fatal_error.empty()) {
         return std::unexpected(fatal_error);
     }
@@ -546,10 +606,42 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
+    // Compute critical path: longest dependency chain by execution time
+    // critical_path_s[task] = execution_time_s + max(critical_path_s[dep])
+    // Tasks complete in dependency order, so all deps are already computed.
+    double max_critical_path = 0.0;
+    if (dirty_task_count > 1) {
+        // Topological traversal: process tasks whose deps are all done
+        std::set<std::string> visited;
+        std::function<double(const std::string&)> compute_critical = [&](const std::string& tid) -> double {
+            auto it = tasks_.find(tid);
+            if (it == tasks_.end()) return 0.0;
+            auto& t = it->second;
+            if (t.critical_path_s > 0.0) return t.critical_path_s;  // memoized
+            if (!visited.insert(tid).second) return 0.0;  // cycle guard
+
+            double dep_max = 0.0;
+            for (const auto& dep : t.dependencies) {
+                dep_max = std::max(dep_max, compute_critical(dep));
+            }
+            t.critical_path_s = t.execution_time_s + dep_max;
+            return t.critical_path_s;
+        };
+
+        for (const auto& [tid, _] : tasks_) {
+            max_critical_path = std::max(max_critical_path, compute_critical(tid));
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lock(output_mutex_);
+        double wall_s = duration.count() / 1000.0;
         std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << "Finished" << dmake::c(std::cout, dmake::colors::RESET) << " build in "
-                << std::fixed << std::setprecision(2) << duration.count() / 1000.0 << "s" << std::endl;
+                << std::fixed << std::setprecision(2) << wall_s << "s";
+        if (max_critical_path > 0.0) {
+            std::cout << " (critical path: " << std::setprecision(2) << max_critical_path << "s)";
+        }
+        std::cout << std::endl;
     }
 
     return {};

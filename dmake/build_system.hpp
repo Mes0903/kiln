@@ -43,6 +43,10 @@ struct BuildTask {
     // For graph execution
     std::set<std::string> dependencies; // Task IDs we depend on
     std::set<std::string> dependents;   // Task IDs that depend on us
+
+    // Filled during execution for critical path computation
+    double execution_time_s = 0.0;    // wall time for this task
+    double critical_path_s = 0.0;     // longest chain ending at this task
 };
 
 class BuildGraph {
