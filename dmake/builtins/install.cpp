@@ -209,7 +209,7 @@ void parse_install_files(
     std::string type_str;
 
     CommandParser parser("install", mode);
-    parser.positionals(raw_files, "files", true);
+    parser.positionals(raw_files, "files", false);
     parser.value("DESTINATION", rule->destination.destination);
     parser.value("TYPE", type_str);
     parser.list("PERMISSIONS", rule->destination.permissions);
@@ -218,6 +218,13 @@ void parse_install_files(
     parser.flag("OPTIONAL", rule->destination.optional);
     parser.flag("EXCLUDE_FROM_ALL", rule->destination.exclude_from_all);
     PARSE_OR_RETURN(parser, interp, parse_args);
+
+    // No files provided - CMake silently accepts this (undocumented behavior)
+    if (raw_files.empty()) {
+        interp.print_message("WARNING",
+            "install(" + std::string(mode) + ") called with no files - ignoring (undocumented CMake behavior)", true);
+        return;
+    }
 
     // Resolve TYPE to destination
     if (!type_str.empty()) {

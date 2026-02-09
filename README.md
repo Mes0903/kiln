@@ -3,7 +3,7 @@
 Better C/C++ builds that just works, with CMake as an input language.
 
 > [!NOTE]
-> Experimental project, GCC/G++ only for now
+> Experimental project, Linux + GCC/G++ only for now
 
 ## Why
 

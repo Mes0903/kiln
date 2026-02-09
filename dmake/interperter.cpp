@@ -17,6 +17,7 @@
 #include "intercept/external_project.hpp"
 #include "intercept/fetch_content.hpp"
 #include "condition_evaluator.hpp"
+#include "CMakeArray.hpp"
 
 namespace dmake {
 
@@ -540,6 +541,52 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_INSTALL_LIBDIR", "lib");
     variables_.set("CMAKE_INSTALL_INCLUDEDIR", "include");
 
+    // Build CMAKE_SYSTEM_PREFIX_PATH (mirrors CMake's UnixPaths.cmake)
+    // Standard system prefixes first
+    std::string system_prefix_path = "/usr/local;/usr;/";
+
+    // Append install prefix and staging prefix (unless CMAKE_FIND_NO_INSTALL_PREFIX)
+    std::string install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
+    std::string staging_prefix = get_variable("CMAKE_STAGING_PREFIX");
+    if (get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "1"
+        && get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "ON"
+        && get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "TRUE") {
+        if (!install_prefix.empty()) {
+            system_prefix_path += ";" + install_prefix;
+        }
+        if (!staging_prefix.empty()) {
+            system_prefix_path += ";" + staging_prefix;
+        }
+    }
+    variables_.set("CMAKE_SYSTEM_PREFIX_PATH", system_prefix_path);
+
+    // Record install prefix snapshot (_cmake_record_install_prefix equivalent)
+    // This snapshots which occurrence of the install/staging prefix in
+    // CMAKE_SYSTEM_PREFIX_PATH was added because it IS the install prefix,
+    // so find_package() can later remove/add it precisely.
+    {
+        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_VALUE", install_prefix);
+        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE", staging_prefix);
+
+        int icount = 0, scount = 0;
+        CMakeArrayView path_view(system_prefix_path);
+        for (auto entry : path_view) {
+            if (!install_prefix.empty() && entry == install_prefix) ++icount;
+            if (!staging_prefix.empty() && entry == staging_prefix) ++scount;
+        }
+        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_COUNT", std::to_string(icount));
+        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_COUNT", std::to_string(scount));
+    }
+
+    // Append non-standard but common prefixes (after recording, matching CMake's order)
+    system_prefix_path += ";/usr/X11R6;/usr/pkg;/opt";
+    variables_.set("CMAKE_SYSTEM_PREFIX_PATH", system_prefix_path);
+
+    // CMAKE_SYSTEM_LIBRARY_PATH and CMAKE_SYSTEM_INCLUDE_PATH
+    variables_.set("CMAKE_SYSTEM_INCLUDE_PATH", "/usr/include/X11");
+    variables_.set("CMAKE_SYSTEM_LIBRARY_PATH", "/usr/lib/X11");
+    variables_.set("CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES", "/lib;/lib32;/lib64;/usr/lib;/usr/lib32;/usr/lib64");
+
     // Initialize root directory context
     push_directory(abs_script_dir.string(), abs_binary_dir.string());
 
@@ -566,6 +613,27 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         register_install_builtins(*this);
         register_source_properties_builtins(*this);
         register_system_info_builtins(*this);
+
+        // CMake compatibility: _cmake_record_install_prefix() re-snapshots
+        // the install/staging prefix position in CMAKE_SYSTEM_PREFIX_PATH.
+        // Called by platform modules after modifying CMAKE_SYSTEM_PREFIX_PATH.
+        add_builtin("_cmake_record_install_prefix", [](Interpreter& interp, const std::vector<std::string>&) {
+            std::string install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+            std::string staging_prefix = interp.get_variable("CMAKE_STAGING_PREFIX");
+            std::string sys_prefix_path = interp.get_variable("CMAKE_SYSTEM_PREFIX_PATH");
+
+            interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_VALUE", install_prefix);
+            interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE", staging_prefix);
+
+            int icount = 0, scount = 0;
+            CMakeArrayView path_view(sys_prefix_path);
+            for (auto entry : path_view) {
+                if (!install_prefix.empty() && entry == install_prefix) ++icount;
+                if (!staging_prefix.empty() && entry == staging_prefix) ++scount;
+            }
+            interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_COUNT", std::to_string(icount));
+            interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_COUNT", std::to_string(scount));
+        });
 
         add_builtin("enable_testing", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (!args.empty()) {
