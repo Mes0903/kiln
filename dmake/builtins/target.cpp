@@ -1122,9 +1122,19 @@ void register_target_builtins(Interpreter& interp) {
             result = target->is_imported() ? "TRUE" : "FALSE";
         } else if (property_name == "IMPORTED_LOCATION") {
             result = target->get_imported_location();
+        } else if (property_name.starts_with("INTERFACE_")) {
+            // INTERFACE_<PROP> maps to the INTERFACE visibility of the base property
+            // e.g., INTERFACE_INCLUDE_DIRECTORIES -> INCLUDE_DIRECTORIES with INTERFACE visibility
+            std::string base_prop = property_name.substr(10); // strlen("INTERFACE_")
+            const auto& vals = target->get_property_list(base_prop, PropertyVisibility::INTERFACE);
+            if (!vals.empty()) {
+                result = CMakeArray(vals).to_string();
+            } else {
+                result = property_name + "-NOTFOUND";
+            }
         } else {
-            // Try generic property
-            result = target->get_property(property_name);
+            // Try generic property (combined across all visibilities)
+            result = target->get_property_combined(property_name);
 
             // If empty, set to <property>-NOTFOUND per CMake convention
             if (result.empty()) {

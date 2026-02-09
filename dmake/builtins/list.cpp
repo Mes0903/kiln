@@ -411,7 +411,7 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
 
-            auto rx = Regex::compile_match(pattern);
+            auto rx = Regex::from_cmake_regex_match(pattern);
             if (!rx) {
                 interp.set_fatal_error("list(FILTER) invalid regex: " + rx.error());
                 return;
@@ -538,7 +538,7 @@ void register_list_builtins(Interpreter& interp) {
                         interp.set_fatal_error("list(TRANSFORM REPLACE) requires regex and replacement string");
                         return false;
                     }
-                    auto rx = Regex::compile(action_args[0]);
+                    auto rx = Regex::from_cmake_regex(action_args[0]);
                     if (!rx) {
                         interp.set_fatal_error("list(TRANSFORM REPLACE) invalid regex: " + rx.error());
                         return false;
@@ -587,7 +587,7 @@ void register_list_builtins(Interpreter& interp) {
                     interp.set_fatal_error("list(TRANSFORM) REGEX requires a pattern");
                     return;
                 }
-                auto rx = Regex::compile_match(selector_params[0]);
+                auto rx = Regex::from_cmake_regex_match(selector_params[0]);
                 if (!rx) {
                     interp.set_fatal_error("list(TRANSFORM) invalid REGEX selector: " + rx.error());
                     return;

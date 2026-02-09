@@ -308,7 +308,15 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     };
 
     auto merge = [](std::vector<std::string>& target, const std::vector<std::string>& source) {
-        target.insert(target.end(), source.begin(), source.end());
+        // Order-preserving dedup: keep first occurrence, skip duplicates.
+        // Prevents exponential growth in deep dependency graphs where many
+        // targets share common transitive dependencies.
+        std::unordered_set<std::string> seen(target.begin(), target.end());
+        for (const auto& s : source) {
+            if (seen.insert(s).second) {
+                target.push_back(s);
+            }
+        }
     };
 
     // Build list of transitive properties to resolve from the shared metadata table.
@@ -558,6 +566,14 @@ std::string Target::get_output_path() const {
     }
 
     return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
+}
+
+// Strip trailing slashes to normalize include paths for comparison.
+// Prevents mismatches like "/usr/include" vs "/usr/include/" when filtering implicit includes.
+static std::string normalize_include(const std::string& dir) {
+    auto end = dir.size();
+    while (end > 1 && dir[end - 1] == '/') --end;
+    return dir.substr(0, end);
 }
 
 static std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path) {
@@ -981,20 +997,20 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             auto pl_it = per_lang_props.find(lang_info.lang);
             if (pl_it != per_lang_props.end()) {
                 for (const auto& dir : pl_it->second.includes) {
-                    if (!implicit_includes.contains(dir)) ctx.includes.push_back(dir);
+                    if (!implicit_includes.contains(normalize_include(dir))) ctx.includes.push_back(dir);
                 }
                 for (const auto& dir : pl_it->second.system_includes) {
-                    if (!implicit_includes.contains(dir)) ctx.system_includes.push_back(dir);
+                    if (!implicit_includes.contains(normalize_include(dir))) ctx.system_includes.push_back(dir);
                 }
                 for (const auto& def : pl_it->second.definitions) ctx.definitions.push_back(def);
                 for (const auto& opt : pl_it->second.options) ctx.options.push_back(opt);
             }
         } else {
             for (const auto& dir : resolved_includes) {
-                if (!implicit_includes.contains(dir)) ctx.includes.push_back(dir);
+                if (!implicit_includes.contains(normalize_include(dir))) ctx.includes.push_back(dir);
             }
             for (const auto& dir : resolved_sys_includes) {
-                if (!implicit_includes.contains(dir)) ctx.system_includes.push_back(dir);
+                if (!implicit_includes.contains(normalize_include(dir))) ctx.system_includes.push_back(dir);
             }
             for (const auto& def : resolved_definitions) ctx.definitions.push_back(def);
             for (const auto& opt : resolved_options) ctx.options.push_back(opt);
@@ -1265,10 +1281,10 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     // These are directories already in the compiler's default search path
     std::set<std::string> implicit_includes;
     for (const auto& dir : CMakeArray(interp.get_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES"))) {
-        implicit_includes.insert(dir);
+        implicit_includes.emplace(normalize_include(dir));
     }
     for (const auto& dir : CMakeArray(interp.get_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES"))) {
-        implicit_includes.insert(dir);
+        implicit_includes.emplace(normalize_include(dir));
     }
 
     std::vector<std::string> obj_files;
@@ -1355,7 +1371,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     auto filter_implicit = [&](const std::vector<std::string>& dirs) {
         std::vector<std::string> result;
         for (const auto& dir : dirs) {
-            if (!implicit_includes.contains(dir)) result.push_back(dir);
+            if (!implicit_includes.contains(normalize_include(dir))) result.push_back(dir);
         }
         return result;
     };

@@ -506,7 +506,7 @@ void register_file_builtins(Interpreter& interp) {
             // Compile regex if provided
             std::optional<Regex> regex_filter;
             if (!regex_pattern.empty()) {
-                auto rx = Regex::compile(regex_pattern);
+                auto rx = Regex::from_cmake_regex(regex_pattern);
                 if (!rx) {
                     interp.set_fatal_error("file(STRINGS) invalid REGEX: " + rx.error());
                     return;
@@ -1093,7 +1093,7 @@ void register_file_builtins(Interpreter& interp) {
                     if (matches_glob(filename, pattern)) return true;
                 }
                 for (const auto& rx_str : regexes) {
-                    auto rx = Regex::compile(rx_str);
+                    auto rx = Regex::from_cmake_regex(rx_str);
                     if (rx && rx->search(filename)) return true;
                 }
                 return patterns.empty() && regexes.empty();

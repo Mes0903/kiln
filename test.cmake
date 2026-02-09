@@ -1,19 +1,19 @@
+# Quick memory check
 cmake_minimum_required(VERSION 3.16)
 project(test)
 
-# Simulate what folly_add_library does
-function(test_func)
-  set(_obj_target "my_obj_target")
-  file(WRITE "${CMAKE_BINARY_DIR}/dummy.cpp" "int dummy() { return 0; }")
-  add_library(${_obj_target} OBJECT "${CMAKE_BINARY_DIR}/dummy.cpp")
-  message(STATUS "Inside function: TARGET exists = $<TARGET_EXISTS:${_obj_target}>")
+function(test_cmake_parse_arguments)
+  cmake_parse_arguments(
+    FOO
+    "FLAG1;FLAG2"
+    "NAME;VALUE"
+    "SRCS;DEPS"
+    ${ARGN}
+  )
 endfunction()
 
-test_func()
-
-# Check if target is visible outside the function
-if(TARGET my_obj_target)
-  message(STATUS "Target visible outside function")
-else()
-  message(STATUS "Target NOT visible outside function")
-endif()
+# Call it 1000 times
+foreach(i RANGE 1 1000)
+  test_cmake_parse_arguments(NAME "test_${i}" SRCS a.cpp b.cpp c.cpp DEPS dep1 dep2)
+endforeach()
+message(STATUS "Done with 1000 calls")

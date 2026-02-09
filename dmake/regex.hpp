@@ -16,12 +16,20 @@ private:
     explicit Regex(Impl* impl) : impl_(impl) {}
 
 public:
-    // Compile pattern, returns error string on failure
-    // If warning is provided, it will be set if pattern required normalization
-    static std::expected<Regex, std::string> compile(std::string_view pattern, std::string* warning = nullptr);
+    // Compile a PCRE2 regex pattern (no transformation)
+    static std::expected<Regex, std::string> compile(std::string_view pattern);
 
     // Compile with full-match semantics (anchors pattern with ^(?:...)$)
-    static std::expected<Regex, std::string> compile_match(std::string_view pattern, std::string* warning = nullptr);
+    static std::expected<Regex, std::string> compile_match(std::string_view pattern);
+
+    // Compile a CMake regex pattern, normalizing CMake escape semantics to PCRE2.
+    // CMake treats \<non-meta> as literal (e.g. \h matches h), while PCRE2 gives
+    // special meaning to many escapes (\h, \d, \s, etc.) or errors on unknown ones.
+    // If warning is provided, it will be set if normalization was needed.
+    static std::expected<Regex, std::string> from_cmake_regex(std::string_view pattern, std::string* warning = nullptr);
+
+    // Like from_cmake_regex but with full-match semantics (^(?:...)$)
+    static std::expected<Regex, std::string> from_cmake_regex_match(std::string_view pattern, std::string* warning = nullptr);
 
     ~Regex();
     Regex(Regex&& other) noexcept;

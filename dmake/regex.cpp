@@ -77,16 +77,13 @@ static std::string normalize_cmake_regex(std::string_view pattern, std::string* 
     return result;
 }
 
-static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view pattern, std::string* warning) {
-    // Normalize the pattern for PCRE2 compatibility
-    std::string normalized = normalize_cmake_regex(pattern, warning);
-
+static std::expected<Regex::Impl*, std::string> compile_raw(std::string_view pattern) {
     int errcode;
     PCRE2_SIZE erroffset;
 
     auto* code = pcre2_compile(
-        reinterpret_cast<PCRE2_SPTR>(normalized.data()),
-        normalized.size(),
+        reinterpret_cast<PCRE2_SPTR>(pattern.data()),
+        pattern.size(),
         PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_DOTALL,
         &errcode, &erroffset, nullptr);
 
@@ -106,18 +103,34 @@ static std::expected<Regex::Impl*, std::string> compile_pattern(std::string_view
     return impl;
 }
 
-std::expected<Regex, std::string> Regex::compile(std::string_view pattern, std::string* warning) {
-    auto result = compile_pattern(pattern, warning);
+std::expected<Regex, std::string> Regex::compile(std::string_view pattern) {
+    auto result = compile_raw(pattern);
     if (!result) return std::unexpected(result.error());
     return Regex(*result);
 }
 
-std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern, std::string* warning) {
-    // Wrap in ^(?:...)$ for full-match semantics
+std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern) {
     std::string anchored = "^(?:";
     anchored.append(pattern);
     anchored += ")$";
-    auto result = compile_pattern(anchored, warning);
+    auto result = compile_raw(anchored);
+    if (!result) return std::unexpected(result.error());
+    return Regex(*result);
+}
+
+std::expected<Regex, std::string> Regex::from_cmake_regex(std::string_view pattern, std::string* warning) {
+    std::string normalized = normalize_cmake_regex(pattern, warning);
+    auto result = compile_raw(normalized);
+    if (!result) return std::unexpected(result.error());
+    return Regex(*result);
+}
+
+std::expected<Regex, std::string> Regex::from_cmake_regex_match(std::string_view pattern, std::string* warning) {
+    std::string normalized = normalize_cmake_regex(pattern, warning);
+    std::string anchored = "^(?:";
+    anchored.append(normalized);
+    anchored += ")$";
+    auto result = compile_raw(anchored);
     if (!result) return std::unexpected(result.error());
     return Regex(*result);
 }

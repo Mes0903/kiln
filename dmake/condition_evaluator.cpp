@@ -355,7 +355,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
             }
             std::string pattern = evaluate_token(condition[pos++]);
             std::string regex_warning;
-            auto re = Regex::compile(pattern, &regex_warning);
+            auto re = Regex::from_cmake_regex(pattern, &regex_warning);
             if (!re) {
                 error_msg = "MATCHES: invalid regex: " + re.error();
                 return false;

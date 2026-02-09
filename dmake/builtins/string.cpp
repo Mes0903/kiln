@@ -399,7 +399,7 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                auto re = Regex::compile(pattern);
+                auto re = Regex::from_cmake_regex(pattern);
                 if (!re) {
                     interp.set_fatal_error("string(REGEX MATCH) invalid regex: " + re.error());
                     return;
@@ -439,7 +439,7 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                auto re = Regex::compile(pattern);
+                auto re = Regex::from_cmake_regex(pattern);
                 if (!re) {
                     interp.set_fatal_error("string(REGEX MATCHALL) invalid regex: " + re.error());
                     return;
@@ -471,7 +471,7 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                auto re = Regex::compile(pattern);
+                auto re = Regex::from_cmake_regex(pattern);
                 if (!re) {
                     interp.set_fatal_error("string(REGEX REPLACE) invalid regex: " + re.error());
                     return;
