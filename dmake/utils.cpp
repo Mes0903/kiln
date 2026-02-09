@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <cstring>
 #include <chrono>
 
 dmake::Hash256 dmake::blake2b(const void *data, size_t len, const void* key, size_t keylen)
@@ -223,71 +224,25 @@ dmake::CommandResult dmake::run_command(const std::vector<std::string>& command,
     std::string stdin_file, stdout_file, stderr_file;
     bool stdout_append = false;
 
-    // Re-tokenize command vector into shell-like tokens, splitting on
-    // unquoted redirect operators and pipe/logic operators.
-    std::vector<std::string> tokens;
-    for (const auto& arg : command) {
-        size_t i = 0;
-        size_t len = arg.size();
-        std::string cur;
-        while (i < len) {
-            char c = arg[i];
-            // Skip over quoted regions — they are literal, no redirect splitting
-            if (c == '\'' || c == '"') {
-                char quote = c;
-                cur += c;
-                ++i;
-                while (i < len && arg[i] != quote) { cur += arg[i]; ++i; }
-                if (i < len) { cur += arg[i]; ++i; }
-                continue;
-            }
-            if (c == '\\' && i + 1 < len) {
-                cur += c;
-                cur += arg[++i];
-                ++i;
-                continue;
-            }
-            // Check for redirect operators at this position
-            // Order matters: check longer prefixes first
-            std::string_view rest(arg.data() + i, len - i);
-            size_t redir_len = 0;
-            if (rest.starts_with("2>>")) redir_len = 3;
-            else if (rest.starts_with("1>>")) redir_len = 3;
-            else if (rest.starts_with(">>"))  redir_len = 2;
-            else if (rest.starts_with("2>") && !(rest.size() > 2 && rest[2] == '&')) redir_len = 2;
-            else if (rest.starts_with("1>"))  redir_len = 2;
-            else if (c == '>')                redir_len = 1;
-            else if (c == '<')                redir_len = 1;
+    // Process command vector: each element is already a distinct argument.
+    // Only check for redirect operators as whole arguments or argument prefixes
+    // (e.g. ">file", "< input"), NOT inside argument content.
+    // This is critical for execvp where arguments are passed directly.
+    for (size_t i = 0; i < command.size(); ++i) {
+        const auto& arg = command[i];
 
-            if (redir_len > 0) {
-                // Flush any accumulated text as a separate token
-                if (!cur.empty()) { tokens.push_back(std::move(cur)); cur.clear(); }
-                // Emit the redirect operator + everything after it as one token
-                // (e.g. ">file" or just ">")
-                tokens.push_back(std::string(rest.substr(0, redir_len)) + std::string(rest.substr(redir_len)));
-                break;  // rest of this arg is consumed by the redirect path
-            }
-            cur += c;
-            ++i;
-        }
-        if (!cur.empty()) tokens.push_back(std::move(cur));
-    }
-
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        const auto& tok = tokens[i];
-
-        if (tok == "|" || tok == "&&" || tok == "||" || tok == "2>&1") {
-            // Genuine shell pipeline/logic — fall back to shell
+        if (arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1") {
+            // Shell pipeline/logic — fall back to shell
             return run_command(join_command_raw(command), working_dir);
         }
 
-        size_t pfx = shell_redirect_prefix_len(tok);
+        size_t pfx = shell_redirect_prefix_len(arg);
         if (pfx > 0) {
-            std::string op = tok.substr(0, pfx);
-            std::string path = tok.substr(pfx);
-            // Path may be in next token if this token is just the operator
-            if (path.empty() && i + 1 < tokens.size()) {
-                path = tokens[++i];
+            std::string op = arg.substr(0, pfx);
+            std::string path = arg.substr(pfx);
+            // Path may be in next argument if this one is just the operator
+            if (path.empty() && i + 1 < command.size()) {
+                path = command[++i];
             }
             path = strip_shell_quoting(path);
 
@@ -297,7 +252,7 @@ dmake::CommandResult dmake::run_command(const std::vector<std::string>& command,
             else if (op == "2>") stderr_file = path;
             else if (op == "2>>") stderr_file = path;
         } else {
-            argv_strs.push_back(strip_shell_quoting(tok));
+            argv_strs.push_back(arg);
         }
     }
 
@@ -357,7 +312,9 @@ dmake::CommandResult dmake::run_command(const std::vector<std::string>& command,
         argv.push_back(nullptr);
 
         execvp(argv[0], const_cast<char* const*>(argv.data()));
-        _exit(127);  // exec failed
+        // exec failed — write error to the pipe so the parent can report it
+        fprintf(stderr, "exec: %s: %s\n", argv[0], strerror(errno));
+        _exit(127);
     }
 
     // Parent

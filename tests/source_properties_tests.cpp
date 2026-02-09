@@ -200,7 +200,8 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
         REQUIRE(result.error().message.find("PROPERTIES") != std::string::npos);
     }
 
-    SECTION("Error on empty file list") {
+    SECTION("Empty file list is accepted with warning") {
+        // Undocumented CMake behavior: empty file list is silently accepted
         std::stringstream output;
         dmake::Interpreter interpreter("", &output);
 
@@ -212,7 +213,7 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
-        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.has_value());
     }
 
     SECTION("Error on odd property arguments") {

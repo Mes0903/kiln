@@ -593,21 +593,31 @@ static void resolve_command_target_references(
             resolved = it->second;
         }
 
-        // Fall back: executable whose OUTPUT_NAME matches the command
+        // Fall back: executable whose OUTPUT_NAME or output path matches the command
         if (!resolved) {
             static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
             static std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
+            static std::unordered_map<std::string, std::shared_ptr<Target>> output_path_map;
             if (&all_targets != cached_source) {
                 cached_source = &all_targets;
                 output_name_map.clear();
+                output_path_map.clear();
                 for (const auto& [name, target] : all_targets) {
-                    if (target->get_type() == TargetType::EXECUTABLE)
+                    if (target->get_type() == TargetType::EXECUTABLE) {
                         output_name_map.emplace(target->get_output_name(), target);
+                        auto path = target->get_output_path();
+                        if (!path.empty()) output_path_map.emplace(path, target);
+                    }
                 }
             }
             auto oit = output_name_map.find(cmd[0]);
             if (oit != output_name_map.end())
                 resolved = oit->second;
+            if (!resolved) {
+                auto pit = output_path_map.find(cmd[0]);
+                if (pit != output_path_map.end())
+                    resolved = pit->second;
+            }
         }
 
         if (resolved) {
@@ -803,7 +813,10 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                 if (val.find("$<COMPILE_LANG") != std::string::npos) {
                     auto eval_result = lang_eval.evaluate(val);
                     if (eval_result && !eval_result->empty()) {
-                        result.push_back(*eval_result);
+                        // Genex may produce semicolon-separated lists
+                        for (auto sv : CMakeArrayView(*eval_result)) {
+                            result.emplace_back(sv);
+                        }
                     }
                 } else {
                     result.push_back(val);
@@ -1024,7 +1037,10 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
                         }
                         auto result = src_eval_storage->evaluate(opt);
                         if (result && !result->empty()) {
-                            ctx.options.push_back(*result);
+                            // Genex may produce semicolon-separated lists
+                            for (auto sv : CMakeArrayView(*result)) {
+                                ctx.options.emplace_back(sv);
+                            }
                         }
                     } else {
                         ctx.options.push_back(std::move(opt));
@@ -1323,7 +1339,10 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             if (val.find("$<COMPILE_LANG") != std::string::npos) {
                 auto eval_result = pch_evaluator.evaluate(val);
                 if (eval_result && !eval_result->empty()) {
-                    result.push_back(*eval_result);
+                    // Genex may produce semicolon-separated lists
+                    for (auto sv : CMakeArrayView(*eval_result)) {
+                        result.emplace_back(sv);
+                    }
                 }
             } else {
                 result.push_back(val);

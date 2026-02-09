@@ -69,6 +69,19 @@ public:
     bool has_task(const std::string& id) const { return tasks_.count(id); }
     BuildTask& get_task(const std::string& id) { return tasks_.at(id); }
 
+    // Returns dependency IDs that no task produces (for resolving missing targets)
+    std::vector<std::string> get_missing_dependencies() const {
+        std::vector<std::string> missing;
+        for (const auto& [id, task] : tasks_) {
+            for (const auto& dep : task.dependencies) {
+                if (!tasks_.count(dep)) {
+                    missing.push_back(dep);
+                }
+            }
+        }
+        return missing;
+    }
+
     // C++20 modules support: inject dependencies after collator runs
     // Called by collator task to update compile task dependencies based on module imports
     void inject_module_dependencies(

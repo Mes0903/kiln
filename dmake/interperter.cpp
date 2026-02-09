@@ -268,6 +268,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         for (const auto& dep : target->get_manually_added_dependencies()) {
             collect(dep);
         }
+
     };
 
     if (requested_targets.empty()) {
@@ -354,6 +355,28 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         ProfileScope scope("generate tasks", "graph");
         for (const auto& name : targets_to_build) {
             targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+        }
+
+        // Resolve missing dependencies: tasks may reference targets (e.g.
+        // custom commands invoking llvm-min-tblgen) that weren't in the
+        // initial targets_to_build set. Find them and generate their tasks.
+        std::unordered_map<std::string, std::string> output_to_target;
+        for (const auto& [name, target] : targets_) {
+            auto path = target->get_output_path();
+            if (!path.empty()) output_to_target[path] = name;
+        }
+
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (const auto& missing : graph.get_missing_dependencies()) {
+                auto it = output_to_target.find(missing);
+                if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
+                    targets_to_build.insert(it->second);
+                    targets_[it->second]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    changed = true;
+                }
+            }
         }
     }
 

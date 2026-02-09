@@ -19,15 +19,15 @@ class ProgressBar {
 public:
     explicit ProgressBar(int total_tasks, bool is_tty);
 
-    // Call before printing a permanent line to erase the progress bar.
-    // Returns with the cursor at column 0 on a clean line.
+    // Atomically: erase bar, print permanent line, redraw bar.
+    // Single write to stdout prevents visible flicker.
+    void print_line(const std::string& line);
+
+    // Erase the progress bar. Caller must flush stdout before writing
+    // to a different stream (e.g. stderr).
     void erase();
 
-    // Call after printing a permanent line (with \n) to schedule a redraw.
-    void request_redraw();
-
     // Redraw the progress bar if enough time has passed since last draw.
-    // Call this after erase() + permanent line, or periodically from a tick.
     void redraw();
 
     // Track task lifecycle
@@ -50,7 +50,8 @@ public:
 
 private:
     void draw_locked();
-    void update_title_locked();
+    std::string build_erase_locked() const;
+    std::string build_bar_locked();
     int get_terminal_width() const;
     std::string build_progress_line(int width) const;
 

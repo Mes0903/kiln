@@ -3307,6 +3307,26 @@ TEST_CASE("Parser handles escaped quotes in unquoted arguments", "[parser]") {
     REQUIRE(output == "done\n");
 }
 
+TEST_CASE("Backslash-newline line continuation in quoted strings", "[parser]") {
+    // In CMake, backslash followed by newline in a quoted string is a line
+    // continuation — both the backslash and newline are dropped entirely.
+    // This is critical for multi-line Python/shell scripts in custom commands.
+    auto output = run_script("message(\"line1\\\nline2\")");
+    REQUIRE(output == "line1line2\n");
+
+    // With leading whitespace on the continuation line (whitespace preserved)
+    output = run_script("message(\"hello\\\n    world\")");
+    REQUIRE(output == "hello    world\n");
+
+    // Multiple continuations
+    output = run_script("message(\"a\\\nb\\\nc\")");
+    REQUIRE(output == "abc\n");
+
+    // Continuation doesn't affect other escape sequences
+    output = run_script("message(\"tab\\there\\\ncont\")");
+    REQUIRE(output == "tab\therecont\n");
+}
+
 // Bug fix tests from differential fuzzing
 
 TEST_CASE("Empty list elements are preserved in string representation", "[interpreter][bugfix]") {

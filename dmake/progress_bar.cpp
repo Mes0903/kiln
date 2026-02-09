@@ -14,33 +14,92 @@ ProgressBar::ProgressBar(int total_tasks, bool is_tty)
 {
 }
 
+// Build the escape sequence to erase the current bar content.
+// Must be called with mutex_ held.
+std::string ProgressBar::build_erase_locked() const {
+    std::string seq;
+    if (!bar_visible_) return seq;
+
+    int term_width = get_terminal_width();
+    if (last_rendered_width_ > term_width && term_width > 0) {
+        int extra_lines = (last_rendered_width_ - 1) / term_width;
+        for (int i = 0; i < extra_lines; i++) {
+            seq += "\x1B[A\x1B[2K";  // cursor up, erase line
+        }
+    }
+    seq += "\r\x1B[K";
+    return seq;
+}
+
+// Build the bar content + title update sequence.
+// Must be called with mutex_ held. Updates last_rendered_width_ and bar_visible_.
+std::string ProgressBar::build_bar_locked() {
+    auto now = std::chrono::steady_clock::now();
+    if (now - start_time_ < initial_delay_) return {};
+
+    int term_width = get_terminal_width();
+    std::string line = build_progress_line(term_width);
+    if (static_cast<int>(line.size()) >= term_width) {
+        line.resize(term_width - 1);
+    }
+
+    std::string output;
+    output += "\r\x1B[K";
+    output += line;
+
+    // Fold title update into same write
+    int done = completed_.load(std::memory_order_relaxed);
+    int tot = total_.load(std::memory_order_relaxed);
+    output += "\x1B]0;dmake [";
+    output += std::to_string(done);
+    output += "/";
+    output += std::to_string(tot);
+    output += "]\x07";
+
+    last_rendered_width_ = static_cast<int>(line.size());
+    last_draw_time_ = now;
+    bar_visible_ = true;
+    return output;
+}
+
+void ProgressBar::print_line(const std::string& line) {
+    if (!is_tty_) {
+        // Non-TTY: just write the line, no bar management
+        std::cout.write(line.data(), line.size());
+        std::cout.put('\n');
+        std::cout.flush();
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Build everything into one string: erase + permanent line + new bar.
+    // Single write syscall so the terminal never shows an intermediate state.
+    std::string output;
+    output += build_erase_locked();
+    bar_visible_ = false;
+    last_rendered_width_ = 0;
+
+    output += line;
+    output += '\n';
+    output += build_bar_locked();
+
+    std::cout.write(output.data(), output.size());
+    std::cout.flush();
+}
+
 void ProgressBar::erase() {
     if (!is_tty_) return;
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (!bar_visible_) return;
 
-    int term_width = get_terminal_width();
-
-    // If previous render was wider than current terminal, it wrapped.
-    // Clean up the extra lines.
-    if (last_rendered_width_ > term_width && term_width > 0) {
-        int extra_lines = (last_rendered_width_ - 1) / term_width;
-        for (int i = 0; i < extra_lines; i++) {
-            std::cout << "\x1B[A\x1B[2K";  // cursor up, erase line
-        }
-    }
-
-    std::cout << "\r\x1B[K" << std::flush;
+    std::string seq = build_erase_locked();
+    std::cout.write(seq.data(), seq.size());
+    // No flush — caller's subsequent output will carry the erase.
+    // If writing to stderr after this, caller must flush stdout first.
     bar_visible_ = false;
     last_rendered_width_ = 0;
-}
-
-void ProgressBar::request_redraw() {
-    if (!is_tty_) return;
-    // Force next redraw() to actually draw regardless of throttle
-    std::lock_guard<std::mutex> lock(mutex_);
-    last_draw_time_ = std::chrono::steady_clock::time_point{};
 }
 
 void ProgressBar::redraw() {
@@ -48,9 +107,6 @@ void ProgressBar::redraw() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto now = std::chrono::steady_clock::now();
-
-    // Always update terminal title (cheap, no visual flicker)
-    update_title_locked();
 
     // Don't show progress bar for fast builds
     if (now - start_time_ < initial_delay_) return;
@@ -89,17 +145,11 @@ void ProgressBar::finish() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!bar_visible_) return;
 
-    int term_width = get_terminal_width();
-    if (last_rendered_width_ > term_width && term_width > 0) {
-        int extra_lines = (last_rendered_width_ - 1) / term_width;
-        for (int i = 0; i < extra_lines; i++) {
-            std::cout << "\x1B[A\x1B[2K";
-        }
-    }
-
-    std::cout << "\r\x1B[K" << std::flush;
+    std::string seq = build_erase_locked();
     // Reset terminal title
-    std::cout << "\x1B]0;\x07" << std::flush;
+    seq += "\x1B]0;\x07";
+    std::cout.write(seq.data(), seq.size());
+    std::cout.flush();
     bar_visible_ = false;
     last_rendered_width_ = 0;
 }
@@ -116,28 +166,34 @@ void ProgressBar::draw_locked() {
     int term_width = get_terminal_width();
     std::string line = build_progress_line(term_width);
 
-    // Truncate to terminal width to prevent wrapping
     if (static_cast<int>(line.size()) >= term_width) {
         line.resize(term_width - 1);
     }
 
-    // Clean up any previous wrapped content
+    // Build the entire output: erase previous + new content + title.
+    std::string output;
     if (bar_visible_ && last_rendered_width_ > term_width && term_width > 0) {
         int extra_lines = (last_rendered_width_ - 1) / term_width;
         for (int i = 0; i < extra_lines; i++) {
-            std::cout << "\x1B[A\x1B[2K";
+            output += "\x1B[A\x1B[2K";
         }
     }
 
-    std::cout << "\r\x1B[K" << line << std::flush;
-    last_rendered_width_ = static_cast<int>(line.size());
-    bar_visible_ = true;
-}
+    output += "\r\x1B[K";
+    output += line;
 
-void ProgressBar::update_title_locked() {
     int done = completed_.load(std::memory_order_relaxed);
     int tot = total_.load(std::memory_order_relaxed);
-    std::cout << "\x1B]0;dmake [" << done << "/" << tot << "]\x07" << std::flush;
+    output += "\x1B]0;dmake [";
+    output += std::to_string(done);
+    output += "/";
+    output += std::to_string(tot);
+    output += "]\x07";
+
+    std::cout.write(output.data(), output.size());
+    std::cout.flush();
+    last_rendered_width_ = static_cast<int>(line.size());
+    bar_visible_ = true;
 }
 
 std::string ProgressBar::build_progress_line(int width) const {

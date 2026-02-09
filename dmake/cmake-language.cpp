@@ -1049,6 +1049,11 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
         if (escaped) {
             // Interpret CMake escape sequences
             switch (current) {
+                case '\n':
+                    // Line continuation: backslash-newline is dropped entirely
+                    // (CMake collapses \ + newline, keeping any leading whitespace
+                    // on the continuation line as-is)
+                    break;
                 case 'n':  current_literal += '\n'; break;
                 case 't':  current_literal += '\t'; break;
                 case 'r':  current_literal += '\r'; break;

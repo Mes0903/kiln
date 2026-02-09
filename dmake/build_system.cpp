@@ -6,6 +6,7 @@
 #include "genex_evaluator.hpp"
 #include "profiler.hpp"
 #include "printing.hpp"
+#include "CMakeArray.hpp"
 #include "progress_bar.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
@@ -98,8 +99,11 @@ std::expected<void, std::string> BuildGraph::finalize(const GenexEvaluationConte
                         "  Error: " + eval.error());
                 }
                 // Only add non-empty results (genex can evaluate to empty string)
+                // Genex may produce semicolon-separated lists
                 if (!eval->empty()) {
-                    evaluated_cmd.push_back(*eval);
+                    for (auto sv : CMakeArrayView(*eval)) {
+                        evaluated_cmd.emplace_back(sv);
+                    }
                 }
             }
             if (!evaluated_cmd.empty()) {
@@ -463,30 +467,34 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     }
                     if (!task_error.empty()) break;
 
-                    // Helper: print a permanent build status line
-                    // On TTY: erase progress bar, print line, request redraw
-                    // On non-TTY: prefix with [N/M] counter
+                    // Helper: print a permanent build status line.
+                    // Uses print_line() to atomically erase bar + print + redraw
+                    // in a single write, preventing flicker.
                     auto print_status = [&](std::string_view verb, std::string_view target_display) {
                         int done = progress.mark_completed();
                         active_display_name = std::string(target_display);
                         progress.task_started(active_display_name);
 
-                        std::lock_guard<std::mutex> lock(output_mutex_);
-                        progress.erase();
+                        auto color = [&](std::string_view code) -> std::string_view {
+                            return stdout_is_tty ? code : std::string_view{};
+                        };
+
+                        std::ostringstream oss;
                         if (stdout_is_tty) {
-                            std::cout << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << std::setw(12) << verb
-                                      << dmake::c(std::cout, dmake::colors::RESET) << " ["
-                                      << artifact_name << "] " << target_display << std::endl;
+                            oss << color(dmake::colors::BOLD_GREEN) << std::setw(12) << verb
+                                << color(dmake::colors::RESET) << " ["
+                                << artifact_name << "] " << target_display;
                         } else {
                             int tot = progress.total();
                             int width = static_cast<int>(std::to_string(tot).size());
-                            std::cout << "   [" << std::setw(width) << done << "/" << tot << "] "
-                                      << dmake::c(std::cout, dmake::colors::BOLD_GREEN) << verb
-                                      << dmake::c(std::cout, dmake::colors::RESET) << " ["
-                                      << artifact_name << "] " << target_display << std::endl;
+                            oss << "   [" << std::setw(width) << done << "/" << tot << "] "
+                                << color(dmake::colors::BOLD_GREEN) << verb
+                                << color(dmake::colors::RESET) << " ["
+                                << artifact_name << "] " << target_display;
                         }
-                        progress.request_redraw();
-                        progress.redraw();
+
+                        std::lock_guard<std::mutex> lock(output_mutex_);
+                        progress.print_line(oss.str());
                     };
 
                     // C++20 modules: handle collator tasks specially (in-process execution)
@@ -569,16 +577,14 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 {
                                     std::lock_guard<std::mutex> lock(output_mutex_);
                                     progress.erase();
+                                    std::cout.flush();  // erase wrote to cout; flush before cerr
                                     if (!result.output.empty()) std::cerr << result.output << std::endl;
                                 }
                                 task_error = "Command failed: " + join_command_raw(cmd);
                                 break;
                             } else if (!result.output.empty()) {
                                 std::lock_guard<std::mutex> lock(output_mutex_);
-                                progress.erase();
-                                std::cout << result.output << std::endl;
-                                progress.request_redraw();
-                                progress.redraw();
+                                progress.print_line(result.output);
                             }
                         }
                         if (!task_error.empty()) break;
