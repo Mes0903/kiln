@@ -379,6 +379,60 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Pre-process argv: handle "dmake [project] [opts] -- <verb> [args]" pattern.
+    // When "--" is followed by a known verb (run/test/build/clean/install) and no
+    // subcommand appears before "--", restructure args so CLI11 sees the verb as a
+    // proper subcommand. This allows e.g.: dmake ~/path -DVAR=VAL -- run cmake --help
+    std::vector<std::string> args_storage;
+    std::vector<char*> new_argv_ptrs;
+    {
+        static constexpr std::string_view known_verbs[] = {"build", "test", "run", "clean", "install"};
+        int separator_pos = -1;
+        bool verb_before_sep = false;
+
+        for (int i = 1; i < argc; ++i) {
+            std::string_view arg(argv[i]);
+            if (arg == "--") {
+                separator_pos = i;
+                break;
+            }
+            for (auto v : known_verbs) {
+                if (arg == v) { verb_before_sep = true; break; }
+            }
+            if (verb_before_sep) break;
+        }
+
+        if (separator_pos > 0 && !verb_before_sep && separator_pos + 1 < argc) {
+            std::string_view next_arg(argv[separator_pos + 1]);
+            bool is_verb = false;
+            for (auto v : known_verbs) {
+                if (next_arg == v) { is_verb = true; break; }
+            }
+            if (is_verb) {
+                // Restructure: [dmake, verb, pre_args..., --, verb_args...]
+                args_storage.emplace_back(argv[0]);
+                args_storage.emplace_back(argv[separator_pos + 1]); // verb moved to front
+                for (int i = 1; i < separator_pos; ++i) {
+                    args_storage.emplace_back(argv[i]);
+                }
+                if (separator_pos + 2 < argc) {
+                    args_storage.emplace_back("--");
+                    for (int i = separator_pos + 2; i < argc; ++i) {
+                        args_storage.emplace_back(argv[i]);
+                    }
+                }
+
+                new_argv_ptrs.reserve(args_storage.size() + 1);
+                for (auto& s : args_storage) {
+                    new_argv_ptrs.push_back(s.data());
+                }
+                new_argv_ptrs.push_back(nullptr);
+                argc = static_cast<int>(args_storage.size());
+                argv = new_argv_ptrs.data();
+            }
+        }
+    }
+
     CLI::App app{"dmake - A modern C++ build system with CMake compatibility.\n"
                   "  Use 'dmake <subcommand> --help' for subcommand-specific options."};
     app.set_version_flag("-v,--version", "0.1.0-alpha");
@@ -473,8 +527,10 @@ Examples:
         add_global_opts(sub);
     }
 
+    std::vector<std::string> positionals;
+    app.add_option("positionals", positionals, "Project directory and/or target names");
+
     app.require_subcommand(0, 1);
-    app.allow_extras();
 
     CLI11_PARSE(app, argc, argv);
 
@@ -685,11 +741,10 @@ Examples:
     std::vector<std::string> targets = build_targets;
 
     if (!build_cmd->parsed() && !test_cmd->parsed() && !run_cmd->parsed() && !clean_cmd->parsed() && !install_cmd->parsed()) {
-        auto remaining = app.remaining();
-        if (!remaining.empty()) {
-            project_dir = remaining[0];
-            for (size_t i = 1; i < remaining.size(); ++i) {
-                targets.push_back(remaining[i]);
+        if (!positionals.empty()) {
+            project_dir = positionals[0];
+            for (size_t i = 1; i < positionals.size(); ++i) {
+                targets.push_back(positionals[i]);
             }
         }
     }
