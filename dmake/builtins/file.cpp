@@ -50,33 +50,106 @@ static int64_t get_dir_mtime(const std::string& path) {
     return 0;
 }
 
-// Recursively collect matching files using cached directory listings
-void glob_directory(Interpreter& interp, const std::string& dir_str,
-                    const std::string& leaf_pattern, bool recurse,
-                    const std::string& relative, CMakeArray& results,
-                    std::map<std::string, int64_t>& dir_mtimes) {
-    auto* entries = interp.get_directory_listing(dir_str);
-    if (!entries) return;
+// Convert a glob component (e.g. "*.cpp", "lib?") to a regex pattern.
+// * → [^/]*   ? → [^/]   literal chars are escaped.
+std::string glob_component_to_regex(std::string_view glob) {
+    std::string rx;
+    for (size_t i = 0; i < glob.size(); ++i) {
+        char c = glob[i];
+        if (c == '*') {
+            rx += "[^/]*";
+        } else if (c == '?') {
+            rx += "[^/]";
+        } else if (std::string_view("\\^$.|+()[]{}").find(c) != std::string_view::npos) {
+            rx += '\\';
+            rx += c;
+        } else {
+            rx += c;
+        }
+    }
+    return rx;
+}
+
+// Compile glob pattern components into Regex objects (one per component).
+// Returns empty vector on compilation failure (shouldn't happen for valid globs).
+std::vector<Regex> compile_glob_components(const std::vector<std::string>& components) {
+    std::vector<Regex> compiled;
+    compiled.reserve(components.size());
+    for (const auto& comp : components) {
+        auto rx = Regex::compile_match(glob_component_to_regex(comp));
+        if (!rx) return {};  // shouldn't happen
+        compiled.push_back(std::move(*rx));
+    }
+    return compiled;
+}
+
+// Walk pattern components recursively, matching directories at intermediate
+// levels and files/dirs at the leaf level.  Handles patterns like
+// "*/CMakeLists.txt" and "libs/*/src/*.cpp".
+// `compiled` is the pre-compiled regex for each component (parallel to `components`).
+void glob_components(Interpreter& interp, const std::string& dir_str,
+                     const std::vector<std::string>& components,
+                     const std::vector<Regex>& compiled,
+                     size_t comp_idx,
+                     bool recurse, const std::string& relative,
+                     CMakeArray& results,
+                     std::map<std::string, int64_t>& dir_mtimes) {
+    if (comp_idx >= components.size()) return;
 
     dir_mtimes[dir_str] = get_dir_mtime(dir_str);
 
-    auto* subdirs = interp.get_directory_subdirs(dir_str);
+    const std::string& comp = components[comp_idx];
+    const Regex& rx = compiled[comp_idx];
+    bool is_last = (comp_idx + 1 == components.size());
+    bool has_wildcard = comp.find('*') != std::string::npos ||
+                        comp.find('?') != std::string::npos;
 
-    // Match entries against pattern (files and directories)
-    for (const auto& name : *entries) {
-        if (!matches_glob(name, leaf_pattern)) continue;
+    if (is_last) {
+        // Leaf component — match against directory entries (files and dirs)
+        auto* entries = interp.get_directory_listing(dir_str);
+        if (!entries) return;
 
-        if (!relative.empty()) {
-            results.push_back(std::filesystem::relative(dir_str + '/' + name, relative).string());
-        } else {
-            results.push_back(dir_str + '/' + name);
+        for (const auto& name : *entries) {
+            if (!rx.match(name)) continue;
+            if (!relative.empty()) {
+                results.push_back(
+                    std::filesystem::relative(dir_str + '/' + name, relative).string());
+            } else {
+                results.push_back(dir_str + '/' + name);
+            }
         }
-    }
 
-    // Recurse into subdirectories
-    if (recurse && subdirs) {
-        for (const auto& subdir_name : *subdirs) {
-            glob_directory(interp, dir_str + '/' + subdir_name, leaf_pattern, true, relative, results, dir_mtimes);
+        // For GLOB_RECURSE, also descend into all subdirs with the same leaf
+        if (recurse) {
+            auto* subdirs = interp.get_directory_subdirs(dir_str);
+            if (subdirs) {
+                for (const auto& subdir_name : *subdirs) {
+                    glob_components(interp, dir_str + '/' + subdir_name,
+                                    components, compiled, comp_idx, true,
+                                    relative, results, dir_mtimes);
+                }
+            }
+        }
+    } else {
+        // Intermediate component — match against subdirectories only
+        if (!has_wildcard) {
+            // Fixed path component, just advance without listing
+            std::string next = dir_str + '/' + comp;
+            if (std::filesystem::is_directory(next)) {
+                glob_components(interp, next, components, compiled,
+                                comp_idx + 1, recurse, relative,
+                                results, dir_mtimes);
+            }
+        } else {
+            auto* subdirs = interp.get_directory_subdirs(dir_str);
+            if (!subdirs) return;
+
+            for (const auto& subdir_name : *subdirs) {
+                if (!rx.match(subdir_name)) continue;
+                glob_components(interp, dir_str + '/' + subdir_name,
+                                components, compiled, comp_idx + 1,
+                                recurse, relative, results, dir_mtimes);
+            }
         }
     }
 }
@@ -142,19 +215,29 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
             search_dir = search_dir.parent_path();
         }
 
-        // Extract the leaf filename pattern for matching
-        std::string leaf_pattern = remaining_pattern;
-        size_t last_slash = remaining_pattern.find_last_of("/\\");
-        if (last_slash != std::string::npos) {
-            leaf_pattern = remaining_pattern.substr(last_slash + 1);
+        // Split remaining pattern into path components for multi-level matching
+        std::vector<std::string> pattern_components;
+        {
+            std::filesystem::path rp(remaining_pattern);
+            for (const auto& c : rp) {
+                std::string s = c.string();
+                if (s == "/" || s == "\\") continue;
+                // ** in a component means "match everything recursively"
+                if (s == "**") s = "*";
+                pattern_components.push_back(std::move(s));
+            }
         }
-        // If leaf is **, we match everything
-        if (leaf_pattern == "**") leaf_pattern = "*";
+        if (pattern_components.empty()) {
+            pattern_components.push_back("*");
+        }
+
+        // Compile glob patterns to PCRE2 regexes (reused across all entries)
+        auto compiled = compile_glob_components(pattern_components);
 
         std::string search_dir_str = search_dir.string();
 
         // Cache key: dir + pattern + recurse + relative
-        std::string cache_sig = search_dir_str + "|" + leaf_pattern +
+        std::string cache_sig = search_dir_str + "|" + remaining_pattern +
                                 "|r:" + (pattern_recurse ? "1" : "0") +
                                 "|rel:" + relative;
 
@@ -187,7 +270,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
             // Cache miss — run the glob
             CMakeArray pattern_results;
             std::map<std::string, int64_t> dir_mtimes;
-            glob_directory(interp, search_dir_str, leaf_pattern, pattern_recurse, relative, pattern_results, dir_mtimes);
+            glob_components(interp, search_dir_str, pattern_components, compiled, 0, pattern_recurse, relative, pattern_results, dir_mtimes);
 
             match_count = pattern_results.size();
 
@@ -203,7 +286,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         if (t_start) {
             int64_t dur = profiler.now_us() - t_start;
             profiler.add_complete(
-                "glob " + leaf_pattern, "configure", t_start, dur,
+                "glob " + remaining_pattern, "configure", t_start, dur,
                 Profiler::Args{std::map<std::string, std::string>{
                     {"pattern", pattern},
                     {"dir", search_dir_str},
