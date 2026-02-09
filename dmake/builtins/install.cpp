@@ -83,7 +83,11 @@ void parse_install_targets(
     }
 
     if (rule->targets.empty()) {
-        interp.set_fatal_error("install(TARGETS) requires at least one target");
+        // CMake silently accepts install(TARGETS) with no targets
+        // (e.g. when a variable expands to empty)
+        interp.print_message("WARNING",
+            "install(TARGETS) called with no targets "
+            "(undocumented CMake behavior, accepted for compatibility)", true);
         return;
     }
 
@@ -215,6 +219,7 @@ void parse_install_files(
     parser.list("PERMISSIONS", rule->destination.permissions);
     parser.list("CONFIGURATIONS", rule->destination.configurations);
     parser.value("COMPONENT", rule->destination.component);
+    parser.value("RENAME", rule->rename);
     parser.flag("OPTIONAL", rule->destination.optional);
     parser.flag("EXCLUDE_FROM_ALL", rule->destination.exclude_from_all);
     PARSE_OR_RETURN(parser, interp, parse_args);
@@ -223,6 +228,12 @@ void parse_install_files(
     if (raw_files.empty()) {
         interp.print_message("WARNING",
             "install(" + std::string(mode) + ") called with no files - ignoring (undocumented CMake behavior)", true);
+        return;
+    }
+
+    // RENAME only valid with a single file
+    if (!rule->rename.empty() && raw_files.size() > 1) {
+        interp.set_fatal_error("install(" + std::string(mode) + ") RENAME may only be used with one file");
         return;
     }
 
@@ -293,7 +304,11 @@ void parse_install_directory(
     }
 
     if (rule->directories.empty()) {
-        interp.set_fatal_error("install(DIRECTORY) requires at least one directory");
+        // CMake silently accepts install(DIRECTORY) with no directories
+        // (e.g. when a variable expands to empty)
+        interp.print_message("WARNING",
+            "install(DIRECTORY) called with no directories "
+            "(undocumented CMake behavior, accepted for compatibility)", true);
         return;
     }
 
@@ -391,45 +406,84 @@ void parse_install_directory(
     interp.get_install_rules().push_back(install_rule);
 }
 
-// Parse install(SCRIPT ...) or install(CODE ...)
+// Parse install(SCRIPT/CODE ...) - supports mixed SCRIPT and CODE entries in a single call.
+// CMake syntax: install([[SCRIPT <file>] [CODE <code>]]...
+//                       [ALL_COMPONENTS | COMPONENT <component>]
+//                       [EXCLUDE_FROM_ALL])
 void parse_install_script(
     Interpreter& interp,
     const std::vector<std::string>& args,
     const std::string& src_dir,
-    const std::string& bin_dir,
-    bool is_script
+    const std::string& bin_dir
 ) {
-    const char* mode = is_script ? "SCRIPT" : "CODE";
+    // Collect script/code entries and shared options
+    struct Entry { bool is_script; std::string content; };
+    std::vector<Entry> entries;
+    std::string component;
+    bool all_components = false;
+    bool exclude_from_all = false;
 
-    // Skip first argument (SCRIPT/CODE keyword)
-    std::vector<std::string> parse_args(args.begin() + 1, args.end());
-
-    auto rule = std::make_shared<InstallScriptRule>();
-    std::string content;
-
-    CommandParser parser("install", mode);
-    parser.positional(content, is_script ? "script_path" : "code", true);
-    parser.value("COMPONENT", rule->component);
-    PARSE_OR_RETURN(parser, interp, parse_args);
-
-    if (is_script) {
-        std::filesystem::path script_path = content;
-        if (!script_path.is_absolute()) {
-            script_path = std::filesystem::path(src_dir) / script_path;
+    size_t i = 0;
+    while (i < args.size()) {
+        const auto& arg = args[i];
+        if (arg == "SCRIPT") {
+            if (i + 1 >= args.size()) {
+                interp.set_fatal_error("install(SCRIPT) requires a file path"); return;
+            }
+            entries.push_back({true, args[++i]});
+        } else if (arg == "CODE") {
+            if (i + 1 >= args.size()) {
+                interp.set_fatal_error("install(CODE) requires a code string"); return;
+            }
+            entries.push_back({false, args[++i]});
+        } else if (arg == "COMPONENT") {
+            if (i + 1 >= args.size()) {
+                interp.set_fatal_error("install(SCRIPT/CODE) COMPONENT requires a value"); return;
+            }
+            component = args[++i];
+        } else if (arg == "ALL_COMPONENTS") {
+            all_components = true;
+        } else if (arg == "EXCLUDE_FROM_ALL") {
+            exclude_from_all = true;
+        } else {
+            interp.set_fatal_error("install(SCRIPT/CODE): unexpected argument '" + arg + "'"); return;
         }
-        rule->script_path = script_path.lexically_normal().string();
-    } else {
-        rule->code = content;
+        ++i;
     }
 
-    // Create install rule
-    auto install_rule = std::make_shared<InstallRule>();
-    install_rule->type = is_script ? InstallRuleType::SCRIPT : InstallRuleType::CODE;
-    install_rule->source_dir = src_dir;
-    install_rule->binary_dir = bin_dir;
-    install_rule->script_rule = rule;
+    if (entries.empty()) {
+        interp.set_fatal_error("install(SCRIPT/CODE) requires at least one SCRIPT or CODE entry"); return;
+    }
 
-    interp.get_install_rules().push_back(install_rule);
+    if (all_components && !component.empty()) {
+        interp.set_fatal_error("install(SCRIPT/CODE): ALL_COMPONENTS and COMPONENT are mutually exclusive"); return;
+    }
+
+    (void)exclude_from_all; // Stored but not used during interpretation
+
+    // Create an install rule for each entry, sharing the same component
+    for (const auto& entry : entries) {
+        auto rule = std::make_shared<InstallScriptRule>();
+        rule->component = component;
+
+        if (entry.is_script) {
+            std::filesystem::path script_path = entry.content;
+            if (!script_path.is_absolute()) {
+                script_path = std::filesystem::path(src_dir) / script_path;
+            }
+            rule->script_path = script_path.lexically_normal().string();
+        } else {
+            rule->code = entry.content;
+        }
+
+        auto install_rule = std::make_shared<InstallRule>();
+        install_rule->type = entry.is_script ? InstallRuleType::SCRIPT : InstallRuleType::CODE;
+        install_rule->source_dir = src_dir;
+        install_rule->binary_dir = bin_dir;
+        install_rule->script_rule = rule;
+
+        interp.get_install_rules().push_back(install_rule);
+    }
 }
 
 // Parse install(EXPORT ...)
@@ -445,12 +499,21 @@ void parse_install_export(
     auto rule = std::make_shared<InstallExportRule>();
 
     CommandParser parser("install", "EXPORT");
-    parser.positional(rule->export_name, "export_name", true);
+    parser.positional(rule->export_name, "export_name", false);
     parser.value("FILE", rule->file_name);
     parser.value("NAMESPACE", rule->namespace_prefix);
     parser.value("DESTINATION", rule->destination);
     parser.value("COMPONENT", rule->component);
     PARSE_OR_RETURN(parser, interp, parse_args);
+
+    if (rule->export_name.empty()) {
+        // CMake silently accepts install(EXPORT) with no export name
+        // (e.g. when a variable expands to empty)
+        interp.print_message("WARNING",
+            "install(EXPORT) called with no export name "
+            "(undocumented CMake behavior, accepted for compatibility)", true);
+        return;
+    }
 
     // Print warning immediately during script interpretation
     interp.print_message("WARNING",
@@ -488,10 +551,8 @@ void register_install_builtins(Interpreter& interp) {
             parse_install_files(interp, args, src_dir, bin_dir, true);
         } else if (mode == "DIRECTORY") {
             parse_install_directory(interp, args, src_dir, bin_dir);
-        } else if (mode == "SCRIPT") {
-            parse_install_script(interp, args, src_dir, bin_dir, true);
-        } else if (mode == "CODE") {
-            parse_install_script(interp, args, src_dir, bin_dir, false);
+        } else if (mode == "SCRIPT" || mode == "CODE") {
+            parse_install_script(interp, args, src_dir, bin_dir);
         } else if (mode == "EXPORT") {
             parse_install_export(interp, args, src_dir, bin_dir);
         } else {

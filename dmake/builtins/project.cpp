@@ -16,6 +16,49 @@ namespace dmake {
 
 namespace {
 
+// Enable a single language in the interpreter and toolchain.
+// Returns empty string on success, or an error message on failure.
+std::string enable_language_impl(Interpreter& interp, const std::string& lang) {
+    if (lang == "NONE") return {};
+
+    std::string loaded_var = "CMAKE_" + lang + "_COMPILER_LOADED";
+    if (!interp.get_variable(loaded_var).empty()) return {}; // Already loaded
+
+    if (lang == "C" || lang == "CXX") {
+        // C and CXX are initialized by fake_cmake_compiler_checks_and_init
+        // before project() runs, so they should already be loaded.
+        return {};
+    }
+
+    if (lang == "ASM") {
+        // ASM uses gcc/cc as the assembler driver (handles .S preprocessing)
+        // Prefer C compiler if available, otherwise find cc directly
+        std::string asm_compiler = interp.get_variable("CMAKE_C_COMPILER");
+        std::string asm_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+        std::string asm_version = interp.get_variable("CMAKE_C_COMPILER_VERSION");
+        if (asm_compiler.empty()) {
+            asm_compiler = "cc";
+            asm_id = "GNU";
+            asm_version = "";
+        }
+        interp.set_variable("CMAKE_ASM_COMPILER", asm_compiler);
+        interp.set_variable("CMAKE_ASM_COMPILER_ID", asm_id);
+        interp.set_variable("CMAKE_ASM_COMPILER_VERSION", asm_version);
+        interp.set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
+        interp.set_variable("CMAKE_ASM_FLAGS", "");
+        interp.set_variable("CMAKE_ASM_FLAGS_DEBUG", "-g");
+        interp.set_variable("CMAKE_ASM_FLAGS_RELEASE", "");
+        interp.set_variable("CMAKE_ASM_FLAGS_RELWITHDEBINFO", "");
+        interp.set_variable("CMAKE_ASM_FLAGS_MINSIZEREL", "");
+
+        auto compiler = std::make_unique<GnuCompiler>(asm_compiler, Language::ASM);
+        interp.get_toolchain().set_compiler(Language::ASM, std::move(compiler));
+        return {};
+    }
+
+    return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
+}
+
 // Check if a value is falsy for #cmakedefine purposes
 // This is simpler than Interpreter::is_falsy - it only checks known false constants,
 // without the buggy "invalid number" logic that treats "-Wall" as falsy
@@ -266,10 +309,11 @@ void register_project_builtins(Interpreter& interp) {
             languages = {"C", "CXX"};
         }
 
+        // Enable each language
         for (const auto& lang : languages) {
-            if (lang != "C" && lang != "CXX" && lang != "ASM" && lang != "NONE") {
-                interp.set_fatal_error("project() unsupported language: " + lang +
-                                     " (only C, CXX, ASM, and NONE are supported)");
+            auto err = enable_language_impl(interp, lang);
+            if (!err.empty()) {
+                interp.set_fatal_error("project() " + err);
                 return;
             }
         }
@@ -346,54 +390,20 @@ void register_project_builtins(Interpreter& interp) {
             return;
         }
 
-        // Validate languages - we support C, CXX, and ASM
-        for (const auto& lang : languages) {
-            if (lang != "C" && lang != "CXX" && lang != "ASM") {
-                if (optional) {
-                    // Silently ignore unsupported optional languages
-                    continue;
-                } else {
-                    interp.set_fatal_error("enable_language() unsupported language: " + lang +
-                                         " (only C, CXX, and ASM are supported)");
-                    return;
-                }
-            }
-        }
-
         // Get current enabled languages
         std::string current = interp.get_global_properties()["ENABLED_LANGUAGES"];
         CMakeArray enabled_langs(current);
 
-        // Add new languages (avoid duplicates)
+        // Enable each language
         for (const auto& lang : languages) {
-            if (lang == "C" || lang == "CXX") {
-                if (!enabled_langs.contains(lang)) {
-                    enabled_langs.append(lang);
-                }
-            } else if (lang == "ASM") {
-                if (!enabled_langs.contains(lang)) {
-                    enabled_langs.append(lang);
-                }
-                // Initialize ASM compiler from C compiler (GAS uses gcc as driver)
-                if (interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
-                    std::string c_compiler = interp.get_variable("CMAKE_C_COMPILER");
-                    if (c_compiler.empty()) {
-                        interp.set_fatal_error("enable_language(ASM) requires C language to be enabled first");
-                        return;
-                    }
-                    interp.set_variable("CMAKE_ASM_COMPILER", c_compiler);
-                    interp.set_variable("CMAKE_ASM_COMPILER_ID", interp.get_variable("CMAKE_C_COMPILER_ID"));
-                    interp.set_variable("CMAKE_ASM_COMPILER_VERSION", interp.get_variable("CMAKE_C_COMPILER_VERSION"));
-                    interp.set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
-                    interp.set_variable("CMAKE_ASM_FLAGS", "");
-                    interp.set_variable("CMAKE_ASM_FLAGS_DEBUG", "-g");
-                    interp.set_variable("CMAKE_ASM_FLAGS_RELEASE", "");
-                    interp.set_variable("CMAKE_ASM_FLAGS_RELWITHDEBINFO", "");
-                    interp.set_variable("CMAKE_ASM_FLAGS_MINSIZEREL", "");
-
-                    auto asm_compiler = std::make_unique<GnuCompiler>(c_compiler, Language::ASM);
-                    interp.get_toolchain().set_compiler(Language::ASM, std::move(asm_compiler));
-                }
+            auto err = enable_language_impl(interp, lang);
+            if (!err.empty()) {
+                if (optional) continue;
+                interp.set_fatal_error("enable_language() " + err);
+                return;
+            }
+            if (!enabled_langs.contains(lang)) {
+                enabled_langs.append(lang);
             }
         }
 

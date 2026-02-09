@@ -997,7 +997,10 @@ void register_target_builtins(Interpreter& interp) {
         // Extract target names (everything before PROPERTIES)
         std::vector<std::string> target_names(args.begin(), props_it);
         if (target_names.empty()) {
-            interp.set_fatal_error("set_target_properties() requires at least one target name before PROPERTIES");
+            // CMake silently accepts this when a variable expands to empty
+            interp.print_message("WARNING",
+                "set_target_properties() called with no targets "
+                "(undocumented CMake behavior, accepted for compatibility)", true);
             return;
         }
 

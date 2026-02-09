@@ -76,7 +76,7 @@ enum class InstallRuleType {
 struct InstallDestination {
     std::string destination;                // Relative to CMAKE_INSTALL_PREFIX
     std::vector<std::string> permissions;   // OWNER_READ, OWNER_WRITE, etc.
-    std::string component = "Unspecified";  // Component name
+    std::string component;                   // Component name (empty = "Unspecified")
     std::vector<std::string> configurations; // Debug, Release, etc.
     bool optional = false;                  // Continue if source missing
     bool exclude_from_all = false;          // Skip from default install
@@ -94,6 +94,7 @@ struct InstallTargetsRule {
 struct InstallFilesRule {
     std::vector<std::string> files;
     InstallDestination destination;
+    std::string rename;                     // RENAME <name> (only valid with single file)
     bool is_programs = false;               // Different default permissions
 };
 
@@ -108,7 +109,7 @@ struct InstallDirectoryRule {
 struct InstallScriptRule {
     std::string script_path;                // For SCRIPT mode
     std::string code;                       // For CODE mode
-    std::string component = "Unspecified";
+    std::string component;                  // Component name (empty = "Unspecified")
 };
 
 struct InstallExportRule {
@@ -116,7 +117,7 @@ struct InstallExportRule {
     std::string file_name;                  // Output file name (e.g., MyProjectTargets.cmake)
     std::string namespace_prefix;           // Namespace for imported targets
     std::string destination;                // Install destination
-    std::string component = "Unspecified";
+    std::string component;                  // Component name (empty = "Unspecified")
 };
 
 struct InstallRule {

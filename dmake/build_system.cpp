@@ -244,7 +244,19 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cycle_err = check_for_cycles();
     if (cycle_err) return std::unexpected(*cycle_err);
 
-    // 1b. Validate build graph: all inputs must exist or be produced by a task
+    // 1b. Validate all dependencies reference existing tasks (catches phantom deps
+    // that would cause stalls at runtime)
+    for (const auto& [id, task] : tasks_) {
+        for (const auto& dep : task.dependencies) {
+            if (!tasks_.count(dep)) {
+                return std::unexpected(
+                    "Build graph error: Task '" + id + "' depends on '" + dep +
+                    "' which is not a known task");
+            }
+        }
+    }
+
+    // 1c. Validate build graph: all inputs must exist or be produced by a task
     for (const auto& [id, task] : tasks_) {
         for (const auto& in : task.inputs) {
             if (!std::filesystem::exists(in) && !file_to_task.count(in)) {
