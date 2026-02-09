@@ -87,6 +87,7 @@ void register_find_package_builtins(Interpreter& interp) {
         std::vector<std::string> paths;
         std::vector<std::string> path_suffixes;
         bool no_default_path = false;
+        bool no_package_root_path = false;
         bool exact = false;
 
         parser.positional(package_name, "package name", true);
@@ -97,6 +98,7 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.flag("NO_MODULE", no_module);
         parser.flag("QUIET", quiet);
         parser.flag("NO_DEFAULT_PATH", no_default_path);
+        parser.flag("NO_PACKAGE_ROOT_PATH", no_package_root_path);
         parser.flag("EXACT", exact);
         parser.list("COMPONENTS", components);
         parser.list("OPTIONAL_COMPONENTS", optional_components);
@@ -341,8 +343,51 @@ void register_find_package_builtins(Interpreter& interp) {
             add_with_suffixes(hint_dir);
         }
 
+        // 2.2 Package root paths: <PackageName>_ROOT and <PACKAGENAME>_ROOT (var + env)
+        {
+            bool use_package_root = !no_default_path && !no_package_root_path;
+            if (use_package_root) {
+                std::string use_var = interp.get_variable("CMAKE_FIND_USE_PACKAGE_ROOT_PATH");
+                if (!use_var.empty() && interp.is_falsy(use_var)) {
+                    use_package_root = false;
+                }
+            }
+            if (use_package_root) {
+                std::string upper_name = package_name;
+                for (auto& c : upper_name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+                // Collect root prefixes: CMake var (original case), CMake var (upper),
+                // env var (original case), env var (upper)
+                std::vector<std::string> root_prefixes;
+                auto maybe_add = [&](const std::string& val) {
+                    if (!val.empty()) root_prefixes.push_back(val);
+                };
+                maybe_add(interp.get_variable(package_name + "_ROOT"));
+                if (upper_name != package_name)
+                    maybe_add(interp.get_variable(upper_name + "_ROOT"));
+
+                if (const char* env = std::getenv((package_name + "_ROOT").c_str()))
+                    maybe_add(env);
+                if (upper_name != package_name) {
+                    if (const char* env = std::getenv((upper_name + "_ROOT").c_str()))
+                        maybe_add(env);
+                }
+
+                // Each root prefix is expanded like CMAKE_PREFIX_PATH:
+                // <root>/lib/cmake/<pkg>, <root>/share/cmake/<pkg>, <root>/lib/cmake, <root>/share/cmake, <root>
+                for (const auto& root : root_prefixes) {
+                    std::filesystem::path rp(root);
+                    add_with_suffixes(rp / "lib" / "cmake" / package_name);
+                    add_with_suffixes(rp / "share" / "cmake" / package_name);
+                    add_with_suffixes(rp / "lib" / "cmake");
+                    add_with_suffixes(rp / "share" / "cmake");
+                    add_with_suffixes(rp);
+                }
+            }
+        }
+
         if (!no_default_path) {
-            // 2.2 Check CMAKE_PREFIX_PATH
+            // 2.3 Check CMAKE_PREFIX_PATH
             std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
             if (!prefix_path.empty()) {
                 size_t start = 0;

@@ -26,6 +26,7 @@ struct FindOptions {
     std::string validator;  // User-provided validator function name
     bool required = false;
     bool no_default_path = false;
+    bool no_package_root_path = false;
     bool no_cache = false;
     bool names_per_dir = false;
 };
@@ -64,6 +65,49 @@ std::vector<std::filesystem::path> split_env_path(const char* env_value) {
     return result;
 }
 
+// Collect <PackageName>_ROOT prefixes from CMake vars and env vars.
+// Returns empty vector if disabled by flags or CMAKE_FIND_USE_PACKAGE_ROOT_PATH.
+std::vector<std::filesystem::path> collect_package_root_prefixes(
+    Interpreter& interp,
+    bool no_default_path,
+    bool no_package_root_path
+) {
+    std::vector<std::filesystem::path> roots;
+
+    if (no_default_path || no_package_root_path) return roots;
+
+    // Check global disable variable
+    std::string use_var = interp.get_variable("CMAKE_FIND_USE_PACKAGE_ROOT_PATH");
+    if (!use_var.empty() && interp.is_falsy(use_var)) return roots;
+
+    // Get current package name (set by find_package before calling Find modules)
+    std::string pkg = interp.get_variable("CMAKE_FIND_PACKAGE_NAME");
+    if (pkg.empty()) return roots;
+
+    std::string upper_pkg = pkg;
+    for (auto& c : upper_pkg)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+    auto maybe_add = [&](const std::string& val) {
+        if (!val.empty()) roots.emplace_back(val);
+    };
+
+    // CMake variable <PackageName>_ROOT, then <PACKAGENAME>_ROOT
+    maybe_add(interp.get_variable(pkg + "_ROOT"));
+    if (upper_pkg != pkg)
+        maybe_add(interp.get_variable(upper_pkg + "_ROOT"));
+
+    // Environment variable <PackageName>_ROOT, then <PACKAGENAME>_ROOT
+    if (const char* env = std::getenv((pkg + "_ROOT").c_str()))
+        maybe_add(env);
+    if (upper_pkg != pkg) {
+        if (const char* env = std::getenv((upper_pkg + "_ROOT").c_str()))
+            maybe_add(env);
+    }
+
+    return roots;
+}
+
 // Build the complete search path list following CMake's specification
 std::vector<std::filesystem::path> build_search_paths(
     Interpreter& interp,
@@ -86,7 +130,20 @@ std::vector<std::filesystem::path> build_search_paths(
         return search_paths;
     }
 
-    // 1. Package-specific roots (would require PackageName parameter - skip for now)
+    // 1. Package-specific roots from <PackageName>_ROOT
+    auto root_prefixes = collect_package_root_prefixes(
+        interp, opts.no_default_path, opts.no_package_root_path);
+    for (const auto& root : root_prefixes) {
+        if (command_name == "find_path" || command_name == "find_file") {
+            search_paths.push_back(root / "include");
+        } else if (command_name == "find_library") {
+            search_paths.push_back(root / "lib");
+            search_paths.push_back(root / "lib64");
+        } else if (command_name == "find_program") {
+            search_paths.push_back(root / "bin");
+        }
+        search_paths.push_back(root);
+    }
 
     // 2. CMake-specific paths from CMAKE_PREFIX_PATH
     std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
@@ -549,6 +606,7 @@ void register_find_command(
         parser.value("VALIDATOR", opts.validator);
         parser.flag("REQUIRED", opts.required);
         parser.flag("NO_DEFAULT_PATH", opts.no_default_path);
+        parser.flag("NO_PACKAGE_ROOT_PATH", opts.no_package_root_path);
         parser.flag("NO_CACHE", opts.no_cache);
         parser.flag("NAMES_PER_DIR", opts.names_per_dir);
 
