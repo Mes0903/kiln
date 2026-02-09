@@ -462,7 +462,13 @@ private:
     // Each entry records {delete_when_size_at_or_below, function_ptr}.
     // When frame_stack_.size() drops to or below the threshold, the function is deleted.
     std::vector<std::pair<size_t, std::unique_ptr<FunctionBlock>>> deferred_function_deletions_;
-    std::vector<std::pair<size_t, std::unique_ptr<MacroBlock>>> deferred_macro_deletions_;
+
+    struct DeferredMacroDeletion {
+        std::string name;       // Which macro was replaced
+        size_t depth;           // Execution depth at time of replacement
+        std::unique_ptr<MacroBlock> block;
+    };
+    std::vector<DeferredMacroDeletion> deferred_macro_deletions_;
 
     // Shadow Map-based variable scoping (O(1) access, automatic cleanup)
     ShadowMap variables_;  // Regular variables with scope tracking

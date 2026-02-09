@@ -29,7 +29,84 @@ struct FindOptions {
     bool no_package_root_path = false;
     bool no_cache = false;
     bool names_per_dir = false;
+    bool no_cmake_find_root_path = false;
+    bool only_cmake_find_root_path = false;
 };
+
+// Determines the find root path mode for a given command.
+// Per-call flags override the per-variable mode.
+// Returns: "NEVER", "ONLY", or "BOTH"
+std::string get_find_root_path_mode(
+    Interpreter& interp,
+    const FindOptions& opts,
+    const std::string& command_name
+) {
+    // Per-call flags take precedence
+    if (opts.no_cmake_find_root_path) return "NEVER";
+    if (opts.only_cmake_find_root_path) return "ONLY";
+
+    // Check per-command mode variable
+    std::string mode_var;
+    if (command_name == "find_program") {
+        mode_var = "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM";
+    } else if (command_name == "find_library") {
+        mode_var = "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY";
+    } else {
+        // find_path, find_file
+        mode_var = "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE";
+    }
+
+    std::string mode = interp.get_variable(mode_var);
+    if (mode == "NEVER" || mode == "ONLY" || mode == "BOTH") return mode;
+
+    // Default: BOTH if CMAKE_FIND_ROOT_PATH is set, effectively no-op if not
+    return "BOTH";
+}
+
+// Apply CMAKE_FIND_ROOT_PATH re-rooting to a list of search paths.
+// Returns the modified search path list based on the mode.
+std::vector<std::filesystem::path> apply_find_root_path(
+    Interpreter& interp,
+    const std::vector<std::filesystem::path>& search_paths,
+    const std::string& mode
+) {
+    if (mode == "NEVER") return search_paths;
+
+    std::string root_path_str = interp.get_variable("CMAKE_FIND_ROOT_PATH");
+    if (root_path_str.empty()) return search_paths;
+
+    // Parse CMAKE_FIND_ROOT_PATH (semicolon-separated)
+    std::vector<std::filesystem::path> root_paths;
+    size_t start = 0;
+    size_t end = root_path_str.find(';');
+    while (end != std::string::npos) {
+        if (end > start)
+            root_paths.emplace_back(root_path_str.substr(start, end - start));
+        start = end + 1;
+        end = root_path_str.find(';', start);
+    }
+    if (start < root_path_str.size())
+        root_paths.emplace_back(root_path_str.substr(start));
+
+    if (root_paths.empty()) return search_paths;
+
+    std::vector<std::filesystem::path> result;
+
+    // Re-rooted paths: prepend each root to each search path
+    for (const auto& search_path : search_paths) {
+        for (const auto& root : root_paths) {
+            result.push_back(root / search_path.relative_path());
+        }
+    }
+
+    if (mode == "BOTH") {
+        // Also include original paths after re-rooted ones
+        result.insert(result.end(), search_paths.begin(), search_paths.end());
+    }
+    // mode == "ONLY": only re-rooted paths, already done
+
+    return result;
+}
 
 // Parse a path argument that could be literal or "ENV VAR_NAME"
 std::filesystem::path parse_path_arg(const std::string& arg) {
@@ -265,6 +342,10 @@ SearchResult search_for_file(
     const std::string& command_name
 ) {
     auto search_paths = build_search_paths(interp, opts, default_paths, command_name);
+
+    // Apply CMAKE_FIND_ROOT_PATH re-rooting
+    std::string root_mode = get_find_root_path_mode(interp, opts, command_name);
+    search_paths = apply_find_root_path(interp, search_paths, root_mode);
 
     // Track searched directories for caching
     std::vector<std::string> searched_dirs;
@@ -608,6 +689,8 @@ void register_find_command(
         parser.flag("NO_DEFAULT_PATH", opts.no_default_path);
         parser.flag("NO_PACKAGE_ROOT_PATH", opts.no_package_root_path);
         parser.flag("NO_CACHE", opts.no_cache);
+        parser.flag("NO_CMAKE_FIND_ROOT_PATH", opts.no_cmake_find_root_path);
+        parser.flag("ONLY_CMAKE_FIND_ROOT_PATH", opts.only_cmake_find_root_path);
         parser.flag("NAMES_PER_DIR", opts.names_per_dir);
 
         PARSE_OR_RETURN(parser, interp, args);
@@ -644,6 +727,11 @@ void register_find_command(
         // Check persistent cache
         auto default_paths = get_defaults(interp);
         auto search_paths = build_search_paths(interp, opts, default_paths, cmd_name);
+
+        // Apply CMAKE_FIND_ROOT_PATH re-rooting for cache signature
+        std::string root_mode = get_find_root_path_mode(interp, opts, cmd_name);
+        search_paths = apply_find_root_path(interp, search_paths, root_mode);
+
         std::string signature = compute_find_signature(cmd_name, opts, search_paths);
 
         auto& cache = interp.get_cache_store();

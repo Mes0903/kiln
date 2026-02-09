@@ -33,7 +33,7 @@ void CommandParser::multi_list(std::string keyword, std::vector<std::vector<std:
     keywords_[keyword] = {KeywordType::MULTI_LIST, &var, keyword};
 }
 
-std::expected<void, std::string> CommandParser::parse(std::span<const std::string> args) {
+std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::span<const std::string> args) {
     // Build error prefix: "cmd(subcmd)" or "cmd"
     std::string error_prefix = cmd_name_;
     if (!subcommand_.empty()) {
@@ -42,6 +42,7 @@ std::expected<void, std::string> CommandParser::parse(std::span<const std::strin
         error_prefix += "()";
     }
 
+    std::vector<std::string> warnings;
     size_t single_pos_idx = 0;
     KeywordInfo* active_keyword = nullptr;
 
@@ -49,6 +50,26 @@ std::expected<void, std::string> CommandParser::parse(std::span<const std::strin
         // Check if this is a keyword
         auto it = keywords_.find(arg);
         if (it != keywords_.end()) {
+            // Warn if we hit a keyword while required positionals are still unfilled
+            if (!active_keyword) {
+                std::string missing;
+                for (size_t i = single_pos_idx; i < single_positionals_.size(); ++i) {
+                    if (single_positionals_[i].required) {
+                        if (!missing.empty()) missing += ", ";
+                        missing += "<" + single_positionals_[i].label + ">";
+                    }
+                }
+                if (missing.empty() && positional_list_ && positional_list_->required && positional_list_->var->empty()) {
+                    missing = "<" + positional_list_->label + ">...";
+                }
+                if (!missing.empty()) {
+                    warnings.push_back("While parsing " + error_prefix +
+                        ", encountered known keyword '" + arg +
+                        "' where positional " + missing +
+                        " was expected. This likely means a required argument was omitted.");
+                }
+            }
+
             // Reset active_keyword before setting new one - this ensures empty lists are allowed
             active_keyword = nullptr;
 
@@ -98,19 +119,27 @@ std::expected<void, std::string> CommandParser::parse(std::span<const std::strin
         }
     }
 
+    // Helper to prepend warnings to an error message for context
+    auto make_error = [&](std::string msg) -> std::unexpected<std::string> {
+        for (const auto& w : warnings) {
+            msg += "\nnote: " + w;
+        }
+        return std::unexpected(std::move(msg));
+    };
+
     // Validate required single positionals are filled
     for (const auto& pos : single_positionals_) {
         if (pos.required && !pos.filled) {
-            return std::unexpected(error_prefix + ": missing required argument <" + pos.label + ">");
+            return make_error(error_prefix + ": missing required argument <" + pos.label + ">");
         }
     }
 
     // Validate positional list if required
     if (positional_list_ && positional_list_->required && positional_list_->var->empty()) {
-        return std::unexpected(error_prefix + ": requires at least one <" + positional_list_->label + ">");
+        return make_error(error_prefix + ": requires at least one <" + positional_list_->label + ">");
     }
 
-    return {};
+    return warnings;
 }
 
 std::string CommandParser::get_syntax() const {

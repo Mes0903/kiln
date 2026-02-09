@@ -62,7 +62,7 @@ public:
      * @brief Parse the arguments.
      * @return Success or an error message.
      */
-    std::expected<void, std::string> parse(std::span<const std::string> args);
+    std::expected<std::vector<std::string>, std::string> parse(std::span<const std::string> args);
 
     /**
      * @brief Get the expected syntax of the command.
@@ -102,6 +102,8 @@ private:
     if (auto res = (parser).parse(args); !res) { \
         (interp).set_fatal_error(res.error() + "\nExpected syntax: " + (parser).get_syntax()); \
         return; \
+    } else { \
+        for (const auto& w : *res) (interp).print_message("WARNING", w); \
     }
 
 } // namespace dmake

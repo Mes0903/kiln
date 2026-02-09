@@ -197,101 +197,50 @@ void parse_install_files(
     const std::string& bin_dir,
     bool is_programs
 ) {
+    const char* mode = is_programs ? "PROGRAMS" : "FILES";
+
     // Skip first argument (FILES/PROGRAMS keyword)
     std::vector<std::string> parse_args(args.begin() + 1, args.end());
 
     auto rule = std::make_shared<InstallFilesRule>();
     rule->is_programs = is_programs;
 
-    // Parse file list (all positional args before first keyword)
-    size_t i = 0;
-    while (i < parse_args.size()) {
-        const auto& arg = parse_args[i];
-        if (arg == "DESTINATION" || arg == "TYPE" || arg == "PERMISSIONS" ||
-            arg == "CONFIGURATIONS" || arg == "COMPONENT" || arg == "OPTIONAL" ||
-            arg == "EXCLUDE_FROM_ALL") {
-            break;
+    std::vector<std::string> raw_files;
+    std::string type_str;
+
+    CommandParser parser("install", mode);
+    parser.positionals(raw_files, "files", true);
+    parser.value("DESTINATION", rule->destination.destination);
+    parser.value("TYPE", type_str);
+    parser.list("PERMISSIONS", rule->destination.permissions);
+    parser.list("CONFIGURATIONS", rule->destination.configurations);
+    parser.value("COMPONENT", rule->destination.component);
+    parser.flag("OPTIONAL", rule->destination.optional);
+    parser.flag("EXCLUDE_FROM_ALL", rule->destination.exclude_from_all);
+    PARSE_OR_RETURN(parser, interp, parse_args);
+
+    // Resolve TYPE to destination
+    if (!type_str.empty()) {
+        auto dest = resolve_install_type(interp, type_str);
+        if (dest.empty()) {
+            interp.set_fatal_error("install(" + std::string(mode) + ") unknown TYPE: " + type_str);
+            return;
         }
-        // Resolve relative paths to absolute
-        std::filesystem::path file_path = arg;
+        rule->destination.destination = dest;
+    }
+
+    if (rule->destination.destination.empty()) {
+        interp.set_fatal_error("install(" + std::string(mode) + ") requires DESTINATION or TYPE");
+        return;
+    }
+
+    // Resolve file paths to absolute
+    for (const auto& f : raw_files) {
+        std::filesystem::path file_path = f;
         if (!file_path.is_absolute()) {
             file_path = std::filesystem::path(src_dir) / file_path;
         }
         rule->files.push_back(file_path.lexically_normal().string());
-        ++i;
-    }
-
-    if (rule->files.empty()) {
-        interp.set_fatal_error(std::string("install(") + (is_programs ? "PROGRAMS" : "FILES") + ") requires at least one file");
-        return;
-    }
-
-    // Parse destination properties
-    std::vector<std::string> remaining_args(parse_args.begin() + i, parse_args.end());
-
-    i = 0;
-    while (i < remaining_args.size()) {
-        const auto& arg = remaining_args[i];
-
-        if (arg == "DESTINATION") {
-            if (i + 1 >= remaining_args.size()) {
-                interp.set_fatal_error("install() DESTINATION requires a value");
-                return;
-            }
-            rule->destination.destination = remaining_args[i + 1];
-            i += 2;
-        } else if (arg == "TYPE") {
-            if (i + 1 >= remaining_args.size()) {
-                interp.set_fatal_error("install() TYPE requires a value");
-                return;
-            }
-            auto dest = resolve_install_type(interp, remaining_args[i + 1]);
-            if (dest.empty()) {
-                interp.set_fatal_error("install() unknown TYPE: " + remaining_args[i + 1]);
-                return;
-            }
-            rule->destination.destination = dest;
-            i += 2;
-        } else if (arg == "PERMISSIONS") {
-            ++i;
-            while (i < remaining_args.size() &&
-                   remaining_args[i].find("_") != std::string::npos &&
-                   (remaining_args[i].find("OWNER_") == 0 ||
-                    remaining_args[i].find("GROUP_") == 0 ||
-                    remaining_args[i].find("WORLD_") == 0)) {
-                rule->destination.permissions.push_back(remaining_args[i]);
-                ++i;
-            }
-        } else if (arg == "CONFIGURATIONS") {
-            ++i;
-            while (i < remaining_args.size() &&
-                   remaining_args[i] != "DESTINATION" && remaining_args[i] != "PERMISSIONS" &&
-                   remaining_args[i] != "COMPONENT" && remaining_args[i] != "OPTIONAL" &&
-                   remaining_args[i] != "EXCLUDE_FROM_ALL") {
-                rule->destination.configurations.push_back(remaining_args[i]);
-                ++i;
-            }
-        } else if (arg == "COMPONENT") {
-            if (i + 1 >= remaining_args.size()) {
-                interp.set_fatal_error("install() COMPONENT requires a value");
-                return;
-            }
-            rule->destination.component = remaining_args[i + 1];
-            i += 2;
-        } else if (arg == "OPTIONAL") {
-            rule->destination.optional = true;
-            ++i;
-        } else if (arg == "EXCLUDE_FROM_ALL") {
-            rule->destination.exclude_from_all = true;
-            ++i;
-        } else {
-            ++i;
-        }
-    }
-
-    if (rule->destination.destination.empty()) {
-        interp.set_fatal_error(std::string("install(") + (is_programs ? "PROGRAMS" : "FILES") + ") requires DESTINATION or TYPE");
-        return;
     }
 
     // Create install rule
@@ -443,29 +392,27 @@ void parse_install_script(
     const std::string& bin_dir,
     bool is_script
 ) {
-    if (args.size() < 2) {
-        interp.set_fatal_error(std::string("install(") + (is_script ? "SCRIPT" : "CODE") + ") requires an argument");
-        return;
-    }
+    const char* mode = is_script ? "SCRIPT" : "CODE";
+
+    // Skip first argument (SCRIPT/CODE keyword)
+    std::vector<std::string> parse_args(args.begin() + 1, args.end());
 
     auto rule = std::make_shared<InstallScriptRule>();
+    std::string content;
+
+    CommandParser parser("install", mode);
+    parser.positional(content, is_script ? "script_path" : "code", true);
+    parser.value("COMPONENT", rule->component);
+    PARSE_OR_RETURN(parser, interp, parse_args);
 
     if (is_script) {
-        std::filesystem::path script_path = args[1];
+        std::filesystem::path script_path = content;
         if (!script_path.is_absolute()) {
             script_path = std::filesystem::path(src_dir) / script_path;
         }
         rule->script_path = script_path.lexically_normal().string();
     } else {
-        rule->code = args[1];
-    }
-
-    // Parse optional COMPONENT
-    for (size_t i = 2; i < args.size(); ++i) {
-        if (args[i] == "COMPONENT" && i + 1 < args.size()) {
-            rule->component = args[i + 1];
-            break;
-        }
+        rule->code = content;
     }
 
     // Create install rule
@@ -485,30 +432,18 @@ void parse_install_export(
     const std::string& src_dir,
     const std::string& bin_dir
 ) {
-    if (args.size() < 2) {
-        interp.set_fatal_error("install(EXPORT) requires an export name");
-        return;
-    }
+    // Skip first argument (EXPORT keyword)
+    std::vector<std::string> parse_args(args.begin() + 1, args.end());
 
     auto rule = std::make_shared<InstallExportRule>();
-    rule->export_name = args[1];
 
-    // Parse remaining arguments
-    for (size_t i = 2; i < args.size(); ++i) {
-        if (args[i] == "FILE" && i + 1 < args.size()) {
-            rule->file_name = args[i + 1];
-            ++i;
-        } else if (args[i] == "NAMESPACE" && i + 1 < args.size()) {
-            rule->namespace_prefix = args[i + 1];
-            ++i;
-        } else if (args[i] == "DESTINATION" && i + 1 < args.size()) {
-            rule->destination = args[i + 1];
-            ++i;
-        } else if (args[i] == "COMPONENT" && i + 1 < args.size()) {
-            rule->component = args[i + 1];
-            ++i;
-        }
-    }
+    CommandParser parser("install", "EXPORT");
+    parser.positional(rule->export_name, "export_name", true);
+    parser.value("FILE", rule->file_name);
+    parser.value("NAMESPACE", rule->namespace_prefix);
+    parser.value("DESTINATION", rule->destination);
+    parser.value("COMPONENT", rule->component);
+    PARSE_OR_RETURN(parser, interp, parse_args);
 
     // Print warning immediately during script interpretation
     interp.print_message("WARNING",

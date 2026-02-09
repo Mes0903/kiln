@@ -623,6 +623,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                     interp.set_fatal_error(parse_res.error());
                     return;
                 }
+                for (const auto& w : *parse_res) interp.print_message("WARNING", w);
 
                 if (name.empty()) {
                     interp.set_fatal_error("add_test NAME requires a non-empty test name");
@@ -1539,7 +1540,7 @@ std::expected<void, InterpreterError> Interpreter::execute_macro_block(const Mac
         auto depth_it = root->macro_execution_depth_.find(lower_name);
         if (depth_it != root->macro_execution_depth_.end() && depth_it->second > 0) {
             // Macro is executing, defer deletion
-            root->deferred_macro_deletions_.emplace_back(depth_it->second, std::move(it->second));
+            root->deferred_macro_deletions_.push_back({lower_name, static_cast<size_t>(depth_it->second), std::move(it->second)});
         }
     }
 
@@ -1956,8 +1957,8 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     // Decrement and cleanup deferred deletions
     int& depth = root->macro_execution_depth_[lower_name];
     --depth;
-    std::erase_if(root->deferred_macro_deletions_, [depth](const auto& entry) {
-        return entry.first > depth;
+    std::erase_if(root->deferred_macro_deletions_, [&lower_name, depth](const auto& entry) {
+        return entry.name == lower_name && entry.depth > static_cast<size_t>(depth);
     });
     if (depth == 0) {
         root->macro_execution_depth_.erase(lower_name);
