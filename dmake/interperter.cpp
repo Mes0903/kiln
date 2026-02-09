@@ -1392,6 +1392,11 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& dir, const std
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {
+    // If debugger is attached, drop into it before dying
+    if (debugger_) {
+        debugger_->on_fatal_error(message);
+    }
+
     Interpreter* root = get_root();
     std::vector<CallLocation> backtrace;
     if (!root->trace_stack_.empty()) {

@@ -58,6 +58,9 @@ public:
                             const std::string& value,
                             const std::string& current_file);
 
+    // Called from message(FATAL_ERROR) to break before dying
+    void on_fatal_error(const std::string& message);
+
     // Call depth tracking for "next" stepping
     void push_call_depth();
     void pop_call_depth();
@@ -114,9 +117,10 @@ private:
     std::vector<Breakpoint> breakpoints_;
     int next_breakpoint_id_ = 1;
     std::optional<std::string> break_on_message_;
-    std::string current_file_;     // Set on entering interactive_loop
-    size_t current_row_ = 0;      // Set on entering interactive_loop
-    std::string current_cmd_;      // Set on entering interactive_loop
+    std::string current_file_;     // Set on entering on_command / interactive_loop
+    size_t current_row_ = 0;      // Set on entering on_command / interactive_loop
+    std::string current_cmd_;      // Set on entering on_command / interactive_loop
+    const std::vector<Argument>* current_raw_args_ = nullptr;  // Valid during on_command scope
     int selected_frame_ = 0;      // 0 = current command, 1..N = callers
     struct sigaction old_sigint_action_{};  // Saved for restoration in destructor
     InputFunction input_fn_;   // Pluggable input (default: std::getline)

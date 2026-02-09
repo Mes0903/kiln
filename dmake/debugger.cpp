@@ -81,6 +81,13 @@ void Debugger::on_command(const std::string& file, size_t row, size_t col,
                           const std::string& identifier,
                           const std::vector<std::string>& expanded_args,
                           const std::vector<Argument>& raw_args) {
+    // Save current command context so on_message/on_variable_access/on_fatal_error
+    // can break at the right location (the command that caused the event, not the next one).
+    current_file_ = file;
+    current_row_ = row;
+    current_cmd_ = identifier;
+    current_raw_args_ = &raw_args;
+
     // Always print trace if trace mode is on
     if (g_trace_enabled) {
         print_trace(file, row, identifier, expanded_args, raw_args);
@@ -115,12 +122,11 @@ void Debugger::on_command(const std::string& file, size_t row, size_t col,
 }
 
 void Debugger::on_message(const std::string& content) {
-    if (break_on_message_) {
+    if (break_on_message_ && g_debug_enabled && current_raw_args_) {
         if (content.find(*break_on_message_) != std::string::npos) {
-            // Trigger step mode - will break on next command
-            action_ = Action::STEP;
             std::cerr << "(dmake) Break on message matching \"" << *break_on_message_
                       << "\": " << content << "\n";
+            interactive_loop(current_file_, current_row_, current_cmd_, *current_raw_args_);
         }
     }
 }
@@ -129,6 +135,8 @@ void Debugger::on_variable_access(const std::string& var_name,
                                    const std::string& access_type,
                                    const std::string& value,
                                    const std::string& current_file) {
+    if (!g_debug_enabled || !current_raw_args_) return;
+
     // Check if any breakpoints match this variable
     for (const auto& bp : breakpoints_) {
         if (bp.enabled && bp.type == Breakpoint::Type::VARIABLE && bp.variable == var_name) {
@@ -138,10 +146,17 @@ void Debugger::on_variable_access(const std::string& var_name,
                 std::cerr << ", value=\"" << value << "\"";
             }
             std::cerr << " in " << current_file << "\n";
-            action_ = Action::STEP;
+            interactive_loop(current_file_, current_row_, current_cmd_, *current_raw_args_);
             break;
         }
     }
+}
+
+void Debugger::on_fatal_error(const std::string& message) {
+    if (!g_debug_enabled || !current_raw_args_) return;
+
+    std::cerr << "(dmake) FATAL_ERROR: " << message << "\n";
+    interactive_loop(current_file_, current_row_, current_cmd_, *current_raw_args_);
 }
 
 void Debugger::push_call_depth() { ++call_depth_; }
@@ -209,9 +224,8 @@ void Debugger::print_trace(const std::string& file, size_t row,
 void Debugger::interactive_loop(const std::string& file, size_t row,
                                 const std::string& identifier,
                                 const std::vector<Argument>& raw_args) {
-    current_file_ = file;
-    current_row_ = row;
-    current_cmd_ = identifier;
+    // Context (current_file_, current_row_, current_cmd_) is set by on_command()
+    // or by on_fatal_error() before entering this loop.
     selected_frame_ = 0;
 
     // Show current position
