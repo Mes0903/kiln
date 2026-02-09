@@ -117,11 +117,12 @@ std::expected<bool, InterpreterError> evaluate_condition(
     auto evaluate_token = [&](const Argument& arg) -> std::string {
         std::string token = get_token_string(arg);
 
-        // Don't dereference keywords (operators) or boolean constants or quoted strings
-        // Check case-insensitively for both
+        // Don't dereference keywords (operators), boolean constants, or quoted strings.
+        // CMake keywords are case-sensitive (must be uppercase: NOT, AND, TARGET, etc.)
+        // Boolean constants are case-insensitive (OFF, off, Off all work)
         std::string upper_token = dmake::to_upper(token);
         if (arg.quoted ||
-            std::find(keywords.begin(), keywords.end(), upper_token) != keywords.end() ||
+            std::find(keywords.begin(), keywords.end(), token) != keywords.end() ||
             std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
             return token;
         }
@@ -158,8 +159,8 @@ std::expected<bool, InterpreterError> evaluate_condition(
     };
 
     auto is_binary_operator = [&](const std::string& token) -> bool {
-        std::string upper = dmake::to_upper(token);
-        return std::find(binary_operators.begin(), binary_operators.end(), upper) != binary_operators.end();
+        // CMake keywords are case-sensitive (must be uppercase)
+        return std::find(binary_operators.begin(), binary_operators.end(), token) != binary_operators.end();
     };
 
     // Recursive descent parser with proper CMake precedence

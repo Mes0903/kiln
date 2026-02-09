@@ -6437,3 +6437,147 @@ TEST_CASE("if condition: undefined variable before binary operator", "[interpret
         )"), Catch::Matchers::ContainsSubstring("missing left operand"));
     }
 }
+
+TEST_CASE("if condition: lowercase keyword names are dereferenced as variables", "[interpreter][if][bugfix]") {
+    // CMake keywords (NOT, AND, OR, TARGET, MATCHES, etc.) are case-sensitive.
+    // Lowercase variants like "target", "not", "matches" should be treated as
+    // variable names and dereferenced, not as keywords.
+
+    SECTION("variable named 'target' in MATCHES") {
+        // Real-world LLVM pattern: if(NOT target MATCHES "^check-")
+        auto output = run_script(R"(
+            set(target "check-all")
+            if(target MATCHES "^check-")
+                message("matched")
+            else()
+                message("no match")
+            endif()
+        )");
+        REQUIRE(output == "matched\n");
+    }
+
+    SECTION("NOT variable named 'target' in MATCHES") {
+        auto output = run_script(R"(
+            set(target "check-all")
+            if(NOT target MATCHES "^check-")
+                message("no match")
+            else()
+                message("matched")
+            endif()
+        )");
+        REQUIRE(output == "matched\n");
+    }
+
+    SECTION("variable named 'target' in STREQUAL") {
+        auto output = run_script(R"(
+            set(target "check-all")
+            if(target STREQUAL "check-all")
+                message("equal")
+            else()
+                message("not equal")
+            endif()
+        )");
+        REQUIRE(output == "equal\n");
+    }
+
+    SECTION("variable named 'matches' in STREQUAL") {
+        auto output = run_script(R"(
+            set(matches "foo")
+            if(matches STREQUAL "foo")
+                message("equal")
+            else()
+                message("not equal")
+            endif()
+        )");
+        REQUIRE(output == "equal\n");
+    }
+
+    SECTION("variable named 'defined' is dereferenced as primary") {
+        auto output = run_script(R"(
+            set(defined "yes")
+            if(defined)
+                message("truthy")
+            else()
+                message("falsy")
+            endif()
+        )");
+        REQUIRE(output == "truthy\n");
+    }
+
+    SECTION("variable named 'not' is dereferenced") {
+        auto output = run_script(R"(
+            set(not "something")
+            if(not)
+                message("truthy")
+            else()
+                message("falsy")
+            endif()
+        )");
+        REQUIRE(output == "truthy\n");
+
+        auto output2 = run_script(R"(
+            set(not "hello")
+            if(not STREQUAL "hello")
+                message("equal")
+            else()
+                message("not equal")
+            endif()
+        )");
+        REQUIRE(output2 == "equal\n");
+    }
+
+    SECTION("variable named 'exists' in STREQUAL") {
+        auto output = run_script(R"(
+            set(exists "/tmp")
+            if(exists STREQUAL "/tmp")
+                message("equal")
+            else()
+                message("not equal")
+            endif()
+        )");
+        REQUIRE(output == "equal\n");
+    }
+
+    SECTION("variable named 'command' in STREQUAL") {
+        auto output = run_script(R"(
+            set(command "bar")
+            if(command STREQUAL "bar")
+                message("equal")
+            else()
+                message("not equal")
+            endif()
+        )");
+        REQUIRE(output == "equal\n");
+    }
+
+    SECTION("variable named 'or' and 'and' are dereferenced as primaries") {
+        auto output = run_script(R"(
+            set(or "1")
+            set(and "1")
+            if(or)
+                message("or truthy")
+            else()
+                message("or falsy")
+            endif()
+            if(and)
+                message("and truthy")
+            else()
+                message("and falsy")
+            endif()
+        )");
+        REQUIRE(output == "or truthy\nand truthy\n");
+    }
+
+    SECTION("uppercase keywords still work as operators") {
+        // Ensure the fix didn't break uppercase keyword behavior
+        auto output = run_script(R"(
+            set(NOT "truthy_value")
+            if(NOT 0)
+                message("NOT is operator")
+            else()
+                message("NOT is variable")
+            endif()
+        )");
+        REQUIRE(output == "NOT is operator\n");
+    }
+}
