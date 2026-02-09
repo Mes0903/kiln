@@ -264,7 +264,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     // is dirty, its output gets a new mtime, which changes the signature of
     // any task depending on it (e.g. the linker). Without propagation the
     // progress counter underestimates the total (e.g. [3/2]).
-    std::set<std::string> dirty_set;
+    std::unordered_set<std::string> dirty_set;
+    if(tasks_.size() > 100) {
+        dirty_set.reserve(20);
+    }
     for (const auto& [id, task] : tasks_) {
         // Skip marker tasks
         if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) continue;
@@ -710,7 +713,7 @@ std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
 static std::expected<std::vector<std::string>, std::string> get_headers_via_h_flag(const std::vector<std::vector<std::string>>& commands) {
     if (commands.empty()) return std::vector<std::string>{};
     const auto& command = commands[0];
-    
+
     std::vector<std::string> scan_cmd;
     scan_cmd.push_back("g++");
     scan_cmd.push_back("-H");
@@ -735,7 +738,7 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
 
     // Redirect stdout to /dev/null for the scan command
     std::string full_cmd = join_command(scan_cmd) + " 2>&1 > /dev/null";
-    
+
     std::array<char, 256> buffer;
     std::vector<std::string> headers;
 

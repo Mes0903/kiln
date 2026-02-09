@@ -1063,7 +1063,12 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
             }
             escaped = false;
             pos_++;
-            col_++;
+            if (current == '\n') {
+                row_++;
+                col_ = 1;
+            } else {
+                col_++;
+            }
             continue;
         }
         if (current == '\\') {
