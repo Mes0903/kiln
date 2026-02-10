@@ -50,7 +50,8 @@ void register_external_project_builtins(Interpreter& interp) {
 
         parser.value("GIT_REPOSITORY", git_repository);
         parser.value("GIT_TAG", git_tag);
-        parser.flag("GIT_SHALLOW", git_shallow);
+        std::string git_shallow_str;
+        parser.value("GIT_SHALLOW", git_shallow_str);
 
         parser.list("CMAKE_ARGS", cmake_args);
         parser.list("CMAKE_CACHE_ARGS", cmake_cache_args);
@@ -110,6 +111,7 @@ void register_external_project_builtins(Interpreter& interp) {
 
         PARSE_OR_RETURN(parser, interp, args);
 
+        git_shallow = !git_shallow_str.empty() && !Interpreter::is_falsy(git_shallow_str);
         build_in_source = !build_in_source_str.empty() && !Interpreter::is_falsy(build_in_source_str);
         exclude_from_all = !exclude_from_all_str.empty() && !Interpreter::is_falsy(exclude_from_all_str);
         build_always = !build_always_str.empty() && !Interpreter::is_falsy(build_always_str);
@@ -324,6 +326,7 @@ void register_external_project_builtins(Interpreter& interp) {
         }
 
         // 3. Configure step
+        bool used_default_cmake_configure = false;
         bool configure_is_empty = (configure_command.size() == 1 && configure_command[0].empty());
         if (!configure_command.empty() && !configure_is_empty) {
             // Custom configure command
@@ -392,12 +395,15 @@ void register_external_project_builtins(Interpreter& interp) {
                     interp.set_fatal_error("ExternalProject_Add(" + name + ") configure+build failed:\n" + result.output);
                     return;
                 }
+                used_default_cmake_configure = true;
             }
         }
 
         // 4. Build step
+        // If the default CMake configure path was used, dmake already built the project,
+        // so skip the build step (even if an explicit BUILD_COMMAND like "make -j4" was given).
         bool build_is_empty = (build_command.size() == 1 && build_command[0].empty());
-        if (!build_command.empty() && !build_is_empty) {
+        if (!build_command.empty() && !build_is_empty && !used_default_cmake_configure) {
             replace_tokens(build_command, tokens);
             interp.print_message("STATUS", "  Building " + name + " (custom)...");
             auto result = run_command(build_command, binary_dir);
@@ -409,8 +415,9 @@ void register_external_project_builtins(Interpreter& interp) {
         // Default build: no-op for dmake (configure step already builds)
 
         // 5. Install step
+        // Skip make-based install when dmake was used for configure+build (no Makefile exists)
         bool install_is_empty = (install_command.size() == 1 && install_command[0].empty());
-        if (!install_command.empty() && !install_is_empty) {
+        if (!install_command.empty() && !install_is_empty && !used_default_cmake_configure) {
             replace_tokens(install_command, tokens);
             interp.print_message("STATUS", "  Installing " + name + " (custom)...");
             auto result = run_command(install_command, binary_dir);

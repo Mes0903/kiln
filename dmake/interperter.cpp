@@ -481,8 +481,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         build_dir_ = *build_dir;
         abs_binary_dir = std::filesystem::absolute(build_dir_).lexically_normal();
     } else {
-        build_dir_ = "build";
-        abs_binary_dir = abs_script_dir / build_dir_;
+        // Script mode (-P): CMake sets CMAKE_CURRENT_BINARY_DIR to cwd
+        abs_binary_dir = std::filesystem::current_path();
     }
 
     // Initialize variables via ShadowMap (depth starts at 0)
@@ -498,12 +498,18 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_CURRENT_BINARY_DIR", abs_binary_dir.string());
     variables_.set("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
+    // In config mode, create the binary directory at configure time (like CMake does)
+    if (build_dir.has_value()) {
+        std::error_code ec;
+        std::filesystem::create_directories(abs_binary_dir, ec);
+    }
+
     // Set default install prefix if not already set
     if (get_variable("CMAKE_INSTALL_PREFIX").empty()) {
         variables_.set("CMAKE_INSTALL_PREFIX", "/usr/local");
     }
 
-    if (abs_binary_dir == abs_script_dir) {
+    if (build_dir.has_value() && abs_binary_dir == abs_script_dir) {
         set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
     }
 
@@ -517,12 +523,15 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     // Platform flags
 #ifdef __unix__
     variables_.set("UNIX", "1");
+    variables_.set("CMAKE_HOST_UNIX", "1");
 #endif
 #ifdef __APPLE__
     variables_.set("APPLE", "1");
+    variables_.set("CMAKE_HOST_APPLE", "1");
 #endif
 #ifdef _WIN32
     variables_.set("WIN32", "1");
+    variables_.set("CMAKE_HOST_WIN32", "1");
 #endif
 #ifdef __linux__
     variables_.set("LINUX", "1");

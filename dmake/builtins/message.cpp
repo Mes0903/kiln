@@ -175,7 +175,9 @@ void register_message_builtins(Interpreter& interp) {
         }
 
         // Normal message output
-        bool is_error = (mode == "WARNING" || mode == "AUTHOR_WARNING" ||
+        // In CMake, NOTICE (and no-mode) goes to stderr, same as WARNING etc.
+        // Only STATUS/VERBOSE/DEBUG/TRACE go to stdout.
+        bool is_error = (mode == "NOTICE" || mode == "WARNING" || mode == "AUTHOR_WARNING" ||
                         mode == "DEPRECATION" || mode == "DEPRECATION_ERROR");
 
         interp.print_message(mode, content, is_error);
