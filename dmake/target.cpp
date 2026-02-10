@@ -588,17 +588,29 @@ std::string Target::get_output_path() const {
     std::string out_name = get_output_name();
     std::filesystem::path path;
 
+    // Determine output directory: per-target property overrides binary_dir_.
+    // CMake mapping: EXECUTABLE → RUNTIME, STATIC → ARCHIVE, SHARED → LIBRARY.
+    std::string output_dir;
     if (type_ == TargetType::EXECUTABLE) {
-        path = std::filesystem::path(binary_dir_) / out_name;
-    } else if (type_ == TargetType::SHARED_LIBRARY) {
-        path = std::filesystem::path(binary_dir_) / ("lib" + out_name + ".so");
+        output_dir = get_property("RUNTIME_OUTPUT_DIRECTORY");
     } else if (type_ == TargetType::STATIC_LIBRARY) {
-        path = std::filesystem::path(binary_dir_) / ("lib" + out_name + ".a");
+        output_dir = get_property("ARCHIVE_OUTPUT_DIRECTORY");
+    } else if (type_ == TargetType::SHARED_LIBRARY) {
+        output_dir = get_property("LIBRARY_OUTPUT_DIRECTORY");
+    }
+    const auto& dir = output_dir.empty() ? binary_dir_ : output_dir;
+
+    if (type_ == TargetType::EXECUTABLE) {
+        path = std::filesystem::path(dir) / out_name;
+    } else if (type_ == TargetType::SHARED_LIBRARY) {
+        path = std::filesystem::path(dir) / ("lib" + out_name + ".so");
+    } else if (type_ == TargetType::STATIC_LIBRARY) {
+        path = std::filesystem::path(dir) / ("lib" + out_name + ".a");
     } else {
         return "";
     }
 
-    return binary_dir_.empty() ? path.string() : path.lexically_normal().string();
+    return dir.empty() ? path.string() : path.lexically_normal().string();
 }
 
 // Strip trailing slashes to normalize include paths for comparison.

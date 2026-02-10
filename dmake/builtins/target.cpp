@@ -66,6 +66,16 @@ void register_target_builtins(Interpreter& interp) {
             target->set_property("POSITION_INDEPENDENT_CODE", "ON");
         }
 
+        // Set output directory properties from CMAKE_ globals
+        for (const auto& [cmake_var, prop] : {
+            std::pair{"CMAKE_RUNTIME_OUTPUT_DIRECTORY", "RUNTIME_OUTPUT_DIRECTORY"},
+            std::pair{"CMAKE_ARCHIVE_OUTPUT_DIRECTORY", "ARCHIVE_OUTPUT_DIRECTORY"},
+            std::pair{"CMAKE_LIBRARY_OUTPUT_DIRECTORY", "LIBRARY_OUTPUT_DIRECTORY"},
+        }) {
+            std::string val = interp.get_variable(cmake_var);
+            if (!val.empty()) target->set_property(prop, val);
+        }
+
         // Note: Accumulated directory properties are applied retroactively via
         // finalize_directory_targets() to match CMake's behavior where directory-level
         // commands like add_definitions() affect all targets in the directory,

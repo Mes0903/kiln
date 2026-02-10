@@ -2404,7 +2404,25 @@ void Interpreter::safe_pop_trace_stack(const std::string& context) {
 void Interpreter::finalize_directory_targets() {
     // Apply accumulated directory properties to all owned targets in current directory
     auto& ctx = get_current_directory_context();
+
+    // CMAKE_INCLUDE_CURRENT_DIR: when ON, prepend source and binary dirs to include path
+    bool include_current_dir = false;
+    std::string icd_val = get_variable("CMAKE_INCLUDE_CURRENT_DIR");
+    if (!icd_val.empty() && !is_falsy(icd_val)) {
+        include_current_dir = true;
+    }
+
     for (const auto& target : ctx.owned_targets) {
+        // Apply CMAKE_INCLUDE_CURRENT_DIR (binary dir first, then source dir — CMake order)
+        if (include_current_dir &&
+            !target->is_imported() &&
+            target->get_type() != TargetType::INTERFACE_LIBRARY) {
+            std::string src_dir = get_variable("CMAKE_CURRENT_SOURCE_DIR");
+            std::string bin_dir = get_variable("CMAKE_CURRENT_BINARY_DIR");
+            target->prepend_property("INCLUDE_DIRECTORIES", {src_dir}, PropertyVisibility::PRIVATE);
+            target->prepend_property("INCLUDE_DIRECTORIES", {bin_dir}, PropertyVisibility::PRIVATE);
+        }
+
         for (const auto& [prop_name, values] : ctx.accumulated) {
             if (!values.empty()) {
                 // append_property handles duplicates gracefully (just appends again)
