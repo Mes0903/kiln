@@ -181,7 +181,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         while (pos < condition.size() && error_msg.empty()) {
             std::string token = get_token_string(condition[pos]);
-            if (token == "OR") {
+            if (!condition[pos].quoted && token == "OR") {
                 pos++;
                 if (pos >= condition.size()) {
                     error_msg = "OR operator requires a right operand";
@@ -201,7 +201,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         while (pos < condition.size() && error_msg.empty()) {
             std::string token = get_token_string(condition[pos]);
-            if (token == "AND") {
+            if (!condition[pos].quoted && token == "AND") {
                 pos++;
                 if (pos >= condition.size()) {
                     error_msg = "AND operator requires a right operand";
@@ -224,7 +224,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
 
         std::string token = get_token_string(condition[pos]);
-        if (token == "NOT") {
+        if (!condition[pos].quoted && token == "NOT") {
             // CMake compatibility: If NOT is followed by a binary operator,
             // treat NOT as a value (left operand), not as a negation operator.
             // Example: if(NOT STREQUAL "X") -> "NOT" STREQUAL "X" = false
@@ -253,7 +253,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // Example: if(${UNDEFINED} MATCHES "pat") where UNDEFINED expands to nothing
         // becomes if(MATCHES "pat") which CMake evaluates as false
         std::string current_token = get_token_string(condition[pos]);
-        if (current_token == "MATCHES" && pos + 1 < condition.size()) {
+        if (!condition[pos].quoted && current_token == "MATCHES" && pos + 1 < condition.size()) {
             // Consume MATCHES and the pattern, return false
             pos += 2;
             return false;
@@ -262,7 +262,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // CMake error case: other binary operators without left operand
         // Example: if(STREQUAL "") -> error "Unknown arguments specified"
         // Note: This does NOT apply when NOT precedes the operator (handled in parse_not)
-        if (is_binary_operator(current_token) && pos + 1 < condition.size()) {
+        if (!condition[pos].quoted && is_binary_operator(current_token) && pos + 1 < condition.size()) {
             error_msg = "if given arguments: \"" + current_token + "\" - missing left operand";
             return false;
         }
@@ -449,7 +449,9 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         // Unary operators that take one argument
         // If there's no next token, treat the keyword as a primary value instead
-        if (token == "DEFINED" && pos + 1 < condition.size()) {
+        // Quoted arguments are never keywords — if("${VAR}" ...) where VAR expands
+        // to "TARGET" etc. must be treated as a primary value, not a unary operator.
+        if (!condition[pos].quoted && token == "DEFINED" && pos + 1 < condition.size()) {
             pos++;
             // DEFINED takes a variable name (don't dereference it)
             std::string var_name = get_token_string(condition[pos++]);
@@ -464,34 +466,34 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
             // Check if variable is defined in any scope (local + cache)
             return interp.is_variable_set(var_name);
-        } else if (token == "TARGET" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "TARGET" && pos + 1 < condition.size()) {
             pos++;
             std::string target_name = get_token_string(condition[pos++]);
             // Use find_target() to handle aliases (CMake's if(TARGET) returns true for aliases)
             return interp.find_target(target_name) != nullptr;
-        } else if (token == "EXISTS" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "EXISTS" && pos + 1 < condition.size()) {
             pos++;
             // File test operators take paths literally (with variable expansion)
             // but do NOT dereference the entire path as a variable name
             std::string path = interp.evaluate_argument(condition[pos++]);
             return std::filesystem::exists(path);
-        } else if (token == "IS_DIRECTORY" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "IS_DIRECTORY" && pos + 1 < condition.size()) {
             pos++;
             std::string path = interp.evaluate_argument(condition[pos++]);
             return std::filesystem::is_directory(path);
-        } else if (token == "IS_ABSOLUTE" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "IS_ABSOLUTE" && pos + 1 < condition.size()) {
             pos++;
             std::string path = interp.evaluate_argument(condition[pos++]);
             return std::filesystem::path(path).is_absolute();
-        } else if (token == "IS_SYMLINK" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "IS_SYMLINK" && pos + 1 < condition.size()) {
             pos++;
             std::string path = interp.evaluate_argument(condition[pos++]);
             return std::filesystem::is_symlink(path);
-        } else if (token == "COMMAND" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "COMMAND" && pos + 1 < condition.size()) {
             pos++;
             std::string name = evaluate_token(condition[pos++]);
             return interp.has_user_function(name);
-        } else if (token == "POLICY" && pos + 1 < condition.size()) {
+        } else if (!condition[pos].quoted && token == "POLICY" && pos + 1 < condition.size()) {
             pos++;
             pos++;  // Consume the policy name/number
             // Always return true - dmake doesn't implement policies but we want
@@ -570,8 +572,8 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         // Error if there are actual non-whitespace tokens (CMake behavior)
         if (!remaining.empty()) {
-            return std::unexpected(InterpreterError{
-                "if() condition has unexpected tokens: " + remaining});
+            interp.set_fatal_error("if() condition has unexpected tokens: " + remaining);
+            return std::unexpected(*interp.get_fatal_error());
         }
     }
 

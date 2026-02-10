@@ -8,10 +8,16 @@
 #include <optional>
 #include <filesystem>
 #include <mutex>
+#include <atomic>
 #include "utils.hpp"
 #include "language.hpp"
 
 namespace dmake {
+
+// Set by signal handlers to request graceful shutdown.
+// The build loop checks this and stops dispatching new tasks,
+// then saves the cache so completed work isn't lost.
+inline std::atomic<bool> g_interrupted{false};
 
 class Target;
 struct GenexEvaluationContext;

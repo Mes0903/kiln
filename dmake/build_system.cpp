@@ -279,11 +279,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cache = load_cache(build_dir);
     std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time
 
-    // 2b. Pre-scan: count tasks that need to execute (for progress display)
-    // We must propagate dirtiness through dependencies: if a compilation task
-    // is dirty, its output gets a new mtime, which changes the signature of
-    // any task depending on it (e.g. the linker). Without propagation the
-    // progress counter underestimates the total (e.g. [3/2]).
+    // 2b. Pre-scan: determine which tasks need to execute.
+    // This serves two purposes:
+    //   (a) Accurate progress count (avoids [3/2] when deps propagate dirtiness)
+    //   (b) Workers skip clean tasks instantly via dirty_set lookup instead of
+    //       redundantly recomputing signatures.
+    ProfileScope pre_scan_profile("pre-scan incremental check", "build");
     std::unordered_set<std::string> dirty_set;
     if(tasks_.size() > 100) {
         dirty_set.reserve(20);
@@ -330,6 +331,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         } while (changed);
     }
     int dirty_task_count = static_cast<int>(dirty_set.size());
+    pre_scan_profile.stop();
 
     bool stdout_is_tty = isatty(STDOUT_FILENO);
     ProgressBar progress(dirty_task_count, stdout_is_tty);
@@ -359,7 +361,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     workers.reserve(jobs);
 
     for (int w = 0; w < jobs; w++) {
-        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &is_ready, &progress, stdout_is_tty]() {
+        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &is_ready, &progress, stdout_is_tty, &dirty_set]() {
+            bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
+
             while (true) {
                 std::string id;
 
@@ -373,10 +377,20 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             if (!completed.count(tid) && !running.count(tid) && is_ready(tid))
                                 return true;
                         }
-                        return running.empty(); // stall: nothing ready and nothing in flight
+                        if (running.empty()) return true; // stall: nothing ready and nothing in flight
+                        return g_interrupted.load(std::memory_order_relaxed);
                     });
 
-                    if (!fatal_error.empty() || completed.size() == tasks_.size()) return;
+                    if (!fatal_error.empty() || completed.size() == tasks_.size()) {
+
+                        return;
+                    }
+                    if (g_interrupted.load(std::memory_order_relaxed)) {
+                        if (fatal_error.empty()) fatal_error = "Interrupted";
+
+                        cv.notify_all();
+                        return;
+                    }
 
                     for (const auto& [tid, task] : tasks_) {
                         if (!completed.count(tid) && !running.count(tid) && is_ready(tid)) {
@@ -399,6 +413,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             fatal_error = oss.str();
                             cv.notify_all();
                         }
+
                         return;
                     }
 
@@ -413,33 +428,13 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 auto task_start = std::chrono::steady_clock::now();
 
                 do { // do-while(false) for break-on-error
-                    // Check if outputs exist
-                    bool outputs_exist = true;
-                    if (task.outputs.empty()) {
-                        outputs_exist = false;
-                    } else {
-                        for (const auto& out : task.outputs) {
-                            if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
-                        }
-                    }
-
-                    bool should_compile = !outputs_exist || task.always_run;
-
-                    if (outputs_exist && !task.always_run) {
-                        auto sig_res = calculate_signature(task);
-                        if (!sig_res) { task_error = sig_res.error(); break; }
-                        sig = *sig_res;
-                        should_compile = !(cache.count(id) && cache[id] == sig);
-                    }
-
-                    if (!should_compile) break;
+                    // dirty_set was computed in the pre-scan; skip clean tasks immediately
+                    if (!dirty_set.count(id)) break;
 
                     // Skip marker tasks (no outputs, no commands) - e.g. imported targets
                     if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) break;
 
-                    // Profile only tasks that actually execute
                     int64_t profile_start = 0;
-                    bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
                     std::string profile_name;
                     if (profiling) {
                         profile_start = Profiler::instance().now_us();

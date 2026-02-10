@@ -18,8 +18,18 @@
 #include "dmake/regex.hpp"
 #include <chrono>
 #include <iomanip>
+#include <csignal>
+#include "dmake/build_system.hpp"
 
 namespace {
+
+void signal_handler(int sig) {
+    if (dmake::g_interrupted.exchange(true, std::memory_order_relaxed)) {
+        // Second signal — restore default handler and re-raise for hard kill
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+}
 
 struct GlobalOptions {
     int jobs = 0;
@@ -186,9 +196,11 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
 
         auto build_result = interpreter->run_build(opt.jobs, targets);
         if (!build_result) {
-            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_RED) << "error:" << dmake::c(std::cerr, dmake::colors::RESET) << " " << build_result.error().message << std::endl;
+            if (!dmake::g_interrupted.load(std::memory_order_relaxed)) {
+                std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_RED) << "error:" << dmake::c(std::cerr, dmake::colors::RESET) << " " << build_result.error().message << std::endl;
+            }
             save_cache();
-            return std::unexpected("Build failed");
+            return std::unexpected(dmake::g_interrupted.load(std::memory_order_relaxed) ? "Interrupted" : "Build failed");
         }
 
         save_cache();
@@ -388,6 +400,10 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 } // namespace
 
 int main(int argc, char* argv[]) {
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGHUP, signal_handler);
+
     // Pre-process argv: handle "dmake [project] [opts] -- <verb> [args]" pattern.
     // When "--" is followed by a known verb (run/test/build/clean/install) and no
     // subcommand appears before "--", restructure args so CLI11 sees the verb as a

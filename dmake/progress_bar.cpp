@@ -129,6 +129,9 @@ void ProgressBar::task_finished(std::string_view filename) {
     if (it != active_tasks_.end()) {
         active_tasks_.erase(it);
     }
+    if (is_tty_ && bar_visible_) {
+        draw_locked();
+    }
 }
 
 int ProgressBar::mark_completed() {

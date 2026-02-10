@@ -395,8 +395,10 @@ void register_try_compile_builtins(Interpreter& interp) {
                     // -DFOO -> FOO (strip the -D prefix)
                     filtered_defs.push_back(item.substr(2));
                 } else if (item[0] == '-') {
-                    // Compiler flag like -Wall, -Werror, etc.
-                    raw_compile_flags.push_back(item);
+                    // Compiler flag(s) like -Wall, -Werror, etc.
+                    // May contain multiple space-separated flags (e.g. "-Werror -fPIC")
+                    // Use shell_split to respect quoting (e.g. -DFOO="BAR BAZ")
+                    for (auto& flag : shell_split(item)) raw_compile_flags.push_back(std::move(flag));
                 } else {
                     // Plain definition
                     filtered_defs.push_back(item);
@@ -990,8 +992,10 @@ void register_try_compile_builtins(Interpreter& interp) {
                     // -DFOO -> FOO (strip the -D prefix)
                     filtered_defs.push_back(item.substr(2));
                 } else if (item[0] == '-') {
-                    // Compiler flag like -Wall, -Werror, etc.
-                    raw_compile_flags.push_back(item);
+                    // Compiler flag(s) like -Wall, -Werror, etc.
+                    // May contain multiple space-separated flags (e.g. "-Werror -fPIC")
+                    // Use shell_split to respect quoting (e.g. -DFOO="BAR BAZ")
+                    for (auto& flag : shell_split(item)) raw_compile_flags.push_back(std::move(flag));
                 } else {
                     // Plain definition
                     filtered_defs.push_back(item);

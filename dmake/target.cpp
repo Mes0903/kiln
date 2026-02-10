@@ -65,19 +65,12 @@ std::string Target::get_property(const std::string& name) const {
 }
 
 void Target::append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {
-#ifndef NDEBUG
-    // Catch bugs: values should already be split by semicolons
+    auto& list = list_properties_[name][visibility];
     for (const auto& v : values) {
-        if (v.find(';') != std::string::npos &&
-            !GenexParser::contains_genex(v)) {  // Allow generator expressions which may contain semicolons
-            std::cerr << "WARNING: append_property('" << name
-                      << "') received unsplit value: " << v << "\n";
-            assert(false && "Property value contains semicolons - should be split at boundary");
+        for (auto item : CMakeArrayView(v)) {
+            if (!item.empty()) list.emplace_back(item);
         }
     }
-#endif
-    auto& list = list_properties_[name][visibility];
-    list.insert(list.end(), values.begin(), values.end());
 }
 
 void Target::append_property_from_string(const std::string& name, const std::string& value, PropertyVisibility visibility) {
@@ -87,7 +80,13 @@ void Target::append_property_from_string(const std::string& name, const std::str
 
 void Target::prepend_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {
     auto& list = list_properties_[name][visibility];
-    list.insert(list.begin(), values.begin(), values.end());
+    std::vector<std::string> split;
+    for (const auto& v : values) {
+        for (auto item : CMakeArrayView(v)) {
+            if (!item.empty()) split.emplace_back(item);
+        }
+    }
+    list.insert(list.begin(), split.begin(), split.end());
 }
 
 const std::vector<std::string>& Target::get_property_list(const std::string& name, PropertyVisibility visibility) const {
