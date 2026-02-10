@@ -244,36 +244,9 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Determine which targets to build
     std::set<std::string> targets_to_build;
 
-    // Helper to recursively collect a target and its dependencies
-    std::function<void(const std::string&)> collect = [&](const std::string& name) {
-        if (targets_to_build.count(name)) return;
-        if (!targets_.count(name)) {
-            // Not a dmake target, might be a system lib or imported target
-            return;
-        }
-        targets_to_build.insert(name);
-        auto target = targets_[name];
-        for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PRIVATE)) collect(lib);
-        for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::PUBLIC)) collect(lib);
-        for (const auto& lib : target->get_property_list("LINK_LIBRARIES", PropertyVisibility::INTERFACE)) collect(lib);
-
-        auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-        if (custom) {
-            for (const auto& dep : custom->get_custom_dependencies()) {
-                collect(dep);
-            }
-        }
-
-        // Also collect manually added dependencies (from add_dependencies command)
-        for (const auto& dep : target->get_manually_added_dependencies()) {
-            collect(dep);
-        }
-
-    };
-
+    // Phase A: Determine initial targets (before resolution)
+    std::vector<std::string> initial_targets;
     if (requested_targets.empty()) {
-        // Collect initial set of default targets
-        std::vector<std::string> initial_targets;
         for (const auto& [name, target] : targets_) {
             auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
             if (custom) {
@@ -289,10 +262,6 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
                 }
             }
         }
-        // Now recursively collect dependencies for each initial target
-        for (const auto& name : initial_targets) {
-            collect(name);
-        }
     } else {
         for (const auto& t : requested_targets) {
             // Resolve aliases to real target names
@@ -300,8 +269,46 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
             if (!targets_.count(resolved)) {
                 return std::unexpected(BuildError{current_file_, "Unknown target: " + t});
             }
-            collect(resolved);
+            initial_targets.push_back(resolved);
         }
+    }
+
+    // Phase B: Resolve all initial targets (recursive — resolves entire dep graph
+    // via resolve()'s transitive dependency walking)
+    for (const auto& name : initial_targets) {
+        targets_[name]->resolve(targets_, *this);
+    }
+
+    // Phase C: Collect targets to build using resolved dependency data.
+    // resolve() already decoded genex + aliases, so get_resolved_target_deps()
+    // returns canonical target names — no raw property walking needed.
+    std::function<void(const std::string&)> collect = [&](const std::string& name) {
+        if (targets_to_build.count(name)) return;
+        if (!targets_.count(name)) return;
+        targets_to_build.insert(name);
+        auto target = targets_[name];
+
+        // Use resolved dependency data — correct by construction
+        for (const auto& dep : target->get_resolved_target_deps()) {
+            collect(dep);
+        }
+
+        // Custom target deps (already plain names, not genex)
+        auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+        if (custom) {
+            for (const auto& dep : custom->get_custom_dependencies()) {
+                collect(dep);
+            }
+        }
+
+        // Manually added dependencies (from add_dependencies command)
+        for (const auto& dep : target->get_manually_added_dependencies()) {
+            collect(dep);
+        }
+    };
+
+    for (const auto& name : initial_targets) {
+        collect(name);
     }
 
     std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
@@ -390,6 +397,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Link dependency resolution (adding inputs to link tasks)
     // Static libraries are just .o archives — they don't link against other libs,
     // so adding link-library inputs would create spurious (and circular) dependencies.
+    // Uses resolved LINK_LIBRARIES (output paths + system libs) — no raw property walking.
     for (const auto& name : targets_to_build) {
         auto target = targets_[name];
         if (target->get_type() == TargetType::STATIC_LIBRARY)
@@ -403,27 +411,13 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         if (graph.has_task(task_id)) {
             auto& task = graph.get_task(task_id);
 
-            auto add_lib_inputs = [&](PropertyVisibility vis) {
-                for (const auto& lib_name : target->get_property_list("LINK_LIBRARIES", vis)) {
-                    if (targets_.count(lib_name)) {
-                        auto dep = targets_[lib_name];
-                        std::string lib_out = dep->get_output_path();
-                        if (!lib_out.empty()) {
-                            task.inputs.push_back(lib_out);
-                        } else {
-                            // Dependency on a utility target
-                            task.dependencies.insert(lib_name);
-                        }
-                    }
+            // Resolved LINK_LIBRARIES already contains the flattened link line
+            // (output paths for target deps, raw names for system libs).
+            // Just check which ones are build graph tasks to wire dependencies.
+            for (const auto& lib : target->get_resolved_property("LINK_LIBRARIES")) {
+                if (graph.has_task(lib)) {
+                    task.inputs.push_back(lib);
                 }
-            };
-            add_lib_inputs(PropertyVisibility::PRIVATE);
-            add_lib_inputs(PropertyVisibility::PUBLIC);
-
-            // If it's a standard target (linking), we need to add libraries to the command line
-            if (target->get_type() != TargetType::CUSTOM && !task.commands.empty()) {
-                 // The link command already has these from Target::generate_tasks
-                 // but we need them as inputs for the graph.
             }
         }
     }

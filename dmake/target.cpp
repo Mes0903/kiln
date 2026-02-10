@@ -422,6 +422,9 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         if (dep_it != all_targets.end()) {
             auto& dep = dep_it->second;
 
+            // Record canonical target dependency for dependency discovery
+            resolved_target_deps_.push_back(lib_name);
+
             // CMake allows circular dependencies between static libraries.
             // Static libs are just .o archives — the linker resolves symbols by
             // scanning them, and CMake repeats the cycle on the link line.

@@ -467,7 +467,8 @@ std::expected<bool, InterpreterError> evaluate_condition(
         } else if (token == "TARGET" && pos + 1 < condition.size()) {
             pos++;
             std::string target_name = get_token_string(condition[pos++]);
-            return interp.get_targets().contains(target_name);
+            // Use find_target() to handle aliases (CMake's if(TARGET) returns true for aliases)
+            return interp.find_target(target_name) != nullptr;
         } else if (token == "EXISTS" && pos + 1 < condition.size()) {
             pos++;
             // File test operators take paths literally (with variable expansion)

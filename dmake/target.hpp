@@ -150,6 +150,10 @@ public:
     const std::vector<std::string>& get_resolved_property(const std::string& name) const;
     const std::vector<std::string>& get_resolved_interface_property(const std::string& name) const;
 
+    // All direct target dependencies (canonical names) discovered during resolve().
+    // Single source of truth for dependency discovery.
+    const std::vector<std::string>& get_resolved_target_deps() const { return resolved_target_deps_; }
+
     // Generate a formatted dump of target info (for dmake_dump_target_info)
     std::string generate_dump_info() const;
 
@@ -216,6 +220,10 @@ protected:
     // OBJECT library dependencies discovered during resolve() (target names, not aliases).
     // Used by generate_tasks() to inject .o files into the link command.
     std::vector<std::string> resolved_object_lib_deps_;
+
+    // All direct target dependencies discovered during resolve() (canonical names, not aliases).
+    // Single source of truth for dependency discovery — replaces raw LINK_LIBRARIES walking.
+    std::vector<std::string> resolved_target_deps_;
 
     // C++20 modules state
     mutable bool modules_detected_ = false;
