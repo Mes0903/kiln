@@ -213,6 +213,10 @@ protected:
     // Resolved Interface Properties Cache (usage requirements propagated to dependents)
     std::map<std::string, std::vector<std::string>> resolved_interface_properties_;
 
+    // OBJECT library dependencies discovered during resolve() (target names, not aliases).
+    // Used by generate_tasks() to inject .o files into the link command.
+    std::vector<std::string> resolved_object_lib_deps_;
+
     // C++20 modules state
     mutable bool modules_detected_ = false;
     mutable bool has_modules_ = false;

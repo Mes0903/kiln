@@ -464,12 +464,19 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                 std::string dep_path = dep->get_output_path();
                 if (!dep_path.empty()) res_libs.push_back(dep_path);
 
+                // Record OBJECT library deps for generate_tasks() to inject .o files
+                if (dep->get_type() == TargetType::OBJECT_LIBRARY) {
+                    resolved_object_lib_deps_.push_back(lib_name);
+                }
+
                 // For static libraries, we need ALL their link dependencies (including PRIVATE)
                 // because static libs are just .o archives with unresolved symbols.
                 // For shared libraries, only INTERFACE deps propagate (shared libs resolve their own symbols).
                 // IMPORTANT: Imported static libraries store deps in INTERFACE, not PRIVATE.
                 if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
                     merge(res_libs, dep->get_resolved_property("LINK_LIBRARIES"));
+                    // Static libs can't resolve their own symbols, so their OBJECT deps flow to us
+                    merge(resolved_object_lib_deps_, dep->resolved_object_lib_deps_);
                 } else {
                     merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
                 }
@@ -1397,41 +1404,23 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 
     // Collect object files from OBJECT library dependencies.
-    // When a target links to an OBJECT library, it absorbs all its .o files
-    // directly (like CMake's $<TARGET_OBJECTS:name>).
-    // Walk all link library names (pre-resolution) to find OBJECT lib deps,
-    // since OBJECT libs have no output path and vanish during resolution.
+    // resolve() populates resolved_object_lib_deps_ with all OBJECT library
+    // target names (transitively through static libs), so we just need to
+    // gather their .o files here.
     {
-        std::function<void(const Target&, std::set<const Target*>&)> collect_object_deps;
-        collect_object_deps = [&](const Target& t, std::set<const Target*>& visited) {
-            auto collect_from = [&](PropertyVisibility vis) {
-                for (const auto& lib_name : t.get_property_list("LINK_LIBRARIES", vis)) {
-                    auto it = all_targets.find(lib_name);
-                    if (it == all_targets.end()) continue;
-                    auto& dep = it->second;
-                    if (!visited.insert(dep.get()).second) continue;
-                    if (dep->get_type() == TargetType::OBJECT_LIBRARY) {
-                        for (const auto& src : dep->get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
-                            auto lang_info = LanguageClassifier::from_path(src);
-                            if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
-                                obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
-                            }
-                        }
-                        // Recurse: OBJECT libraries can depend on other OBJECT libraries
-                        collect_object_deps(*dep, visited);
-                    } else if (dep->get_type() == TargetType::STATIC_LIBRARY) {
-                        // Static libs may also link to OBJECT libraries
-                        collect_object_deps(*dep, visited);
-                    }
+        std::set<std::string> seen;
+        for (const auto& obj_lib_name : resolved_object_lib_deps_) {
+            if (!seen.insert(obj_lib_name).second) continue;
+            auto it = all_targets.find(obj_lib_name);
+            if (it == all_targets.end()) continue;
+            auto& dep = it->second;
+            for (const auto& src : dep->get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+                auto lang_info = LanguageClassifier::from_path(src);
+                if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
+                    obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
                 }
-            };
-            collect_from(PropertyVisibility::PUBLIC);
-            collect_from(PropertyVisibility::PRIVATE);
-            collect_from(PropertyVisibility::INTERFACE);
-        };
-        std::set<const Target*> visited;
-        visited.insert(this);
-        collect_object_deps(*this, visited);
+            }
+        }
     }
 
     const auto& sources_list = get_property_list("SOURCES", PropertyVisibility::PRIVATE);
