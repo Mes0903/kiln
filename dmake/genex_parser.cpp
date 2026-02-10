@@ -13,7 +13,9 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     }
 
     if (keyword == "BUILD_INTERFACE") return GenexNodeType::BUILD_INTERFACE;
+    if (keyword == "BUILD_LOCAL_INTERFACE") return GenexNodeType::BUILD_INTERFACE;  // CMake 3.26+, same as BUILD_INTERFACE (no export in dmake)
     if (keyword == "INSTALL_INTERFACE") return GenexNodeType::INSTALL_INTERFACE;
+    if (keyword == "INSTALL_LOCAL_INTERFACE") return GenexNodeType::INSTALL_INTERFACE;  // CMake 3.26+, same as INSTALL_INTERFACE (no export in dmake)
     if (keyword == "LINK_ONLY") return GenexNodeType::LINK_ONLY;
     if (keyword == "CONFIG") return GenexNodeType::CONFIG;
     if (keyword == "BOOL") return GenexNodeType::BOOL;
