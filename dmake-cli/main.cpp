@@ -452,6 +452,8 @@ int main(int argc, char* argv[]) {
        ->default_val(0);
     app.add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
     app.add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
+    std::string ignored_generator;
+    app.add_option("-G", ignored_generator, "Generator (ignored, accepted for CMake compatibility)");
     app.add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
     app.add_flag("--trace", opt.trace, "Print each command as it is executed (raw arguments)");
     app.add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
@@ -518,6 +520,7 @@ Examples:
         sub->add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)");
         sub->add_option("-B", opt.build_dir_str, "Build directory");
         sub->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE)");
+        sub->add_option("-G", ignored_generator, "Generator (ignored, CMake compatibility)");
         sub->add_flag("--profile", opt.profile, "Generate build profile");
         sub->add_flag("--trace", opt.trace, "Print each command as it is executed");
         sub->add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");

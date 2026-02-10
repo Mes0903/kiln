@@ -110,11 +110,13 @@ std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::s
                 *val = arg;
             } else if (active_keyword->type == KeywordType::LIST) {
                 auto* vec = static_cast<std::vector<std::string>*>(active_keyword->target);
-                vec->push_back(arg);
+                // Skip empty strings — CMake expands "${EMPTY_VAR}" to "" which
+                // should not produce a list entry (matches CMake behavior)
+                if (!arg.empty()) vec->push_back(arg);
             } else if (active_keyword->type == KeywordType::MULTI_LIST) {
                 auto* vec = static_cast<std::vector<std::vector<std::string>>*>(active_keyword->target);
                 if (vec->empty()) vec->emplace_back();
-                vec->back().push_back(arg);
+                if (!arg.empty()) vec->back().push_back(arg);
             }
         }
     }
