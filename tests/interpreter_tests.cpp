@@ -4128,12 +4128,12 @@ TEST_CASE("get_property TARGET TYPE", "[interpreter][property]") {
         get_property(INTERFACE_TYPE TARGET myinterfacelib PROPERTY TYPE)
         get_property(CUSTOM_TYPE TARGET mycustomtarget PROPERTY TYPE)
 
-        message("exe=${EXE_TYPE}")
-        message("static=${STATIC_TYPE}")
-        message("shared=${SHARED_TYPE}")
-        message("object=${OBJECT_TYPE}")
-        message("interface=${INTERFACE_TYPE}")
-        message("custom=${CUSTOM_TYPE}")
+        message(STATUS "exe=${EXE_TYPE}")
+        message(STATUS "static=${STATIC_TYPE}")
+        message(STATUS "shared=${SHARED_TYPE}")
+        message(STATUS "object=${OBJECT_TYPE}")
+        message(STATUS "interface=${INTERFACE_TYPE}")
+        message(STATUS "custom=${CUSTOM_TYPE}")
     )";
 
     dmake::Parser parser(script);
@@ -4177,8 +4177,8 @@ TEST_CASE("get_target_property TYPE", "[interpreter][property]") {
         get_target_property(EXE_TYPE myexe TYPE)
         get_target_property(LIB_TYPE mylib TYPE)
 
-        message("exe=${EXE_TYPE}")
-        message("lib=${LIB_TYPE}")
+        message(STATUS "exe=${EXE_TYPE}")
+        message(STATUS "lib=${LIB_TYPE}")
     )";
 
     dmake::Parser parser(script);
@@ -4215,8 +4215,8 @@ TEST_CASE("get_property TARGET other properties", "[interpreter][property]") {
         get_property(NAME_VAL TARGET myexe PROPERTY NAME)
         get_property(IMPORTED_VAL TARGET myexe PROPERTY IMPORTED)
 
-        message("name=${NAME_VAL}")
-        message("imported=${IMPORTED_VAL}")
+        message(STATUS "name=${NAME_VAL}")
+        message(STATUS "imported=${IMPORTED_VAL}")
     )";
 
     dmake::Parser parser(script);
@@ -4252,8 +4252,8 @@ TEST_CASE("get_property TARGET SET mode", "[interpreter][property]") {
         get_property(TYPE_SET TARGET myexe PROPERTY TYPE SET)
         get_property(UNKNOWN_SET TARGET myexe PROPERTY NONEXISTENT_PROP SET)
 
-        message("type_set=${TYPE_SET}")
-        message("unknown_set=${UNKNOWN_SET}")
+        message(STATUS "type_set=${TYPE_SET}")
+        message(STATUS "unknown_set=${UNKNOWN_SET}")
     )";
 
     dmake::Parser parser(script);
@@ -4288,7 +4288,7 @@ TEST_CASE("get_target_property NOTFOUND for missing property", "[interpreter][pr
 
         get_target_property(UNKNOWN_PROP myexe NONEXISTENT_PROPERTY)
 
-        message("unknown=${UNKNOWN_PROP}")
+        message(STATUS "unknown=${UNKNOWN_PROP}")
     )";
 
     dmake::Parser parser(script);
@@ -4321,9 +4321,9 @@ TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
         get_property(IMPORTED_VAL TARGET myimported PROPERTY IMPORTED)
         get_property(LOCATION_VAL TARGET myimported PROPERTY IMPORTED_LOCATION)
 
-        message("type=${TYPE_VAL}")
-        message("imported=${IMPORTED_VAL}")
-        message("location=${LOCATION_VAL}")
+        message(STATUS "type=${TYPE_VAL}")
+        message(STATUS "imported=${IMPORTED_VAL}")
+        message(STATUS "location=${LOCATION_VAL}")
     )";
 
     dmake::Parser parser(script);
@@ -6272,40 +6272,50 @@ TEST_CASE("Truthiness - CMake exact rules", "[interpreter][if][truthiness]") {
 }
 
 TEST_CASE("IS_NEWER_THAN operator", "[interpreter][if][is_newer_than]") {
+    auto temp_dir = std::filesystem::temp_directory_path() / "dmake_test_is_newer_than";
+    std::filesystem::create_directories(temp_dir);
+    auto cleanup = [&]() { std::filesystem::remove_all(temp_dir); };
+
     SECTION("Newer file returns true") {
-        CHECK(run_script(R"(
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/older.txt" "older")
-            execute_process(COMMAND sleep 0.1)
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/newer.txt" "newer")
-            if("${CMAKE_CURRENT_BINARY_DIR}/newer.txt" IS_NEWER_THAN "${CMAKE_CURRENT_BINARY_DIR}/older.txt")
-                message(STATUS "PASS")
-            else()
-                message(STATUS "FAIL")
-            endif()
-        )").find("PASS") != std::string::npos);
+        auto td = temp_dir.string();
+        CHECK(run_script(
+            "file(MAKE_DIRECTORY \"" + td + "\")\n"
+            "file(WRITE \"" + td + "/older.txt\" \"older\")\n"
+            "execute_process(COMMAND sleep 0.1)\n"
+            "file(WRITE \"" + td + "/newer.txt\" \"newer\")\n"
+            "if(\"" + td + "/newer.txt\" IS_NEWER_THAN \"" + td + "/older.txt\")\n"
+            "    message(STATUS \"PASS\")\n"
+            "else()\n"
+            "    message(STATUS \"FAIL\")\n"
+            "endif()\n"
+        ).find("PASS") != std::string::npos);
     }
 
     SECTION("Missing file returns true") {
-        CHECK(run_script(R"(
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/exists_file.txt" "exists")
-            if("${CMAKE_CURRENT_BINARY_DIR}/nonexistent_file_12345.txt" IS_NEWER_THAN "${CMAKE_CURRENT_BINARY_DIR}/exists_file.txt")
-                message(STATUS "PASS")
-            else()
-                message(STATUS "FAIL")
-            endif()
-        )").find("PASS") != std::string::npos);
+        auto td = temp_dir.string();
+        CHECK(run_script(
+            "file(WRITE \"" + td + "/exists_file.txt\" \"exists\")\n"
+            "if(\"" + td + "/nonexistent_file_12345.txt\" IS_NEWER_THAN \"" + td + "/exists_file.txt\")\n"
+            "    message(STATUS \"PASS\")\n"
+            "else()\n"
+            "    message(STATUS \"FAIL\")\n"
+            "endif()\n"
+        ).find("PASS") != std::string::npos);
     }
 
     SECTION("Same file returns true (equal mtime)") {
-        CHECK(run_script(R"(
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/same_file.txt" "content")
-            if("${CMAKE_CURRENT_BINARY_DIR}/same_file.txt" IS_NEWER_THAN "${CMAKE_CURRENT_BINARY_DIR}/same_file.txt")
-                message(STATUS "PASS")
-            else()
-                message(STATUS "FAIL")
-            endif()
-        )").find("PASS") != std::string::npos);
+        auto td = temp_dir.string();
+        CHECK(run_script(
+            "file(WRITE \"" + td + "/same_file.txt\" \"content\")\n"
+            "if(\"" + td + "/same_file.txt\" IS_NEWER_THAN \"" + td + "/same_file.txt\")\n"
+            "    message(STATUS \"PASS\")\n"
+            "else()\n"
+            "    message(STATUS \"FAIL\")\n"
+            "endif()\n"
+        ).find("PASS") != std::string::npos);
     }
+
+    cleanup();
 }
 
 TEST_CASE("if condition: undefined variable in MATCHES is literal", "[interpreter][if][bugfix]") {
