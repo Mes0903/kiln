@@ -42,9 +42,32 @@ static std::string normalize_cmake_regex(std::string_view pattern, std::string* 
     std::string result;
     result.reserve(pattern.size());
     std::string normalized_escapes; // Track which escapes were normalized
+    bool in_bracket = false;    // Inside a character class [...]
+    bool bracket_first = false; // Next char is first in class (where ] is literal)
 
     for (size_t i = 0; i < pattern.size(); ++i) {
-        if (pattern[i] == '\\' && i + 1 < pattern.size()) {
+        if (in_bracket) {
+            // CMake regex uses POSIX ERE semantics inside character classes:
+            // - Backslash has NO special meaning, it's a literal backslash
+            // - ] closes the class (unless it's the first char after [ or [^)
+            // PCRE2 treats \ as an escape inside brackets, so we must double it.
+            if (pattern[i] == ']' && !bracket_first) {
+                in_bracket = false;
+                result += ']';
+            } else if (pattern[i] == '\\') {
+                result += "\\\\"; // Literal backslash for PCRE2
+                bracket_first = false;
+            } else {
+                if (bracket_first && pattern[i] != '^') {
+                    bracket_first = false;
+                }
+                result += pattern[i];
+            }
+        } else if (pattern[i] == '[') {
+            in_bracket = true;
+            bracket_first = true;
+            result += '[';
+        } else if (pattern[i] == '\\' && i + 1 < pattern.size()) {
             char next = pattern[i + 1];
             if (is_cmake_metachar(next)) {
                 // Escaping a metacharacter - keep the escape for PCRE2
