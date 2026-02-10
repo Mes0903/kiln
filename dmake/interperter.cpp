@@ -275,40 +275,46 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
 
     // Phase B: Resolve all initial targets (recursive — resolves entire dep graph
     // via resolve()'s transitive dependency walking)
-    for (const auto& name : initial_targets) {
-        targets_[name]->resolve(targets_, *this);
+    {
+        ProfileScope scope("resolve dependencies", "graph");
+        for (const auto& name : initial_targets) {
+            targets_[name]->resolve(targets_, *this);
+        }
     }
 
     // Phase C: Collect targets to build using resolved dependency data.
     // resolve() already decoded genex + aliases, so get_resolved_target_deps()
     // returns canonical target names — no raw property walking needed.
-    std::function<void(const std::string&)> collect = [&](const std::string& name) {
-        if (targets_to_build.count(name)) return;
-        if (!targets_.count(name)) return;
-        targets_to_build.insert(name);
-        auto target = targets_[name];
+    {
+        ProfileScope scope("collect targets", "graph");
+        std::function<void(const std::string&)> collect = [&](const std::string& name) {
+            if (targets_to_build.count(name)) return;
+            if (!targets_.count(name)) return;
+            targets_to_build.insert(name);
+            auto target = targets_[name];
 
-        // Use resolved dependency data — correct by construction
-        for (const auto& dep : target->get_resolved_target_deps()) {
-            collect(dep);
-        }
-
-        // Custom target deps (already plain names, not genex)
-        auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-        if (custom) {
-            for (const auto& dep : custom->get_custom_dependencies()) {
+            // Use resolved dependency data — correct by construction
+            for (const auto& dep : target->get_resolved_target_deps()) {
                 collect(dep);
             }
-        }
 
-        // Manually added dependencies (from add_dependencies command)
-        for (const auto& dep : target->get_manually_added_dependencies()) {
-            collect(dep);
-        }
-    };
+            // Custom target deps (already plain names, not genex)
+            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+            if (custom) {
+                for (const auto& dep : custom->get_custom_dependencies()) {
+                    collect(dep);
+                }
+            }
 
-    for (const auto& name : initial_targets) {
-        collect(name);
+            // Manually added dependencies (from add_dependencies command)
+            for (const auto& dep : target->get_manually_added_dependencies()) {
+                collect(dep);
+            }
+        };
+
+        for (const auto& name : initial_targets) {
+            collect(name);
+        }
     }
 
     std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
@@ -403,25 +409,28 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Static libraries are just .o archives — they don't link against other libs,
     // so adding link-library inputs would create spurious (and circular) dependencies.
     // Uses resolved LINK_LIBRARIES (output paths + system libs) — no raw property walking.
-    for (const auto& name : targets_to_build) {
-        auto target = targets_[name];
-        if (target->get_type() == TargetType::STATIC_LIBRARY)
-            continue;
+    {
+        ProfileScope scope("wire link deps", "graph");
+        for (const auto& name : targets_to_build) {
+            auto target = targets_[name];
+            if (target->get_type() == TargetType::STATIC_LIBRARY)
+                continue;
 
-        std::string out_path = target->get_output_path();
+            std::string out_path = target->get_output_path();
 
-        // For custom targets, out_path might be empty or same as name
-        std::string task_id = out_path.empty() ? target->get_name() : out_path;
+            // For custom targets, out_path might be empty or same as name
+            std::string task_id = out_path.empty() ? target->get_name() : out_path;
 
-        if (graph.has_task(task_id)) {
-            auto& task = graph.get_task(task_id);
+            if (graph.has_task(task_id)) {
+                auto& task = graph.get_task(task_id);
 
-            // Resolved LINK_LIBRARIES already contains the flattened link line
-            // (output paths for target deps, raw names for system libs).
-            // Just check which ones are build graph tasks to wire dependencies.
-            for (const auto& lib : target->get_resolved_property("LINK_LIBRARIES")) {
-                if (graph.has_task(lib)) {
-                    task.inputs.push_back(lib);
+                // Resolved LINK_LIBRARIES already contains the flattened link line
+                // (output paths for target deps, raw names for system libs).
+                // Just check which ones are build graph tasks to wire dependencies.
+                for (const auto& lib : target->get_resolved_property("LINK_LIBRARIES")) {
+                    if (graph.has_task(lib)) {
+                        task.inputs.push_back(lib);
+                    }
                 }
             }
         }
