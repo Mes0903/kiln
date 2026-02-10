@@ -179,7 +179,7 @@ std::string dmake::join_command_raw(const std::vector<std::string>& args) {
 // Strip shell quoting from an argument.
 // Handles: 'literal' → literal, "with $vars" → with $vars, \'  → '
 // This undoes shell-level quoting that CMake source preserves in COMMAND args.
-static std::string strip_shell_quoting(const std::string& arg) {
+std::string dmake::strip_shell_quoting(const std::string& arg) {
     std::string result;
     result.reserve(arg.size());
     for (size_t i = 0; i < arg.size(); ++i) {

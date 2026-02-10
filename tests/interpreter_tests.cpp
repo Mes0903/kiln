@@ -6659,3 +6659,34 @@ TEST_CASE("if condition: lowercase keyword names are dereferenced as variables",
         REQUIRE(output == "NOT is operator\n");
     }
 }
+
+TEST_CASE("Embedded quotes in unquoted arguments are preserved", "[interpreter]") {
+    // CMake preserves literal quote characters in unquoted arguments.
+    // e.g. BENCHMARK_VERSION="${VERSION}" -> BENCHMARK_VERSION="v1.0"
+    // This is critical for compile definitions that need C string literals.
+    SECTION("simple embedded quotes") {
+        auto output = run_script(R"(
+            set(VERSION "v1.0.0")
+            set(VAR BENCHMARK_VERSION="${VERSION}")
+            message("${VAR}")
+        )");
+        REQUIRE(output == "BENCHMARK_VERSION=\"v1.0.0\"\n");
+    }
+
+    SECTION("embedded quotes with no variable expansion") {
+        auto output = run_script(R"(
+            set(VAR KEY="hello")
+            message("${VAR}")
+        )");
+        REQUIRE(output == "KEY=\"hello\"\n");
+    }
+
+    SECTION("flag-style embedded quotes") {
+        auto output = run_script(R"(
+            set(NAME "foo")
+            set(VAR -combiners="${NAME}")
+            message("${VAR}")
+        )");
+        REQUIRE(output == "-combiners=\"foo\"\n");
+    }
+}

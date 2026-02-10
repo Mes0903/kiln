@@ -69,6 +69,12 @@ std::string join_command(const std::vector<std::string>& args);
 std::string join_command_raw(const std::vector<std::string>& args);
 
 /**
+ * @brief Strip shell-level quoting from a string.
+ * CMake preserves quotes in COMMAND args; since we use execvp we must strip them.
+ */
+std::string strip_shell_quoting(const std::string& arg);
+
+/**
  * @brief Execute a shell command and capture its output.
  * @param command The command to execute.
  * @param working_dir The directory to run the command in (empty for current dir).

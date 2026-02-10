@@ -571,7 +571,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                         print_status(verb, target_display);
 
-                        for (const auto& cmd : task.commands) {
+                        for (auto cmd : task.commands) {
+                            // Custom/shell commands: strip shell quoting from args.
+                            // CMake preserves quotes in COMMAND args (e.g. -flag="${VAR}"),
+                            // expecting shell to strip them. Since we use execvp, do it here.
+                            if (task.is_shell_command) {
+                                for (auto& arg : cmd) {
+                                    arg = strip_shell_quoting(arg);
+                                }
+                            }
                             auto result = dmake::run_command(cmd, task.working_dir);
                             if (result.exit_code != 0) {
                                 {

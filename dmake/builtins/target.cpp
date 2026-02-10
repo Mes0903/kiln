@@ -1303,13 +1303,15 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
+        auto& opts = interp.get_current_directory_context().accumulated["COMPILE_OPTIONS"];
         for (const auto& arg : args) {
-            std::string def = arg;
-            // Strip -D prefix if present (CMake compatibility)
-            if (def.size() >= 2 && def[0] == '-' && def[1] == 'D') {
-                def = def.substr(2);
+            if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'D') {
+                // -Dfoo -> definition "foo"
+                defs.push_back(arg.substr(2));
+            } else {
+                // Non-definition flags (e.g. -Wno-foo) go to compile options
+                opts.push_back(arg);
             }
-            defs.push_back(def);
         }
     });
 

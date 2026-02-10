@@ -857,11 +857,12 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
             if (!quoted_value) {
                 return std::unexpected(quoted_value.error());
             }
-            // Add parts from the quoted segment — quotes themselves are NOT part of
-            // the value (CMake spec: embedded quotes in unquoted args are just grouping)
+            // Embedded quotes in unquoted args are preserved as literal characters
+            parts.emplace_back(std::string("\""));
             for (auto& part : *quoted_value) {
                 parts.emplace_back(std::move(part));
             }
+            parts.emplace_back(std::string("\""));
 
             start_pos = pos_;
             continue;

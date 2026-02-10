@@ -125,6 +125,7 @@ void fake_cmake_compiler_checks_and_init(
     interp.set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", cxx_info.system_processor);
     interp.set_variable("CMAKE_C_COMPILER_LOADED", "1");
     interp.set_variable("CMAKE_CXX_COMPILER_LOADED", "1");
+    interp.set_variable("CMAKE_CFG_INTDIR", ".");  // Single-config per invocation, like Make
 
     toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
     toolchain.set_compiler(Language::C, std::move(c_compiler));
@@ -878,7 +879,25 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             std::filesystem::path cmake_file = abs_source_path / "CMakeLists.txt";
 
             // Compute binary directory for the subdirectory
-            std::filesystem::path binary_path = std::filesystem::path(current_binary_dir) / subdir;
+            // Check for explicit binary_dir argument (args[1]), skipping EXCLUDE_FROM_ALL
+            std::filesystem::path binary_path;
+            bool has_explicit_binary_dir = false;
+            for (size_t i = 1; i < args.size(); ++i) {
+                if (args[i] != "EXCLUDE_FROM_ALL") {
+                    binary_path = std::filesystem::path(current_binary_dir) / args[i];
+                    has_explicit_binary_dir = true;
+                    break;
+                }
+            }
+            if (!has_explicit_binary_dir) {
+                if (std::filesystem::path(subdir).is_absolute()) {
+                    // For absolute source paths without explicit binary dir,
+                    // use the last component as subdirectory name under current binary dir
+                    binary_path = std::filesystem::path(current_binary_dir) / std::filesystem::path(subdir).filename();
+                } else {
+                    binary_path = std::filesystem::path(current_binary_dir) / subdir;
+                }
+            }
 
             // Create binary directory (CMake does this implicitly)
             std::error_code ec;
