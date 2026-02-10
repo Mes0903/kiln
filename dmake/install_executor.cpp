@@ -213,14 +213,10 @@ std::expected<void, std::string> execute_targets_rule(
     std::ostream& out
 ) {
     for (const auto& target_name : rule.targets) {
-        std::string resolved_name = interp->resolve_target_alias(target_name);
-        auto& targets = interp->get_targets();
-        auto it = targets.find(resolved_name);
-        if (it == targets.end()) {
+        auto* target = interp->find_target(target_name);
+        if (!target) {
             return std::unexpected("Unknown target: " + target_name);
         }
-
-        auto target = it->second;
 
         // Determine artifact path and destination based on target type
         std::filesystem::path artifact_path;

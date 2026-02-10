@@ -93,9 +93,7 @@ void parse_install_targets(
 
     // Validate all targets exist
     for (const auto& target_name : rule->targets) {
-        std::string resolved_name = interp.resolve_target_alias(target_name);
-        auto& targets = interp.get_targets();
-        if (targets.find(resolved_name) == targets.end()) {
+        if (!interp.find_target(target_name)) {
             interp.set_fatal_error("install(TARGETS) unknown target: " + target_name);
             return;
         }

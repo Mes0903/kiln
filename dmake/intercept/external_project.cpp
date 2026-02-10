@@ -442,14 +442,11 @@ void register_external_project_builtins(Interpreter& interp) {
         }
 
         std::string target_name = args[0];
-        auto& targets = interp.get_targets();
-        auto it = targets.find(target_name);
-        if (it == targets.end()) {
+        auto* target = interp.find_target(target_name);
+        if (!target) {
             interp.set_fatal_error("ExternalProject_Get_Property: target '" + target_name + "' not found");
             return;
         }
-
-        auto& target = it->second;
         for (size_t i = 1; i < args.size(); ++i) {
             std::string prop_name = args[i];
             std::string upper_prop = prop_name;

@@ -100,14 +100,12 @@ void register_source_properties_builtins(Interpreter& interp) {
         if (!target_directories.empty()) {
             // Use target directories
             for (const auto& target_name : target_directories) {
-                std::string resolved_name = interp.resolve_target_alias(target_name);
-                auto& targets = interp.get_targets();
-                auto it = targets.find(resolved_name);
-                if (it == targets.end()) {
+                auto* target = interp.find_target(target_name);
+                if (!target) {
                     interp.set_fatal_error("set_source_files_properties() unknown target: " + target_name);
                     return;
                 }
-                base_dirs.push_back(it->second->get_source_dir());
+                base_dirs.push_back(target->get_source_dir());
             }
         } else if (!directories.empty()) {
             // Use specified directories
@@ -188,14 +186,12 @@ void register_source_properties_builtins(Interpreter& interp) {
         // Determine base directory
         std::string base_dir;
         if (!opt_target_directory.empty()) {
-            std::string resolved_name = interp.resolve_target_alias(opt_target_directory);
-            auto& targets = interp.get_targets();
-            auto it = targets.find(resolved_name);
-            if (it == targets.end()) {
+            auto* target = interp.find_target(opt_target_directory);
+            if (!target) {
                 interp.set_fatal_error("get_source_file_property() unknown target: " + opt_target_directory);
                 return;
             }
-            base_dir = it->second->get_source_dir();
+            base_dir = target->get_source_dir();
         } else if (!opt_directory.empty()) {
             std::filesystem::path dir_path(opt_directory);
             if (dir_path.is_absolute()) {

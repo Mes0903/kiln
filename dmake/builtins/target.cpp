@@ -431,14 +431,11 @@ void register_target_builtins(Interpreter& interp) {
             }
 
             // Find the target
-            std::string resolved_name = interp.resolve_target_alias(target_name);
-            auto& targets = interp.get_root()->targets_;
-            auto it = targets.find(resolved_name);
-            if (it == targets.end()) {
+            auto* target = interp.find_target(target_name);
+            if (!target) {
                 interp.set_fatal_error("add_custom_command(TARGET) target '" + target_name + "' does not exist");
                 return;
             }
-            auto target = it->second;
 
             // Parse remaining arguments
             // Strip deprecated ARGS keyword (see OUTPUT form above)
@@ -643,17 +640,12 @@ void register_target_builtins(Interpreter& interp) {
         interp.get_current_directory_context().owned_targets.push_back(target);  // Track ownership for this directory
     });
 
-    auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> std::shared_ptr<Target> {
-        // Resolve alias first
-        std::string resolved_name = interp.resolve_target_alias(name);
-
-        auto& targets = interp.get_root()->targets_;
-        auto it = targets.find(resolved_name);
-        if (it == targets.end()) {
+    auto get_target_from_name = [](Interpreter& interp, const std::string& name, const std::string& cmd_name) -> Target* {
+        auto* target = interp.find_target(name);
+        if (!target) {
             interp.set_fatal_error(cmd_name + "() called on unknown target '" + name + "'");
-            return nullptr;
         }
-        return it->second;
+        return target;
     };
 
     // Generic handler generator for target_* commands
@@ -1062,15 +1054,15 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         // Get all target objects and validate they exist
-        std::vector<std::shared_ptr<Target>> targets;
+        std::vector<Target*> targets;
         for (const auto& name : target_names) {
-            auto target = get_target_from_name(interp, name, "set_target_properties");
+            auto* target = get_target_from_name(interp, name, "set_target_properties");
             if (!target) return;
             targets.push_back(target);
         }
 
         // Apply properties to each target
-        for (auto& target : targets) {
+        for (auto* target : targets) {
             // Helper to validate genex and append as INTERFACE property (uses append_property_from_string for splitting)
             auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
                 // Split first to validate each item

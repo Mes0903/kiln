@@ -687,13 +687,12 @@ Examples:
         }
 
         auto& interpreter = build_res.value();
-        auto& targets_map = interpreter->get_targets();
-        if (!targets_map.count(run_target)) {
+        auto* target = interpreter->find_target(run_target);
+        if (!target) {
             std::cerr << "Error: Target '" << run_target << "' not found after build." << std::endl;
             return 1;
         }
 
-        auto target = targets_map[run_target];
         if (target->get_type() != dmake::TargetType::EXECUTABLE) {
             std::cerr << "Error: Target '" << run_target << "' is not an executable." << std::endl;
             return 1;

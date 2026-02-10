@@ -24,17 +24,12 @@ static std::optional<PropertyScope> parse_property_scope(const std::string& scop
 }
 
 // Helper to get target by name (used in multiple places)
-static std::shared_ptr<Target> get_target_from_name(Interpreter& interp, const std::string& name, const std::string& cmd_name) {
-    // Resolve alias first
-    std::string resolved_name = interp.resolve_target_alias(name);
-
-    auto& targets = interp.get_targets();
-    auto it = targets.find(resolved_name);
-    if (it == targets.end()) {
+static Target* get_target_from_name(Interpreter& interp, const std::string& name, const std::string& cmd_name) {
+    auto* target = interp.find_target(name);
+    if (!target) {
         interp.set_fatal_error(cmd_name + "() called on unknown target '" + name + "'");
-        return nullptr;
     }
-    return it->second;
+    return target;
 }
 
 // Helper to get test by name
@@ -386,7 +381,7 @@ void register_property_builtins(Interpreter& interp) {
                 }
 
                 // Handle list properties generically using the shared property metadata table
-                auto handle_list_property = [](const std::shared_ptr<Target>& target,
+                auto handle_list_property = [](Target* target,
                                                const std::string& prop_name,
                                                const std::vector<std::string>& values,
                                                bool append_mode) -> bool {

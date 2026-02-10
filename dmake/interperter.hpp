@@ -246,6 +246,14 @@ public:
         return (it != aliases.end()) ? it->second : name;
     }
 
+    // Look up a target by name, resolving aliases. Returns nullptr if not found.
+    // Use this for user-provided target names. For internal/already-resolved names, use get_targets() directly.
+    Target* find_target(const std::string& name) const {
+        auto& targets = get_root()->targets_;
+        auto it = targets.find(resolve_target_alias(name));
+        return (it != targets.end()) ? it->second.get() : nullptr;
+    }
+
     // Check if a name is an alias
     bool is_target_alias(const std::string& name) const {
         return get_root()->target_aliases_.find(name) != get_root()->target_aliases_.end();
