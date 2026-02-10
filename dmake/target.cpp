@@ -341,6 +341,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
     genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     genex_ctx.all_targets = &all_targets;
+    genex_ctx.target_aliases = &interp.get_target_aliases();
     genex_ctx.current_target = this;
     genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
@@ -818,6 +819,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     source_genex_base.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
     source_genex_base.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     source_genex_base.all_targets = &all_targets;
+    source_genex_base.target_aliases = &interp.get_target_aliases();
     source_genex_base.current_target = this;
     source_genex_base.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     source_genex_base.phase = GenexEvaluationContext::Phase::BUILD;
@@ -1272,6 +1274,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
     genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     genex_ctx.all_targets = &all_targets;
+    genex_ctx.target_aliases = &interp.get_target_aliases();
     genex_ctx.current_target = this;
     genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
@@ -1342,6 +1345,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     pch_genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
     pch_genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
     pch_genex_ctx.all_targets = &all_targets;
+    pch_genex_ctx.target_aliases = &interp.get_target_aliases();
     pch_genex_ctx.current_target = this;
     pch_genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
     pch_genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;

@@ -236,7 +236,8 @@ public:
 
     // Access to targets (for testing and build system)
     std::map<std::string, std::shared_ptr<Target>>& get_targets() { return get_root()->targets_; }
-    std::map<std::string, std::string>& get_target_aliases() { return get_root()->target_aliases_; }
+    std::unordered_map<std::string, std::string>& get_target_aliases() { return get_root()->target_aliases_; }
+    const std::unordered_map<std::string, std::string>& get_target_aliases() const { return get_root()->target_aliases_; }
 
     // Resolve alias to real target name (returns input if not an alias)
     std::string resolve_target_alias(const std::string& name) const {
@@ -404,7 +405,7 @@ private:
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
-    std::map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
+    std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
     bool testing_enabled_ = false;
     std::set<std::string> targets_to_dump_at_build_;  // For dmake_dump_target_info AT_BUILD

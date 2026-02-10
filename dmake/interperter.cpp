@@ -437,6 +437,7 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         genex_ctx.cxx_compiler_id = get_variable("CMAKE_CXX_COMPILER_ID");
         genex_ctx.c_compiler_id = get_variable("CMAKE_C_COMPILER_ID");
         genex_ctx.all_targets = &targets_;
+        genex_ctx.target_aliases = &target_aliases_;
         genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
         genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
 

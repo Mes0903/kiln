@@ -214,6 +214,7 @@ void register_message_builtins(Interpreter& interp) {
         ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
         ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
         ctx.all_targets = &interp.get_targets();
+        ctx.target_aliases = &interp.get_target_aliases();
         ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
         ctx.phase = GenexEvaluationContext::Phase::BUILD;
         ctx.allow_deferred_compile_language = allow_deferred;

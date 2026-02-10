@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace dmake {
@@ -31,6 +32,7 @@ struct GenexEvaluationContext {
     std::string c_compiler_id;        // CMAKE_C_COMPILER_ID
     std::optional<Language> compile_language;  // For per-source evaluation
     const std::map<std::string, std::shared_ptr<Target>>* all_targets = nullptr;
+    const std::unordered_map<std::string, std::string>* target_aliases = nullptr;
     const Target* current_target = nullptr;     // For error messages
     std::string install_prefix;       // CMAKE_INSTALL_PREFIX (for $<INSTALL_PREFIX>)
     enum class Phase { BUILD, INSTALL } phase = Phase::BUILD;
@@ -62,6 +64,10 @@ private:
     // Helper: Evaluate nodes and concatenate results
     std::expected<std::string, std::string> evaluate_nodes(
         const std::vector<std::shared_ptr<GenexNode>>& nodes);
+
+    // Helper: Find a target by name, resolving aliases if needed
+    // Returns nullptr if not found
+    Target* find_target(const std::string& name) const;
 
     // Helper: Check if a string is "truthy" using CMake semantics
     bool is_truthy(const std::string& value) const;

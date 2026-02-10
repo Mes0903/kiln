@@ -26,6 +26,19 @@ int GenexEvaluator::compare_versions(const std::string& v1, const std::string& v
     return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end()) ? -1 : 1;
 }
 
+Target* GenexEvaluator::find_target(const std::string& name) const {
+    auto it = ctx_.all_targets->find(name);
+    if (it != ctx_.all_targets->end()) return it->second.get();
+    if (ctx_.target_aliases) {
+        auto alias_it = ctx_.target_aliases->find(name);
+        if (alias_it != ctx_.target_aliases->end()) {
+            it = ctx_.all_targets->find(alias_it->second);
+            if (it != ctx_.all_targets->end()) return it->second.get();
+        }
+    }
+    return nullptr;
+}
+
 bool GenexEvaluator::is_truthy(const std::string& value) const {
     // CMake truthiness: falsy values are empty string, 0, OFF, NO, FALSE, N, IGNORE, NOTFOUND, *-NOTFOUND
     if (value.empty()) return false;
@@ -278,7 +291,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_EXISTS requires all_targets context");
             }
-            return (ctx_.all_targets->find(node.raw_content) != ctx_.all_targets->end()) ? "1" : "0";
+            return find_target(node.raw_content) ? "1" : "0";
         }
 
         case GenexNodeType::TARGET_NAME_IF_EXISTS: {
@@ -286,8 +299,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_NAME_IF_EXISTS requires all_targets context");
             }
-            auto target_it = ctx_.all_targets->find(node.raw_content);
-            return (target_it != ctx_.all_targets->end()) ? node.raw_content : "";
+            return find_target(node.raw_content) ? node.raw_content : "";
         }
 
         case GenexNodeType::TARGET_FILE: {
@@ -295,11 +307,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_FILE requires all_targets context");
             }
-            auto target_it = ctx_.all_targets->find(node.raw_content);
-            if (target_it == ctx_.all_targets->end()) {
+            auto* target = find_target(node.raw_content);
+            if (!target) {
                 return std::unexpected("TARGET_FILE: target '" + node.raw_content + "' not found");
             }
-            return target_it->second->get_output_path();
+            return target->get_output_path();
         }
 
         case GenexNodeType::TARGET_FILE_NAME: {
@@ -307,11 +319,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_FILE_NAME requires all_targets context");
             }
-            auto target_it = ctx_.all_targets->find(node.raw_content);
-            if (target_it == ctx_.all_targets->end()) {
+            auto* target = find_target(node.raw_content);
+            if (!target) {
                 return std::unexpected("TARGET_FILE_NAME: target '" + node.raw_content + "' not found");
             }
-            std::filesystem::path output_path(target_it->second->get_output_path());
+            std::filesystem::path output_path(target->get_output_path());
             return output_path.filename().string();
         }
 
@@ -320,11 +332,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_FILE_DIR requires all_targets context");
             }
-            auto target_it = ctx_.all_targets->find(node.raw_content);
-            if (target_it == ctx_.all_targets->end()) {
+            auto* target = find_target(node.raw_content);
+            if (!target) {
                 return std::unexpected("TARGET_FILE_DIR: target '" + node.raw_content + "' not found");
             }
-            std::filesystem::path output_path(target_it->second->get_output_path());
+            std::filesystem::path output_path(target->get_output_path());
             return output_path.parent_path().string();
         }
 
@@ -333,11 +345,10 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_OBJECTS requires all_targets context");
             }
-            auto target_it = ctx_.all_targets->find(node.raw_content);
-            if (target_it == ctx_.all_targets->end()) {
+            auto* target = find_target(node.raw_content);
+            if (!target) {
                 return std::unexpected("TARGET_OBJECTS: target '" + node.raw_content + "' not found");
             }
-            const auto& target = target_it->second;
             // Since CMake 3.21, TARGET_OBJECTS works on any library with compiled sources
             auto ttype = target->get_type();
             if (ttype == TargetType::INTERFACE_LIBRARY || ttype == TargetType::CUSTOM) {
@@ -439,14 +450,14 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 property_name = *prop_val;
             }
 
-            // Look up the target
-            auto target_it = ctx_.all_targets->find(target_name);
-            if (target_it == ctx_.all_targets->end()) {
+            // Look up the target (resolving aliases)
+            auto* target = find_target(target_name);
+            if (!target) {
                 return std::unexpected("TARGET_PROPERTY: target '" + target_name + "' not found");
             }
 
             // Get the property value (checks list properties then generic)
-            std::string prop_value = target_it->second->get_property_combined(property_name);
+            std::string prop_value = target->get_property_combined(property_name);
 
             // Recursively evaluate any nested genex in individual list elements
             if (prop_value.find("$<") != std::string::npos) {
