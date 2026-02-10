@@ -90,18 +90,9 @@ public:
             if (clean_def.starts_with("-D")) {
                 clean_def = clean_def.substr(2);
             }
-            // Escape quotes in definition values so they reach the preprocessor
-            // e.g., FOO="bar" -> FOO=\"bar\"
-            std::string escaped_def;
-            escaped_def.reserve(clean_def.size() + 4);
-            for (char c : clean_def) {
-                if (c == '"') {
-                    escaped_def += "\\\"";
-                } else {
-                    escaped_def += c;
-                }
-            }
-            cmd.push_back("-D" + escaped_def);
+            // No shell escaping needed: commands are executed via execvp,
+            // so each argv element is passed directly to the compiler.
+            cmd.push_back("-D" + clean_def);
         }
 
         cmd.push_back("-MMD");

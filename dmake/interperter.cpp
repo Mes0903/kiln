@@ -1530,8 +1530,9 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
 
-    // CMake argument elision: Remove arguments that evaluate to empty strings
-    // when they contain variable references (unquoted arguments with ${...})
+    // CMake argument elision and list expansion: Remove arguments that evaluate
+    // to empty strings, and split semicolon-separated lists into separate arguments
+    // when they come from variable references (unquoted arguments with ${...})
     auto filter_empty_args = [&](const std::vector<Argument>& args) -> std::vector<Argument> {
         std::vector<Argument> filtered;
         for (const auto& arg : args) {
@@ -1544,15 +1545,23 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
                 }
             }
 
-            // If it has variable references, evaluate it and check if empty
+            // If it has variable references and is unquoted, expand and split lists
             if (has_var_ref && !arg.quoted) {
                 std::string val = evaluate_argument(arg);
                 if (val.empty()) {
                     continue;  // Skip this argument (elision)
                 }
+                // Split semicolon-separated lists into separate arguments
+                for (auto item : CMakeArrayView(val)) {
+                    if (item.empty()) continue;
+                    Argument new_arg;
+                    new_arg.quoted = false;
+                    new_arg.parts.push_back(std::string(item));
+                    filtered.push_back(std::move(new_arg));
+                }
+            } else {
+                filtered.push_back(arg);
             }
-
-            filtered.push_back(arg);
         }
         return filtered;
     };

@@ -580,7 +580,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                     std::cout.flush();  // erase wrote to cout; flush before cerr
                                     if (!result.output.empty()) std::cerr << result.output << std::endl;
                                 }
-                                task_error = "Command failed: " + join_command_raw(cmd);
+                                task_error = "Command failed: " + join_command(cmd);
                                 break;
                             } else if (!result.output.empty()) {
                                 std::lock_guard<std::mutex> lock(output_mutex_);

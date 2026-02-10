@@ -4633,18 +4633,66 @@ TEST_CASE("if condition: unquoted variable reference in STREQUAL", "[interpreter
     }
 
     SECTION("Variable with value that looks like a variable name") {
-        // Even if the expanded value happens to be a defined variable name,
-        // it should NOT be dereferenced again
+        // CMake behavior: if(${type}) first expands ${type} to "OTHER_VAR",
+        // then the condition evaluator auto-dereferences OTHER_VAR as a variable.
+        // So if(${type} STREQUAL "OTHER_VAR") becomes if(OTHER_VAR STREQUAL "OTHER_VAR")
+        // and OTHER_VAR gets dereferenced to "wrong".
         auto output = run_script(R"(
             set(OTHER_VAR "wrong")
             set(type "OTHER_VAR")
             if(${type} STREQUAL "OTHER_VAR")
-                message("correct")
+                message("no double deref")
             else()
-                message("wrong - double dereferenced")
+                message("double dereferenced")
             endif()
         )");
-        REQUIRE(output == "correct\n");
+        REQUIRE(output == "double dereferenced\n");
+    }
+
+    SECTION("List expansion in if() condition") {
+        // When a variable contains a semicolon-separated list and is expanded
+        // in an if() condition, the list elements should become separate arguments.
+        // e.g., if(${COND}) where COND="NOT;MY_VAR" should become if(NOT MY_VAR)
+        auto output = run_script(R"(
+            set(MY_VAR OFF)
+            set(MY_COND "NOT;MY_VAR")
+            if(${MY_COND})
+                message("TRUE")
+            else()
+                message("FALSE")
+            endif()
+        )");
+        REQUIRE(output == "TRUE\n");
+    }
+
+    SECTION("List expansion in if() with multiple conditions") {
+        // Test that list expansion works for more complex conditions
+        auto output = run_script(R"(
+            set(A ON)
+            set(B ON)
+            set(COND "A;AND;B")
+            if(${COND})
+                message("both on")
+            else()
+                message("not both")
+            endif()
+        )");
+        REQUIRE(output == "both on\n");
+    }
+
+    SECTION("List expansion in elseif() condition") {
+        auto output = run_script(R"(
+            set(MY_VAR OFF)
+            set(MY_COND "NOT;MY_VAR")
+            if(FALSE)
+                message("first")
+            elseif(${MY_COND})
+                message("elseif list expanded")
+            else()
+                message("else")
+            endif()
+        )");
+        REQUIRE(output == "elseif list expanded\n");
     }
 }
 
