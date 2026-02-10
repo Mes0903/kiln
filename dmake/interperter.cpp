@@ -387,6 +387,11 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         }
     }
 
+    // Second pass: resolve circular dependency properties now that all targets are resolved
+    for (auto& [name, target] : targets_) {
+        target->resolve_deferred_circular_deps(targets_);
+    }
+
     // Print deferred target dumps (AT_BUILD) - targets are now resolved
     for (const auto& dump_target_name : get_targets_to_dump_at_build()) {
         if (targets_.count(dump_target_name)) {

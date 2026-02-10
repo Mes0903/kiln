@@ -97,7 +97,8 @@ if(BUILD_TESTING)
         tests/genex_tests.cpp
         tests/compile_features_tests.cpp
         tests/source_properties_tests.cpp
-        tests/cmake_array_tests.cpp)
+        tests/cmake_array_tests.cpp
+        tests/resolve_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

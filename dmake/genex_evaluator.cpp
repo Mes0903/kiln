@@ -357,7 +357,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
 
             // Collect object file paths for all sources in the target
             std::string result;
-            const auto& sources = target->get_property_list("SOURCES", PropertyVisibility::PRIVATE);
+            auto sources = target->get_property_list("SOURCES", TargetPropertyScope::BUILD);
             std::string binary_dir = target->get_binary_dir();
             std::string target_name = target->get_name();
             std::string source_dir = target->get_source_dir();

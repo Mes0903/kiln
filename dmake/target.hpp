@@ -7,12 +7,20 @@
 #include <memory>
 #include <string_view>
 #include <algorithm>
+#include <optional>
 #include "language.hpp"
 
 namespace dmake {
 
 enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY, CUSTOM };
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
+
+// Semantic scopes for querying properties. Maps to visibility combinations.
+// Use this instead of manually combining PropertyVisibility values.
+enum class TargetPropertyScope {
+    BUILD,      // PRIVATE + PUBLIC — what this target uses to build itself
+    INTERFACE,  // PUBLIC + INTERFACE — what consumers of this target inherit
+};
 
 // Single source of truth for all list properties that use visibility (PUBLIC/PRIVATE/INTERFACE).
 // Used by resolve(), generate_dump_info(), set_target_properties(), set_property(TARGET).
@@ -65,8 +73,8 @@ struct CustomCommand {
 };
 
 class BuildGraph;
-
 class Toolchain;
+struct GenexEvaluationContext;
 
 class Target {
 public:
@@ -110,6 +118,9 @@ public:
     const std::vector<std::string>& get_property_list(const std::string& name, PropertyVisibility visibility) const;
     std::vector<std::string> get_property_list(const std::string& name, std::initializer_list<PropertyVisibility> visibilities) const;
 
+    // Get property values for a semantic scope (merges visibility buckets, returns by value).
+    std::vector<std::string> get_property_list(const std::string& name, TargetPropertyScope scope) const;
+
     // Get combined property value as semicolon-separated string (all visibilities).
     // Checks list_properties_ first, then falls back to generic properties_.
     std::string get_property_combined(const std::string& name) const;
@@ -151,6 +162,11 @@ public:
     const std::vector<std::string>& get_resolved_property(const std::string& name) const;
     const std::vector<std::string>& get_resolved_interface_property(const std::string& name) const;
 
+    // Second pass after all targets are resolved: pick up interface properties
+    // from circular dependencies that were unavailable during the DFS.
+    void resolve_deferred_circular_deps(
+        const std::map<std::string, std::shared_ptr<Target>>& all_targets);
+
     // All direct target dependencies (canonical names) discovered during resolve().
     // Single source of truth for dependency discovery.
     const std::vector<std::string>& get_resolved_target_deps() const { return resolved_target_deps_; }
@@ -162,6 +178,51 @@ public:
     std::string get_module_mapper_path() const;
 
 protected:
+    // Factory for GenexEvaluationContext. Populates from interpreter variables.
+    static GenexEvaluationContext make_genex_context(
+        const Target* current_target,
+        const class Interpreter& interp,
+        const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+        std::optional<Language> compile_language = std::nullopt,
+        bool allow_deferred = false);
+
+    // Metadata for a transitive property during resolve().
+    struct PropInfo {
+        std::string name;
+        bool is_path;
+    };
+    static std::vector<PropInfo> build_props_to_resolve();
+
+    // Resolve a possibly-relative path to absolute against source_dir_.
+    std::string resolve_to_absolute_path(const std::string& p) const;
+
+    // Phase 1 of resolve(): populate resolved_properties_ and resolved_interface_properties_
+    // from this target's own property values. Evaluates generator expressions, resolves paths.
+    void initialize_local_properties(
+        const std::vector<PropInfo>& props_to_resolve,
+        class GenexEvaluator& evaluator);
+
+    // Get the link library dependencies that should propagate from a dependency.
+    // Static (non-imported): ALL link deps; Shared/imported/interface: only INTERFACE.
+    static const std::vector<std::string>& collect_link_deps(const Target& dep);
+
+    // Merge a resolved dependency's INTERFACE properties into an output property map.
+    void propagate_from_dependency(
+        const Target& dep,
+        const std::vector<PropInfo>& props_to_resolve,
+        std::map<std::string, std::vector<std::string>>& output_props,
+        bool skip_non_link);
+
+    // Handle a circular dependency detected during resolve().
+    void handle_circular_dep(
+        const Target& dep,
+        bool is_public, bool is_interface_only,
+        std::vector<std::string>& res_libs,
+        std::vector<std::string>& res_iface_libs);
+
+    // Circular static lib deps recorded during resolve() for deferred property pickup.
+    std::vector<std::string> deferred_circular_deps_;
+
     // Helper methods for task generation
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,

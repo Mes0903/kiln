@@ -108,6 +108,16 @@ std::vector<std::string> Target::get_property_list(const std::string& name, std:
     return result;
 }
 
+std::vector<std::string> Target::get_property_list(const std::string& name, TargetPropertyScope scope) const {
+    switch (scope) {
+    case TargetPropertyScope::BUILD:
+        return get_property_list(name, {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC});
+    case TargetPropertyScope::INTERFACE:
+        return get_property_list(name, {PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE});
+    }
+    __builtin_unreachable();
+}
+
 std::string Target::get_property_combined(const std::string& name) const {
     // Check visibility-based list properties first
     auto prop_it = list_properties_.find(name);
@@ -303,111 +313,91 @@ const std::vector<std::string>& Target::get_language_flags(Language lang) const 
 
 // --- Resolution Logic ---
 
-void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp) {
-    if (resolved_) return;
-    if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
-    visiting_ = true;
+GenexEvaluationContext Target::make_genex_context(
+    const Target* current_target,
+    const Interpreter& interp,
+    const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+    std::optional<Language> compile_language,
+    bool allow_deferred)
+{
+    GenexEvaluationContext ctx;
+    ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+    ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+    ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+    ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    ctx.all_targets = &all_targets;
+    ctx.target_aliases = &interp.get_target_aliases();
+    ctx.current_target = current_target;
+    ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+    ctx.phase = GenexEvaluationContext::Phase::BUILD;
+    ctx.compile_language = compile_language;
+    ctx.allow_deferred_compile_language = allow_deferred;
+    return ctx;
+}
 
-    auto resolve_path = [&](std::string p) -> std::string {
-        if(p.starts_with("-I")) {
-            p = p.substr(2);
-        }
-        std::filesystem::path path(p);
-        if (path.is_absolute()) return path.string();
-        return (std::filesystem::path(source_dir_) / path).lexically_normal().string();
-    };
-
-    auto merge = [](std::vector<std::string>& target, const std::vector<std::string>& source) {
-        // Order-preserving dedup: keep first occurrence, skip duplicates.
-        // Prevents exponential growth in deep dependency graphs where many
-        // targets share common transitive dependencies.
-        std::unordered_set<std::string> seen(target.begin(), target.end());
-        for (const auto& s : source) {
-            if (seen.insert(s).second) {
-                target.push_back(s);
-            }
-        }
-    };
-
-    // Build list of transitive properties to resolve from the shared metadata table.
-    // "SOURCES" is excluded (not transitive).
-    // "LINK_LIBRARIES" is excluded because it has specialized handling below
-    // (process_dependency walks the target graph and resolves target names to paths).
-    struct PropInfo {
-        std::string name;
-        bool is_path;
-    };
-    std::vector<PropInfo> props_to_resolve;
-    for (const auto& meta : kListProperties) {
-        if (meta.transitive && meta.name != "LINK_LIBRARIES") {
-            props_to_resolve.push_back({std::string(meta.name), meta.is_path});
+// Order-preserving dedup merge: append items from source into target,
+// skipping duplicates already present in target.
+namespace {
+void merge_dedup(std::vector<std::string>& target,
+                 const std::vector<std::string>& source) {
+    std::unordered_set<std::string> seen(target.begin(), target.end());
+    for (const auto& s : source) {
+        if (seen.insert(s).second) {
+            target.push_back(s);
         }
     }
+}
+} // anonymous namespace
 
-    // Prepare genex evaluator (needed before processing properties)
-    GenexEvaluationContext genex_ctx;
-    genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-    genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
-    genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
-    genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-    genex_ctx.all_targets = &all_targets;
-    genex_ctx.target_aliases = &interp.get_target_aliases();
-    genex_ctx.current_target = this;
-    genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
-    genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
-    // Defer COMPILE_LANGUAGE and COMPILE_LANG_AND_ID evaluation until per-source processing
-    genex_ctx.allow_deferred_compile_language = true;
-
-    GenexEvaluator evaluator(genex_ctx);
-
-    // Helper: Format best-effort error message (Layer 2)
-    auto format_genex_error = [&](const std::string& prop_name,
-                                   const std::string& error_msg,
-                                   const std::vector<std::string>& values) -> std::string {
-        std::ostringstream oss;
-        oss << "Error during build graph generation:\n"
-            << "  Target: '" << name_ << "'\n"
-            << "  Property: '" << prop_name << "'\n"
-            << "  Values: ";
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0) oss << ", ";
-            oss << "'" << values[i] << "'";
-            if (i >= 3) { oss << " ... (" << (values.size() - 3) << " more)"; break; }
+std::vector<Target::PropInfo> Target::build_props_to_resolve() {
+    std::vector<PropInfo> result;
+    for (const auto& meta : kListProperties) {
+        if (meta.transitive && meta.name != "LINK_LIBRARIES") {
+            result.push_back({std::string(meta.name), meta.is_path});
         }
-        oss << "\n  Error: " << error_msg << "\n\n"
-            << "Hint: Generator expressions are typically set via target_*() commands.\n"
-            << "      Search for: target_.*" << name_ << " in your CMakeLists.txt files";
-        return oss.str();
-    };
+    }
+    return result;
+}
 
-    // 1. Initialize with local properties (evaluate genex FIRST, then resolve paths)
+std::string Target::resolve_to_absolute_path(const std::string& p) const {
+    std::string_view sv = p;
+    if (sv.starts_with("-I")) sv.remove_prefix(2);
+    std::filesystem::path path(sv);
+    if (path.is_absolute()) return path.string();
+    return (std::filesystem::path(source_dir_) / path).lexically_normal().string();
+}
+
+void Target::initialize_local_properties(
+    const std::vector<PropInfo>& props_to_resolve,
+    GenexEvaluator& evaluator)
+{
     for (const auto& info : props_to_resolve) {
         auto& res = resolved_properties_[info.name];
         auto& res_iface = resolved_interface_properties_[info.name];
 
         auto process_local = [&](PropertyVisibility vis, std::vector<std::string>& out) {
-            // Get raw property values
-            auto val = get_property_list(info.name, vis);
-
-            // Evaluate generator expressions FIRST
+            const auto& val = get_property_list(info.name, vis);
             auto eval_result = evaluator.evaluate_property_list(val);
             if (!eval_result) {
-                throw std::runtime_error(format_genex_error(info.name, eval_result.error(), val));
+                std::ostringstream oss;
+                oss << "Error during build graph generation:\n"
+                    << "  Target: '" << name_ << "'\n"
+                    << "  Property: '" << info.name << "'\n"
+                    << "  Error: " << eval_result.error();
+                throw std::runtime_error(oss.str());
             }
-
-            // Then resolve paths if needed
             if (info.is_path) {
-                for(const auto& p : *eval_result) {
-                    if (!p.empty()) {  // Skip empty results from genex
-                        out.push_back(resolve_path(p));
+                for (const auto& p : *eval_result) {
+                    if (!p.empty()) {
+                        out.push_back(resolve_to_absolute_path(p));
                     }
                 }
             } else {
-                merge(out, *eval_result);
+                merge_dedup(out, *eval_result);
             }
         };
 
-        // Self properties: PRIVATE + PUBLIC
+        // Own build properties: PRIVATE + PUBLIC
         process_local(PropertyVisibility::PRIVATE, res);
         process_local(PropertyVisibility::PUBLIC, res);
 
@@ -415,143 +405,165 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         process_local(PropertyVisibility::PUBLIC, res_iface);
         process_local(PropertyVisibility::INTERFACE, res_iface);
     }
+}
 
-    // Special handling for LINK_LIBRARIES (order matters, so we do it manually/carefully)
+const std::vector<std::string>& Target::collect_link_deps(const Target& dep) {
+    if (dep.get_type() == TargetType::STATIC_LIBRARY && !dep.is_imported()) {
+        return dep.get_resolved_property("LINK_LIBRARIES");
+    }
+    return dep.get_resolved_interface_property("LINK_LIBRARIES");
+}
+
+void Target::propagate_from_dependency(
+    const Target& dep,
+    const std::vector<PropInfo>& props_to_resolve,
+    std::map<std::string, std::vector<std::string>>& output_props,
+    bool skip_non_link)
+{
+    // 1. Merge non-link interface properties (includes, definitions, options, etc.)
+    if (!skip_non_link) {
+        for (const auto& info : props_to_resolve) {
+            const auto& dep_iface = dep.get_resolved_interface_property(info.name);
+            if (dep_iface.empty()) continue;
+            if (dep.is_imported() && info.name == "INCLUDE_DIRECTORIES") {
+                merge_dedup(output_props["SYSTEM_INCLUDE_DIRECTORIES"], dep_iface);
+            } else {
+                merge_dedup(output_props[info.name], dep_iface);
+            }
+        }
+    }
+
+    // 2. Add dependency's own artifact + transitive link deps to LINK_LIBRARIES
+    auto& output_libs = output_props["LINK_LIBRARIES"];
+    std::string dep_path = dep.get_output_path();
+    if (!dep_path.empty()) {
+        output_libs.push_back(std::move(dep_path));
+    }
+    merge_dedup(output_libs, collect_link_deps(dep));
+}
+
+void Target::handle_circular_dep(
+    const Target& dep,
+    bool is_public, bool is_interface_only,
+    std::vector<std::string>& res_libs,
+    std::vector<std::string>& res_iface_libs)
+{
+    if (dep.get_type() != TargetType::STATIC_LIBRARY &&
+        dep.get_type() != TargetType::OBJECT_LIBRARY) {
+        throw std::runtime_error(
+            "Circular dependency detected involving target: " + dep.get_name());
+    }
+    dmake::print_message(std::cerr, "WARNING",
+        "Circular dependency between static libraries '" + name_ +
+        "' and '" + dep.get_name() + "'. Consider restructuring.");
+    std::string dep_path = dep.get_output_path();
+    if (!dep_path.empty()) {
+        if (!is_interface_only) res_libs.push_back(dep_path);
+        if (is_public || is_interface_only) res_iface_libs.push_back(dep_path);
+    }
+    deferred_circular_deps_.push_back(dep.get_name());
+}
+
+void Target::resolve_deferred_circular_deps(
+    const std::map<std::string, std::shared_ptr<Target>>& all_targets)
+{
+    if (deferred_circular_deps_.empty()) return;
+
+    auto props = build_props_to_resolve();
+    for (const auto& dep_name : deferred_circular_deps_) {
+        auto it = all_targets.find(dep_name);
+        if (it == all_targets.end() || !it->second->is_resolved()) continue;
+        const auto& dep = *it->second;
+        for (const auto& info : props) {
+            const auto& dep_iface = dep.get_resolved_interface_property(info.name);
+            if (dep_iface.empty()) continue;
+            if (dep.is_imported() && info.name == "INCLUDE_DIRECTORIES") {
+                merge_dedup(resolved_properties_["SYSTEM_INCLUDE_DIRECTORIES"], dep_iface);
+            } else {
+                merge_dedup(resolved_properties_[info.name], dep_iface);
+            }
+        }
+    }
+    deferred_circular_deps_.clear();
+}
+
+void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp) {
+    if (resolved_) return;
+    if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
+    visiting_ = true;
+
+    auto props_to_resolve = build_props_to_resolve();
+    auto genex_ctx = make_genex_context(this, interp, all_targets, std::nullopt, true);
+    GenexEvaluator evaluator(genex_ctx);
+
+    // Phase 1: Own properties
+    initialize_local_properties(props_to_resolve, evaluator);
+
+    // Phase 2: Walk dependency graph via LINK_LIBRARIES
     auto& res_libs = resolved_properties_["LINK_LIBRARIES"];
     auto& res_iface_libs = resolved_interface_properties_["LINK_LIBRARIES"];
 
-    // 2. Process Dependencies
-    // link_only: when true (from $<LINK_ONLY:...>), link the library but don't propagate INTERFACE properties
-    auto process_dependency = [&](const std::string& raw_lib_name, bool is_public, bool is_interface_only, bool link_only) {
-        // Resolve aliases at build-graph time, not at interpretation time.
-        // CMake resolves target_link_libraries lazily (at generation time), so
-        // forward references like Boost::type_traits work even when the alias
-        // hasn't been created yet during interpretation.
+    auto process_one_dep = [&](const std::string& raw_lib_name,
+                               bool is_public, bool is_interface_only,
+                               bool link_only) {
         std::string lib_name = interp.resolve_target_alias(raw_lib_name);
         auto dep_it = all_targets.find(lib_name);
-        if (dep_it != all_targets.end()) {
-            auto& dep = dep_it->second;
 
-            // Record canonical target dependency for dependency discovery
-            resolved_target_deps_.push_back(lib_name);
+        if (dep_it == all_targets.end()) {
+            // System library or raw file path
+            if (!is_interface_only) res_libs.push_back(lib_name);
+            if (is_public || is_interface_only) res_iface_libs.push_back(lib_name);
+            return;
+        }
 
-            // CMake allows circular dependencies between static libraries.
-            // Static libs are just .o archives — the linker resolves symbols by
-            // scanning them, and CMake repeats the cycle on the link line.
-            // When we detect a cycle, add the library to the link line but skip
-            // property propagation (the dep's resolved properties aren't ready yet).
-            if (dep->is_visiting()) {
-                if (dep->get_type() == TargetType::STATIC_LIBRARY ||
-                    dep->get_type() == TargetType::OBJECT_LIBRARY) {
-                    dmake::print_message(std::cerr, "WARNING",
-                        "Circular dependency between static libraries '" + name_ +
-                        "' and '" + dep->get_name() + "'. Consider restructuring to avoid cycles.");
-                    std::string dep_path = dep->get_output_path();
-                    if (!dep_path.empty()) {
-                        if (!is_interface_only) res_libs.push_back(dep_path);
-                        if (is_public || is_interface_only) res_iface_libs.push_back(dep_path);
-                    }
-                    return;
-                }
-                throw std::runtime_error("Circular dependency detected involving target: " + dep->get_name());
+        auto& dep = dep_it->second;
+        resolved_target_deps_.push_back(lib_name);
+
+        if (dep->is_visiting()) {
+            handle_circular_dep(*dep, is_public, is_interface_only,
+                                res_libs, res_iface_libs);
+            return;
+        }
+
+        dep->resolve(all_targets, interp);
+
+        // For building THIS target (PRIVATE or PUBLIC dep)
+        if (!is_interface_only) {
+            propagate_from_dependency(*dep, props_to_resolve,
+                resolved_properties_, /*skip_non_link=*/link_only);
+            if (dep->get_type() == TargetType::OBJECT_LIBRARY) {
+                resolved_object_lib_deps_.push_back(lib_name);
             }
-
-            dep->resolve(all_targets, interp);
-
-            // Inherit for building THIS target (from dep's INTERFACE)
-            // Skip INTERFACE property propagation if link_only is set
-            if (!is_interface_only) {
-                if (!link_only) {
-                    for (const auto& info : props_to_resolve) {
-                        // CMake treats IMPORTED target interface includes as system includes
-                        // (they use -isystem instead of -I to suppress warnings from external headers)
-                        if (dep->is_imported() && info.name == "INCLUDE_DIRECTORIES") {
-                            merge(resolved_properties_["SYSTEM_INCLUDE_DIRECTORIES"],
-                                  dep->get_resolved_interface_property(info.name));
-                        } else {
-                            merge(resolved_properties_[info.name], dep->get_resolved_interface_property(info.name));
-                        }
-                    }
-                }
-
-                std::string dep_path = dep->get_output_path();
-                if (!dep_path.empty()) res_libs.push_back(dep_path);
-
-                // Record OBJECT library deps for generate_tasks() to inject .o files
-                if (dep->get_type() == TargetType::OBJECT_LIBRARY) {
-                    resolved_object_lib_deps_.push_back(lib_name);
-                }
-
-                // For static libraries, we need ALL their link dependencies (including PRIVATE)
-                // because static libs are just .o archives with unresolved symbols.
-                // For shared libraries, only INTERFACE deps propagate (shared libs resolve their own symbols).
-                // IMPORTANT: Imported static libraries store deps in INTERFACE, not PRIVATE.
-                if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
-                    merge(res_libs, dep->get_resolved_property("LINK_LIBRARIES"));
-                    // Static libs can't resolve their own symbols, so their OBJECT deps flow to us
-                    merge(resolved_object_lib_deps_, dep->resolved_object_lib_deps_);
-                } else {
-                    merge(res_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
-                }
+            if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
+                merge_dedup(resolved_object_lib_deps_, dep->resolved_object_lib_deps_);
             }
+        }
 
-            // Propagate to Dependents (from dep's INTERFACE)
-            if (is_public || is_interface_only) {
-                // If link_only, only propagate LINK_LIBRARIES (skip INCLUDE_DIRECTORIES, COMPILE_OPTIONS, etc.)
-                if (!link_only) {
-                    for (const auto& info : props_to_resolve) {
-                        // CMake treats IMPORTED target interface includes as system includes
-                        if (dep->is_imported() && info.name == "INCLUDE_DIRECTORIES") {
-                            merge(resolved_interface_properties_["SYSTEM_INCLUDE_DIRECTORIES"],
-                                  dep->get_resolved_interface_property(info.name));
-                        } else {
-                            merge(resolved_interface_properties_[info.name], dep->get_resolved_interface_property(info.name));
-                        }
-                    }
-                }
-
-                std::string dep_path = dep->get_output_path();
-                if (!dep_path.empty()) res_iface_libs.push_back(dep_path);
-
-                // Always propagate LINK_LIBRARIES (even with link_only - that's the point of linking)
-                // For static libraries, we need ALL their link deps because static libs are archives with unresolved symbols.
-                // For imported static libs, deps are in INTERFACE; for built static libs, deps are in PRIVATE+PUBLIC.
-                if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
-                    merge(res_iface_libs, dep->get_resolved_property("LINK_LIBRARIES"));
-                } else {
-                    merge(res_iface_libs, dep->get_resolved_interface_property("LINK_LIBRARIES"));
-                }
-            }
-        } else {
-             // System library or raw file - no INTERFACE properties to worry about,
-             // so LINK_ONLY doesn't affect propagation (it only suppresses INTERFACE properties)
-             if (!is_interface_only) res_libs.push_back(lib_name);
-             if (is_public || is_interface_only) {
-                 res_iface_libs.push_back(lib_name);
-             }
+        // For propagating to OUR dependents (PUBLIC or INTERFACE dep)
+        if (is_public || is_interface_only) {
+            propagate_from_dependency(*dep, props_to_resolve,
+                resolved_interface_properties_, /*skip_non_link=*/link_only);
         }
     };
 
-    // Helper to evaluate link library with genex support (handles $<LINK_ONLY:...>)
-    auto process_link_libraries = [&](PropertyVisibility vis, bool is_public, bool is_interface_only) {
+    auto walk_link_libs = [&](PropertyVisibility vis, bool is_public, bool is_interface_only) {
         for (const auto& lib : get_property_list("LINK_LIBRARIES", vis)) {
             auto eval_result = evaluator.evaluate_link_library(lib);
             if (!eval_result) {
-                throw std::runtime_error("Error evaluating LINK_LIBRARIES for target '" + name_ +
-                                        "': " + eval_result.error());
+                throw std::runtime_error("Error evaluating LINK_LIBRARIES for target '"
+                    + name_ + "': " + eval_result.error());
             }
             if (!eval_result->value.empty()) {
-                process_dependency(eval_result->value, is_public, is_interface_only, eval_result->link_only);
+                process_one_dep(eval_result->value, is_public,
+                               is_interface_only, eval_result->link_only);
             }
         }
     };
+    walk_link_libs(PropertyVisibility::PUBLIC, true, false);
+    walk_link_libs(PropertyVisibility::PRIVATE, false, false);
+    walk_link_libs(PropertyVisibility::INTERFACE, false, true);
 
-    process_link_libraries(PropertyVisibility::PUBLIC, true, false);
-    process_link_libraries(PropertyVisibility::PRIVATE, false, false);
-    process_link_libraries(PropertyVisibility::INTERFACE, false, true);
-
-    // Deduplicate non-order-sensitive properties (include dirs, definitions, options, etc.)
-    // Link libraries are NOT deduplicated - order and repetition matter for static lib resolution.
+    // Phase 3: Deduplicate non-link properties
     for (const auto& info : props_to_resolve) {
         remove_duplicates(resolved_properties_[info.name]);
         remove_duplicates(resolved_interface_properties_[info.name]);
@@ -833,16 +845,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     std::map<Language, PerLangProperties> per_lang_props;
 
     // Base genex context for per-source evaluator (used for source-property genex)
-    GenexEvaluationContext source_genex_base;
-    source_genex_base.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-    source_genex_base.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
-    source_genex_base.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
-    source_genex_base.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-    source_genex_base.all_targets = &all_targets;
-    source_genex_base.target_aliases = &interp.get_target_aliases();
-    source_genex_base.current_target = this;
-    source_genex_base.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
-    source_genex_base.phase = GenexEvaluationContext::Phase::BUILD;
+    auto source_genex_base = make_genex_context(this, interp, all_targets);
 
     if (needs_per_lang_eval) {
         auto eval_for_lang = [&](const std::vector<std::string>& values, GenexEvaluator& lang_eval) {
@@ -880,7 +883,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     std::string module_mapper = target_has_modules ? get_module_mapper_path() : std::string{};
 
     // --- Evaluate genex in source paths (single pass over sources) ---
-    auto own_sources = get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC});
+    auto own_sources = get_property_list("SOURCES", TargetPropertyScope::BUILD);
     auto evaluated_sources_result = evaluator.evaluate_property_list(own_sources);
     if (!evaluated_sources_result) {
         throw std::runtime_error("Error evaluating genex in SOURCES for target '" + name_ + "': " + evaluated_sources_result.error());
@@ -1178,10 +1181,9 @@ static std::pair<std::string, std::string> generate_pch_task(
     int compiler_default_standard) {
 
     // Using PCH property name "PRECOMPILE_HEADERS"
-    auto private_pchs = target->get_property_list("PRECOMPILE_HEADERS", PropertyVisibility::PRIVATE);
-    auto public_pchs = target->get_property_list("PRECOMPILE_HEADERS", PropertyVisibility::PUBLIC);
+    auto own_pchs = target->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
 
-    if (private_pchs.empty() && public_pchs.empty()) {
+    if (own_pchs.empty()) {
         return {"", ""};
     }
 
@@ -1197,8 +1199,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     std::string pch_include_arg = " -include " + pch_wrapper;
 
     std::ostringstream wrapper_content;
-    for (const auto& hdr : private_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
-    for (const auto& hdr : public_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
+    for (const auto& hdr : own_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
     std::string content = wrapper_content.str();
 
     bool needs_write = true;
@@ -1262,13 +1263,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     pch_task.is_compilation = true;
     pch_task.source_file = pch_wrapper;
 
-    for (const auto& hdr : private_pchs) {
-        auto hdr_abs = std::filesystem::path(hdr).is_absolute() ?
-            std::filesystem::path(hdr) :
-            std::filesystem::path(target->get_source_dir()) / hdr;
-        pch_task.inputs.push_back(hdr_abs.lexically_normal().string());
-    }
-    for (const auto& hdr : public_pchs) {
+    for (const auto& hdr : own_pchs) {
         auto hdr_abs = std::filesystem::path(hdr).is_absolute() ?
             std::filesystem::path(hdr) :
             std::filesystem::path(target->get_source_dir()) / hdr;
@@ -1288,16 +1283,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     resolve(all_targets, interp);
 
     // Set up genex evaluator for SOURCES
-    GenexEvaluationContext genex_ctx;
-    genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-    genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
-    genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
-    genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-    genex_ctx.all_targets = &all_targets;
-    genex_ctx.target_aliases = &interp.get_target_aliases();
-    genex_ctx.current_target = this;
-    genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
-    genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+    auto genex_ctx = make_genex_context(this, interp, all_targets);
     GenexEvaluator evaluator(genex_ctx);
 
     // Get implicit include directories to filter out (CMake doesn't pass these to compiler)
@@ -1359,17 +1345,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // Create CXX-specific evaluator for PCH (PCH is always C++)
-    GenexEvaluationContext pch_genex_ctx;
-    pch_genex_ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-    pch_genex_ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
-    pch_genex_ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
-    pch_genex_ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-    pch_genex_ctx.all_targets = &all_targets;
-    pch_genex_ctx.target_aliases = &interp.get_target_aliases();
-    pch_genex_ctx.current_target = this;
-    pch_genex_ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
-    pch_genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
-    pch_genex_ctx.compile_language = Language::CXX;  // PCH is always C++
+    auto pch_genex_ctx = make_genex_context(this, interp, all_targets, Language::CXX);
     GenexEvaluator pch_evaluator(pch_genex_ctx);
 
     // Helper to evaluate deferred COMPILE_LANGUAGE genex for PCH
@@ -1427,7 +1403,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             auto it = all_targets.find(obj_lib_name);
             if (it == all_targets.end()) continue;
             auto& dep = it->second;
-            for (const auto& src : dep->get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
+            for (const auto& src : dep->get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
                 auto lang_info = LanguageClassifier::from_path(src);
                 if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
                     obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
@@ -1436,7 +1412,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
     }
 
-    auto sources_list = get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC});
+    auto sources_list = get_property_list("SOURCES", TargetPropertyScope::BUILD);
     Language linker_lang = std::any_of(sources_list.begin(), sources_list.end(),
         [](const std::string& src) { return LanguageClassifier::from_path(src).lang == Language::CXX; })
         ? Language::CXX : Language::C;
@@ -1470,7 +1446,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
                     bool is_linked = std::any_of(full_link_libs.begin(), full_link_libs.end(),
                         [&](const std::string& lib) { return lib == tgt_output; });
                     if (!is_linked) continue;
-                    for (const auto& src : tgt->get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+                    for (const auto& src : tgt->get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
                         if (LanguageClassifier::from_path(src).lang == Language::CXX)
                             return true;
                     }
@@ -1697,7 +1673,7 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
     }
 
     // Support SOURCES in custom targets just in case
-    for (const auto& src : get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
+    for (const auto& src : get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
          std::filesystem::path p(src);
          if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
          task.inputs.push_back(p.string());
@@ -1719,7 +1695,7 @@ bool Target::has_module_sources() const {
     has_modules_ = false;
 
     // Check regular SOURCES for module interface files by extension
-    for (const auto& src : get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
+    for (const auto& src : get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
         auto lang_info = LanguageClassifier::from_path(src);
         if (lang_info.is_module_interface) {
             has_modules_ = true;
@@ -1741,7 +1717,7 @@ bool Target::has_module_sources() const {
 bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain, int cxx_default_std) {
     std::vector<std::string> scanner_ids;
 
-    for (const auto& src : get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
+    for (const auto& src : get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
         auto lang_info = LanguageClassifier::from_path(src);
 
         // Override module interface detection if file is in CXX_MODULES file set
