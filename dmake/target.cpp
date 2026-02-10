@@ -1503,6 +1503,12 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         ctx.color_diagnostics = isatty(STDOUT_FILENO);
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
 
+        // CMake passes CMAKE_<LANG>_FLAGS to both compile AND link commands.
+        // Flags like -fsanitize=address require this to work correctly.
+        for (const auto& opt : get_language_flags(linker_lang)) {
+            ctx.linker_flags.push_back(opt);
+        }
+
         // Add target-specific link options (from target_link_options)
         for (const auto& opt : get_resolved_property("LINK_OPTIONS")) {
             ctx.linker_flags.push_back(opt);

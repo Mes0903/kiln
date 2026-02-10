@@ -1278,11 +1278,14 @@ void register_target_builtins(Interpreter& interp) {
         auto& dirs = interp.get_current_directory_context().accumulated["LINK_DIRECTORIES"];
 
         for (const auto& arg : args) {
-            std::string dir = arg;
-            std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
-                std::filesystem::path(dir) :
-                std::filesystem::path(src_dir) / dir;
-            dirs.push_back(resolved.string());
+            // Split semicolons - CMake treats all args as lists
+            for (const auto& item : CMakeArrayView(arg)) {
+                if (item.empty()) continue;
+                std::filesystem::path resolved = std::filesystem::path(item).is_absolute() ?
+                    std::filesystem::path(item) :
+                    std::filesystem::path(src_dir) / item;
+                dirs.push_back(resolved.string());
+            }
         }
     });
 
