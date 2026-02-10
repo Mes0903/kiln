@@ -1974,9 +1974,6 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
         variables_.set(func.parameters[i], all[i]);
     }
 
-    // Fix CMAKE_CURRENT_LIST_DIR bug: Set to function's definition location
-    variables_.set("CMAKE_CURRENT_LIST_DIR", func.definition_dir);
-    variables_.set("CMAKE_CURRENT_LIST_FILE", func.definition_file);
 
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
