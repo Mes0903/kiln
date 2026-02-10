@@ -1,11 +1,13 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../CMakeArray.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <vector>
 #include <string>
 #include <cctype>
+#include <cstdlib>
 
 namespace dmake {
 
@@ -86,9 +88,27 @@ void register_find_package_builtins(Interpreter& interp) {
         std::vector<std::string> hints;
         std::vector<std::string> paths;
         std::vector<std::string> path_suffixes;
+        std::vector<std::string> names;
+        std::vector<std::string> configs;
         bool no_default_path = false;
         bool no_package_root_path = false;
+        bool no_cmake_path = false;
+        bool no_cmake_environment_path = false;
+        bool no_system_environment_path = false;
+        bool no_cmake_package_registry = false;
+        bool no_cmake_system_path = false;
+        bool no_cmake_system_package_registry = false;
+        bool no_cmake_install_prefix = false;
         bool exact = false;
+        bool global_flag = false;
+
+        // Silently accepted but ignored flags
+        bool no_policy_scope = false;
+        bool bypass_provider = false;
+        bool cmake_find_root_path_both = false;
+        bool only_cmake_find_root_path = false;
+        bool no_cmake_find_root_path = false;
+        std::string registry_view; // VALUE keyword, silently ignored
 
         parser.positional(package_name, "package name", true);
         parser.positional(version, "version", false);
@@ -99,21 +119,54 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.flag("QUIET", quiet);
         parser.flag("NO_DEFAULT_PATH", no_default_path);
         parser.flag("NO_PACKAGE_ROOT_PATH", no_package_root_path);
+        parser.flag("NO_CMAKE_PATH", no_cmake_path);
+        parser.flag("NO_CMAKE_ENVIRONMENT_PATH", no_cmake_environment_path);
+        parser.flag("NO_SYSTEM_ENVIRONMENT_PATH", no_system_environment_path);
+        parser.flag("NO_CMAKE_PACKAGE_REGISTRY", no_cmake_package_registry);
+        parser.flag("NO_CMAKE_SYSTEM_PATH", no_cmake_system_path);
+        parser.flag("NO_CMAKE_SYSTEM_PACKAGE_REGISTRY", no_cmake_system_package_registry);
+        parser.flag("NO_CMAKE_INSTALL_PREFIX", no_cmake_install_prefix);
         parser.flag("EXACT", exact);
+        parser.flag("GLOBAL", global_flag);
+        parser.flag("NO_POLICY_SCOPE", no_policy_scope);
+        parser.flag("BYPASS_PROVIDER", bypass_provider);
+        parser.flag("CMAKE_FIND_ROOT_PATH_BOTH", cmake_find_root_path_both);
+        parser.flag("ONLY_CMAKE_FIND_ROOT_PATH", only_cmake_find_root_path);
+        parser.flag("NO_CMAKE_FIND_ROOT_PATH", no_cmake_find_root_path);
         parser.list("COMPONENTS", components);
         parser.list("OPTIONAL_COMPONENTS", optional_components);
         parser.list("HINTS", hints);
         parser.list("PATHS", paths);
         parser.list("PATH_SUFFIXES", path_suffixes);
+        parser.list("NAMES", names);
+        parser.list("CONFIGS", configs);
+        parser.value("REGISTRY_VIEW", registry_view);
 
         PARSE_OR_RETURN(parser, interp, args);
 
+        // --- Step 1: CMAKE_DISABLE_FIND_PACKAGE_<Name> ---
+        std::string disable_var = interp.get_variable("CMAKE_DISABLE_FIND_PACKAGE_" + package_name);
+        if (!disable_var.empty() && !interp.is_falsy(disable_var)) {
+            if (required) {
+                interp.set_fatal_error("find_package(" + package_name + ") is REQUIRED but CMAKE_DISABLE_FIND_PACKAGE_" + package_name + " is TRUE");
+                return;
+            }
+            // Silently skip
+            interp.set_variable(package_name + "_FOUND", "OFF");
+            return;
+        }
+
+        // --- Step 2: CMAKE_REQUIRE_FIND_PACKAGE_<Name> ---
+        std::string require_var = interp.get_variable("CMAKE_REQUIRE_FIND_PACKAGE_" + package_name);
+        if (!require_var.empty() && !interp.is_falsy(require_var)) {
+            required = true;
+        }
+
         std::string found_var = package_name + "_FOUND";
 
+        // --- Step 3: FindVarGuard ---
         // Save and restore _FIND_* input variables so they don't leak between
-        // repeated find_package calls for the same package. We can't use
-        // push_scope/pop_scope because output variables (like _VERSION, _FOUND,
-        // targets) set by config files must survive.
+        // repeated find_package calls for the same package.
         struct FindVarGuard {
             Interpreter& interp;
             std::string pkg;
@@ -130,14 +183,10 @@ void register_find_package_builtins(Interpreter& interp) {
                 // Save per-component FIND_REQUIRED vars
                 std::string comps = interp.get_variable(pkg + "_FIND_COMPONENTS");
                 if (!comps.empty()) {
-                    size_t start = 0, end;
-                    while ((end = comps.find(';', start)) != std::string::npos) {
-                        std::string n = pkg + "_FIND_REQUIRED_" + comps.substr(start, end - start);
+                    for (auto c : CMakeArrayView(comps)) {
+                        std::string n = std::string(pkg) + "_FIND_REQUIRED_" + std::string(c);
                         saved.emplace_back(n, interp.get_variable(n));
-                        start = end + 1;
                     }
-                    std::string n = pkg + "_FIND_REQUIRED_" + comps.substr(start);
-                    saved.emplace_back(n, interp.get_variable(n));
                 }
             }
 
@@ -172,17 +221,14 @@ void register_find_package_builtins(Interpreter& interp) {
             }
         }
 
-        // Set <Package>_FIND_REQUIRED
         if (required) {
             interp.set_variable(package_name + "_FIND_REQUIRED", "TRUE");
         }
-        // Set <Package>_FIND_QUIETLY
         if (quiet) {
             interp.set_variable(package_name + "_FIND_QUIETLY", "TRUE");
         }
 
-        // Set version-related variables (needed by some Find modules like FindPython)
-        // Only set these if a version is specified to avoid empty version range errors
+        // Set version-related variables
         VersionComponents v_req = parse_version(version);
         if (!version.empty()) {
             interp.set_variable(package_name + "_FIND_VERSION", v_req.full);
@@ -197,13 +243,12 @@ void register_find_package_builtins(Interpreter& interp) {
         // Helper to validate that all required components were found
         auto validate_components = [&]() -> bool {
             if (components.empty()) {
-                return true; // No required components to check
+                return true;
             }
 
-            // Only check components if package was found
             std::string pkg_found = interp.get_variable(found_var);
             if (interp.is_falsy(pkg_found)) {
-                return false; // Package not found, so components can't be found either
+                return false;
             }
 
             std::vector<std::string> missing_components;
@@ -211,16 +256,12 @@ void register_find_package_builtins(Interpreter& interp) {
                 std::string comp_found_var = package_name + "_" + comp + "_FOUND";
                 std::string comp_found = interp.get_variable(comp_found_var);
 
-                // Only consider a component missing if it's explicitly set to FALSE
-                // If undefined, assume the Find module doesn't set component variables
-                // and trust that it validated components internally
                 if (!comp_found.empty() && interp.is_falsy(comp_found)) {
                     missing_components.push_back(comp);
                 }
             }
 
             if (!missing_components.empty()) {
-                // Build error message
                 std::string missing_str;
                 for (size_t i = 0; i < missing_components.size(); ++i) {
                     if (i > 0) missing_str += " ";
@@ -233,7 +274,6 @@ void register_find_package_builtins(Interpreter& interp) {
                     interp.print_message("STATUS", "Package " + package_name + " missing components: " + missing_str);
                 }
 
-                // Set package as not found if required components are missing
                 interp.set_variable(found_var, "OFF");
                 return false;
             }
@@ -241,18 +281,21 @@ void register_find_package_builtins(Interpreter& interp) {
             return true;
         };
 
-        // Search order:
-        // 1. CMAKE_MODULE_PATH Find modules (user-provided, always first)
-        // 2. System Find modules (matches CMake's default module-first behavior)
-        // 3. Config mode (PackageConfig.cmake, fallback)
-
+        // --- Determine search mode ---
         // CMP0167: Boost uses config-first (BoostConfig.cmake) instead of
         // the legacy FindBoost.cmake module. All other packages use module-first.
         bool prefer_config = (package_name == "Boost");
+
+        // CMAKE_FIND_PACKAGE_PREFER_CONFIG overrides for all packages
+        std::string prefer_config_var = interp.get_variable("CMAKE_FIND_PACKAGE_PREFER_CONFIG");
+        if (!prefer_config_var.empty() && !interp.is_falsy(prefer_config_var)) {
+            prefer_config = true;
+        }
+
         bool try_module = !config && !no_module;
         bool try_config = !module_only;
 
-        // Helper to run a Find module and return true if it handled the package
+        // --- Module mode search helpers ---
         auto try_find_module = [&](const std::filesystem::path& found_module) -> bool {
             if (!quiet) {
                 interp.print_message("STATUS", "Found module: " + found_module.string());
@@ -260,7 +303,7 @@ void register_find_package_builtins(Interpreter& interp) {
             auto res = interp.include_file(found_module.string());
             if (!res) {
                 interp.set_fatal_error(res.error());
-                return true; // Handled (with error)
+                return true;
             }
 
             std::string found = interp.get_variable(found_var);
@@ -270,37 +313,30 @@ void register_find_package_builtins(Interpreter& interp) {
                 } else if (!quiet) {
                     interp.print_message("STATUS", "Could not find package " + package_name + " (Module mode)");
                 }
-                return true; // Handled (not found, but module ran)
+                return true;
             }
 
             validate_components();
-            return true; // Handled (found)
+            return true;
         };
 
-        // 1. Check CMAKE_MODULE_PATH for user-provided Find modules
-        if (try_module) {
+        // Search CMAKE_MODULE_PATH for user-provided Find modules
+        auto try_user_find_modules = [&]() -> bool {
+            if (!try_module) return false;
             std::string module_path_var = interp.get_variable("CMAKE_MODULE_PATH");
-            if (!module_path_var.empty()) {
-                std::vector<std::filesystem::path> user_module_paths;
-                size_t start = 0;
-                size_t end = module_path_var.find(';');
-                while (end != std::string::npos) {
-                    user_module_paths.push_back(module_path_var.substr(start, end - start));
-                    start = end + 1;
-                    end = module_path_var.find(';', start);
-                }
-                user_module_paths.push_back(module_path_var.substr(start));
+            if (module_path_var.empty()) return false;
 
-                std::string module_filename = "Find" + package_name + ".cmake";
-                for (const auto& path : user_module_paths) {
-                    if (interp.cached_file_exists(path, module_filename)) {
-                        if (try_find_module(path / module_filename)) return;
-                    }
+            std::string module_filename = "Find" + package_name + ".cmake";
+            for (auto path_sv : CMakeArrayView(module_path_var)) {
+                std::filesystem::path path(path_sv);
+                if (interp.cached_file_exists(path, module_filename)) {
+                    if (try_find_module(path / module_filename)) return true;
                 }
             }
-        }
+            return false;
+        };
 
-        // Helper: try system Find modules
+        // Search system paths for Find modules
         auto try_system_find_modules = [&]() -> bool {
             if (!try_module) return false;
             std::vector<std::string> system_modules = {
@@ -319,247 +355,417 @@ void register_find_package_builtins(Interpreter& interp) {
             return false;
         };
 
-        // 2. System Find modules (CMake default: module-first, except Boost per CMP0167)
+        // --- Module mode: user CMAKE_MODULE_PATH always first ---
+        if (try_user_find_modules()) return;
+
+        // --- Module mode before config (unless prefer_config) ---
         if (!prefer_config && try_system_find_modules()) return;
 
-        // 3. Config Mode (skip if MODULE was explicitly requested)
+        // --- Config Mode ---
         std::string dir_var = package_name + "_DIR";
         std::filesystem::path found_path;
 
         if (try_config) {
-        std::vector<std::filesystem::path> search_paths;
-
-        // Helper: expand a base path with PATH_SUFFIXES (adds base + base/suffix for each suffix)
-        auto add_with_suffixes = [&](const std::filesystem::path& base) {
-            search_paths.push_back(base);
-            for (const auto& suffix : path_suffixes) {
-                search_paths.push_back(base / suffix);
+            // Build the list of search names
+            // If NAMES given, use those. Otherwise use package_name.
+            std::vector<std::string> search_names;
+            if (!names.empty()) {
+                search_names = names;
+            } else {
+                search_names.push_back(package_name);
             }
-        };
 
-        // 2.1 Check PackageName_DIR hint (always checked, even with NO_DEFAULT_PATH)
-        std::string hint_dir = interp.get_variable(dir_var);
-        if (!hint_dir.empty()) {
-            add_with_suffixes(hint_dir);
-        }
-
-        // 2.2 Package root paths: <PackageName>_ROOT and <PACKAGENAME>_ROOT (var + env)
-        {
-            bool use_package_root = !no_default_path && !no_package_root_path;
-            if (use_package_root) {
-                std::string use_var = interp.get_variable("CMAKE_FIND_USE_PACKAGE_ROOT_PATH");
-                if (!use_var.empty() && interp.is_falsy(use_var)) {
-                    use_package_root = false;
-                }
-            }
-            if (use_package_root) {
-                std::string upper_name = package_name;
-                for (auto& c : upper_name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-
-                // Collect root prefixes: CMake var (original case), CMake var (upper),
-                // env var (original case), env var (upper)
-                std::vector<std::string> root_prefixes;
-                auto maybe_add = [&](const std::string& val) {
-                    if (!val.empty()) root_prefixes.push_back(val);
-                };
-                maybe_add(interp.get_variable(package_name + "_ROOT"));
-                if (upper_name != package_name)
-                    maybe_add(interp.get_variable(upper_name + "_ROOT"));
-
-                if (const char* env = std::getenv((package_name + "_ROOT").c_str()))
-                    maybe_add(env);
-                if (upper_name != package_name) {
-                    if (const char* env = std::getenv((upper_name + "_ROOT").c_str()))
-                        maybe_add(env);
-                }
-
-                // Each root prefix is expanded like CMAKE_PREFIX_PATH:
-                // <root>/lib/cmake/<pkg>, <root>/share/cmake/<pkg>, <root>/lib/cmake, <root>/share/cmake, <root>
-                for (const auto& root : root_prefixes) {
-                    std::filesystem::path rp(root);
-                    add_with_suffixes(rp / "lib" / "cmake" / package_name);
-                    add_with_suffixes(rp / "share" / "cmake" / package_name);
-                    add_with_suffixes(rp / "lib" / "cmake");
-                    add_with_suffixes(rp / "share" / "cmake");
-                    add_with_suffixes(rp);
-                }
-            }
-        }
-
-        if (!no_default_path) {
-            // 2.3 Check CMAKE_PREFIX_PATH
-            std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
-            if (!prefix_path.empty()) {
-                size_t start = 0;
-                size_t end = prefix_path.find(';');
-                while (end != std::string::npos) {
-                    add_with_suffixes(prefix_path.substr(start, end - start));
-                    start = end + 1;
-                    end = prefix_path.find(';', start);
-                }
-                add_with_suffixes(prefix_path.substr(start));
-            }
-        }
-
-        // 2.3 HINTS paths (after CMAKE_PREFIX_PATH, before system roots)
-        for (const auto& h : hints) {
-            add_with_suffixes(h);
-        }
-
-        std::vector<std::string> system_roots = {
-            "/usr/lib/cmake",
-            "/usr/share/cmake",
-            "/usr/local/lib/cmake",
-            "/usr/local/share/cmake",
-            "/usr/lib/x86_64-linux-gnu/cmake"
-        };
-
-        if (!no_default_path) {
-            // 2.4 Standard system paths
-            for (const auto& root : system_roots) {
-                add_with_suffixes(std::filesystem::path(root) / package_name);
-                add_with_suffixes(root); // Also check the root itself
-            }
-        }
-
-        // 2.5 PATHS (hard-coded guesses, after system roots)
-        for (const auto& p : paths) {
-            add_with_suffixes(p);
-        }
-
-        std::string lower_name = dmake::to_lower(package_name);
-
-        // Candidates for Config file and Version file (used in multiple places)
-        struct Candidate {
-            std::string config;
-            std::string version;
-        };
-
-        // Helper lambda to check a directory for config files
-        auto check_directory_for_config = [&](const std::filesystem::path& path) -> bool {
-            std::vector<Candidate> candidates = {
-                {package_name + "Config.cmake", package_name + "ConfigVersion.cmake"},
-                {lower_name + "-config.cmake", lower_name + "-config-version.cmake"}
+            // Build config file candidates for each name
+            // If CONFIGS given, use those exact filenames. Otherwise generate standard patterns.
+            struct Candidate {
+                std::string config;
+                std::string version;
             };
 
-            for (const auto& cand : candidates) {
-                if (!interp.cached_file_exists(path, cand.config)) continue;
-                std::filesystem::path config_path = path / cand.config;
+            auto make_candidates = [&]() -> std::vector<Candidate> {
+                std::vector<Candidate> candidates;
+                if (!configs.empty()) {
+                    // Use exact config filenames provided
+                    for (const auto& cfg : configs) {
+                        // Derive version filename: replace .cmake with Version.cmake
+                        std::string ver = cfg;
+                        if (ver.size() > 6 && ver.substr(ver.size() - 6) == ".cmake") {
+                            ver = ver.substr(0, ver.size() - 6) + "Version.cmake";
+                        }
+                        candidates.push_back({cfg, ver});
+                    }
+                } else {
+                    for (const auto& name : search_names) {
+                        std::string lower = dmake::to_lower(name);
+                        candidates.push_back({name + "Config.cmake", name + "ConfigVersion.cmake"});
+                        candidates.push_back({lower + "-config.cmake", lower + "-config-version.cmake"});
+                    }
+                }
+                return candidates;
+            };
 
-                // Run version file if it exists (always, for <Package>_VERSION)
-                if (interp.cached_file_exists(path, cand.version)) {
-                    std::filesystem::path version_path = path / cand.version;
+            auto candidates = make_candidates();
 
-                    // Set variables for the version file
-                    interp.set_variable("PACKAGE_FIND_NAME", package_name);
-                    interp.set_variable("PACKAGE_FIND_VERSION", v_req.full);
-                    interp.set_variable("PACKAGE_FIND_VERSION_MAJOR", v_req.major);
-                    interp.set_variable("PACKAGE_FIND_VERSION_MINOR", v_req.minor);
-                    interp.set_variable("PACKAGE_FIND_VERSION_PATCH", v_req.patch);
-                    interp.set_variable("PACKAGE_FIND_VERSION_TWEAK", v_req.tweak);
-                    interp.set_variable("PACKAGE_FIND_VERSION_COUNT", v_req.count);
-                    interp.set_variable("PACKAGE_FIND_VERSION_EXACT", exact ? "TRUE" : "FALSE");
+            // Track considered configs/versions
+            std::vector<std::string> considered_configs;
+            std::vector<std::string> considered_versions;
 
-                    auto res = interp.include_file(version_path.string());
-                    if (!res) {
-                        interp.print_message("WARN", "Error processing version file " + version_path.string() + ": " + res.error().message);
+            // Collect search prefixes in proper CMake 9-step order
+            std::vector<std::filesystem::path> search_paths;
+
+            auto add_with_suffixes = [&](const std::filesystem::path& base) {
+                search_paths.push_back(base);
+                for (const auto& suffix : path_suffixes) {
+                    search_paths.push_back(base / suffix);
+                }
+            };
+
+            // Expand a prefix to UNIX convention subdirectories
+            auto expand_prefix = [&](const std::filesystem::path& prefix) {
+                for (const auto& name : search_names) {
+                    std::string lower = dmake::to_lower(name);
+                    // <prefix>/lib/cmake/<name>
+                    add_with_suffixes(prefix / "lib" / "cmake" / name);
+                    if (lower != name)
+                        add_with_suffixes(prefix / "lib" / "cmake" / lower);
+                    // <prefix>/lib/<name>
+                    add_with_suffixes(prefix / "lib" / name);
+                    if (lower != name)
+                        add_with_suffixes(prefix / "lib" / lower);
+                    // <prefix>/share/cmake/<name>
+                    add_with_suffixes(prefix / "share" / "cmake" / name);
+                    if (lower != name)
+                        add_with_suffixes(prefix / "share" / "cmake" / lower);
+                    // <prefix>/share/<name>
+                    add_with_suffixes(prefix / "share" / name);
+                    if (lower != name)
+                        add_with_suffixes(prefix / "share" / lower);
+                }
+                // Also check the prefix root itself
+                add_with_suffixes(prefix);
+            };
+
+            // Step 0: <PackageName>_DIR hint (always checked, even with NO_DEFAULT_PATH)
+            {
+                std::string hint_dir = interp.get_variable(dir_var);
+                if (!hint_dir.empty()) {
+                    add_with_suffixes(hint_dir);
+                }
+            }
+
+            // Step 1: Package root paths (<PackageName>_ROOT, <PACKAGENAME>_ROOT)
+            {
+                bool use_package_root = !no_default_path && !no_package_root_path;
+                if (use_package_root) {
+                    std::string use_var = interp.get_variable("CMAKE_FIND_USE_PACKAGE_ROOT_PATH");
+                    if (!use_var.empty() && interp.is_falsy(use_var)) {
+                        use_package_root = false;
+                    }
+                }
+                if (use_package_root) {
+                    std::string upper_name = package_name;
+                    for (auto& c : upper_name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+                    std::vector<std::string> root_prefixes;
+                    auto maybe_add = [&](const std::string& val) {
+                        if (!val.empty()) root_prefixes.push_back(val);
+                    };
+                    maybe_add(interp.get_variable(package_name + "_ROOT"));
+                    if (upper_name != package_name)
+                        maybe_add(interp.get_variable(upper_name + "_ROOT"));
+                    if (const char* env = std::getenv((package_name + "_ROOT").c_str()))
+                        maybe_add(env);
+                    if (upper_name != package_name) {
+                        if (const char* env = std::getenv((upper_name + "_ROOT").c_str()))
+                            maybe_add(env);
+                    }
+
+                    for (const auto& root : root_prefixes) {
+                        expand_prefix(root);
+                    }
+                }
+            }
+
+            // Step 2: CMAKE_PREFIX_PATH (variable), CMAKE_FRAMEWORK_PATH, CMAKE_APPBUNDLE_PATH
+            if (!no_default_path && !no_cmake_path) {
+                std::string use_var = interp.get_variable("CMAKE_FIND_USE_CMAKE_PATH");
+                bool use = use_var.empty() || !interp.is_falsy(use_var);
+                if (use) {
+                    std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
+                    for (auto p : CMakeArrayView(prefix_path)) {
+                        expand_prefix(std::string(p));
+                    }
+                }
+            }
+
+            // Step 3: CMAKE_PREFIX_PATH (environment), <PackageName>_DIR (environment)
+            if (!no_default_path && !no_cmake_environment_path) {
+                std::string use_var = interp.get_variable("CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH");
+                bool use = use_var.empty() || !interp.is_falsy(use_var);
+                if (use) {
+                    if (const char* env = std::getenv("CMAKE_PREFIX_PATH")) {
+                        // Environment CMAKE_PREFIX_PATH is colon-separated on UNIX
+                        std::string env_str(env);
+                        size_t start = 0;
+                        size_t end;
+                        while ((end = env_str.find(':', start)) != std::string::npos) {
+                            std::string p = env_str.substr(start, end - start);
+                            if (!p.empty()) expand_prefix(p);
+                            start = end + 1;
+                        }
+                        std::string p = env_str.substr(start);
+                        if (!p.empty()) expand_prefix(p);
+                    }
+
+                    // <PackageName>_DIR from environment
+                    if (const char* env = std::getenv((package_name + "_DIR").c_str())) {
+                        add_with_suffixes(env);
+                    }
+                }
+            }
+
+            // Step 4: HINTS
+            for (const auto& h : hints) {
+                add_with_suffixes(h);
+            }
+
+            // Step 5: System environment PATH (convert /bin, /sbin to parent prefix)
+            if (!no_default_path && !no_system_environment_path) {
+                std::string use_var = interp.get_variable("CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH");
+                bool use = use_var.empty() || !interp.is_falsy(use_var);
+                if (use) {
+                    if (const char* env_path = std::getenv("PATH")) {
+                        std::string path_str(env_path);
+                        size_t start = 0;
+                        size_t end;
+                        std::vector<std::string> seen_prefixes;
+                        auto process_path_entry = [&](const std::string& entry) {
+                            if (entry.empty()) return;
+                            std::filesystem::path p(entry);
+                            std::string filename = p.filename().string();
+                            // Convert /bin and /sbin to parent prefix
+                            std::filesystem::path prefix;
+                            if (filename == "bin" || filename == "sbin") {
+                                prefix = p.parent_path();
+                            } else {
+                                prefix = p;
+                            }
+                            std::string prefix_str = prefix.string();
+                            // Deduplicate
+                            if (std::find(seen_prefixes.begin(), seen_prefixes.end(), prefix_str) == seen_prefixes.end()) {
+                                seen_prefixes.push_back(prefix_str);
+                                expand_prefix(prefix);
+                            }
+                        };
+                        while ((end = path_str.find(':', start)) != std::string::npos) {
+                            process_path_entry(path_str.substr(start, end - start));
+                            start = end + 1;
+                        }
+                        process_path_entry(path_str.substr(start));
+                    }
+                }
+            }
+
+            // Step 6: Package registry (skipped - we don't implement it)
+            // NO_CMAKE_PACKAGE_REGISTRY silently accepted above
+
+            // Step 7: System paths (CMAKE_SYSTEM_PREFIX_PATH, standard system roots)
+            if (!no_default_path && !no_cmake_system_path) {
+                std::string use_var = interp.get_variable("CMAKE_FIND_USE_CMAKE_SYSTEM_PATH");
+                bool use = use_var.empty() || !interp.is_falsy(use_var);
+                if (use) {
+                    // CMAKE_SYSTEM_PREFIX_PATH if set
+                    std::string sys_prefix = interp.get_variable("CMAKE_SYSTEM_PREFIX_PATH");
+                    if (!sys_prefix.empty()) {
+                        for (auto p : CMakeArrayView(sys_prefix)) {
+                            expand_prefix(std::string(p));
+                        }
+                    }
+
+                    // CMAKE_INSTALL_PREFIX (unless NO_CMAKE_INSTALL_PREFIX)
+                    if (!no_cmake_install_prefix) {
+                        std::string install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+                        if (!install_prefix.empty()) {
+                            expand_prefix(install_prefix);
+                        }
+                    }
+
+                    // Standard system roots
+                    std::vector<std::string> system_prefixes = {
+                        "/usr",
+                        "/usr/local",
+                    };
+                    for (const auto& prefix : system_prefixes) {
+                        expand_prefix(prefix);
+                    }
+
+                    // Also check arch-specific paths directly
+                    add_with_suffixes("/usr/lib/x86_64-linux-gnu/cmake");
+                    for (const auto& name : search_names) {
+                        std::string lower = dmake::to_lower(name);
+                        add_with_suffixes(std::filesystem::path("/usr/lib/x86_64-linux-gnu/cmake") / name);
+                        if (lower != name)
+                            add_with_suffixes(std::filesystem::path("/usr/lib/x86_64-linux-gnu/cmake") / lower);
+                    }
+                }
+            }
+
+            // Step 8: System package registry (skipped)
+            // NO_CMAKE_SYSTEM_PACKAGE_REGISTRY silently accepted above
+
+            // Step 9: PATHS (hard-coded guesses, always last)
+            for (const auto& p : paths) {
+                add_with_suffixes(p);
+            }
+
+            // --- Search all collected paths for config files ---
+            auto check_directory_for_config = [&](const std::filesystem::path& path) -> bool {
+                for (const auto& cand : candidates) {
+                    if (!interp.cached_file_exists(path, cand.config)) continue;
+                    std::filesystem::path config_path = path / cand.config;
+
+                    // Track considered configs
+                    considered_configs.push_back(config_path.string());
+
+                    // Run version file if it exists
+                    if (interp.cached_file_exists(path, cand.version)) {
+                        std::filesystem::path version_path = path / cand.version;
+                        considered_versions.push_back(interp.get_variable("PACKAGE_VERSION"));
+
+                        interp.set_variable("PACKAGE_FIND_NAME", package_name);
+                        interp.set_variable("PACKAGE_FIND_VERSION", v_req.full);
+                        interp.set_variable("PACKAGE_FIND_VERSION_MAJOR", v_req.major);
+                        interp.set_variable("PACKAGE_FIND_VERSION_MINOR", v_req.minor);
+                        interp.set_variable("PACKAGE_FIND_VERSION_PATCH", v_req.patch);
+                        interp.set_variable("PACKAGE_FIND_VERSION_TWEAK", v_req.tweak);
+                        interp.set_variable("PACKAGE_FIND_VERSION_COUNT", v_req.count);
+                        interp.set_variable("PACKAGE_FIND_VERSION_EXACT", exact ? "TRUE" : "FALSE");
+
+                        auto res = interp.include_file(version_path.string());
+                        if (!res) {
+                            interp.print_message("WARN", "Error processing version file " + version_path.string() + ": " + res.error().message);
+                            continue;
+                        }
+
+                        // Map PACKAGE_VERSION* -> <Package>_VERSION*
+                        std::string pkg_version = interp.get_variable("PACKAGE_VERSION");
+                        if (!pkg_version.empty()) {
+                            VersionComponents v_found = parse_version(pkg_version);
+                            interp.set_variable(package_name + "_VERSION", v_found.full);
+                            interp.set_variable(package_name + "_VERSION_MAJOR", v_found.major);
+                            interp.set_variable(package_name + "_VERSION_MINOR", v_found.minor);
+                            interp.set_variable(package_name + "_VERSION_PATCH", v_found.patch);
+                            interp.set_variable(package_name + "_VERSION_TWEAK", v_found.tweak);
+                            interp.set_variable(package_name + "_VERSION_COUNT", v_found.count);
+                        }
+
+                        // Update considered_versions with actual version found
+                        if (!considered_versions.empty()) {
+                            considered_versions.back() = pkg_version;
+                        }
+
+                        // Check version compatibility if a version was requested
+                        if (!version.empty()) {
+                            std::string compatible = interp.get_variable("PACKAGE_VERSION_COMPATIBLE");
+                            std::string exact_match = interp.get_variable("PACKAGE_VERSION_EXACT");
+
+                            interp.set_variable("PACKAGE_VERSION_COMPATIBLE", "");
+                            interp.set_variable("PACKAGE_VERSION_EXACT", "");
+
+                            if (interp.is_falsy(compatible)) {
+                                continue;
+                            }
+                            if (exact && interp.is_falsy(exact_match)) {
+                                continue;
+                            }
+                        }
+                    } else if (!version.empty()) {
+                        // Version requested but no version file found - skip
+                        considered_versions.push_back("");
+                        if (!quiet) {
+                             interp.print_message("STATUS", "Checking " + config_path.string() + ": No version file found, assuming incompatible.");
+                        }
                         continue;
                     }
 
-                    // Map PACKAGE_VERSION* → <Package>_VERSION* (CMake does this automatically)
-                    std::string pkg_version = interp.get_variable("PACKAGE_VERSION");
-                    if (!pkg_version.empty()) {
-                        VersionComponents v_found = parse_version(pkg_version);
-                        interp.set_variable(package_name + "_VERSION", v_found.full);
-                        interp.set_variable(package_name + "_VERSION_MAJOR", v_found.major);
-                        interp.set_variable(package_name + "_VERSION_MINOR", v_found.minor);
-                        interp.set_variable(package_name + "_VERSION_PATCH", v_found.patch);
-                        interp.set_variable(package_name + "_VERSION_TWEAK", v_found.tweak);
-                        interp.set_variable(package_name + "_VERSION_COUNT", v_found.count);
-                    }
-
-                    // Check version compatibility if a version was requested
-                    if (!version.empty()) {
-                        std::string compatible = interp.get_variable("PACKAGE_VERSION_COMPATIBLE");
-                        std::string exact_match = interp.get_variable("PACKAGE_VERSION_EXACT");
-
-                        interp.set_variable("PACKAGE_VERSION_COMPATIBLE", "");
-                        interp.set_variable("PACKAGE_VERSION_EXACT", "");
-
-                        if (interp.is_falsy(compatible)) {
-                            continue;
-                        }
-                        if (exact && interp.is_falsy(exact_match)) {
-                            continue;
-                        }
-                    }
-                } else if (!version.empty()) {
-                    // Version requested but no version file found - skip
-                    if (!quiet) {
-                         interp.print_message("STATUS", "Checking " + config_path.string() + ": No version file found, assuming incompatible.");
-                    }
-                    continue;
-                }
-
-                found_path = config_path;
-                return true;
-            }
-            return false;
-        };
-
-        // First pass: check explicit search paths
-        for (const auto& path : search_paths) {
-            // Check if directory exists using cache
-            auto path_parent = path.parent_path();
-            auto path_name = path.filename().string();
-            if (!path_parent.empty() && !path_name.empty()) {
-                if (!interp.cached_file_exists(path_parent, path_name)) continue;
-            }
-            // Verify it's actually a directory
-            std::error_code ec;
-            if (!std::filesystem::is_directory(path, ec)) continue;
-
-            if (check_directory_for_config(path)) break;
-        }
-
-        // Second pass: scan directories for subdirs matching package name pattern
-        // This handles cases like boost_system-1.89.0/ for package boost_system
-        // Scan HINTS first, then system roots
-        if (found_path.empty()) {
-            auto scan_root_for_package = [&](const std::string& root) -> bool {
-                auto* entries = interp.get_directory_listing(root);
-                if (!entries) return false;
-
-                for (const auto& entry_name : *entries) {
-                    if (!directory_matches_package(entry_name, package_name)) continue;
-
-                    std::filesystem::path subdir = std::filesystem::path(root) / entry_name;
-                    std::error_code ec;
-                    if (!std::filesystem::is_directory(subdir, ec)) continue;
-
-                    if (check_directory_for_config(subdir)) return true;
+                    found_path = config_path;
+                    return true;
                 }
                 return false;
             };
 
-            // Scan HINTS directories
-            for (const auto& h : hints) {
-                if (scan_root_for_package(h)) break;
+            // First pass: check explicit search paths
+            for (const auto& path : search_paths) {
+                auto path_parent = path.parent_path();
+                auto path_name = path.filename().string();
+                if (!path_parent.empty() && !path_name.empty()) {
+                    if (!interp.cached_file_exists(path_parent, path_name)) continue;
+                }
+                std::error_code ec;
+                if (!std::filesystem::is_directory(path, ec)) continue;
+
+                if (check_directory_for_config(path)) break;
             }
 
-            // Scan system roots
+            // Second pass: scan directories for subdirs matching package name pattern
+            // This handles cases like boost_system-1.89.0/ for package "boost_system"
             if (found_path.empty()) {
-                for (const auto& root : system_roots) {
-                    if (scan_root_for_package(root)) break;
+                // Collect all root dirs to scan (search_paths that are cmake/lib/share roots)
+                auto scan_root_for_package = [&](const std::string& root) -> bool {
+                    auto* entries = interp.get_directory_listing(root);
+                    if (!entries) return false;
+
+                    for (const auto& name : search_names) {
+                        for (const auto& entry_name : *entries) {
+                            if (!directory_matches_package(entry_name, name)) continue;
+
+                            std::filesystem::path subdir = std::filesystem::path(root) / entry_name;
+                            std::error_code ec;
+                            if (!std::filesystem::is_directory(subdir, ec)) continue;
+
+                            if (check_directory_for_config(subdir)) return true;
+                        }
+                    }
+                    return false;
+                };
+
+                // Scan HINTS directories
+                for (const auto& h : hints) {
+                    if (scan_root_for_package(h)) break;
+                }
+
+                // Scan system cmake roots
+                if (found_path.empty()) {
+                    std::vector<std::string> system_roots = {
+                        "/usr/lib/cmake",
+                        "/usr/share/cmake",
+                        "/usr/local/lib/cmake",
+                        "/usr/local/share/cmake",
+                        "/usr/lib/x86_64-linux-gnu/cmake"
+                    };
+                    for (const auto& root : system_roots) {
+                        if (scan_root_for_package(root)) break;
+                    }
                 }
             }
-        }
+
+            // Set CONSIDERED_CONFIGS and CONSIDERED_VERSIONS
+            {
+                std::string cc_str, cv_str;
+                for (size_t i = 0; i < considered_configs.size(); ++i) {
+                    if (i > 0) { cc_str += ";"; cv_str += ";"; }
+                    cc_str += considered_configs[i];
+                    if (i < considered_versions.size())
+                        cv_str += considered_versions[i];
+                }
+                interp.set_variable(package_name + "_CONSIDERED_CONFIGS", cc_str);
+                interp.set_variable(package_name + "_CONSIDERED_VERSIONS", cv_str);
+            }
         } // if (try_config)
 
         if (!found_path.empty()) {
             interp.set_variable(found_var, "ON");
             interp.set_variable(dir_var, found_path.parent_path().string());
-            // Set <Package>_CONFIG to the full path of the config file (CMake compatibility)
             interp.set_variable(package_name + "_CONFIG", found_path.string());
 
             auto res = interp.include_file(found_path.string());
@@ -568,10 +774,9 @@ void register_find_package_builtins(Interpreter& interp) {
                 return;
             }
 
-            // Validate required components
             validate_components();
         } else {
-            // For config-preferred packages (Boost), fall back to system Find modules
+            // For config-preferred packages, fall back to system Find modules
             if (prefer_config && try_system_find_modules()) return;
 
             // Nothing found

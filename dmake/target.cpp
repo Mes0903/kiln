@@ -1508,6 +1508,16 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             ctx.linker_flags.push_back(opt);
         }
 
+        // Apply LINK_FLAGS property (deprecated but still used by many projects)
+        {
+            std::string link_flags = get_property("LINK_FLAGS");
+            if (!link_flags.empty()) {
+                std::istringstream iss(link_flags);
+                std::string flag;
+                while (iss >> flag) ctx.linker_flags.push_back(flag);
+            }
+        }
+
         for (const auto& lib : full_link_libs) {
              if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") ||
                  lib.find(".so") != std::string::npos ||

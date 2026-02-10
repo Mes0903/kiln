@@ -374,12 +374,8 @@ void register_fetch_content_builtins(Interpreter& interp) {
 
     interp.add_builtin("fetchcontent_makeavailable", [](Interpreter& interp, const std::vector<std::string>& args) {
         for (const auto& name : args) {
-            std::string lower_name = name;
-            std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
-                           [](unsigned char c) { return std::tolower(c); });
-            std::string upper_name = name;
-            std::transform(upper_name.begin(), upper_name.end(), upper_name.begin(),
-                           [](unsigned char c) { return std::toupper(c); });
+            std::string lower_name = to_lower(name);
+            std::string upper_name = to_upper(name);
 
             // Check for local override
             std::string override_dir = interp.get_variable("FETCHCONTENT_SOURCE_DIR_" + upper_name);

@@ -346,7 +346,13 @@ std::expected<CompileResult, std::string> compile_sources(
         lctx.output = result.executable_path;
         lctx.objects = obj_files;
         lctx.libs = params.resolved_link_libs;
+        // raw_compile_flags must also be passed to the linker — flags like -m32
+        // affect both compilation and linking (CMake passes CMAKE_REQUIRED_FLAGS
+        // to CMAKE_<LANG>_FLAGS which applies to both stages).
         lctx.linker_flags = params.link_options;
+        lctx.linker_flags.insert(lctx.linker_flags.end(),
+                                 params.raw_compile_flags.begin(),
+                                 params.raw_compile_flags.end());
         lctx.standard = params.standard;
         lctx.extensions_enabled = params.use_extensions;
 
