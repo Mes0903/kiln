@@ -564,71 +564,22 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         }
 
         case GenexNodeType::CONDITIONAL: {
-            // $<cond:text> where cond is a genex - if cond evaluates to 1, return text
-            // Children are organized as: condition nodes first, then value nodes
-            // We need to find where condition ends and value begins
-            // The parser stores condition nodes first (from parsing the keyword),
-            // then value nodes (from parsing content after ':')
-
-            // For simplicity, evaluate all children and split the result
-            // Actually, we need a better way to know where condition ends
-            // Let me check the parsing logic...
-
-            // From parsing: condition nodes are added first, then value nodes
-            // But we don't know the split point. Let me re-parse from raw_content
-
-            // Actually, looking at the parser, for CONDITIONAL:
-            // - First set of children are from parsing the keyword (the condition)
-            // - Second set are from parsing the content after ':' (the value)
-            // But they're all in one children vector with no delimiter
-
-            // Let me use a different approach: re-parse the components
-            // The condition is the original keyword, which we didn't store separately
-            // Let me add a field to store it or find another way
-
-            // Actually, for CONDITIONAL, I can reconstruct from the structure:
-            // If there are children, the first "half" should be the condition
-            // But that's not reliable.
-
-            // Better approach: for CONDITIONAL nodes, store the condition separately
-            // Let me add metadata or use a different storage mechanism
-
-            // For now, let me use a simpler heuristic: evaluate all children as a single unit
-            // If they evaluate to "1", return empty (since we don't have the value separate)
-            // This won't work correctly.
-
-            // Actually, looking at the parser code I just wrote, I store:
-            // 1. First, condition nodes from cond_result->nodes
-            // 2. Then, value nodes from value_result->nodes
-            // But I have no way to know where the split is.
-
-            // Let me fix the parser to store this information better.
-            // For now, let me assume the raw_content has the value, and I need to re-parse
-            // Actually, raw_content has the value part.
-
-            // New approach: for CONDITIONAL, evaluate the children until we see the value separator
-            // But there's no separator in the children array.
-
-            // Simplest fix: use a special marker or separate field
-            // For now, let me hack it by assuming the first child is the condition:
-
+            // $<cond:text> - first child is condition, remaining children are value.
             if (node.children.empty()) {
                 return std::unexpected("CONDITIONAL genex requires condition and value");
             }
 
-            // Evaluate first child as condition
             auto cond_val = evaluate_node(*node.children[0]);
             if (!cond_val) {
                 return cond_val;
             }
 
-            // If condition contains deferred genex (e.g., $<COMPILE_LANG_AND_ID:...>),
-            // return the entire expression as deferred for per-source evaluation
+            // Deferred genex in condition (e.g. $<COMPILE_LANG_AND_ID:...>):
+            // reconstruct the expression for per-source evaluation later.
             if (cond_val->find("$<") != std::string::npos) {
                 return "$<" + *cond_val + ":" + node.raw_content + ">";
             }
 
-            // If condition is true, evaluate remaining children as value
             if (is_truthy(*cond_val)) {
                 std::string result;
                 for (size_t i = 1; i < node.children.size(); ++i) {
@@ -641,7 +592,6 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return result;
             }
 
-            // Condition is false, return empty
             return std::string("");
         }
 
