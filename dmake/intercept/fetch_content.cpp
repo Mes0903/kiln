@@ -260,10 +260,15 @@ static void do_populate(Interpreter& interp, const std::string& name) {
     global_props["_FetchContent_" + lower_name + "_sourceDir"] = source_dir;
     global_props["_FetchContent_" + lower_name + "_binaryDir"] = binary_dir;
 
-    // Set variables in current scope
-    interp.set_variable(lower_name + "_POPULATED", "TRUE");
-    interp.set_variable(lower_name + "_SOURCE_DIR", source_dir);
-    interp.set_variable(lower_name + "_BINARY_DIR", binary_dir);
+    // Set variables as cache variables so they survive block() scopes (matching CMake behavior)
+    interp.set_cache_variable(lower_name + "_POPULATED", "TRUE");
+    interp.set_cache_variable(lower_name + "_SOURCE_DIR", source_dir);
+    interp.set_cache_variable(lower_name + "_BINARY_DIR", binary_dir);
+    if (name != lower_name) {
+        interp.set_cache_variable(name + "_POPULATED", "TRUE");
+        interp.set_cache_variable(name + "_SOURCE_DIR", source_dir);
+        interp.set_cache_variable(name + "_BINARY_DIR", binary_dir);
+    }
 }
 
 // Helper: add_subdirectory logic for a fetched dependency
@@ -385,9 +390,14 @@ void register_fetch_content_builtins(Interpreter& interp) {
                 }
                 std::string binary_dir = base_dir + "/" + lower_name + "-build";
 
-                interp.set_variable(lower_name + "_POPULATED", "TRUE");
-                interp.set_variable(lower_name + "_SOURCE_DIR", override_dir);
-                interp.set_variable(lower_name + "_BINARY_DIR", binary_dir);
+                interp.set_cache_variable(lower_name + "_POPULATED", "TRUE");
+                interp.set_cache_variable(lower_name + "_SOURCE_DIR", override_dir);
+                interp.set_cache_variable(lower_name + "_BINARY_DIR", binary_dir);
+                if (name != lower_name) {
+                    interp.set_cache_variable(name + "_POPULATED", "TRUE");
+                    interp.set_cache_variable(name + "_SOURCE_DIR", override_dir);
+                    interp.set_cache_variable(name + "_BINARY_DIR", binary_dir);
+                }
 
                 add_subdirectory_for_dep(interp, override_dir, binary_dir);
                 continue;

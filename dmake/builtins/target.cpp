@@ -268,9 +268,17 @@ void register_target_builtins(Interpreter& interp) {
             std::vector<std::string> byproducts;
             std::string working_dir;
             std::vector<std::string> comment_parts;
+            std::string main_dependency;
+            std::string depfile;
+            std::string job_pool;
+            std::vector<std::string> implicit_depends;
             bool append_flag = false;
             bool verbatim = false;
             bool command_expand_lists = false;
+            bool uses_terminal = false;
+            bool codegen = false;
+            bool depends_explicit_only = false;
+            bool job_server_aware = false;
 
             parser.list("OUTPUT", outputs);
             parser.multi_list("COMMAND", commands);
@@ -278,9 +286,17 @@ void register_target_builtins(Interpreter& interp) {
             parser.list("BYPRODUCTS", byproducts);  // Parsed but treated same as OUTPUT
             parser.value("WORKING_DIRECTORY", working_dir);
             parser.list("COMMENT", comment_parts);
+            parser.value("MAIN_DEPENDENCY", main_dependency);
+            parser.value("DEPFILE", depfile);
+            parser.value("JOB_POOL", job_pool);
+            parser.list("IMPLICIT_DEPENDS", implicit_depends);
             parser.flag("APPEND", append_flag);
             parser.flag("VERBATIM", verbatim);  // Ignored (we always quote properly)
             parser.flag("COMMAND_EXPAND_LISTS", command_expand_lists);
+            parser.flag("USES_TERMINAL", uses_terminal);
+            parser.flag("CODEGEN", codegen);
+            parser.flag("DEPENDS_EXPLICIT_ONLY", depends_explicit_only);
+            parser.flag("JOB_SERVER_AWARE", job_server_aware);
             PARSE_OR_RETURN(parser, interp, filtered_args);
 
             // APPEND can be first keyword or a flag within the command
@@ -297,6 +313,11 @@ void register_target_builtins(Interpreter& interp) {
                     }
                     cmd_args = std::move(expanded_args);
                 }
+            }
+
+            // MAIN_DEPENDENCY is treated as an additional dependency
+            if (!main_dependency.empty()) {
+                depends.push_back(main_dependency);
             }
 
             if (outputs.empty()) {
@@ -384,18 +405,29 @@ void register_target_builtins(Interpreter& interp) {
             }
         } else if ((*parse_args)[0] == "TARGET") {
             // TARGET form - build events
-            if (parse_args->size() < 4) {
-                interp.set_fatal_error("add_custom_command(TARGET) requires: TARGET <name> PRE_BUILD|PRE_LINK|POST_BUILD COMMAND ...");
+            // Syntax: add_custom_command(TARGET <target>
+            //           [PRE_BUILD | PRE_LINK | POST_BUILD]
+            //           COMMAND command1 [ARGS] [args1...]
+            //           [COMMAND command2 ...] [BYPRODUCTS files...]
+            //           [COMMENT comment] [WORKING_DIRECTORY dir]
+            //           [VERBATIM] [USES_TERMINAL] [COMMAND_EXPAND_LISTS])
+            // Timing is optional and defaults to POST_BUILD (matching CMake behavior).
+            if (parse_args->size() < 2) {
+                interp.set_fatal_error("add_custom_command(TARGET) requires a target name");
                 return;
             }
 
             std::string target_name = (*parse_args)[1];
-            std::string timing = (*parse_args)[2];
 
-            // Validate timing keyword
-            if (timing != "PRE_BUILD" && timing != "PRE_LINK" && timing != "POST_BUILD") {
-                interp.set_fatal_error("add_custom_command(TARGET) requires PRE_BUILD, PRE_LINK, or POST_BUILD, got: " + timing);
-                return;
+            // Check if args[2] is a timing keyword; if not, default to POST_BUILD
+            std::string timing = "POST_BUILD";
+            size_t remaining_start = 2;
+            if (parse_args->size() > 2) {
+                const std::string& candidate = (*parse_args)[2];
+                if (candidate == "PRE_BUILD" || candidate == "PRE_LINK" || candidate == "POST_BUILD") {
+                    timing = candidate;
+                    remaining_start = 3;
+                }
             }
 
             // Find the target
@@ -411,26 +443,44 @@ void register_target_builtins(Interpreter& interp) {
             // Parse remaining arguments
             // Strip deprecated ARGS keyword (see OUTPUT form above)
             std::vector<std::string> remaining_args;
-            for (auto it = parse_args->begin() + 3; it != parse_args->end(); ++it) {
-                if (*it != "ARGS") remaining_args.push_back(*it);
+            for (size_t ri = remaining_start; ri < parse_args->size(); ++ri) {
+                if ((*parse_args)[ri] != "ARGS") remaining_args.push_back((*parse_args)[ri]);
             }
 
             CommandParser parser("add_custom_command");
             std::vector<std::vector<std::string>> commands;
+            std::vector<std::string> byproducts;
             std::string working_dir;
             std::vector<std::string> comment_parts;
             bool verbatim = false;
+            bool uses_terminal = false;
+            bool command_expand_lists = false;
 
             parser.multi_list("COMMAND", commands);
+            parser.list("BYPRODUCTS", byproducts);
             parser.value("WORKING_DIRECTORY", working_dir);
             parser.list("COMMENT", comment_parts);
             parser.flag("VERBATIM", verbatim);
+            parser.flag("USES_TERMINAL", uses_terminal);
+            parser.flag("COMMAND_EXPAND_LISTS", command_expand_lists);
 
             PARSE_OR_RETURN(parser, interp, remaining_args);
 
             if (commands.empty()) {
                 interp.set_fatal_error("add_custom_command(TARGET) requires at least one COMMAND");
                 return;
+            }
+
+            if (command_expand_lists) {
+                for (auto& cmd_args : commands) {
+                    std::vector<std::string> expanded_args;
+                    for (const auto& arg : cmd_args) {
+                        CMakeArray list(arg);
+                        auto parts = list.to_vector();
+                        expanded_args.insert(expanded_args.end(), parts.begin(), parts.end());
+                    }
+                    cmd_args = std::move(expanded_args);
+                }
             }
 
             // Default working directory
