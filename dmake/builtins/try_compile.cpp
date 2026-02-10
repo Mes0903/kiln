@@ -42,43 +42,8 @@ std::string detect_language(const std::string& path) {
     return "CXX";  // Default to C++
 }
 
-// Helper: Shell-style split that handles single and double quotes
-std::vector<std::string> shell_split(std::string_view input) {
-    std::vector<std::string> result;
-    std::string current;
-    char quote_char = 0;
-
-    for (size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
-
-        if (quote_char) {
-            // Inside quotes
-            if (c == quote_char) {
-                quote_char = 0;  // End quote
-            } else {
-                current += c;
-            }
-        } else {
-            // Outside quotes
-            if (c == '"' || c == '\'') {
-                quote_char = c;  // Start quote
-            } else if (c == ' ' || c == '\t') {
-                if (!current.empty()) {
-                    result.push_back(std::move(current));
-                    current.clear();
-                }
-            } else {
-                current += c;
-            }
-        }
-    }
-
-    if (!current.empty()) {
-        result.push_back(std::move(current));
-    }
-
-    return result;
-}
+// Use dmake::shell_split from utils.hpp
+using dmake::shell_split;
 
 // Helper: Parse .d file to extract header dependencies
 std::expected<std::vector<std::string>, std::string> parse_deps_file(const std::string& deps_file) {

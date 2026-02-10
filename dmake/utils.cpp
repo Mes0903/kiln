@@ -557,3 +557,38 @@ std::string dmake::replace_all(std::string str, std::string_view from, std::stri
     }
     return str;
 }
+
+std::vector<std::string> dmake::shell_split(std::string_view input) {
+    std::vector<std::string> result;
+    std::string current;
+    char quote_char = 0;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+
+        if (quote_char) {
+            if (c == quote_char) {
+                quote_char = 0;
+            } else {
+                current += c;
+            }
+        } else {
+            if (c == '"' || c == '\'') {
+                quote_char = c;
+            } else if (c == ' ' || c == '\t') {
+                if (!current.empty()) {
+                    result.push_back(std::move(current));
+                    current.clear();
+                }
+            } else {
+                current += c;
+            }
+        }
+    }
+
+    if (!current.empty()) {
+        result.push_back(std::move(current));
+    }
+
+    return result;
+}

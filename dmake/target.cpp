@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include "container_utils.hpp"
+#include "utils.hpp"
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -96,6 +97,15 @@ const std::vector<std::string>& Target::get_property_list(const std::string& nam
 
     auto vis_it = prop_it->second.find(visibility);
     return (vis_it != prop_it->second.end()) ? vis_it->second : empty;
+}
+
+std::vector<std::string> Target::get_property_list(const std::string& name, std::initializer_list<PropertyVisibility> visibilities) const {
+    std::vector<std::string> result;
+    for (auto vis : visibilities) {
+        const auto& vals = get_property_list(name, vis);
+        result.insert(result.end(), vals.begin(), vals.end());
+    }
+    return result;
 }
 
 std::string Target::get_property_combined(const std::string& name) const {
@@ -870,8 +880,8 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
     std::string module_mapper = target_has_modules ? get_module_mapper_path() : std::string{};
 
     // --- Evaluate genex in source paths (single pass over sources) ---
-    const auto& raw_sources = get_property_list("SOURCES", PropertyVisibility::PRIVATE);
-    auto evaluated_sources_result = evaluator.evaluate_property_list(raw_sources);
+    auto own_sources = get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC});
+    auto evaluated_sources_result = evaluator.evaluate_property_list(own_sources);
     if (!evaluated_sources_result) {
         throw std::runtime_error("Error evaluating genex in SOURCES for target '" + name_ + "': " + evaluated_sources_result.error());
     }
@@ -1417,7 +1427,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             auto it = all_targets.find(obj_lib_name);
             if (it == all_targets.end()) continue;
             auto& dep = it->second;
-            for (const auto& src : dep->get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+            for (const auto& src : dep->get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
                 auto lang_info = LanguageClassifier::from_path(src);
                 if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
                     obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
@@ -1426,7 +1436,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
     }
 
-    const auto& sources_list = get_property_list("SOURCES", PropertyVisibility::PRIVATE);
+    auto sources_list = get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC});
     Language linker_lang = std::any_of(sources_list.begin(), sources_list.end(),
         [](const std::string& src) { return LanguageClassifier::from_path(src).lang == Language::CXX; })
         ? Language::CXX : Language::C;
@@ -1514,9 +1524,9 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         {
             std::string link_flags = get_property("LINK_FLAGS");
             if (!link_flags.empty()) {
-                std::istringstream iss(link_flags);
-                std::string flag;
-                while (iss >> flag) ctx.linker_flags.push_back(flag);
+                for (auto& flag : dmake::shell_split(link_flags)) {
+                    ctx.linker_flags.push_back(std::move(flag));
+                }
             }
         }
 
@@ -1687,7 +1697,7 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
     }
 
     // Support SOURCES in custom targets just in case
-    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+    for (const auto& src : get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
          std::filesystem::path p(src);
          if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
          task.inputs.push_back(p.string());
@@ -1709,7 +1719,7 @@ bool Target::has_module_sources() const {
     has_modules_ = false;
 
     // Check regular SOURCES for module interface files by extension
-    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+    for (const auto& src : get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
         auto lang_info = LanguageClassifier::from_path(src);
         if (lang_info.is_module_interface) {
             has_modules_ = true;
@@ -1731,7 +1741,7 @@ bool Target::has_module_sources() const {
 bool Target::generate_module_scanner_tasks(BuildGraph& graph, const Toolchain& toolchain, int cxx_default_std) {
     std::vector<std::string> scanner_ids;
 
-    for (const auto& src : get_property_list("SOURCES", PropertyVisibility::PRIVATE)) {
+    for (const auto& src : get_property_list("SOURCES", {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC})) {
         auto lang_info = LanguageClassifier::from_path(src);
 
         // Override module interface detection if file is in CXX_MODULES file set

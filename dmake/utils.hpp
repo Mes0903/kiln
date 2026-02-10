@@ -145,4 +145,10 @@ std::string_view rstrip(std::string_view str);
  */
 std::string replace_all(std::string str, std::string_view from, std::string_view to);
 
+/**
+ * @brief Split a string into tokens with shell-like quote handling.
+ * Handles both single and double quotes as grouping delimiters (stripped from output).
+ */
+std::vector<std::string> shell_split(std::string_view input);
+
 }

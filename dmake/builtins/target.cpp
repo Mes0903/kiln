@@ -203,10 +203,16 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
-        TargetType type = TargetType::STATIC_LIBRARY;
+        TargetType type;
         if (shared) type = TargetType::SHARED_LIBRARY;
+        else if (static_lib) type = TargetType::STATIC_LIBRARY;
         else if (object_lib) type = TargetType::OBJECT_LIBRARY;
         else if (interface_lib) type = TargetType::INTERFACE_LIBRARY;
+        else {
+            // No explicit type — check BUILD_SHARED_LIBS (CMake behavior)
+            auto bsl = interp.get_variable("BUILD_SHARED_LIBS");
+            type = Interpreter::is_truthy(bsl) ? TargetType::SHARED_LIBRARY : TargetType::STATIC_LIBRARY;
+        }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
