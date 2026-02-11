@@ -1,8 +1,10 @@
 #include "registry.hpp"
+#include "export_generator.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include <filesystem>
 #include <algorithm>
+#include <fstream>
 
 namespace dmake {
 
@@ -174,11 +176,11 @@ void parse_install_targets(
         }
     }
 
-    // Warn if EXPORT was specified
+    // Add targets to the export set
     if (!export_name.empty()) {
-        interp.print_message("WARNING",
-            "install(TARGETS ... EXPORT) is not yet supported - export set '" + export_name +
-            "' will be ignored");
+        for (const auto& target_name : rule->targets) {
+            interp.add_to_export_set(export_name, target_name, src_dir, bin_dir);
+        }
     }
 
     // Create install rule
@@ -513,12 +515,30 @@ void parse_install_export(
         return;
     }
 
-    // Print warning immediately during script interpretation
-    interp.print_message("WARNING",
-        "install(EXPORT) is not yet supported - export set '" + rule->export_name +
-        "' will not generate CMake target files");
+    // Look up the export set
+    const auto& export_sets = interp.get_export_sets();
+    auto it = export_sets.find(rule->export_name);
+    if (it == export_sets.end() || it->second.empty()) {
+        interp.print_message("WARNING",
+            "install(EXPORT) export set '" + rule->export_name +
+            "' has no targets - no export file will be generated");
+        return;
+    }
 
-    // Create install rule (as no-op for now)
+    // Collect the targets from the export set
+    std::vector<Target*> targets_to_export;
+    for (const auto& entry : it->second) {
+        auto* target = interp.find_target(entry.target_name);
+        if (target) {
+            targets_to_export.push_back(target);
+        } else {
+            interp.print_message("WARNING",
+                "install(EXPORT) target '" + entry.target_name +
+                "' in export set '" + rule->export_name + "' not found");
+        }
+    }
+
+    // Create install rule (actual file generation happens at install time)
     auto install_rule = std::make_shared<InstallRule>();
     install_rule->type = InstallRuleType::EXPORT;
     install_rule->source_dir = src_dir;
@@ -559,12 +579,200 @@ void register_install_builtins(Interpreter& interp) {
     });
 
     interp.add_builtin("export", [](Interpreter& interp, const std::vector<std::string>& args) {
-        // Export is not yet supported - just show a warning and ignore
-        std::string export_name = "unknown";
-        if (!args.empty()) {
-            export_name = args[0];
+        // export(TARGETS t1 t2... FILE file.cmake [NAMESPACE ns::] [APPEND])
+        // export(EXPORT export_name ...) - alternate form using install export set
+        // export(PACKAGE name) - register package in user package registry (ignored for now)
+        if (args.empty()) {
+            interp.set_fatal_error("export() requires arguments");
+            return;
         }
-        interp.print_message("WARNING", "export() is not yet supported - ignoring export of '" + export_name + "'", true);
+
+        std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+        std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+
+        // Handle export(PACKAGE) - just ignore it (package registry not supported)
+        if (args[0] == "PACKAGE") {
+            if (args.size() < 2) {
+                interp.set_fatal_error("export(PACKAGE) requires a package name");
+                return;
+            }
+            // Silently ignore - package registry is not commonly used
+            return;
+        }
+
+        // Handle export(EXPORT export_name ...) - uses an install export set
+        if (args[0] == "EXPORT") {
+            if (args.size() < 2) {
+                interp.set_fatal_error("export(EXPORT) requires an export set name");
+                return;
+            }
+
+            std::string export_set_name = args[1];
+            std::string file_path;
+            std::string namespace_prefix;
+
+            // Parse remaining arguments
+            for (size_t i = 2; i < args.size(); ++i) {
+                if (args[i] == "FILE" && i + 1 < args.size()) {
+                    file_path = args[++i];
+                } else if (args[i] == "NAMESPACE" && i + 1 < args.size()) {
+                    namespace_prefix = args[++i];
+                }
+            }
+
+            // Look up export set
+            const auto& export_sets = interp.get_export_sets();
+            auto it = export_sets.find(export_set_name);
+            if (it == export_sets.end() || it->second.empty()) {
+                interp.print_message("WARNING",
+                    "export(EXPORT) export set '" + export_set_name + "' has no targets");
+                return;
+            }
+
+            // Collect targets
+            std::vector<Target*> targets_to_export;
+            for (const auto& entry : it->second) {
+                auto* target = interp.find_target(entry.target_name);
+                if (target) {
+                    targets_to_export.push_back(target);
+                }
+            }
+
+            if (targets_to_export.empty()) {
+                interp.print_message("WARNING",
+                    "export(EXPORT) no valid targets found in export set '" + export_set_name + "'");
+                return;
+            }
+
+            // Default file name
+            if (file_path.empty()) {
+                file_path = export_set_name + ".cmake";
+            }
+
+            // Resolve file path relative to binary dir
+            std::filesystem::path output_file = file_path;
+            if (!output_file.is_absolute()) {
+                output_file = std::filesystem::path(bin_dir) / output_file;
+            }
+
+            // Generate export content
+            ExportContext ctx;
+            ctx.for_install = false;  // Build-tree export
+            ctx.namespace_prefix = namespace_prefix;
+            ctx.destination = "";
+            ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+            ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+            ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+            ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+            ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+            ctx.all_targets = &interp.get_targets();
+            ctx.target_aliases = &interp.get_target_aliases();
+
+            std::string content = generate_export_content(ctx, targets_to_export);
+
+            // Write to file
+            std::filesystem::create_directories(output_file.parent_path());
+            std::ofstream out(output_file);
+            if (!out) {
+                interp.set_fatal_error("export(EXPORT): failed to open file for writing: " + output_file.string());
+                return;
+            }
+            out << content;
+            return;
+        }
+
+        // Handle export(TARGETS ...) form
+        if (args[0] != "TARGETS") {
+            interp.set_fatal_error("export() first argument must be TARGETS, EXPORT, or PACKAGE");
+            return;
+        }
+
+        // Parse TARGETS list and options
+        std::vector<std::string> target_names;
+        std::string file_path;
+        std::string namespace_prefix;
+        bool append = false;
+
+        size_t i = 1;  // Skip "TARGETS"
+        while (i < args.size()) {
+            const auto& arg = args[i];
+            if (arg == "FILE") {
+                if (i + 1 >= args.size()) {
+                    interp.set_fatal_error("export(TARGETS) FILE requires a value");
+                    return;
+                }
+                file_path = args[++i];
+            } else if (arg == "NAMESPACE") {
+                if (i + 1 >= args.size()) {
+                    interp.set_fatal_error("export(TARGETS) NAMESPACE requires a value");
+                    return;
+                }
+                namespace_prefix = args[++i];
+            } else if (arg == "APPEND") {
+                append = true;
+            } else if (arg == "EXPORT_LINK_INTERFACE_LIBRARIES") {
+                // Deprecated option, ignore
+            } else {
+                // Must be a target name
+                target_names.push_back(arg);
+            }
+            ++i;
+        }
+
+        if (target_names.empty()) {
+            interp.set_fatal_error("export(TARGETS) requires at least one target");
+            return;
+        }
+
+        if (file_path.empty()) {
+            interp.set_fatal_error("export(TARGETS) requires FILE argument");
+            return;
+        }
+
+        // Validate and collect targets
+        std::vector<Target*> targets_to_export;
+        for (const auto& name : target_names) {
+            auto* target = interp.find_target(name);
+            if (!target) {
+                interp.set_fatal_error("export(TARGETS) unknown target: " + name);
+                return;
+            }
+            targets_to_export.push_back(target);
+        }
+
+        // Resolve file path relative to binary dir
+        std::filesystem::path output_file = file_path;
+        if (!output_file.is_absolute()) {
+            output_file = std::filesystem::path(bin_dir) / output_file;
+        }
+
+        // Generate export content
+        ExportContext ctx;
+        ctx.for_install = false;  // Build-tree export
+        ctx.namespace_prefix = namespace_prefix;
+        ctx.destination = "";
+        ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+        ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+        ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+        ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+        ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+        ctx.all_targets = &interp.get_targets();
+        ctx.target_aliases = &interp.get_target_aliases();
+
+        std::string content = generate_export_content(ctx, targets_to_export);
+
+        // Write to file
+        std::filesystem::create_directories(output_file.parent_path());
+        std::ios_base::openmode mode = std::ios::out;
+        if (append) {
+            mode |= std::ios::app;
+        }
+        std::ofstream out(output_file, mode);
+        if (!out) {
+            interp.set_fatal_error("export(TARGETS): failed to open file for writing: " + output_file.string());
+            return;
+        }
+        out << content;
     });
 }
 

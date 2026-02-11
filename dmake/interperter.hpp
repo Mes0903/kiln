@@ -133,6 +133,13 @@ struct InstallRule {
     std::shared_ptr<InstallExportRule> export_rule;
 };
 
+// Entry in an export set (populated by install(TARGETS ... EXPORT))
+struct ExportSetEntry {
+    std::string target_name;
+    std::string source_dir;  // For relative path computation
+    std::string binary_dir;
+};
+
 // Forward declaration
 class Interpreter;
 
@@ -297,6 +304,15 @@ public:
         return get_root()->install_rules_;
     }
 
+    // Export sets (populated by install(TARGETS ... EXPORT))
+    void add_to_export_set(const std::string& export_name, const std::string& target,
+                           const std::string& src_dir, const std::string& bin_dir) {
+        get_root()->export_sets_[export_name].push_back({target, src_dir, bin_dir});
+    }
+    const std::map<std::string, std::vector<ExportSetEntry>>& get_export_sets() const {
+        return get_root()->export_sets_;
+    }
+
     // Property system accessors
     std::map<PropertyScope, std::map<std::string, PropertyDefinition>>& get_property_definitions() {
         return get_root()->property_definitions_;
@@ -424,6 +440,9 @@ private:
 
     // Install rules
     std::vector<std::shared_ptr<InstallRule>> install_rules_;
+
+    // Export sets: export_name -> list of target entries
+    std::map<std::string, std::vector<ExportSetEntry>> export_sets_;
 
     Toolchain toolchain_;
     std::unique_ptr<CacheStore> cache_store_;
