@@ -226,7 +226,7 @@ protected:
     // Helper methods for task generation
     void generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
-                               bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                               bool is_shared, bool is_pie, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
                                class GenexEvaluator& evaluator, const class Interpreter& interp,
                                const std::string& pre_build_task_id,
                                const std::string& module_mapper_path,

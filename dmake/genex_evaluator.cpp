@@ -374,12 +374,30 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                     continue;
                 }
 
+                // Skip sources marked HEADER_FILE_ONLY (e.g. unity build originals)
+                if (ctx_.source_properties) {
+                    std::filesystem::path sp(src);
+                    std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
+                        : (std::filesystem::path(source_dir) / sp).lexically_normal().string();
+                    auto sp_it = ctx_.source_properties->find(abs);
+                    if (sp_it != ctx_.source_properties->end()) {
+                        auto hfo = sp_it->second.find("HEADER_FILE_ONLY");
+                        if (hfo != sp_it->second.end() &&
+                            hfo->second != "0" && hfo->second != "OFF" &&
+                            hfo->second != "FALSE" && hfo->second != "NO" &&
+                            hfo->second != "N" && !hfo->second.empty()) {
+                            continue;
+                        }
+                    }
+                }
+
                 // Compute object path using same logic as get_obj_path in target.cpp
                 std::filesystem::path src_path(src);
                 std::filesystem::path obj_suffix;
 
                 if (src_path.is_absolute()) {
-                    obj_suffix = src_path.filename();
+                    // Use full path structure (minus root) to match get_obj_path in target.cpp
+                    obj_suffix = src_path.relative_path();
                 } else {
                     obj_suffix = src_path;
                 }

@@ -37,6 +37,7 @@ struct GenexEvaluationContext {
     std::string install_prefix;       // CMAKE_INSTALL_PREFIX (for $<INSTALL_PREFIX>)
     enum class Phase { BUILD, INSTALL } phase = Phase::BUILD;
     bool allow_deferred_compile_language = false;  // For deferred evaluation
+    const std::map<std::string, std::map<std::string, std::string>>* source_properties = nullptr;
 };
 
 // Evaluator for generator expressions

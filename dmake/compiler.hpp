@@ -15,6 +15,7 @@ struct CompileContext {
     std::string standard;
     bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)
     bool is_shared = false;
+    bool is_pie = false;                        // -fPIE for executables with POSITION_INDEPENDENT_CODE
     std::string visibility_preset;          // e.g. "hidden", "default", "protected", "internal"
     bool visibility_inlines_hidden = false; // -fvisibility-inlines-hidden (GCC/Clang)
     std::string pch_include;

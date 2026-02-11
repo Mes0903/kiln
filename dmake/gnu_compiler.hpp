@@ -100,6 +100,7 @@ public:
         cmd.push_back(ctx.output + ".d");
 
         if (ctx.is_shared) cmd.push_back("-fPIC");
+        else if (ctx.is_pie) cmd.push_back("-fPIE");
         if (!ctx.visibility_preset.empty()) cmd.push_back("-fvisibility=" + ctx.visibility_preset);
         if (ctx.visibility_inlines_hidden) cmd.push_back("-fvisibility-inlines-hidden");
 

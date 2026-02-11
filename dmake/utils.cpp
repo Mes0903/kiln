@@ -148,7 +148,8 @@ static size_t shell_redirect_prefix_len(const std::string& arg) {
 }
 
 static bool is_shell_operator(const std::string& arg) {
-    return arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1";
+    return arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1" ||
+           arg == "(" || arg == ")";
 }
 
 std::string dmake::join_command(const std::vector<std::string>& args) {

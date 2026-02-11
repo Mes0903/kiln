@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <unistd.h>
 #include <algorithm>
 #include "container_utils.hpp"
@@ -331,6 +332,7 @@ GenexEvaluationContext Target::make_genex_context(
     ctx.phase = GenexEvaluationContext::Phase::BUILD;
     ctx.compile_language = compile_language;
     ctx.allow_deferred_compile_language = allow_deferred;
+    ctx.source_properties = &interp.get_source_properties();
     return ctx;
 }
 
@@ -562,6 +564,36 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
     walk_link_libs(PropertyVisibility::PRIVATE, false, false);
     walk_link_libs(PropertyVisibility::INTERFACE, false, true);
 
+    // Phase 2b: Discover OBJECT library deps from $<TARGET_OBJECTS:X> in SOURCES.
+    // DuckDB (and others) pass object libraries this way instead of via
+    // target_link_libraries(), so we must resolve them here to ensure their
+    // compile tasks get generated.
+    {
+        static constexpr std::string_view prefix = "$<TARGET_OBJECTS:";
+        for (auto vis : {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE}) {
+            for (const auto& src : get_property_list("SOURCES", vis)) {
+                std::string_view sv(src);
+                std::string_view::size_type pos = 0;
+                while ((pos = sv.find(prefix, pos)) != std::string_view::npos) {
+                    auto name_start = pos + prefix.size();
+                    auto name_end = sv.find('>', name_start);
+                    if (name_end == std::string_view::npos) break;
+                    std::string obj_target_name(sv.substr(name_start, name_end - name_start));
+                    pos = name_end + 1;
+
+                    std::string resolved_name = interp.resolve_target_alias(obj_target_name);
+                    auto dep_it = all_targets.find(resolved_name);
+                    if (dep_it == all_targets.end()) continue;
+
+                    auto& dep = dep_it->second;
+                    resolved_target_deps_.push_back(resolved_name);
+                    dep->resolve(all_targets, interp);
+                    resolved_object_lib_deps_.push_back(resolved_name);
+                }
+            }
+        }
+    }
+
     // Phase 3: Deduplicate non-link properties
     for (const auto& info : props_to_resolve) {
         remove_duplicates(resolved_properties_[info.name]);
@@ -761,7 +793,7 @@ static void generate_custom_command_task(BuildGraph& graph, const CustomCommandR
 
 void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
-                                      bool is_shared, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                                      bool is_shared, bool is_pie, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
                                       GenexEvaluator& evaluator, const Interpreter& interp,
                                       const std::string& pre_build_task_id,
                                       const std::string& module_mapper_path,
@@ -1018,6 +1050,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.source = src_abs_str;
         ctx.output = obj;
         ctx.is_shared = is_shared;
+        ctx.is_pie = is_pie;
         ctx.pch_include = (lang_info.lang == Language::ASM) ? "" : pch_include_arg;
         ctx.standard = effective_standard(lang_info.lang);
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
@@ -1323,11 +1356,16 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     std::vector<std::string> obj_files;
     bool is_shared = (type_ == TargetType::SHARED_LIBRARY);
+    bool is_pie = false;
 
-    // Check POSITION_INDEPENDENT_CODE property - if set, compile with -fPIC
+    // Check POSITION_INDEPENDENT_CODE property
     std::string pic_prop = get_property("POSITION_INDEPENDENT_CODE");
     if (!pic_prop.empty() && !Interpreter::is_falsy(pic_prop)) {
-        is_shared = true;  // Use -fPIC for position-independent code
+        if (type_ == TargetType::EXECUTABLE) {
+            is_pie = true;   // Executables use -fPIE
+        } else {
+            is_shared = true; // Libraries use -fPIC
+        }
     }
 
     // Track which custom command tasks we've created
@@ -1410,7 +1448,7 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
 
     // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
-    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared,
+    generate_object_tasks(graph, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, is_pie,
                           all_targets, evaluator, interp,
                           pre_build_task_id, module_mapper_path, generated_custom_tasks,
                           implicit_includes);
@@ -1428,9 +1466,21 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             auto it = all_targets.find(obj_lib_name);
             if (it == all_targets.end()) continue;
             auto& dep = it->second;
+            const auto& source_props = interp.get_source_properties();
             for (const auto& src : dep->get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
                 auto lang_info = LanguageClassifier::from_path(src);
                 if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
+                    // Skip sources marked HEADER_FILE_ONLY (e.g. unity build originals)
+                    std::filesystem::path sp(src);
+                    std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
+                        : (std::filesystem::path(dep->get_source_dir()) / sp).lexically_normal().string();
+                    auto sp_it = source_props.find(abs);
+                    if (sp_it != source_props.end()) {
+                        auto hfo = sp_it->second.find("HEADER_FILE_ONLY");
+                        if (hfo != sp_it->second.end() && !Interpreter::is_falsy(hfo->second)) {
+                            continue;
+                        }
+                    }
                     obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
                 }
             }
@@ -1447,11 +1497,11 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
             return !seen.insert(o).second;
         });
         if (obj_files.size() < before) {
-            std::cerr << "Note: target '" << name_ << "' has " << (before - obj_files.size())
-                      << " duplicate object file(s), likely from the same OBJECT library "
-                      << "appearing in both $<TARGET_OBJECTS:> and target_link_libraries(). "
-                      << "Duplicates were removed automatically for compatibility. "
-                      << "Consider removing the redundant reference to clean this up.\n";
+            dmake::print_message(std::cerr, "WARNING", "target '" + name_ + "' has " + std::to_string(before - obj_files.size())
+                      + " duplicate object file(s), likely from the same OBJECT library "
+                      + "appearing in both $<TARGET_OBJECTS:> and target_link_libraries(). "
+                      + "Duplicates were removed automatically for compatibility. "
+                      + "Consider removing the redundant reference to clean this up.");
         }
     }
 
