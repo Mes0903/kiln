@@ -391,20 +391,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                     }
                 }
 
-                // Compute object path using same logic as get_obj_path in target.cpp
-                std::filesystem::path src_path(src);
-                std::filesystem::path obj_suffix;
-
-                if (src_path.is_absolute()) {
-                    // Use full path structure (minus root) to match get_obj_path in target.cpp
-                    obj_suffix = src_path.relative_path();
-                } else {
-                    obj_suffix = src_path;
-                }
-
-                std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / target_name / obj_suffix;
-                obj += ".o";
-                std::string obj_str = binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
+                std::string obj_str = get_obj_path(binary_dir, target_name, src);
 
                 if (!result.empty()) {
                     result += ";";

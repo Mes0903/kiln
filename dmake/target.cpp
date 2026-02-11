@@ -652,7 +652,7 @@ static std::string normalize_include(const std::string& dir) {
     return dir.substr(0, end);
 }
 
-static std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path) {
+std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path) {
     std::filesystem::path src(source_path);
     std::filesystem::path obj_suffix;
 

@@ -754,10 +754,11 @@ void register_string_builtins(Interpreter& interp) {
             for (const auto& code_str : codes) {
                 try {
                     int code = std::stoi(code_str);
-                    if (code < 0 || code > 127) {
-                        interp.set_fatal_error("string(ASCII) code out of range [0, 127]: " + code_str);
-                        return;
-                    }
+                    // XXX: apparently CMake allows ASCII codes outside the range [0, 127]
+                    // if (code < 0 || code > 127) {
+                    //     interp.set_fatal_error("string(ASCII) code out of range [0, 127]: " + code_str);
+                    //     return;
+                    // }
                     result += static_cast<char>(code);
                 } catch (const std::exception& e) {
                     interp.set_fatal_error("string(ASCII) invalid code: " + code_str);

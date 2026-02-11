@@ -509,6 +509,11 @@ void register_project_builtins(Interpreter& interp) {
             }
         }
 
+        // CMake's configure_file always ensures a trailing newline
+        if (!content.empty() && content.back() != '\n') {
+            content += '\n';
+        }
+
         // Create output directory if needed
         std::filesystem::create_directories(output_path.parent_path());
 

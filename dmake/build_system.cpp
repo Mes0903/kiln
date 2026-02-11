@@ -528,9 +528,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             if (!ddi_result) { task_error = ddi_result.error(); break; }
 
                             const auto& ddi = *ddi_result;
-                            std::string obj_path = std::filesystem::path(task.parent_target->get_binary_dir())
-                                / "objs" / (std::filesystem::path(ddi.source).filename().string() + ".o");
-                            obj_path = std::filesystem::path(obj_path).lexically_normal().string();
+                            std::string obj_path = get_obj_path(task.parent_target->get_binary_dir(), task.parent_target->get_name(), ddi.source);
 
                             if (!ddi.provides.empty()) {
                                 module_to_task[ddi.provides] = obj_path;

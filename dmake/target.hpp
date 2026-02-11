@@ -319,4 +319,8 @@ private:
     bool build_by_default_ = false;
 };
 
+// Compute the object file path for a source file within a target.
+// Single source of truth — used by target task generation, genex evaluator, and module collator.
+std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path);
+
 } // namespace dmake
