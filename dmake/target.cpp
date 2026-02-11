@@ -1437,6 +1437,24 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
     }
 
+    // Deduplicate object files (CMake compatibility). This can happen when
+    // $<TARGET_OBJECTS:X> in SOURCES and target_link_libraries(... X) both
+    // pull in the same object library's files.
+    {
+        std::unordered_set<std::string> seen;
+        auto before = obj_files.size();
+        std::erase_if(obj_files, [&](const std::string& o) {
+            return !seen.insert(o).second;
+        });
+        if (obj_files.size() < before) {
+            std::cerr << "Note: target '" << name_ << "' has " << (before - obj_files.size())
+                      << " duplicate object file(s), likely from the same OBJECT library "
+                      << "appearing in both $<TARGET_OBJECTS:> and target_link_libraries(). "
+                      << "Duplicates were removed automatically for compatibility. "
+                      << "Consider removing the redundant reference to clean this up.\n";
+        }
+    }
+
     auto sources_list = get_property_list("SOURCES", TargetPropertyScope::BUILD);
     Language linker_lang = std::any_of(sources_list.begin(), sources_list.end(),
         [](const std::string& src) { return LanguageClassifier::from_path(src).lang == Language::CXX; })

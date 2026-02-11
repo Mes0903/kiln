@@ -152,6 +152,19 @@ public:
                 while (ss >> arg) {
                     cmd.push_back(arg);
                 }
+            } else if (flag.starts_with("LINKER:")) {
+                // CMake LINKER: prefix - split on commas, each piece gets -Wl,
+                // e.g. LINKER:--version-script,/path/to/map -> -Wl,--version-script -Wl,/path/to/map
+                // e.g. LINKER:-Bsymbolic-functions -> -Wl,-Bsymbolic-functions
+                std::string rest = flag.substr(7);
+                std::string_view sv(rest);
+                size_t pos = 0;
+                while (pos < sv.size()) {
+                    auto comma = sv.find(',', pos);
+                    if (comma == std::string_view::npos) comma = sv.size();
+                    cmd.push_back("-Wl," + std::string(sv.substr(pos, comma - pos)));
+                    pos = comma + 1;
+                }
             } else {
                 cmd.push_back(flag);
             }
