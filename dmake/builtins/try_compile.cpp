@@ -1257,30 +1257,61 @@ void register_try_compile_builtins(Interpreter& interp) {
 
         // Check cache
         CacheStore& cache = interp.get_cache_store();
-        auto cached = cache.lookup<CacheSubsystem::TryRun>(base_signature);
-        if (cached) {
-            if (validate_header_deps(cached->header_deps).empty()) {
-                // Cache hit
-                interp.set_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
-                interp.set_cache_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
-                if (!compile_output_variable.empty()) {
-                    interp.set_variable(compile_output_variable, cached->compile_output);
+
+        // Helper to check cache and return early on hit
+        auto try_cache_hit = [&](const std::string& sig) -> bool {
+            auto cached = cache.lookup<CacheSubsystem::TryRun>(sig);
+            if (!cached) return false;
+            auto reason = validate_header_deps(cached->header_deps);
+            if (!reason.empty()) return false;
+            // Cache hit
+            interp.set_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
+            interp.set_cache_variable(compile_result_var, cached->compile_success ? "TRUE" : "FALSE");
+            if (!compile_output_variable.empty()) {
+                interp.set_variable(compile_output_variable, cached->compile_output);
+            }
+            if (!cached->compile_success) {
+                interp.set_variable(run_result_var, "FAILED_TO_RUN");
+            } else {
+                interp.set_variable(run_result_var, std::to_string(cached->exit_code));
+                if (!run_output_variable.empty()) {
+                    interp.set_variable(run_output_variable, cached->run_output);
                 }
-                if (!cached->compile_success) {
-                    interp.set_variable(run_result_var, "FAILED_TO_RUN");
-                } else {
-                    interp.set_variable(run_result_var, std::to_string(cached->exit_code));
-                    if (!run_output_variable.empty()) {
-                        interp.set_variable(run_output_variable, cached->run_output);
-                    }
-                    if (!run_output_stdout_variable.empty()) {
-                        interp.set_variable(run_output_stdout_variable, cached->run_output);
-                    }
-                    if (!run_output_stderr_variable.empty()) {
-                        interp.set_variable(run_output_stderr_variable, cached->run_output);
-                    }
+                if (!run_output_stdout_variable.empty()) {
+                    interp.set_variable(run_output_stdout_variable, cached->run_output);
                 }
-                return;
+                if (!run_output_stderr_variable.empty()) {
+                    interp.set_variable(run_output_stderr_variable, cached->run_output);
+                }
+            }
+            return true;
+        };
+
+        if (try_cache_hit(base_signature)) return;
+
+        // Mtime miss — try content-hash signature (source rewritten with same content?)
+        // Compute the content-hash extended signature
+        std::string hash_extended_signature;
+        if (!sources.empty()) {
+            auto hash_sig = compute_signature(
+                compiler_path, compiler_version, language_str, standard,
+                sources, inline_sources_map, compile_definitions,
+                resolved_link_libs, link_options, /*use_content_hash=*/true
+            );
+            if (hash_sig) {
+                std::ostringstream hash_run_sig;
+                hash_run_sig << *hash_sig;
+                for (const auto& arg : run_args) {
+                    hash_run_sig << "arg:" << arg << "|";
+                }
+                if (!working_directory.empty()) {
+                    hash_run_sig << "workdir:" << working_directory << "|";
+                }
+                for (const auto& flag : raw_compile_flags) {
+                    hash_run_sig << "cflag:" << flag << "|";
+                }
+                hash_extended_signature = hash_run_sig.str();
+                if (try_cache_hit(hash_extended_signature)) return;
             }
         }
 
@@ -1341,6 +1372,10 @@ void register_try_compile_builtins(Interpreter& interp) {
             entry.compile_output = compile_output;
             entry.header_deps = compile_result->header_deps;
             cache.insert<CacheSubsystem::TryRun>(base_signature, entry);
+            // Also insert under content-hash signature for rewritten source files
+            if (!hash_extended_signature.empty() && hash_extended_signature != base_signature) {
+                cache.insert<CacheSubsystem::TryRun>(hash_extended_signature, entry);
+            }
             return;
         }
 
@@ -1408,7 +1443,7 @@ void register_try_compile_builtins(Interpreter& interp) {
             interp.set_variable(run_output_stderr_variable, run_result.output);
         }
 
-        // Cache the result
+        // Cache the result under both mtime and content-hash signatures
         TryRunCacheEntry entry;
         entry.compile_success = true;
         entry.compile_output = compile_output;
@@ -1416,6 +1451,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         entry.run_output = run_result.output;
         entry.header_deps = compile_result->header_deps;
         cache.insert<CacheSubsystem::TryRun>(base_signature, entry);
+        if (!hash_extended_signature.empty() && hash_extended_signature != base_signature) {
+            cache.insert<CacheSubsystem::TryRun>(hash_extended_signature, entry);
+        }
 
         // Clean up temp directory on success
         if (run_result.exit_code == 0) {
