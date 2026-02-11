@@ -1425,6 +1425,86 @@ TEST_CASE("if condition: IN_LIST operator", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 }
 
+TEST_CASE("if condition: quoted values not treated as keywords", "[interpreter][if]") {
+    // Quoted variable expanding to unary keyword (TARGET)
+    auto output = run_script(R"(
+        set(VAR "TARGET")
+        if("${VAR}" STREQUAL "TARGET")
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted variable with IN_LIST
+    output = run_script(R"(
+        set(KEYWORDS "TIMEOUT;SKIP_RETURN_CODE;WORKING_DIRECTORY")
+        set(ITEM "TIMEOUT")
+        if("${ITEM}" IN_LIST KEYWORDS)
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted "NOT" should not act as negation
+    output = run_script(R"(
+        set(X "NOT")
+        if("${X}" STREQUAL "NOT")
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted "AND" should not act as logical AND
+    output = run_script(R"(
+        set(Y "AND")
+        if("${Y}" STREQUAL "AND")
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted "OR" should not act as logical OR
+    output = run_script(R"(
+        set(Z "OR")
+        if("${Z}" STREQUAL "OR")
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted "DEFINED" should not act as unary operator
+    output = run_script(R"(
+        set(W "DEFINED")
+        if("${W}" STREQUAL "DEFINED")
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+
+    // Quoted "EXISTS" should not act as unary operator
+    output = run_script(R"(
+        set(E "EXISTS")
+        if("${E}" STREQUAL "EXISTS")
+            message("pass")
+        else()
+            message("fail")
+        endif()
+    )");
+    REQUIRE(output == "pass\n");
+}
+
 TEST_CASE("if condition: true constants (case-insensitive)", "[interpreter][if]") {
     auto output = run_script(R"(
         set(T1 "TRUE")
