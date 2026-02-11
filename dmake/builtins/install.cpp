@@ -662,6 +662,7 @@ void register_install_builtins(Interpreter& interp) {
             ctx.destination = "";
             ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
             ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+            ctx.config = interp.get_variable("CMAKE_BUILD_TYPE");  // Per-config properties
             ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
             ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
             ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
@@ -753,6 +754,7 @@ void register_install_builtins(Interpreter& interp) {
         ctx.destination = "";
         ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
         ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
+        ctx.config = interp.get_variable("CMAKE_BUILD_TYPE");  // Per-config properties
         ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
         ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
         ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");

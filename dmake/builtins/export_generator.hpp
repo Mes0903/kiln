@@ -17,6 +17,7 @@ struct ExportContext {
     std::string destination;       // Install destination (for computing _IMPORT_PREFIX depth)
     std::string install_prefix;    // CMAKE_INSTALL_PREFIX
     std::string build_type;        // CMAKE_BUILD_TYPE
+    std::string config;            // Current build config for per-config properties (e.g., "Debug", "Release")
     std::string system_name;       // CMAKE_SYSTEM_NAME
     std::string cxx_compiler_id;   // CMAKE_CXX_COMPILER_ID
     std::string c_compiler_id;     // CMAKE_C_COMPILER_ID
