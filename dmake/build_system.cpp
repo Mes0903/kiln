@@ -917,6 +917,22 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
 
 std::map<std::string, std::string> BuildGraph::load_cache(const std::string& build_dir) {
     std::map<std::string, std::string> cache;
+
+    // Validate build_dir hasn't moved
+    std::error_code ec;
+    auto canonical_build_dir = std::filesystem::canonical(build_dir, ec);
+    if (ec) return cache;
+
+    std::ifstream meta_file(std::filesystem::path(build_dir) / ".dmake_build_path");
+    if (meta_file) {
+        std::string cached_path;
+        std::getline(meta_file, cached_path);
+        if (cached_path != canonical_build_dir.string()) {
+            // Build dir moved - invalidate cache
+            return cache;
+        }
+    }
+
     std::ifstream file(std::filesystem::path(build_dir) / ".dmake_cache");
     if (!file) return cache;
 
@@ -935,6 +951,16 @@ std::expected<void, std::string> BuildGraph::save_cache(const std::string& build
     std::filesystem::create_directories(build_dir, ec);
     if (ec) {
         return std::unexpected("Failed to create build directory: " + build_dir + " (" + ec.message() + ")");
+    }
+
+    // Write build_dir validation file
+    auto canonical_build_dir = std::filesystem::canonical(build_dir, ec);
+    if (ec) {
+        return std::unexpected("Failed to canonicalize build directory: " + build_dir);
+    }
+    std::ofstream meta_file(std::filesystem::path(build_dir) / ".dmake_build_path");
+    if (meta_file) {
+        meta_file << canonical_build_dir.string();
     }
 
     std::ofstream file(std::filesystem::path(build_dir) / ".dmake_cache");
