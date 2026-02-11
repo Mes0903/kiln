@@ -3301,6 +3301,33 @@ TEST_CASE("cmake_parse_arguments edge cases", "[interpreter]") {
     REQUIRE(output == "TRUE\nverbose\n");
 }
 
+TEST_CASE("cmake_parse_arguments duplicate multi-value keywords append", "[interpreter]") {
+    // CMake appends values when a multi-value keyword appears more than once
+    auto output = run_script(R"(
+        cmake_parse_arguments(MY "" "" "LIBRARIES;INCLUDES"
+            INCLUDES inc1 inc2
+            LIBRARIES lib1 lib2
+            LIBRARIES lib3
+        )
+        message("${MY_LIBRARIES}")
+        message("${MY_INCLUDES}")
+    )");
+    REQUIRE(output == "lib1;lib2;lib3\ninc1;inc2\n");
+
+    // Duplicate keyword with different multi-value keywords interleaved
+    output = run_script(R"(
+        cmake_parse_arguments(MY "" "" "SOURCES;FLAGS"
+            SOURCES a.cpp
+            FLAGS -Wall
+            SOURCES b.cpp c.cpp
+            FLAGS -Werror
+        )
+        message("${MY_SOURCES}")
+        message("${MY_FLAGS}")
+    )");
+    REQUIRE(output == "a.cpp;b.cpp;c.cpp\n-Wall;-Werror\n");
+}
+
 TEST_CASE("cmake_parse_arguments error handling", "[interpreter]") {
     // Test too few arguments
     CHECK_THROWS_WITH(run_script(R"(

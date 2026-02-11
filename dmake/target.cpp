@@ -1600,7 +1600,18 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
 
         for (const auto& lib : full_link_libs) {
-             if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") ||
+             // Some Find modules set LIBRARIES as a space-separated string of
+             // flags (e.g. "-L/usr/lib -lmbedtls -lmbedx509"). Split these into
+             // individual arguments so they don't get passed as one quoted token.
+             if (lib.find(' ') != std::string::npos) {
+                 for (auto& part : dmake::shell_split(lib)) {
+                     if (part.starts_with("-L")) {
+                         ctx.lib_dirs.push_back(part.substr(2));
+                     } else {
+                         ctx.libs.push_back(std::move(part));
+                     }
+                 }
+             } else if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") ||
                  lib.find(".so") != std::string::npos ||
                  lib.find(".a") != std::string::npos) {
                  ctx.objects.push_back(lib);

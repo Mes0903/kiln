@@ -307,6 +307,19 @@ void register_find_package_builtins(Interpreter& interp) {
             }
 
             std::string found = interp.get_variable(found_var);
+            // CMake also checks <PACKAGENAME>_FOUND (uppercase) as a fallback
+            if (interp.is_falsy(found)) {
+                std::string upper_name = package_name;
+                for (auto& c : upper_name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                std::string upper_found_var = upper_name + "_FOUND";
+                if (upper_found_var != found_var) {
+                    std::string upper_found = interp.get_variable(upper_found_var);
+                    if (!interp.is_falsy(upper_found)) {
+                        found = upper_found;
+                        interp.set_variable(found_var, found);
+                    }
+                }
+            }
             if (interp.is_falsy(found)) {
                 if (required) {
                     interp.set_fatal_error("Could not find package " + package_name + " (missing: " + package_name + "_FOUND)");

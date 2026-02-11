@@ -356,9 +356,17 @@ void register_variable_builtins(Interpreter& interp) {
                     i++;
                 }
 
-                // Set variable (even if empty list)
-                CMakeArray value_list(values);
-                interp.set_variable(prefix + "_" + keyword, value_list.to_string());
+                // Append to existing values (CMake appends on duplicate keywords)
+                std::string var_name = prefix + "_" + keyword;
+                std::string existing = interp.get_variable(var_name);
+                if (!existing.empty() && !values.empty()) {
+                    CMakeArray combined(existing);
+                    for (auto& v : values) combined.append(std::move(v));
+                    interp.set_variable(var_name, combined.to_string());
+                } else {
+                    CMakeArray value_list(values);
+                    interp.set_variable(var_name, value_list.to_string());
+                }
                 continue;
             }
 
