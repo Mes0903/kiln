@@ -179,31 +179,46 @@ std::expected<void, std::string> git_clone(
     const std::string& tag,
     bool shallow)
 {
-    std::vector<std::string> cmd = {"git", "clone"};
-    if (shallow && !tag.empty()) {
-        cmd.push_back("--depth");
-        cmd.push_back("1");
-    }
+    // Strategy: try --branch first (works for branches/tags, efficient for shallow).
+    // If that fails, fall back to full clone + checkout (works for commit hashes).
+
     if (!tag.empty()) {
+        std::vector<std::string> cmd = {"git", "clone"};
+        if (shallow) {
+            cmd.push_back("--depth");
+            cmd.push_back("1");
+        }
         cmd.push_back("--branch");
         cmd.push_back(tag);
-    }
-    cmd.push_back("--");
-    cmd.push_back(repo_url);
-    cmd.push_back(dest_dir);
+        cmd.push_back("--");
+        cmd.push_back(repo_url);
+        cmd.push_back(dest_dir);
 
+        auto result = run_command(cmd);
+        if (result.exit_code == 0) {
+            return {};
+        }
+
+        // --branch failed (likely a commit hash). Fall back to clone + checkout.
+        // Clean up any partial clone first.
+        std::error_code ec;
+        std::filesystem::remove_all(dest_dir, ec);
+    }
+
+    // Clone without --branch (gets default branch)
+    std::vector<std::string> cmd = {"git", "clone", "--", repo_url, dest_dir};
     auto result = run_command(cmd);
     if (result.exit_code != 0) {
         return std::unexpected<std::string>(
             "git clone failed for " + repo_url + ":\n" + result.output);
     }
 
-    // If tag specified and not shallow, checkout the exact ref
-    // (handles commit hashes that --branch doesn't support)
-    if (!tag.empty() && !shallow) {
+    // Checkout the specific ref if requested
+    if (!tag.empty()) {
         auto checkout = run_command(std::vector<std::string>{"git", "-C", dest_dir, "checkout", tag});
         if (checkout.exit_code != 0) {
-            // --branch worked, this is fine
+            return std::unexpected<std::string>(
+                "git checkout failed for " + tag + ":\n" + checkout.output);
         }
     }
 
