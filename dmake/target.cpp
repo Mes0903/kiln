@@ -1648,6 +1648,14 @@ void CustomTarget::generate_tasks(BuildGraph& graph, const Toolchain&, const std
 
     // Handle DEPENDS from add_custom_target
     for (const auto& dep_name : custom_depends_) {
+        // Skip self-dependencies (CMake silently ignores these)
+        if (dep_name == name_) {
+            dmake::print_message(std::cerr, "WARNING",
+                "Target '" + name_ + "' has itself in DEPENDS - ignoring self-dependency. "
+                "If you meant to depend on a file named '" + dep_name + "', use an absolute path.");
+            continue;
+        }
+
         auto dep_it = all_targets.find(dep_name);
         if (dep_it != all_targets.end()) {
             std::string dep_out = dep_it->second->get_output_path();
