@@ -625,7 +625,9 @@ static std::string get_obj_path(const std::string& binary_dir, const std::string
     std::filesystem::path obj_suffix;
 
     if (src.is_absolute()) {
-        obj_suffix = src.filename();
+        // Use full path structure (minus root) to avoid collisions between
+        // files with same name in different directories (e.g. posix/file.c vs file.c)
+        obj_suffix = src.relative_path();
     } else {
         obj_suffix = src;
     }
