@@ -631,12 +631,24 @@ std::string Target::get_output_path() const {
     }
     const auto& dir = output_dir.empty() ? binary_dir_ : output_dir;
 
+    // Determine prefix and suffix, respecting target properties
+    std::string prefix_prop = get_property("PREFIX");
+    std::string suffix_prop = get_property("SUFFIX");
+    bool has_prefix = !prefix_prop.empty() || properties_.count("PREFIX");
+    bool has_suffix = !suffix_prop.empty() || properties_.count("SUFFIX");
+
     if (type_ == TargetType::EXECUTABLE) {
-        path = std::filesystem::path(dir) / out_name;
+        std::string prefix = has_prefix ? prefix_prop : "";
+        std::string suffix = has_suffix ? suffix_prop : "";
+        path = std::filesystem::path(dir) / (prefix + out_name + suffix);
     } else if (type_ == TargetType::SHARED_LIBRARY) {
-        path = std::filesystem::path(dir) / ("lib" + out_name + ".so");
+        std::string prefix = has_prefix ? prefix_prop : "lib";
+        std::string suffix = has_suffix ? suffix_prop : ".so";
+        path = std::filesystem::path(dir) / (prefix + out_name + suffix);
     } else if (type_ == TargetType::STATIC_LIBRARY) {
-        path = std::filesystem::path(dir) / ("lib" + out_name + ".a");
+        std::string prefix = has_prefix ? prefix_prop : "lib";
+        std::string suffix = has_suffix ? suffix_prop : ".a";
+        path = std::filesystem::path(dir) / (prefix + out_name + suffix);
     } else {
         return "";
     }

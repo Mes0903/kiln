@@ -177,12 +177,13 @@ void register_target_builtins(Interpreter& interp) {
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("add_library");
         std::string name;
-        bool shared = false, static_lib = false, object_lib = false, interface_lib = false, imported = false, is_alias = false;
+        bool shared = false, static_lib = false, module_lib = false, object_lib = false, interface_lib = false, imported = false, is_alias = false;
         std::vector<std::string> sources;
 
         parser.positional(name, "target name");
         parser.flag("SHARED", shared);
         parser.flag("STATIC", static_lib);
+        parser.flag("MODULE", module_lib);
         parser.flag("OBJECT", object_lib);
         parser.flag("INTERFACE", interface_lib);
         parser.flag("IMPORTED", imported);
@@ -220,14 +221,14 @@ void register_target_builtins(Interpreter& interp) {
             return;
         }
 
-        int type_count = (shared ? 1 : 0) + (static_lib ? 1 : 0) + (object_lib ? 1 : 0) + (interface_lib ? 1 : 0);
+        int type_count = (shared ? 1 : 0) + (static_lib ? 1 : 0) + (module_lib ? 1 : 0) + (object_lib ? 1 : 0) + (interface_lib ? 1 : 0);
         if (type_count > 1) {
             interp.set_fatal_error("add_library() called with multiple conflicting types");
             return;
         }
 
         TargetType type;
-        if (shared) type = TargetType::SHARED_LIBRARY;
+        if (shared || module_lib) type = TargetType::SHARED_LIBRARY;
         else if (static_lib) type = TargetType::STATIC_LIBRARY;
         else if (object_lib) type = TargetType::OBJECT_LIBRARY;
         else if (interface_lib) type = TargetType::INTERFACE_LIBRARY;
