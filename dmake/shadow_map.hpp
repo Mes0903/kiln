@@ -1,13 +1,33 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <expected>
 #include <optional>
+#include <functional>
 
 namespace dmake {
+
+// Transparent hash/equal for heterogeneous lookup with string_view
+// Allows unordered_map<string,...>::find(string_view) without constructing a string
+struct TransparentStringHash {
+    using is_transparent = void;
+
+    size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+
+struct TransparentStringEqual {
+    using is_transparent = void;
+
+    bool operator()(std::string_view lhs, std::string_view rhs) const noexcept {
+        return lhs == rhs;
+    }
+};
 
 /**
  * Shadow Map for efficient variable scoping with O(1) access.
@@ -29,7 +49,7 @@ public:
      * Returns empty string if variable is not defined.
      * O(1) complexity.
      */
-    const std::string& get(const std::string& name) const {
+    const std::string& get(std::string_view name) const {
         static const std::string empty;
         auto it = variables_.find(name);
         if (it == variables_.end() || it->second.empty()) {
@@ -230,7 +250,7 @@ public:
      * Check if a variable is defined at any visible depth.
      * O(1) complexity.
      */
-    bool is_defined(const std::string& name) const {
+    bool is_defined(std::string_view name) const {
         auto it = variables_.find(name);
         if (it == variables_.end() || it->second.empty()) {
             return false;
@@ -332,7 +352,9 @@ private:
     };
 
     // Variable name -> [version history sorted by depth]
-    std::unordered_map<std::string, std::vector<VariableVersion>> variables_;
+    // Uses transparent hash/equal for string_view lookup without allocation
+    std::unordered_map<std::string, std::vector<VariableVersion>,
+                       TransparentStringHash, TransparentStringEqual> variables_;
 
     // Current scope depth (0 = root)
     int current_depth_ = 0;

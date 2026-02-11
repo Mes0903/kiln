@@ -194,13 +194,13 @@ public:
     void set_fatal_error(const std::string& message);
     void set_fatal_error(const InterpreterError& error);
 
-    std::string get_variable(const std::string& var_name) const;
-    std::optional<std::string> get_optional_variable(const std::string& var_name) const;
+    std::string get_variable(std::string_view var_name) const;
+    std::optional<std::string> get_optional_variable(std::string_view var_name) const;
     void set_variable(const std::string& var_name, const std::string& value);
     std::expected<void, std::string> set_variable_parent_scope(const std::string& var_name, const std::string& value);
     std::expected<void, std::string> unset_variable_parent_scope(const std::string& var_name);
     bool unset_variable(const std::string& var_name);
-    bool is_variable_set(const std::string& var_name) const;
+    bool is_variable_set(std::string_view var_name) const;
     static bool is_falsy(const std::string& val);
     static bool is_truthy(const std::string& val);
     void set_cache_variable(const std::string& var_name, const std::string& value);

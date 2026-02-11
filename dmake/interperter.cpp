@@ -2156,7 +2156,17 @@ bool Interpreter::has_user_function(const std::string& name) const {
 }
 
 std::string Interpreter::evaluate_variable_reference(const VariableReference& ref) {
-    // Step 1: Recursively evaluate name_parts to build the final variable name
+    // Fast path: single string name_part with no namespace (most common: ${SIMPLE_VAR})
+    // Avoids copying the variable name - uses string_view directly from AST
+    if (ref.name_parts.size() == 1 &&
+        std::holds_alternative<std::string>(ref.name_parts[0]) &&
+        ref.namespace_prefix.empty()) {
+        // Use string_view to avoid copying the variable name for lookup
+        std::string_view name = std::get<std::string>(ref.name_parts[0]);
+        return get_variable(name);
+    }
+
+    // General path: build variable name from parts (handles nested refs like ${${PREFIX}_VAR})
     std::string name;
     for (const auto& part : ref.name_parts) {
         if (std::holds_alternative<std::string>(part)) {
@@ -2166,7 +2176,7 @@ std::string Interpreter::evaluate_variable_reference(const VariableReference& re
         }
     }
 
-    // Step 2: Lookup based on namespace
+    // Lookup based on namespace
     if (ref.namespace_prefix.empty()) {
         // Regular variable lookup
         return get_variable(name);
@@ -2193,7 +2203,7 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
     return res;
 }
 
-std::string Interpreter::get_variable(const std::string& name) const {
+std::string Interpreter::get_variable(std::string_view name) const {
     return get_optional_variable(name).value_or("");
 }
 
@@ -2263,38 +2273,47 @@ bool Interpreter::unset_variable(const std::string& name) {
     return true;  // ShadowMap::unset is always safe (no-op if variable doesn't exist)
 }
 
-bool Interpreter::is_variable_set(const std::string& name) const {
+bool Interpreter::is_variable_set(std::string_view name) const {
     // Check macro substitutions first
-    if (macro_substitutions_.contains(name)) {
+    // Note: macro_substitutions_ is std::map<string,string>, need string for lookup
+    if (auto it = macro_substitutions_.find(std::string(name)); it != macro_substitutions_.end()) {
         return true;
     }
 
-    // Check local variables (O(1) via ShadowMap)
+    // Check local variables (O(1) via ShadowMap with transparent lookup)
     // ShadowMap now handles all scoping including subdirectory scope
     if (variables_.is_defined(name)) {
         return true;
     }
 
     // Check cache variables
-    return cache_variables_.contains(name);
+    // Note: cache_variables_ is std::map<string,string>, need string for lookup
+    return cache_variables_.contains(std::string(name));
 }
 
-std::optional<std::string> Interpreter::get_optional_variable(const std::string& name) const {
+std::optional<std::string> Interpreter::get_optional_variable(std::string_view name) const {
     if (frame_stack_.empty()) {
         std::cerr << "FATAL: get_optional_variable('" << name << "') called with empty frame_stack_\n";
         std::abort();
     }
 
     // Check macro substitutions first (macro parameters take precedence)
-    auto macro_it = macro_substitutions_.find(name);
-    if (macro_it != macro_substitutions_.end()) {
+    // Note: macro_substitutions_ is std::map<string,string>, need string for lookup
+    if (auto macro_it = macro_substitutions_.find(std::string(name)); macro_it != macro_substitutions_.end()) {
         return macro_it->second;
     }
 
     // Function-scoped special variables (lazy evaluation - check current frame only)
-    if (name == "CMAKE_CURRENT_FUNCTION" ||
-        name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
-        name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") {
+    // Fast reject: CMAKE_CURRENT_FUNCTION* vs other CMAKE_CURRENT_* variables.
+    // The common lookups (SOURCE_DIR, BINARY_DIR, LIST_*) have 'S', 'B', or 'L' at position 14.
+    // CMAKE_CURRENT_FUNCTION* has 'F' at position 14. Minimum length is 22 ("CMAKE_CURRENT_FUNCTION").
+    // Position 14: CMAKE_CURRENT_FUNCTION
+    //              01234567890123456789...
+    //                            ^-- position 14 is 'F'
+    if (name.size() >= 22 && name[14] == 'F' &&
+        (name == "CMAKE_CURRENT_FUNCTION" ||
+         name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
+         name == "CMAKE_CURRENT_FUNCTION_LIST_DIR")) {
 
         const auto* fb = frame_stack_.front().function_block;
         if (fb != nullptr) {
@@ -2306,14 +2325,14 @@ std::optional<std::string> Interpreter::get_optional_variable(const std::string&
     }
 
     // Check local variables (use is_defined to distinguish "not set" from "set to empty")
-    // ShadowMap now handles all scoping including subdirectory scope
+    // ShadowMap now handles all scoping including subdirectory scope (O(1) with transparent lookup)
     if (variables_.is_defined(name)) {
-        return variables_.get(name);
+        return std::string(variables_.get(name));
     }
 
     // Check cache variables (CACHE variables are globally accessible)
-    auto cache_it = cache_variables_.find(name);
-    if (cache_it != cache_variables_.end()) {
+    // Note: cache_variables_ is std::map<string,string>, need string for lookup
+    if (auto cache_it = cache_variables_.find(std::string(name)); cache_it != cache_variables_.end()) {
         return cache_it->second;
     }
 
