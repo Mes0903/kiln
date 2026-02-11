@@ -347,11 +347,17 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     ProgressBar progress(dirty_task_count, stdout_is_tty);
 
     // 3. Parallel execution with fixed worker threads
-    // Pre-populate completed with clean tasks - workers will never consider them.
-    // This avoids the overhead of workers picking up tasks only to skip them.
+    // Pre-populate completed with clean tasks whose deps are all clean.
+    // Tasks not in dirty_set but with dirty deps (e.g. marker/grouping targets)
+    // must flow through the worker loop to preserve ordering.
     std::set<std::string> completed;
     for (const auto& [id, task] : tasks_) {
-        if (!dirty_set.count(id)) {
+        if (dirty_set.count(id)) continue;
+        bool has_dirty_dep = false;
+        for (const auto& dep : task.dependencies) {
+            if (dirty_set.count(dep)) { has_dirty_dep = true; break; }
+        }
+        if (!has_dirty_dep) {
             completed.insert(id);
         }
     }
@@ -373,70 +379,69 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         return true;
     };
 
-    // Initialize ready_set with dirty tasks whose deps are all complete.
-    // Using std::set for deterministic ordering (alphabetical by task ID).
-    std::set<std::string> ready_set;
-    for (const std::string& id : dirty_set) {
-        if (is_ready(id)) {
-            ready_set.insert(id);
-        }
-    }
-
     auto start_time = std::chrono::steady_clock::now();
 
     std::vector<std::thread> workers;
     workers.reserve(jobs);
 
     for (int w = 0; w < jobs; w++) {
-        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &progress, stdout_is_tty, &dirty_set, &ready_set]() {
+        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &is_ready, &progress, stdout_is_tty, &dirty_set]() {
             bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
 
             while (true) {
                 std::string id;
 
-                // Grab the next ready task from ready_set (O(log n) instead of O(n))
+                // Grab the next ready task
                 {
                     std::unique_lock<std::mutex> lock(loop_mutex);
                     cv.wait(lock, [&] {
                         if (!fatal_error.empty()) return true;
                         if (completed.size() == tasks_.size()) return true;
-                        if (!ready_set.empty()) return true;
+                        for (const auto& [tid, task] : tasks_) {
+                            if (!completed.count(tid) && !running.count(tid) && is_ready(tid))
+                                return true;
+                        }
                         if (running.empty()) return true; // stall: nothing ready and nothing in flight
                         return g_interrupted.load(std::memory_order_relaxed);
                     });
 
                     if (!fatal_error.empty() || completed.size() == tasks_.size()) {
+
                         return;
                     }
                     if (g_interrupted.load(std::memory_order_relaxed)) {
                         if (fatal_error.empty()) fatal_error = "Interrupted";
+
                         cv.notify_all();
                         return;
                     }
 
-                    if (!ready_set.empty()) {
-                        auto it = ready_set.begin();
-                        id = *it;
-                        ready_set.erase(it);
-                        running.insert(id);
-                    } else if (running.empty() && completed.size() < tasks_.size()) {
-                        // Stall detection
-                        std::ostringstream oss;
-                        oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
-                        for (const auto& [tid, task] : tasks_) {
-                            if (completed.count(tid)) continue;
-                            oss << "\n  - " << tid << " depends on: ";
-                            for (const auto& dep : task.dependencies) {
-                                if (completed.find(dep) == completed.end()) oss << dep << " ";
-                            }
+                    for (const auto& [tid, task] : tasks_) {
+                        if (!completed.count(tid) && !running.count(tid) && is_ready(tid)) {
+                            id = tid;
+                            break;
                         }
-                        fatal_error = oss.str();
-                        cv.notify_all();
-                        return;
-                    } else {
-                        // Spurious wakeup or other condition - wait again
-                        continue;
                     }
+
+                    if (id.empty()) {
+                        if (running.empty() && completed.size() < tasks_.size()) {
+                            std::ostringstream oss;
+                            oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
+                            for (const auto& [tid, task] : tasks_) {
+                                if (completed.count(tid)) continue;
+                                oss << "\n  - " << tid << " depends on: ";
+                                for (const auto& dep : task.dependencies) {
+                                    if (completed.find(dep) == completed.end()) oss << dep << " ";
+                                }
+                            }
+                            fatal_error = oss.str();
+                            cv.notify_all();
+                        }
+
+                        return;
+                    }
+
+                    running.insert(id);
                 }
 
                 // Execute the task (outside lock)
@@ -447,8 +452,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 auto task_start = std::chrono::steady_clock::now();
 
                 do { // do-while(false) for break-on-error
-                    // Note: ready_set only contains dirty tasks, so no need to check dirty_set here.
-                    // Marker tasks (no outputs, no commands) are never added to dirty_set.
+                    // dirty_set was computed in the pre-scan; skip clean tasks immediately
+                    if (!dirty_set.count(id)) break;
+
+                    // Skip marker tasks (no outputs, no commands) - e.g. imported targets
+                    if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) break;
 
                     int64_t profile_start = 0;
                     std::string profile_name;
@@ -661,22 +669,6 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     }
                     completed.insert(id);
                     running.erase(id);
-
-                    // Check if any dirty dependents are now ready
-                    for (const auto& dep_id : task.dependents) {
-                        if (!dirty_set.count(dep_id)) continue;  // clean task, skip
-                        if (completed.count(dep_id)) continue;   // already done
-                        if (running.count(dep_id)) continue;     // already running
-                        if (ready_set.count(dep_id)) continue;   // already in ready set
-
-                        // Check if all its dependencies are complete
-                        bool ready = true;
-                        for (const auto& d : tasks_[dep_id].dependencies) {
-                            if (!completed.count(d)) { ready = false; break; }
-                        }
-                        if (ready) ready_set.insert(dep_id);
-                    }
-
                     cv.notify_all();
                 }
             }
