@@ -583,9 +583,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         print_status(verb, target_display);
 
                         for (auto cmd : task.commands) {
-                            // Custom/shell commands: strip shell quoting from args.
-                            // CMake preserves quotes in COMMAND args (e.g. -flag="${VAR}"),
-                            // expecting shell to strip them. Since we use execvp, do it here.
+                            // Strip shell-style quoting from COMMAND args.
+                            // CMake expects shell to strip quotes like -flag="value".
+                            // Since we use execvp (no shell), we strip them here.
                             if (task.is_shell_command) {
                                 for (auto& arg : cmd) {
                                     arg = strip_shell_quoting(arg);

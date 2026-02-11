@@ -7,7 +7,6 @@
 #include <linux/limits.h>
 #endif
 #include <type_traits>
-#include <iostream>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -176,39 +175,50 @@ std::string dmake::join_command_raw(const std::vector<std::string>& args) {
     return join(args, " ");
 }
 
-// Strip shell quoting from an argument.
-// Handles: 'literal' → literal, "with $vars" → with $vars, \'  → '
-// This undoes shell-level quoting that CMake source preserves in COMMAND args.
+// Strip shell-style embedded quoting from a COMMAND argument.
+//
+// CMake allows embedded quoted segments in unquoted arguments like:
+//   -flag="${VAR}"  →  should become -flag=value (quotes are shell grouping)
+//
+// But we must NOT strip quotes that are content, like:
+//   print("hello")  →  should stay as print("hello") (quotes are Python syntax)
+//
+// The heuristic: only strip quotes that form a "value segment" pattern:
+//   - Quotes immediately after = (like -DFOO="bar")
+//   - Quotes that wrap the entire argument (like "value")
+//   - Single quotes following shell conventions
+//
+// We do NOT strip quotes that appear mid-content (like function calls).
 std::string dmake::strip_shell_quoting(const std::string& arg) {
+    if (arg.empty()) return arg;
+
+    // Case 1: Entire argument is quoted (rare, but handle it)
+    if ((arg.front() == '"' && arg.back() == '"' && arg.size() >= 2) ||
+        (arg.front() == '\'' && arg.back() == '\'' && arg.size() >= 2)) {
+        return arg.substr(1, arg.size() - 2);
+    }
+
+    // Case 2: Pattern like -flag="value" or VAR="value"
+    // Look for =" or =' and strip the quotes around the value part
     std::string result;
     result.reserve(arg.size());
+
     for (size_t i = 0; i < arg.size(); ++i) {
-        if (arg[i] == '\'' ) {
-            // Single-quoted segment: everything until next ' is literal
-            size_t end = arg.find('\'', i + 1);
-            if (end != std::string::npos) {
-                result.append(arg, i + 1, end - i - 1);
+        // Check for =" or =' pattern
+        if (arg[i] == '=' && i + 1 < arg.size() && (arg[i + 1] == '"' || arg[i + 1] == '\'')) {
+            char quote = arg[i + 1];
+            size_t end = arg.find(quote, i + 2);
+            if (end != std::string::npos && (end == arg.size() - 1 || arg[end + 1] == '=' || arg[end + 1] == ' ')) {
+                // Found a complete quoted value segment after =
+                result += '=';
+                result.append(arg, i + 2, end - i - 2);
                 i = end;
-            } else {
-                // Unmatched quote — keep as-is
-                result += arg[i];
+                continue;
             }
-        } else if (arg[i] == '"') {
-            // Double-quoted segment: take content until next "
-            size_t end = arg.find('"', i + 1);
-            if (end != std::string::npos) {
-                result.append(arg, i + 1, end - i - 1);
-                i = end;
-            } else {
-                result += arg[i];
-            }
-        } else if (arg[i] == '\\' && i + 1 < arg.size()) {
-            // Backslash escape: take next char literally
-            result += arg[++i];
-        } else {
-            result += arg[i];
         }
+        result += arg[i];
     }
+
     return result;
 }
 

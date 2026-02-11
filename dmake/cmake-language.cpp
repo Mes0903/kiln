@@ -857,7 +857,10 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
             if (!quoted_value) {
                 return std::unexpected(quoted_value.error());
             }
-            // Embedded quotes in unquoted args are preserved as literal characters
+            // Embedded quotes in unquoted args are preserved as literal characters.
+            // This is needed for compile definitions like MY_VERSION="${VAR}" which
+            // should become -DMY_VERSION="value" (quotes are C string delimiters).
+            // For COMMAND args, the build system strips these quotes at execution time.
             parts.emplace_back(std::string("\""));
             for (auto& part : *quoted_value) {
                 parts.emplace_back(std::move(part));
