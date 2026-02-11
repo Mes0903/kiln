@@ -1021,6 +1021,18 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = color_diag;
 
+        // Visibility preset (per-language property)
+        {
+            std::string vis = get_property(std::string(lang_info.name) + "_VISIBILITY_PRESET");
+            if (!vis.empty()) ctx.visibility_preset = vis;
+
+            // Inline visibility hiding (only meaningful for C++/ObjC++)
+            if (lang_info.lang == Language::CXX) {
+                std::string vih_val = get_property("VISIBILITY_INLINES_HIDDEN");
+                if (!vih_val.empty() && !Interpreter::is_falsy(vih_val)) ctx.visibility_inlines_hidden = true;
+            }
+        }
+
         if (lang_info.lang != Language::ASM && (lang_info.is_module_interface || target_has_modules)) {
             ctx.is_module_source = true;
             ctx.module_mapper_file = module_mapper;

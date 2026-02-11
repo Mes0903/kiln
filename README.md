@@ -26,7 +26,9 @@ The project has very few dependencies:
 * CLI11 (https://github.com/CLIUtils/CLI11)
 * Catch2 3.x (https://github.com/catchorg/Catch2)
 * PCRE2 (https://github.com/PCRE2Project/pcre2)
-* C++23 capable compiler (GCC 13+)
+* Glaze (https://github.com/stephenberry/glaze)
+* libcurl
+* C++23 apable compiler (GCC 13+)
 * CMake (dmake is an execution engine, you still need the CMake shipped modules)
 
 To build `dmake` for the first time using CMake:
@@ -42,7 +44,7 @@ make -j$(nproc)
 `dmake` provides a modern, verb-based CLI inspired by tools like `cargo` or `go`.
 
 ### Basic Build
-Build the current project (all targets):
+Build the current project (the `all` virtual target):
 ```bash
 dmake
 ```
@@ -72,6 +74,36 @@ Remove build artifacts:
 dmake clean
 ```
 
+### Debugging CMake
+Launch in debug mode (GDB-like commands with breaking and other features). The program is then immediately broken on the first command. Setup breakpoints here and use `c` or `continue` to start execution. Debug mode also automatically breaks on fatal errors.
+
+```plaintext
+❯ ./dmake .. --debugger
+(dmake) /home/marty/Documents/dmake/CMakeLists.txt:1  cmake_minimum_required(VERSION 3.15)
+(dmake) > help
+Commands:
+  break <line>         (b) Set breakpoint at line in current file
+  break <file>:<line>  (b) Set location breakpoint
+  break <command>      (b) Break on command name
+  continue             (c) Run until next breakpoint
+  step                 (s) Step to next command
+  next                 (n) Step over (stay at current call depth)
+  print <var>          (p) Print variable value
+  backtrace            (bt) Show call stack
+  list                 (l) Show source around current line/frame
+  frame [N]            (f) Select stack frame N (show current if no arg)
+  up                       Move up one stack frame (toward caller)
+  down                     Move down one stack frame (toward callee)
+  info variables           List all visible variables
+  info breakpoints         List all breakpoints
+  break-on-message <p> (bm) Break when message matches pattern
+  watch <var>          (w) Break when variable changes
+  delete <n>           (d) Delete breakpoint by ID
+  quit                 (q) Exit dmake
+  help                 (h) Show this help
+(dmake) > 
+```
+
 ### Options
 Common flags:
 - `-j N`: Set number of parallel jobs (defaults to CPU count)
@@ -79,10 +111,11 @@ Common flags:
 - `-DVAR=VAL`: Define a CMake variable
 - `-B <dir>`: Set build root directory
 - `--profile`: Output a Chrome Trace Event Format compatiable profile that can be loaded into [Perfetto](https://ui.perfetto.dev/) and others
+- `--debugger`: Launch in debug mode (GDB-like commands with breaking and other features. Use `help` in the debugger for more information)
 
 ## Self Hosting
 
-Since `dmake` uses CMake as its input language, it can build itself!
+Since `dmake` uses CMake as its input language and itself built using CMake, it can build itself!
 
 ```bash
 # Assuming you have a dmake binary in build/

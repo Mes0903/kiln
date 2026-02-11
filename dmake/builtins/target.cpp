@@ -33,6 +33,13 @@ void register_target_builtins(Interpreter& interp) {
             }
             // else: default to true (handled in get_language_extensions)
 
+            // Set visibility preset from CMAKE_<LANG>_VISIBILITY_PRESET
+            std::string vis_var = "CMAKE_" + lang_prefix + "_VISIBILITY_PRESET";
+            std::string vis_preset = interp.get_variable(vis_var);
+            if (!vis_preset.empty()) {
+                target->set_property(lang_prefix + "_VISIBILITY_PRESET", vis_preset);
+            }
+
             // Apply CMAKE_<LANG>_FLAGS and CMAKE_<LANG>_FLAGS_<CONFIG>
             auto get_flags = [&](const std::string& var_name) -> std::vector<std::string> {
                 std::string flags = interp.get_variable(var_name);
@@ -58,6 +65,12 @@ void register_target_builtins(Interpreter& interp) {
         configure_lang(Language::C, "C");
         if (!interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
             configure_lang(Language::ASM, "ASM");
+        }
+
+        // Set VISIBILITY_INLINES_HIDDEN from CMAKE_VISIBILITY_INLINES_HIDDEN
+        std::string vih = interp.get_variable("CMAKE_VISIBILITY_INLINES_HIDDEN");
+        if (!vih.empty() && !interp.is_falsy(vih)) {
+            target->set_property("VISIBILITY_INLINES_HIDDEN", "ON");
         }
 
         // Set POSITION_INDEPENDENT_CODE from CMAKE_POSITION_INDEPENDENT_CODE
