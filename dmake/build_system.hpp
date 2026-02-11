@@ -106,15 +106,24 @@ private:
     std::map<std::string, std::string> load_cache(const std::string& build_dir);
     std::expected<void, std::string> save_cache(const std::string& build_dir, const std::map<std::string, std::string>& cache);
 
-    std::filesystem::file_time_type get_file_time(const std::string& path);
-    std::map<std::string, std::filesystem::file_time_type> stat_cache_;
+    // Returns file mtime, or nullopt if file doesn't exist (single syscall)
+    std::optional<std::filesystem::file_time_type> get_file_time_if_exists(const std::string& path);
+    std::map<std::string, std::optional<std::filesystem::file_time_type>> stat_cache_;
+
+    // Cache for parsed .d files: avoids re-reading/parsing on every build
+    // Memory: ~8KB per source file for LLVM-scale projects (~80MB total)
+    struct DepsFileCache {
+        std::filesystem::file_time_type d_file_mtime;
+        std::vector<std::string> deps;
+    };
+    std::map<std::string, DepsFileCache> deps_cache_;
 
     std::expected<std::string, std::string> get_compiler_version();
     std::optional<std::string> compiler_version_cache_;
     std::string get_dmake_version() { return "0.1.0-alpha (task-refactor)"; }
 
-    // Parsers for .d files (header dependencies)
-    std::vector<std::string> parse_deps_file(const std::string& path);
+    // Parsers for .d files (header dependencies) - uses deps_cache_
+    std::vector<std::string> get_deps_for_output(const std::string& output_path);
 
     // Subprocess execution with output capture
     CommandResult run_command(const std::vector<std::string>& command, const std::string& working_dir = "");

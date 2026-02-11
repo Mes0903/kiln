@@ -306,7 +306,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         bool outputs_exist = !task.outputs.empty();
         if (outputs_exist) {
             for (const auto& out : task.outputs) {
-                if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+                if (!get_file_time_if_exists(out)) { outputs_exist = false; break; }
             }
         }
 
@@ -745,11 +745,26 @@ dmake::CommandResult BuildGraph::run_command(const std::vector<std::string>& com
     return dmake::run_command(command, working_dir);
 }
 
-std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
-    std::ifstream file(path);
+std::vector<std::string> BuildGraph::get_deps_for_output(const std::string& output_path) {
+    std::string deps_file = output_path + ".d";
+
+    // Check if .d file exists and get its mtime
+    auto d_mtime = get_file_time_if_exists(deps_file);
+    if (!d_mtime) return {};
+
+    // Check cache
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        auto it = deps_cache_.find(deps_file);
+        if (it != deps_cache_.end() && it->second.d_file_mtime == *d_mtime) {
+            return it->second.deps;
+        }
+    }
+
+    // Cache miss - parse the .d file
+    std::ifstream file(deps_file);
     if (!file) return {};
 
-    std::vector<std::string> deps;
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
     size_t colon = content.find(':');
@@ -759,11 +774,19 @@ std::vector<std::string> BuildGraph::parse_deps_file(const std::string& path) {
     std::replace(deps_part.begin(), deps_part.end(), '\\', ' ');
     std::replace(deps_part.begin(), deps_part.end(), '\n', ' ');
 
+    std::vector<std::string> deps;
     std::stringstream ss(deps_part);
     std::string dep;
     while (ss >> dep) {
         deps.push_back(dep);
     }
+
+    // Store in cache
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        deps_cache_[deps_file] = DepsFileCache{*d_mtime, deps};
+    }
+
     return deps;
 }
 
@@ -823,22 +846,24 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
         }
         return headers;
     }
-std::filesystem::file_time_type BuildGraph::get_file_time(const std::string& path) {
+std::optional<std::filesystem::file_time_type> BuildGraph::get_file_time_if_exists(const std::string& path) {
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         auto it = stat_cache_.find(path);
         if (it != stat_cache_.end()) return it->second;
     }
 
+    std::optional<std::filesystem::file_time_type> result;
     try {
-        auto time = std::filesystem::last_write_time(path);
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        stat_cache_[path] = time;
-        return time;
+        result = std::filesystem::last_write_time(path);
     } catch (...) {
-        // Return a very old time if we can't stat the file
-        return std::filesystem::file_time_type::min();
+        // File doesn't exist or not accessible
+        result = std::nullopt;
     }
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    stat_cache_[path] = result;
+    return result;
 }
 
 std::expected<std::string, std::string> BuildGraph::calculate_signature(const BuildTask& task) {
@@ -853,23 +878,21 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
 
     oss << "dmake:" << get_dmake_version() << "|";
 
-    // 1. Primary inputs
+    // 1. Primary inputs (combined exists+stat)
     for (const auto& in : task.inputs) {
-        if (std::filesystem::exists(in)) {
-            oss << in << ":" << get_file_time(in).time_since_epoch().count() << "|";
+        if (auto mtime = get_file_time_if_exists(in)) {
+            oss << in << ":" << mtime->time_since_epoch().count() << "|";
         }
     }
 
-    // 2. Header dependencies from .d files (fast path)
-    // .d files are generated alongside .o files with the pattern <output>.d
+    // 2. Header dependencies from .d files (cached parsing + combined exists+stat)
     bool found_deps = false;
     for (const auto& out : task.outputs) {
-        std::string deps_file = out + ".d";
-        if (std::filesystem::exists(deps_file)) {
-            auto deps = parse_deps_file(deps_file);
+        auto deps = get_deps_for_output(out);
+        if (!deps.empty()) {
             for (const auto& dep : deps) {
-                if (std::filesystem::exists(dep)) {
-                    oss << "dep:" << dep << ":" << get_file_time(dep).time_since_epoch().count() << "|";
+                if (auto mtime = get_file_time_if_exists(dep)) {
+                    oss << "dep:" << dep << ":" << mtime->time_since_epoch().count() << "|";
                 }
             }
             found_deps = true;
@@ -883,8 +906,8 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
         auto headers_res = get_headers_via_h_flag(task.commands);
         if (!headers_res) return std::unexpected(headers_res.error());
         for (const auto& header : *headers_res) {
-            if (std::filesystem::exists(header)) {
-                oss << "ext_dep:" << header << ":" << get_file_time(header).time_since_epoch().count() << "|";
+            if (auto mtime = get_file_time_if_exists(header)) {
+                oss << "ext_dep:" << header << ":" << mtime->time_since_epoch().count() << "|";
             }
         }
     }
