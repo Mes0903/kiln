@@ -400,10 +400,6 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 } // namespace
 
 int main(int argc, char* argv[]) {
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-    signal(SIGHUP, signal_handler);
-
     // Pre-process argv: handle "dmake [project] [opts] -- <verb> [args]" pattern.
     // When "--" is followed by a known verb (run/test/build/clean/install) and no
     // subcommand appears before "--", restructure args so CLI11 sees the verb as a
@@ -571,6 +567,11 @@ Examples:
     dmake::DebugController debug_controller(debug_opts);
 
     if (debug_opts.any_enabled()) {
+        // Install signal handlers for graceful interruption in debugger mode
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
+        signal(SIGHUP, signal_handler);
+
         // Set up linenoise-based input for interactive debugger
         static const char* dbg_commands[] = {
             "break", "break-on-message", "continue", "step", "next", "print",
