@@ -170,6 +170,12 @@ struct FrameMetadata {
 };
 
 // Directory-specific state (stored in map at root, keyed by abs source path)
+struct DeferredCall {
+    std::string id;                      // Unique identifier
+    std::string command;                 // Command to call
+    std::vector<std::string> arguments;  // Unevaluated arguments
+};
+
 struct DirectoryContext {
     std::string source_dir;
     std::string binary_dir;
@@ -179,6 +185,8 @@ struct DirectoryContext {
     std::map<std::string, std::vector<std::string>> accumulated;      // Compile defs, includes, etc.
     std::vector<std::shared_ptr<Target>> owned_targets;               // For finalize_directory_targets()
     std::set<std::string> guarded_files;                              // Directory-level include guards
+    std::vector<DeferredCall> deferred_calls;                         // cmake_language(DEFER) calls
+    int next_deferred_id = 0;                                         // Auto-increment for ID generation
 };
 
 class Interpreter {
@@ -354,6 +362,7 @@ public:
     DirectoryContext* get_directory_context(const std::string& dir);
     void push_directory(const std::string& source_dir, const std::string& binary_dir);
     void pop_directory();
+    void execute_deferred_calls();
 
     // For property.cpp compatibility - returns current directory's properties
     std::map<std::string, std::string>& get_directory_properties() {

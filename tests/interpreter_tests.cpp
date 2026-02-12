@@ -36,6 +36,11 @@ std::string run_script(std::string src) {
         throw std::runtime_error(result.error().message);
     }
 
+    interpreter.execute_deferred_calls();
+    if (auto err = interpreter.get_fatal_error()) {
+        throw std::runtime_error(err->message);
+    }
+
     return output.str();
 }
 
@@ -3167,6 +3172,67 @@ TEST_CASE("cmake_language", "[interpreter][cmake_language]") {
     CHECK_THROWS_WITH(run_script(R"(
         cmake_language(EVAL)
     )"), Catch::Matchers::ContainsSubstring("requires CODE"));
+}
+
+TEST_CASE("cmake_language DEFER", "[interpreter][cmake_language]") {
+    // Test DEFER CALL executes at end of scope, after normal code
+    auto output = run_script(R"(
+        message("before")
+        cmake_language(DEFER CALL message "deferred")
+        message("after")
+    )");
+    CHECK(output == "before\nafter\ndeferred\n");
+
+    // Test multiple DEFER calls execute in order
+    output = run_script(R"(
+        cmake_language(DEFER CALL message "first")
+        cmake_language(DEFER CALL message "second")
+        message("immediate")
+    )");
+    CHECK(output == "immediate\nfirst\nsecond\n");
+
+    // Test GET_CALL_IDS retrieves auto-generated IDs
+    output = run_script(R"(
+        cmake_language(DEFER CALL message "a")
+        cmake_language(DEFER CALL message "b")
+        cmake_language(DEFER GET_CALL_IDS ids)
+        message("${ids}")
+    )");
+    // Deferred calls also execute, but after message
+    CHECK(output == "_0;_1\na\nb\n");
+
+    // Test explicit ID and ID_VAR
+    output = run_script(R"(
+        cmake_language(DEFER ID myid CALL message "hello")
+        cmake_language(DEFER ID_VAR generated_id CALL message "world")
+        cmake_language(DEFER GET_CALL_IDS ids)
+        message("ids=${ids}")
+        message("gen=${generated_id}")
+    )");
+    CHECK(output == "ids=myid;_0\ngen=_0\nhello\nworld\n");
+
+    // Test GET_CALL retrieves call details
+    output = run_script(R"(
+        cmake_language(DEFER ID myid CALL message "arg1" "arg2")
+        cmake_language(DEFER GET_CALL myid details)
+        message("${details}")
+    )");
+    CHECK(output == "message;arg1;arg2\narg1arg2\n");
+
+    // Test CANCEL_CALL removes scheduled call
+    output = run_script(R"(
+        cmake_language(DEFER ID keep CALL message "kept")
+        cmake_language(DEFER ID remove CALL message "removed")
+        cmake_language(DEFER CANCEL_CALL remove)
+    )");
+    CHECK(output == "kept\n");
+
+    // Test GET_CALL with unknown ID returns empty
+    output = run_script(R"(
+        cmake_language(DEFER GET_CALL nonexistent result)
+        message("result=[${result}]")
+    )");
+    CHECK(output == "result=[]\n");
 }
 
 TEST_CASE("cmake_parse_arguments standard form", "[interpreter]") {

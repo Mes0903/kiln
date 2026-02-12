@@ -279,6 +279,20 @@ void Interpreter::pop_directory() {
     directory_stack_.pop_back();
 }
 
+void Interpreter::execute_deferred_calls() {
+    auto& ctx = get_root()->get_current_directory_context();
+    // Copy the list - deferred calls could schedule more deferred calls
+    auto calls = std::move(ctx.deferred_calls);
+    ctx.deferred_calls.clear();
+    for (const auto& call : calls) {
+        if (fatal_error_) break;
+        auto res = execute_command_with_args(call.command, call.arguments);
+        if (!res) {
+            set_fatal_error(res.error());
+        }
+    }
+}
+
 
 std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_build(int jobs, const std::vector<std::string>& requested_targets) {
     // Sanity check CMAKE_BUILD_TYPE
@@ -1170,6 +1184,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                     if (!res) {
                         interp.set_fatal_error(res.error());
                     } else {
+                        interp.execute_deferred_calls();
                         interp.finalize_directory_targets();  // Apply retroactive properties
                     }
                 } else {
@@ -1314,6 +1329,122 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
                  auto res = interp.execute_command_with_args(cmd, cmd_args);
                  if (!res) interp.set_fatal_error(res.error());
+            } else if (args[0] == "DEFER") {
+                 // cmake_language(DEFER [DIRECTORY <dir>] [ID <id>] [ID_VAR <var>] CALL <cmd> [<args>...])
+                 // cmake_language(DEFER [DIRECTORY <dir>] CANCEL_CALL <id>...)
+                 // cmake_language(DEFER [DIRECTORY <dir>] GET_CALL_IDS <var>)
+                 // cmake_language(DEFER [DIRECTORY <dir>] GET_CALL <id> <var>)
+                 if (args.size() < 2) {
+                     interp.set_fatal_error("cmake_language(DEFER) requires additional arguments");
+                     return;
+                 }
+
+                 size_t i = 1;
+                 DirectoryContext* target_ctx = nullptr;
+                 std::string user_id;
+                 std::string id_var;
+
+                 // Parse optional DIRECTORY, ID, ID_VAR before the subcommand
+                 while (i < args.size()) {
+                     if (args[i] == "DIRECTORY") {
+                         if (i + 1 >= args.size()) {
+                             interp.set_fatal_error("cmake_language(DEFER DIRECTORY) missing directory argument");
+                             return;
+                         }
+                         auto* ctx = interp.get_root()->get_directory_context(args[i + 1]);
+                         if (!ctx) {
+                             interp.set_fatal_error("cmake_language(DEFER): directory not known: " + args[i + 1]);
+                             return;
+                         }
+                         target_ctx = ctx;
+                         i += 2;
+                     } else if (args[i] == "ID") {
+                         if (i + 1 >= args.size()) {
+                             interp.set_fatal_error("cmake_language(DEFER ID) missing id argument");
+                             return;
+                         }
+                         user_id = args[i + 1];
+                         i += 2;
+                     } else if (args[i] == "ID_VAR") {
+                         if (i + 1 >= args.size()) {
+                             interp.set_fatal_error("cmake_language(DEFER ID_VAR) missing variable argument");
+                             return;
+                         }
+                         id_var = args[i + 1];
+                         i += 2;
+                     } else {
+                         break;  // Must be a subcommand
+                     }
+                 }
+
+                 if (!target_ctx) {
+                     target_ctx = &interp.get_root()->get_current_directory_context();
+                 }
+
+                 if (i >= args.size()) {
+                     interp.set_fatal_error("cmake_language(DEFER) missing subcommand (CALL, CANCEL_CALL, GET_CALL_IDS, GET_CALL)");
+                     return;
+                 }
+
+                 const std::string& subcmd = args[i];
+                 if (subcmd == "CALL") {
+                     if (i + 1 >= args.size()) {
+                         interp.set_fatal_error("cmake_language(DEFER CALL) requires a command name");
+                         return;
+                     }
+                     std::string call_id;
+                     if (!user_id.empty()) {
+                         call_id = user_id;
+                     } else {
+                         call_id = "_" + std::to_string(target_ctx->next_deferred_id++);
+                     }
+                     if (!id_var.empty()) {
+                         interp.set_variable(id_var, call_id);
+                     }
+                     DeferredCall dc;
+                     dc.id = call_id;
+                     dc.command = args[i + 1];
+                     dc.arguments.assign(args.begin() + i + 2, args.end());
+                     target_ctx->deferred_calls.push_back(std::move(dc));
+                 } else if (subcmd == "CANCEL_CALL") {
+                     std::set<std::string> ids_to_cancel(args.begin() + i + 1, args.end());
+                     auto& calls = target_ctx->deferred_calls;
+                     std::erase_if(calls, [&](const DeferredCall& dc) {
+                         return ids_to_cancel.count(dc.id) > 0;
+                     });
+                 } else if (subcmd == "GET_CALL_IDS") {
+                     if (i + 1 >= args.size()) {
+                         interp.set_fatal_error("cmake_language(DEFER GET_CALL_IDS) requires a variable name");
+                         return;
+                     }
+                     std::string result;
+                     for (size_t j = 0; j < target_ctx->deferred_calls.size(); ++j) {
+                         if (j > 0) result += ';';
+                         result += target_ctx->deferred_calls[j].id;
+                     }
+                     interp.set_variable(args[i + 1], result);
+                 } else if (subcmd == "GET_CALL") {
+                     if (i + 2 >= args.size()) {
+                         interp.set_fatal_error("cmake_language(DEFER GET_CALL) requires an id and a variable name");
+                         return;
+                     }
+                     const std::string& search_id = args[i + 1];
+                     const std::string& var_name = args[i + 2];
+                     std::string result;
+                     for (const auto& dc : target_ctx->deferred_calls) {
+                         if (dc.id == search_id) {
+                             result = dc.command;
+                             for (const auto& a : dc.arguments) {
+                                 result += ';';
+                                 result += a;
+                             }
+                             break;
+                         }
+                     }
+                     interp.set_variable(var_name, result);
+                 } else {
+                     interp.set_fatal_error("cmake_language(DEFER): unknown subcommand: " + subcmd);
+                 }
             } else {
                 interp.set_fatal_error("Unknown cmake_language mode: " + args[0]);
             }

@@ -198,7 +198,8 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
                 return std::unexpected("Interpretation error");
             }
 
-            // Apply retroactive directory properties to root-level targets
+            // Execute deferred calls and apply retroactive directory properties
+            interpreter->execute_deferred_calls();
             interpreter->finalize_directory_targets();
         }
 
@@ -571,6 +572,11 @@ Examples:
             auto result = interpreter.interpret(ast_or_error.value());
             if (!result) {
                 print_error_context(result.error());
+                return 1;
+            }
+            interpreter.execute_deferred_calls();
+            if (auto err = interpreter.get_fatal_error()) {
+                print_error_context(*err);
                 return 1;
             }
             return 0;

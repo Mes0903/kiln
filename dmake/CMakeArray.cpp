@@ -24,8 +24,12 @@ std::vector<std::string> CMakeArray::split_by_semicolon(const std::string& str) 
         } else if (c == '>' && genex_depth > 0) {
             genex_depth--;
             current += c;
+        } else if (c == '\\' && i + 1 < str.size() && str[i + 1] == ';') {
+            // Escaped semicolon - not a separator, unescape it
+            current += ';';
+            i++; // skip the semicolon
         } else if (c == ';' && genex_depth == 0) {
-            // Only split on semicolons outside of genex
+            // Only split on unescaped semicolons outside of genex
             result.push_back(current);
             current.clear();
         } else {
@@ -188,6 +192,8 @@ CMakeArrayView::CMakeArrayView(std::string_view semicolon_separated)
             genex_depth++;
         } else if (c == '>' && genex_depth > 0) {
             genex_depth--;
+        } else if (c == '\\' && i + 1 < source_.size() && source_[i + 1] == ';') {
+            i++; // skip escaped semicolon
         } else if (c == ';' && genex_depth == 0) {
             separators_.push_back(i);
         }

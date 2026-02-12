@@ -943,7 +943,7 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
                 case '(':  current_literal += '('; break;
                 case '#':  current_literal += '#'; break;
                 case ' ':  current_literal += ' '; break;
-                case ';':  current_literal += ';'; break;
+                case ';':  current_literal += '\\'; current_literal += ';'; break;
                 case '\n':
                     // Backslash-newline continues the line
                     row_++;
@@ -1071,7 +1071,7 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
                 case '(':  current_literal += '('; break;
                 case '#':  current_literal += '#'; break;
                 case ' ':  current_literal += ' '; break;
-                case ';':  current_literal += ';'; break;
+                case ';':  current_literal += '\\'; current_literal += ';'; break;
                 default:   current_literal += current; break; // Unknown escape, keep as-is
             }
             escaped = false;
