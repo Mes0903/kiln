@@ -9,10 +9,10 @@ namespace dmake {
 
 class Interpreter;
 
-// Metadata for an ExternalProject step command
+// Metadata for an ExternalProject step command (may contain multiple commands)
 struct EPStepCommand {
-    std::vector<std::string> command;  // Command arguments
-    bool is_empty = false;             // Empty string means skip this step
+    std::vector<std::vector<std::string>> commands;  // One or more commands
+    bool is_empty = false;                           // Empty string means skip this step
 };
 
 // ExternalProjectTarget: Represents an ExternalProject_Add target.

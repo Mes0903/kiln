@@ -9,7 +9,7 @@ bool ExternalProjectTarget::is_cmake_based() const {
     // cmake-based if:
     // 1. No custom CONFIGURE_COMMAND (or empty)
     // 2. CMakeLists.txt exists in effective source dir
-    if (!configure_command_.command.empty() && !configure_command_.is_empty) {
+    if (!configure_command_.commands.empty() && !configure_command_.is_empty) {
         return false;  // Has custom configure command
     }
 

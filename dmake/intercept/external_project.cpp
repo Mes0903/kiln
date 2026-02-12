@@ -9,13 +9,28 @@
 
 namespace dmake {
 
-// Helper to create an EPStepCommand from a vector of strings
-static EPStepCommand make_step_command(const std::vector<std::string>& command) {
+// Helper to create an EPStepCommand from a flat vector of strings,
+// splitting on "COMMAND" tokens to support multiple commands per step.
+static EPStepCommand make_step_command(const std::vector<std::string>& args) {
     EPStepCommand result;
-    if (command.size() == 1 && command[0].empty()) {
-        result.is_empty = true;  // Explicit empty string means skip this step
-    } else {
-        result.command = command;
+    if (args.size() == 1 && args[0].empty()) {
+        result.is_empty = true;
+        return result;
+    }
+    // Split on COMMAND tokens
+    std::vector<std::string> current;
+    for (const auto& token : args) {
+        if (token == "COMMAND") {
+            if (!current.empty()) {
+                result.commands.push_back(std::move(current));
+                current.clear();
+            }
+        } else {
+            current.push_back(token);
+        }
+    }
+    if (!current.empty()) {
+        result.commands.push_back(std::move(current));
     }
     return result;
 }

@@ -1394,38 +1394,23 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         std::string working_dir = ep_target->get_ep_binary_dir();
         std::filesystem::create_directories(working_dir);
 
-        // Configure step
-        const auto& configure_cmd = ep_target->get_configure_command();
-        if (!configure_cmd.command.empty() && !configure_cmd.is_empty) {
-            auto result = dmake::run_command(configure_cmd.command, working_dir);
-            if (result.exit_code != 0) {
+        auto run_step = [&](const EPStepCommand& step, const char* step_name)
+            -> std::optional<std::string> {
+            if (step.is_empty || step.commands.empty()) return std::nullopt;
+            for (const auto& cmd : step.commands) {
+                auto result = dmake::run_command(cmd, working_dir);
+                if (result.exit_code != 0) {
+                    print_prefixed_output(result.output);
+                    return "EP " + ep_name + " " + step_name + " failed";
+                }
                 print_prefixed_output(result.output);
-                return "EP " + ep_name + " configure failed";
             }
-            print_prefixed_output(result.output);
-        }
+            return std::nullopt;
+        };
 
-        // Build step
-        const auto& build_cmd = ep_target->get_build_command();
-        if (!build_cmd.command.empty() && !build_cmd.is_empty) {
-            auto result = dmake::run_command(build_cmd.command, working_dir);
-            if (result.exit_code != 0) {
-                print_prefixed_output(result.output);
-                return "EP " + ep_name + " build failed";
-            }
-            print_prefixed_output(result.output);
-        }
-
-        // Install step
-        const auto& install_cmd = ep_target->get_install_command();
-        if (!install_cmd.command.empty() && !install_cmd.is_empty) {
-            auto result = dmake::run_command(install_cmd.command, working_dir);
-            if (result.exit_code != 0) {
-                print_prefixed_output(result.output);
-                return "EP " + ep_name + " install failed";
-            }
-            print_prefixed_output(result.output);
-        }
+        if (auto err = run_step(ep_target->get_configure_command(), "configure")) return *err;
+        if (auto err = run_step(ep_target->get_build_command(), "build")) return *err;
+        if (auto err = run_step(ep_target->get_install_command(), "install")) return *err;
     }
 
     return std::nullopt;  // Success
