@@ -1,4 +1,5 @@
 #include "external_project.hpp"
+#include "external_project_target.hpp"
 #include "download_utils.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
@@ -7,6 +8,17 @@
 #include <algorithm>
 
 namespace dmake {
+
+// Helper to create an EPStepCommand from a vector of strings
+static EPStepCommand make_step_command(const std::vector<std::string>& command) {
+    EPStepCommand result;
+    if (command.size() == 1 && command[0].empty()) {
+        result.is_empty = true;  // Explicit empty string means skip this step
+    } else {
+        result.command = command;
+    }
+    return result;
+}
 
 void register_external_project_builtins(Interpreter& interp) {
 
@@ -121,8 +133,18 @@ void register_external_project_builtins(Interpreter& interp) {
             return;
         }
 
-        // Resolve prefix
+        // === Resolve directories ===
+        // Use shared source dir under build root (DMAKE_BUILD_ROOT/_deps/<name>-src)
+        // so sources are shared across configs
+        std::string build_root = interp.get_variable("DMAKE_BUILD_ROOT");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+
+        // Fallback if DMAKE_BUILD_ROOT not set (shouldn't happen in normal builds)
+        if (build_root.empty()) {
+            build_root = interp.get_variable("CMAKE_BINARY_DIR");
+        }
+
+        // Resolve prefix (config-specific)
         if (prefix.empty()) {
             prefix = bin_dir + "/" + name + "-prefix";
         }
@@ -130,25 +152,32 @@ void register_external_project_builtins(Interpreter& interp) {
             prefix = bin_dir + "/" + prefix;
         }
 
-        // Resolve directories
-        if (source_dir.empty()) source_dir = prefix + "/src/" + name;
-        else if (!std::filesystem::path(source_dir).is_absolute())
+        // Source dir: shared across configs
+        if (source_dir.empty()) {
+            source_dir = build_root + "/_deps/" + name + "-src";
+        } else if (!std::filesystem::path(source_dir).is_absolute()) {
             source_dir = bin_dir + "/" + source_dir;
+        }
 
+        // Binary dir: config-specific EP build artifacts
         if (binary_dir.empty()) {
-            if (build_in_source) binary_dir = source_dir;
-            else binary_dir = prefix + "/src/" + name + "-build";
+            if (build_in_source) {
+                binary_dir = source_dir;
+            } else {
+                binary_dir = bin_dir + "/_ep/" + name;
+            }
         } else if (!std::filesystem::path(binary_dir).is_absolute()) {
             binary_dir = bin_dir + "/" + binary_dir;
         }
 
+        // Install dir: config-specific
         if (install_dir.empty()) install_dir = prefix;
         else if (!std::filesystem::path(install_dir).is_absolute())
             install_dir = bin_dir + "/" + install_dir;
 
         if (tmp_dir.empty()) tmp_dir = prefix + "/tmp";
         if (stamp_dir.empty()) stamp_dir = prefix + "/src/" + name + "-stamp";
-        if (download_dir.empty()) download_dir = prefix + "/src";
+        if (download_dir.empty()) download_dir = build_root + "/_deps";  // Shared download dir
 
         // Apply SOURCE_SUBDIR
         std::string effective_source_dir = source_dir;
@@ -165,10 +194,70 @@ void register_external_project_builtins(Interpreter& interp) {
             {"<TMP_DIR>", tmp_dir},
         };
 
-        // Store properties on a CustomTarget
+        // === Create ExternalProjectTarget ===
         std::string src_dir_cmake = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
-        auto target = std::make_shared<CustomTarget>(name, src_dir_cmake, bin_dir);
+        auto target = std::make_shared<ExternalProjectTarget>(name, src_dir_cmake, bin_dir);
         target->set_build_by_default(!exclude_from_all);
+
+        // Store EP directories
+        target->set_ep_source_dir(source_dir);
+        target->set_ep_binary_dir(binary_dir);
+        target->set_ep_install_dir(install_dir);
+        target->set_ep_prefix(prefix);
+        target->set_ep_tmp_dir(tmp_dir);
+        target->set_ep_stamp_dir(stamp_dir);
+        target->set_ep_download_dir(download_dir);
+        target->set_ep_source_subdir(source_subdir);
+
+        // Store CMAKE_ARGS and CMAKE_CACHE_ARGS
+        for (const auto& arg : cmake_args) {
+            // Apply token replacements
+            std::string processed = arg;
+            if (!list_separator.empty()) {
+                processed = dmake::replace_all(std::move(processed), list_separator, ";");
+            }
+            for (const auto& [token, value] : tokens) {
+                processed = dmake::replace_all(std::move(processed), token, value);
+            }
+            target->add_cmake_arg(processed);
+        }
+        for (const auto& arg : cmake_cache_args) {
+            std::string processed = arg;
+            if (!list_separator.empty()) {
+                processed = dmake::replace_all(std::move(processed), list_separator, ";");
+            }
+            for (const auto& [token, value] : tokens) {
+                processed = dmake::replace_all(std::move(processed), token, value);
+            }
+            target->add_cmake_cache_arg(processed);
+        }
+        target->set_list_separator(list_separator);
+
+        // Store step commands (for non-cmake EPs)
+        // Apply token replacements to commands
+        auto apply_tokens = [&tokens](std::vector<std::string>& cmd) {
+            for (auto& arg : cmd) {
+                for (const auto& [token, value] : tokens) {
+                    arg = dmake::replace_all(std::move(arg), token, value);
+                }
+            }
+        };
+        if (!configure_command.empty()) {
+            apply_tokens(configure_command);
+            target->set_configure_command(make_step_command(configure_command));
+        }
+        if (!build_command.empty()) {
+            apply_tokens(build_command);
+            target->set_build_command(make_step_command(build_command));
+        }
+        if (!install_command.empty()) {
+            apply_tokens(install_command);
+            target->set_install_command(make_step_command(install_command));
+        }
+
+        // Store build options
+        target->set_build_in_source(build_in_source);
+        target->set_build_always(build_always);
 
         // Store all directories as target properties for ExternalProject_Get_Property
         target->set_property("_EP_SOURCE_DIR", source_dir);
@@ -180,15 +269,19 @@ void register_external_project_builtins(Interpreter& interp) {
         target->set_property("_EP_DOWNLOAD_DIR", download_dir);
         if (!source_subdir.empty()) target->set_property("_EP_SOURCE_SUBDIR", source_subdir);
 
+        // Add DEPENDS
         for (const auto& dep : depends) {
             target->add_custom_dependency(dep);
         }
 
-        // === Execute steps at configure time (like CMake does) ===
+        // === Download + Patch at CONFIGURE time ===
+        // This runs now, not at build time, because:
+        // 1. Source dir is shared across configs - download once
+        // 2. Patch commands may be config-agnostic
+        // 3. Build-time interpreter needs sources to exist
 
         interp.print_message("STATUS", "ExternalProject_Add: " + name);
 
-        // 1. Download step
         bool source_dir_has_content = false;
         if (std::filesystem::exists(source_dir)) {
             auto it = std::filesystem::directory_iterator(source_dir);
@@ -198,7 +291,7 @@ void register_external_project_builtins(Interpreter& interp) {
         if (!source_dir_has_content) {
             if (!download_command.empty()) {
                 // Custom download command
-                replace_tokens(download_command, tokens);
+                apply_tokens(download_command);
                 interp.print_message("STATUS", "  Downloading " + name + " (custom command)...");
                 auto result = run_steps({download_command});
                 if (!result) {
@@ -261,7 +354,6 @@ void register_external_project_builtins(Interpreter& interp) {
                         interp.set_fatal_error("ExternalProject_Add(" + name + ") extraction failed: " + ex_result.error());
                         return;
                     }
-
                 }
             } else if (!git_repository.empty()) {
                 interp.print_message("STATUS", "  Cloning " + name + " from " + git_repository + "...");
@@ -275,9 +367,8 @@ void register_external_project_builtins(Interpreter& interp) {
             interp.print_message("STATUS", "  " + name + " source directory already exists, skipping download.");
         }
 
-        // Flatten single top-level directory (common in archives).
-        // Only count directories so archive files in source_dir don't prevent flattening.
-        {
+        // Flatten single top-level directory (common in archives)
+        if (std::filesystem::exists(source_dir)) {
             std::vector<std::filesystem::directory_entry> dirs;
             for (const auto& e : std::filesystem::directory_iterator(source_dir)) {
                 if (e.is_directory()) dirs.push_back(e);
@@ -293,10 +384,9 @@ void register_external_project_builtins(Interpreter& interp) {
             }
         }
 
-        // 2. Patch step (only on fresh download)
-        // PATCH_COMMAND may contain multiple commands separated by "COMMAND" tokens
+        // Patch step (only on fresh download)
         if (!patch_command.empty() && !source_dir_has_content) {
-            replace_tokens(patch_command, tokens);
+            apply_tokens(patch_command);
             interp.print_message("STATUS", "  Patching " + name + "...");
 
             // Split on "COMMAND" tokens to get individual commands
@@ -325,113 +415,12 @@ void register_external_project_builtins(Interpreter& interp) {
             }
         }
 
-        // 3. Configure step
-        bool used_default_cmake_configure = false;
-        bool configure_is_empty = (configure_command.size() == 1 && configure_command[0].empty());
-        if (!configure_command.empty() && !configure_is_empty) {
-            // Custom configure command
-            std::filesystem::create_directories(binary_dir);
-            replace_tokens(configure_command, tokens);
-            interp.print_message("STATUS", "  Configuring " + name + " (custom)...");
-            auto result = run_command(configure_command, binary_dir);
-            if (result.exit_code != 0) {
-                interp.set_fatal_error("ExternalProject_Add(" + name + ") configure failed:\n" + result.output);
-                return;
-            }
-        } else if (configure_is_empty) {
-            // Empty string means skip configure
-        } else {
-            // Default: CMake configure
-            if (std::filesystem::exists(effective_source_dir + "/CMakeLists.txt")) {
-                std::filesystem::create_directories(binary_dir);
-                std::string dmake_path = get_executable_path();
-
-                std::vector<std::string> cmd = {dmake_path};
-                cmd.push_back("-S");
-                cmd.push_back(effective_source_dir);
-                cmd.push_back("-B");
-                cmd.push_back(binary_dir);
-
-                // Process LIST_SEPARATOR in cmake_args
-                auto process_cmake_arg = [&](const std::string& arg) {
-                    std::string processed = arg;
-                    if (!list_separator.empty()) {
-                        processed = dmake::replace_all(std::move(processed), list_separator, ";");
-                    }
-                    return processed;
-                };
-
-                for (const auto& arg : cmake_args) {
-                    std::string processed = process_cmake_arg(arg);
-                    // Token replacement
-                    for (const auto& [token, value] : tokens) {
-                        processed = dmake::replace_all(std::move(processed), token, value);
-                    }
-                    cmd.push_back(processed);
-                }
-                for (const auto& arg : cmake_cache_args) {
-                    std::string processed = process_cmake_arg(arg);
-                    for (const auto& [token, value] : tokens) {
-                        processed = dmake::replace_all(std::move(processed), token, value);
-                    }
-                    cmd.push_back(processed);
-                }
-
-                // Add default install prefix if not already specified
-                bool has_install_prefix = false;
-                for (const auto& arg : cmd) {
-                    if (arg.find("CMAKE_INSTALL_PREFIX") != std::string::npos) {
-                        has_install_prefix = true;
-                        break;
-                    }
-                }
-                if (!has_install_prefix) {
-                    cmd.push_back("-DCMAKE_INSTALL_PREFIX=" + install_dir);
-                }
-
-                interp.print_message("STATUS", "  Configuring+Building " + name + "...");
-                auto result = run_command(cmd);
-                if (result.exit_code != 0) {
-                    interp.set_fatal_error("ExternalProject_Add(" + name + ") configure+build failed:\n" + result.output);
-                    return;
-                }
-                used_default_cmake_configure = true;
-            }
-        }
-
-        // 4. Build step
-        // If the default CMake configure path was used, dmake already built the project,
-        // so skip the build step (even if an explicit BUILD_COMMAND like "make -j4" was given).
-        bool build_is_empty = (build_command.size() == 1 && build_command[0].empty());
-        if (!build_command.empty() && !build_is_empty && !used_default_cmake_configure) {
-            replace_tokens(build_command, tokens);
-            interp.print_message("STATUS", "  Building " + name + " (custom)...");
-            auto result = run_command(build_command, binary_dir);
-            if (result.exit_code != 0) {
-                interp.set_fatal_error("ExternalProject_Add(" + name + ") build failed:\n" + result.output);
-                return;
-            }
-        }
-        // Default build: no-op for dmake (configure step already builds)
-
-        // 5. Install step
-        // Skip make-based install when dmake was used for configure+build (no Makefile exists)
-        bool install_is_empty = (install_command.size() == 1 && install_command[0].empty());
-        if (!install_command.empty() && !install_is_empty && !used_default_cmake_configure) {
-            replace_tokens(install_command, tokens);
-            interp.print_message("STATUS", "  Installing " + name + " (custom)...");
-            auto result = run_command(install_command, binary_dir);
-            if (result.exit_code != 0) {
-                interp.set_fatal_error("ExternalProject_Add(" + name + ") install failed:\n" + result.output);
-                return;
-            }
-        }
-
-        // Register the target (as a custom target with no commands since steps ran at configure)
+        // === Register the target ===
+        // Configure/Build/Install will happen at BUILD TIME via the orchestrator task
         interp.get_targets()[name] = target;
         interp.get_current_directory_context().owned_targets.push_back(target);
 
-        interp.print_message("STATUS", "ExternalProject_Add: " + name + " complete.");
+        interp.print_message("STATUS", "ExternalProject_Add: " + name + " registered (will build at build time).");
     });
 
     interp.add_builtin("externalproject_get_property", [](Interpreter& interp, const std::vector<std::string>& args) {
@@ -464,17 +453,17 @@ void register_external_project_builtins(Interpreter& interp) {
     });
 
     // Stub for ExternalProject_Add_Step (just ignore)
-    interp.add_builtin("externalproject_add_step", [](Interpreter& interp, const std::vector<std::string>&) {
+    interp.add_builtin("externalproject_add_step", [](Interpreter&, const std::vector<std::string>&) {
         // Silently ignore - steps are not used in our model
     });
 
     // Stub for ExternalProject_Add_StepTargets
-    interp.add_builtin("externalproject_add_steptargets", [](Interpreter& interp, const std::vector<std::string>&) {
+    interp.add_builtin("externalproject_add_steptargets", [](Interpreter&, const std::vector<std::string>&) {
         // Silently ignore
     });
 
     // Stub for ExternalProject_Add_StepDependencies
-    interp.add_builtin("externalproject_add_stepdependencies", [](Interpreter& interp, const std::vector<std::string>&) {
+    interp.add_builtin("externalproject_add_stepdependencies", [](Interpreter&, const std::vector<std::string>&) {
         // Silently ignore
     });
 }

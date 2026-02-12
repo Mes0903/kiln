@@ -116,16 +116,29 @@ static void do_populate(Interpreter& interp, const std::string& name) {
     };
 
     // Resolve source/binary dirs
+    // Source dir: use DMAKE_BUILD_ROOT/_deps (shared across configs)
+    // Binary dir: use CMAKE_BINARY_DIR/_deps (config-specific)
+    std::string build_root = interp.get_variable("DMAKE_BUILD_ROOT");
+    std::string binary_base = interp.get_variable("CMAKE_BINARY_DIR");
+
+    // Check for user override
     std::string base_dir = interp.get_variable("FETCHCONTENT_BASE_DIR");
-    if (base_dir.empty()) {
-        base_dir = interp.get_variable("CMAKE_BINARY_DIR") + "/_deps";
+    if (!base_dir.empty()) {
+        // User override - use same dir for both
+        build_root = base_dir;
+        binary_base = base_dir;
+    } else {
+        // Use shared source dir under build root
+        if (build_root.empty()) {
+            build_root = binary_base;  // Fallback
+        }
     }
 
     std::string source_dir = get_detail("SOURCE_DIR");
-    if (source_dir.empty()) source_dir = base_dir + "/" + lower_name + "-src";
+    if (source_dir.empty()) source_dir = build_root + "/_deps/" + lower_name + "-src";
 
     std::string binary_dir = get_detail("BINARY_DIR");
-    if (binary_dir.empty()) binary_dir = base_dir + "/" + lower_name + "-build";
+    if (binary_dir.empty()) binary_dir = binary_base + "/_deps/" + lower_name + "-build";
 
     // Check if source dir already has content
     bool has_content = false;
@@ -380,11 +393,10 @@ void register_fetch_content_builtins(Interpreter& interp) {
             // Check for local override
             std::string override_dir = interp.get_variable("FETCHCONTENT_SOURCE_DIR_" + upper_name);
             if (!override_dir.empty()) {
+                // Binary dir is always config-specific
                 std::string base_dir = interp.get_variable("FETCHCONTENT_BASE_DIR");
-                if (base_dir.empty()) {
-                    base_dir = interp.get_variable("CMAKE_BINARY_DIR") + "/_deps";
-                }
-                std::string binary_dir = base_dir + "/" + lower_name + "-build";
+                std::string binary_base = base_dir.empty() ? interp.get_variable("CMAKE_BINARY_DIR") : base_dir;
+                std::string binary_dir = binary_base + "/_deps/" + lower_name + "-build";
 
                 interp.set_cache_variable(lower_name + "_POPULATED", "TRUE");
                 interp.set_cache_variable(lower_name + "_SOURCE_DIR", override_dir);

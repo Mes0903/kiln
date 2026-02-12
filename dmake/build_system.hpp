@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <expected>
 #include <optional>
 #include <filesystem>
@@ -14,12 +15,18 @@
 
 namespace dmake {
 
+// Forward declarations
+class ProgressBar;
+
 // Set by signal handlers to request graceful shutdown.
 // The build loop checks this and stops dispatching new tasks,
 // then saves the cache so completed work isn't lost.
 inline std::atomic<bool> g_interrupted{false};
 
 class Target;
+class Interpreter;
+class ExternalProjectTarget;
+class Toolchain;
 struct GenexEvaluationContext;
 
 struct BuildTask {
@@ -42,6 +49,11 @@ struct BuildTask {
     bool is_module_source = false;     // True if this source file uses modules (imports or exports)
     std::string module_provides;       // Module name this source provides (if any)
     std::vector<std::string> module_requires;  // Module names this source requires
+
+    // For ExternalProject support (build-time execution)
+    bool is_ep_orchestrator = false;   // True if this is an EP orchestrator task
+    bool is_ep_sentinel = false;       // True if this is an EP sentinel task
+    std::string ep_name;               // EP name (for orchestrator/sentinel identification)
 
     // For COMPILE_LANGUAGE genex support
     std::optional<Language> compile_language;  // Language being compiled (for $<COMPILE_LANGUAGE:...>)
@@ -94,6 +106,37 @@ public:
         const std::map<std::string, std::string>& module_to_task,  // Module name -> provider task ID
         const std::map<std::string, std::vector<std::string>>& task_requires  // Task ID -> required modules
     );
+
+    // ExternalProject support: run EP orchestrator task in-process
+    // Called by execute() when an EP orchestrator task becomes ready.
+    // Returns error message on failure, nullopt on success.
+    // The orchestrator either:
+    //   1. Spawns an isolated interpreter (cmake-based EP), extracts dirty tasks, injects them
+    //   2. Runs shell commands (custom CONFIGURE_COMMAND/BUILD_COMMAND/INSTALL_COMMAND)
+    std::optional<std::string> run_ep_orchestrator(
+        BuildTask& task,
+        const std::string& build_dir,
+        std::set<std::string>& completed,
+        std::unordered_set<std::string>& dirty_set,
+        std::set<std::string>& ready_set,
+        ProgressBar& progress,
+        std::map<std::string, std::string>& new_cache);
+
+    // Inject tasks into the live build graph during execution.
+    // Called by run_ep_orchestrator after extracting dirty tasks from a child interpreter.
+    // sentinel_id: The EP sentinel task ID - its dependencies will be updated
+    // last_task_id: The final task in the injected chain (sentinel will depend on this)
+    void inject_tasks(
+        std::vector<BuildTask> new_tasks,
+        const std::string& sentinel_id,
+        const std::string& last_task_id,
+        std::set<std::string>& completed,
+        std::unordered_set<std::string>& dirty_set,
+        std::set<std::string>& ready_set,
+        ProgressBar& progress);
+
+    // Access to tasks map (needed by EP orchestrator for isolated interpreter)
+    const std::map<std::string, BuildTask>& get_tasks() const { return tasks_; }
 
 private:
     std::map<std::string, BuildTask> tasks_;

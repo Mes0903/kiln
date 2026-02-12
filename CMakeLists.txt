@@ -41,6 +41,7 @@ add_library(dmake SHARED
     dmake/builtins/system_info.cpp
     dmake/intercept/download_utils.cpp
     dmake/intercept/external_project.cpp
+    dmake/intercept/external_project_target.cpp
     dmake/intercept/fetch_content.cpp
     dmake/install_executor.cpp
     dmake/printing.cpp

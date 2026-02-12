@@ -1,5 +1,6 @@
 #include "build_system.hpp"
 #include "target.hpp"
+#include "intercept/external_project_target.hpp"
 #include "utils.hpp"
 #include "container_utils.hpp"
 #include "module_scanner.hpp"
@@ -8,6 +9,8 @@
 #include "printing.hpp"
 #include "CMakeArray.hpp"
 #include "progress_bar.hpp"
+#include "interperter.hpp"
+#include "toolchain.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -300,8 +303,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         dirty_set.reserve(20);
     }
     for (const auto& [id, task] : tasks_) {
-        // Skip marker tasks
-        if (task.outputs.empty() && task.commands.empty() && !task.is_module_collator) continue;
+        // Skip marker tasks (but NOT EP orchestrator/sentinel which run in-process)
+        if (task.outputs.empty() && task.commands.empty() &&
+            !task.is_module_collator && !task.is_ep_orchestrator && !task.is_ep_sentinel) continue;
 
         bool outputs_exist = !task.outputs.empty();
         if (outputs_exist) {
@@ -340,7 +344,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
             }
         } while (changed);
     }
-    int dirty_task_count = static_cast<int>(dirty_set.size());
+    // Count dirty tasks, excluding EP sentinels (they're just synchronization points)
+    int dirty_task_count = 0;
+    for (const auto& id : dirty_set) {
+        if (!tasks_[id].is_ep_sentinel) dirty_task_count++;
+    }
     pre_scan_profile.stop();
 
     bool stdout_is_tty = isatty(STDOUT_FILENO);
@@ -515,8 +523,25 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         progress.print_line(oss.str());
                     };
 
+                    // ExternalProject: handle orchestrator tasks specially (in-process execution)
+                    if (task.is_ep_orchestrator) {
+                        print_status("Configuring", task.ep_name);
+
+                        // Run the EP orchestrator under the loop_mutex since it may call inject_tasks
+                        // Actually, we need to call it outside the lock and acquire the lock when injecting
+                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_set, ready_set, progress, new_cache);
+                        if (ep_result) {
+                            task_error = *ep_result;
+                            break;
+                        }
+                        // EP orchestrator completed successfully
+
+                    } else if (task.is_ep_sentinel) {
+                        // Sentinel task - no-op, just a synchronization point
+                        // Don't print anything or count toward progress
+
                     // C++20 modules: handle collator tasks specially (in-process execution)
-                    if (task.is_module_collator) {
+                    } else if (task.is_module_collator) {
                         print_status("Collating", "modules");
 
                         std::map<std::string, std::string> module_to_task;
@@ -1056,6 +1081,247 @@ void BuildGraph::inject_module_dependencies(
             }
         }
     }
+}
+
+void BuildGraph::inject_tasks(
+    std::vector<BuildTask> new_tasks,
+    const std::string& sentinel_id,
+    const std::string& last_task_id,
+    std::set<std::string>& completed,
+    std::unordered_set<std::string>& dirty_set,
+    std::set<std::string>& ready_set,
+    ProgressBar& progress) {
+
+    // This is called under loop_mutex (from run_ep_orchestrator)
+
+    if (new_tasks.empty()) {
+        // No tasks to inject - EP is clean
+        return;
+    }
+
+    // 1. Build file->task map for new tasks (for dependency resolution)
+    std::unordered_map<std::string, std::string> new_file_to_task;
+    for (const auto& task : new_tasks) {
+        for (const auto& out : task.outputs) {
+            new_file_to_task[out] = task.id;
+        }
+    }
+
+    // 2. Add new tasks to the graph
+    for (auto& task : new_tasks) {
+        tasks_[task.id] = std::move(task);
+    }
+
+    // 3. Resolve file->task dependencies for all tasks
+    //    (new tasks may depend on each other, or existing tasks may depend on new outputs)
+    for (auto& [id, task] : tasks_) {
+        for (const auto& in : task.inputs) {
+            auto it = new_file_to_task.find(in);
+            if (it != new_file_to_task.end() && it->second != id) {
+                task.dependencies.insert(it->second);
+                tasks_[it->second].dependents.insert(id);
+            }
+        }
+    }
+
+    // 4. Wire sentinel to depend on the last injected task
+    if (!last_task_id.empty() && tasks_.count(sentinel_id) && tasks_.count(last_task_id)) {
+        tasks_[sentinel_id].dependencies.insert(last_task_id);
+        tasks_[last_task_id].dependents.insert(sentinel_id);
+    }
+
+    // 5. Mark all new tasks as dirty
+    for (const auto& [id, _] : new_file_to_task) {
+        // id here is the output, not task id - get task id from new_file_to_task
+    }
+    // Actually iterate over tasks
+    for (const auto& [out, task_id] : new_file_to_task) {
+        dirty_set.insert(task_id);
+    }
+    // Also ensure sentinel is dirty
+    dirty_set.insert(sentinel_id);
+
+    // 6. Update progress total
+    progress.bump_total(static_cast<int>(new_file_to_task.size()));
+
+    // 7. Compute ready set for new tasks
+    for (const auto& [out, task_id] : new_file_to_task) {
+        if (completed.count(task_id)) continue;  // already done (shouldn't happen)
+        if (ready_set.count(task_id)) continue;   // already ready
+
+        bool all_deps_done = true;
+        for (const auto& dep : tasks_[task_id].dependencies) {
+            if (!completed.count(dep)) {
+                all_deps_done = false;
+                break;
+            }
+        }
+        if (all_deps_done) {
+            ready_set.insert(task_id);
+        }
+    }
+}
+
+std::optional<std::string> BuildGraph::run_ep_orchestrator(
+    BuildTask& task,
+    const std::string& build_dir,
+    std::set<std::string>& completed,
+    std::unordered_set<std::string>& dirty_set,
+    std::set<std::string>& ready_set,
+    ProgressBar& progress,
+    std::map<std::string, std::string>& new_cache) {
+
+    // Get the ExternalProjectTarget from the task
+    auto* ep_target = dynamic_cast<ExternalProjectTarget*>(task.parent_target);
+    if (!ep_target) {
+        return "EP orchestrator task has no ExternalProjectTarget";
+    }
+
+    std::string ep_name = ep_target->get_name();
+    std::string sentinel_id = ep_name;  // Sentinel task ID is the EP name
+
+    // Check if this is a cmake-based EP or custom commands EP
+    if (ep_target->is_cmake_based()) {
+        // === CMAKE-BASED EP ===
+        // Spawn an isolated interpreter to build the EP
+
+        std::string source_dir = ep_target->get_effective_source_dir();
+        std::string binary_dir = ep_target->get_ep_binary_dir();
+        std::string install_dir = ep_target->get_ep_install_dir();
+
+        // Create isolated interpreter
+        std::stringstream ep_output;
+        auto ep_interp = std::make_unique<Interpreter>(source_dir, &ep_output, &ep_output, binary_dir);
+
+        // Apply CMAKE_ARGS and CMAKE_CACHE_ARGS
+        for (const auto& arg : ep_target->get_cmake_args()) {
+            // Parse -DVAR=value or -DVAR:TYPE=value
+            if (arg.starts_with("-D")) {
+                std::string def = arg.substr(2);
+                size_t eq = def.find('=');
+                if (eq != std::string::npos) {
+                    std::string var = def.substr(0, eq);
+                    std::string val = def.substr(eq + 1);
+                    // Strip type annotation
+                    size_t colon = var.find(':');
+                    if (colon != std::string::npos) var = var.substr(0, colon);
+                    ep_interp->set_variable(var, val);
+                }
+            }
+        }
+        for (const auto& arg : ep_target->get_cmake_cache_args()) {
+            if (arg.starts_with("-D")) {
+                std::string def = arg.substr(2);
+                size_t eq = def.find('=');
+                if (eq != std::string::npos) {
+                    std::string var = def.substr(0, eq);
+                    std::string val = def.substr(eq + 1);
+                    size_t colon = var.find(':');
+                    if (colon != std::string::npos) var = var.substr(0, colon);
+                    ep_interp->set_variable(var, val);
+                }
+            }
+        }
+
+        // Set CMAKE_INSTALL_PREFIX if not already set
+        if (ep_interp->get_variable("CMAKE_INSTALL_PREFIX").empty()) {
+            ep_interp->set_variable("CMAKE_INSTALL_PREFIX", install_dir);
+        }
+
+        // Suppress STATUS messages in child interpreter
+        ep_interp->set_variable("CMAKE_MESSAGE_LOG_LEVEL", "WARNING");
+
+        // Read and parse CMakeLists.txt
+        std::string cmake_file = source_dir + "/CMakeLists.txt";
+        if (!std::filesystem::exists(cmake_file)) {
+            return "EP " + ep_name + ": CMakeLists.txt not found at " + cmake_file;
+        }
+
+        std::ifstream file(cmake_file);
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+        Parser parser(content, cmake_file);
+        auto ast = parser.parse();
+        if (!ast) {
+            return "EP " + ep_name + ": Parse error in " + cmake_file + ": " + ast.error().reason;
+        }
+
+        ep_interp->set_current_file(cmake_file);
+
+        // Interpret
+        auto interp_result = ep_interp->interpret(*ast);
+        if (!interp_result) {
+            std::string output = ep_output.str();
+            return "EP " + ep_name + ": Interpretation error: " + interp_result.error().message +
+                   (output.empty() ? "" : "\nOutput:\n" + output);
+        }
+
+        // Run the build (this is recursive - it will resolve, generate tasks, and execute)
+        auto build_result = ep_interp->run_build(0, {});  // Use default jobs
+        if (!build_result) {
+            std::string output = ep_output.str();
+            return "EP " + ep_name + ": Build error: " + build_result.error().message +
+                   (output.empty() ? "" : "\nOutput:\n" + output);
+        }
+
+        // Print any buffered output from the EP
+        std::string output = ep_output.str();
+        if (!output.empty()) {
+            std::lock_guard<std::mutex> lock(output_mutex_);
+            std::cout << output;
+        }
+
+        // No tasks to inject - the EP build completed internally
+        // The sentinel just needs to complete
+
+    } else {
+        // === CUSTOM COMMANDS EP ===
+        // Run CONFIGURE_COMMAND, BUILD_COMMAND, INSTALL_COMMAND sequentially
+
+        std::string working_dir = ep_target->get_ep_binary_dir();
+        std::filesystem::create_directories(working_dir);
+
+        // Configure step
+        const auto& configure_cmd = ep_target->get_configure_command();
+        if (!configure_cmd.command.empty() && !configure_cmd.is_empty) {
+            auto result = dmake::run_command(configure_cmd.command, working_dir);
+            if (result.exit_code != 0) {
+                return "EP " + ep_name + " configure failed:\n" + result.output;
+            }
+            if (!result.output.empty()) {
+                std::lock_guard<std::mutex> lock(output_mutex_);
+                std::cout << result.output;
+            }
+        }
+
+        // Build step
+        const auto& build_cmd = ep_target->get_build_command();
+        if (!build_cmd.command.empty() && !build_cmd.is_empty) {
+            auto result = dmake::run_command(build_cmd.command, working_dir);
+            if (result.exit_code != 0) {
+                return "EP " + ep_name + " build failed:\n" + result.output;
+            }
+            if (!result.output.empty()) {
+                std::lock_guard<std::mutex> lock(output_mutex_);
+                std::cout << result.output;
+            }
+        }
+
+        // Install step
+        const auto& install_cmd = ep_target->get_install_command();
+        if (!install_cmd.command.empty() && !install_cmd.is_empty) {
+            auto result = dmake::run_command(install_cmd.command, working_dir);
+            if (result.exit_code != 0) {
+                return "EP " + ep_name + " install failed:\n" + result.output;
+            }
+            if (!result.output.empty()) {
+                std::lock_guard<std::mutex> lock(output_mutex_);
+                std::cout << result.output;
+            }
+        }
+    }
+
+    return std::nullopt;  // Success
 }
 
 } // namespace dmake

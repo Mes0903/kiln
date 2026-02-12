@@ -1,0 +1,10 @@
+[STATUS] ExternalProject_Add: mylib_ep
+[STATUS]   mylib_ep source directory already exists, skipping download.
+[STATUS] ExternalProject_Add: mylib_ep registered (will build at build time).
+[STATUS] Generating build graph...
+[STATUS] Starting debug build...
+   [1/4] Configuring [mylib_ep] mylib_ep
+   [2/4] Compiling [main_app] main.cpp
+   [3/4]   Linking [main_app] main_app
+    Finished build in 0.06s (critical path: 0.06s)
+[STATUS] Build finished.

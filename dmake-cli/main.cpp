@@ -123,15 +123,19 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         }
 
         std::filesystem::path build_path;
+        std::filesystem::path build_root_path;  // For DMAKE_BUILD_ROOT
+
         if (!opt.source_dir_str.empty()) {
             // -S mode: use -B as-is (no config appended), used for ExternalProject recursive builds
             if (opt.build_dir_str.empty()) {
                 return std::unexpected("-S requires -B to be specified");
             }
             build_path = std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+            // In -S mode, build_root is the parent of build_path (EP creates config-specific dirs)
+            build_root_path = build_path.parent_path();
         } else {
-            std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
-            build_path = build_root / opt.config;
+            build_root_path = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+            build_path = build_root_path / opt.config;
         }
 
         if (build_path == project_path) {
@@ -156,6 +160,9 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string());
         interpreter->set_current_file(cmake_lists.string());
         debug_controller.attach(*interpreter);
+
+        // Set DMAKE_BUILD_ROOT - shared location for EP/FetchContent sources
+        interpreter->set_variable("DMAKE_BUILD_ROOT", build_root_path.string());
 
         // Set BUILD_TESTING before user definitions (user can override with -D)
         interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
