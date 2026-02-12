@@ -972,6 +972,7 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
         }
     }
 
+    std::unordered_set<std::string> seen_sources;
     for (const auto& src : *evaluated_sources_result) {
         if (src.empty()) continue;
 
@@ -1006,8 +1007,9 @@ void Target::generate_object_tasks(BuildGraph& graph, const Toolchain& toolchain
             }
         }
 
-        // Note: custom command discovery and dependency wiring is handled
-        // by the pre-scan loop above, before any compilation tasks are emitted.
+        // Deduplicate sources that resolve to the same file
+        // (e.g. same file added as both relative and absolute path)
+        if (!seen_sources.insert(src_normalized).second) continue;
 
         // Look up per-source properties
         auto sp_it = source_props.find(src_normalized);
