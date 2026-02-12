@@ -1,1 +1,2 @@
-find_package(Filesystem COMPONENTS final)
+project(testproj)
+find_package(Qt6 REQUIRED COMPONENTS Core)
