@@ -4462,12 +4462,16 @@ TEST_CASE("Built-in global properties", "[interpreter][property]") {
     });
 
     // Test built-in global properties
+    // ENABLED_LANGUAGES starts empty; project() populates it
     std::string script = R"(
+        get_property(LANGS_BEFORE GLOBAL PROPERTY ENABLED_LANGUAGES)
+        project(test)
         get_property(LANGS GLOBAL PROPERTY ENABLED_LANGUAGES)
         get_property(MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
         get_property(SHARED_LIBS GLOBAL PROPERTY TARGET_SUPPORTS_SHARED_LIBS)
         get_property(ROLE GLOBAL PROPERTY CMAKE_ROLE)
         get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
+        message("langs_before=${LANGS_BEFORE}")
         message("langs=${LANGS}")
         message("multi_config=${MULTI_CONFIG}")
         message("shared_libs=${SHARED_LIBS}")
@@ -4483,6 +4487,7 @@ TEST_CASE("Built-in global properties", "[interpreter][property]") {
     REQUIRE(result.has_value());
 
     std::string out = output.str();
+    REQUIRE(out.find("langs_before=\n") != std::string::npos);
     REQUIRE(out.find("langs=C;CXX") != std::string::npos);
     REQUIRE(out.find("multi_config=FALSE") != std::string::npos);
     REQUIRE(out.find("shared_libs=TRUE") != std::string::npos);
@@ -4561,6 +4566,8 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
 
         get_property(AFTER GLOBAL PROPERTY ENABLED_LANGUAGES)
         message("after=${AFTER}")
+        message("cxx_loaded=${CMAKE_CXX_COMPILER_LOADED}")
+        message("c_loaded=${CMAKE_C_COMPILER_LOADED}")
     )";
 
     dmake::Parser parser(script);
@@ -4571,8 +4578,12 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
     REQUIRE(result.has_value());
 
     std::string out = output.str();
-    REQUIRE(out.find("before=C;CXX") != std::string::npos);
+    REQUIRE(out.find("before=\n") != std::string::npos);
     REQUIRE(out.find("after=CXX") != std::string::npos);
+
+    // CMAKE_CXX_COMPILER_LOADED should be set, CMAKE_C_COMPILER_LOADED should not
+    REQUIRE(out.find("cxx_loaded=1") != std::string::npos);
+    REQUIRE(out.find("c_loaded=\n") != std::string::npos);
 
     // Cleanup
     std::filesystem::remove_all(temp_dir);

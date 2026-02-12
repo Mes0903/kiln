@@ -33,6 +33,9 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
 
     Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
+    // Enable C++ compiler (required for task generation)
+    interp.enable_compiler_for_language("CXX");
+
     // Register builtins
     register_target_builtins(interp);
 

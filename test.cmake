@@ -1,4 +1,1 @@
-set(var1 "123")
-set(VAR1 "234")
-
-message("${VaR1}")
+find_package(Filesystem COMPONENTS final)

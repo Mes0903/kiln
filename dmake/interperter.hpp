@@ -279,6 +279,11 @@ public:
     Toolchain& get_toolchain() { return get_root()->toolchain_; }
     CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
+    // Enable a compiler for the given language (C, CXX, ASM).
+    // Pulls cached detection data, sets language-specific variables, and creates
+    // the toolchain compiler. Returns empty string on success, error on failure.
+    std::string enable_compiler_for_language(const std::string& lang);
+
     // Directory mtime caching for find_xxx performance
     // Returns mtime of directory (nullopt if doesn't exist)
     // Uses session cache for paths outside source/binary dirs

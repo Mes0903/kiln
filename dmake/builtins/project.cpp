@@ -4,7 +4,6 @@
 #include "../utils.hpp"
 #include "../language.hpp"
 #include "../CMakeArray.hpp"
-#include "../gnu_compiler.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -20,43 +19,7 @@ namespace {
 // Returns empty string on success, or an error message on failure.
 std::string enable_language_impl(Interpreter& interp, const std::string& lang) {
     if (lang == "NONE") return {};
-
-    std::string loaded_var = "CMAKE_" + lang + "_COMPILER_LOADED";
-    if (!interp.get_variable(loaded_var).empty()) return {}; // Already loaded
-
-    if (lang == "C" || lang == "CXX") {
-        // C and CXX are initialized by fake_cmake_compiler_checks_and_init
-        // before project() runs, so they should already be loaded.
-        return {};
-    }
-
-    if (lang == "ASM") {
-        // ASM uses gcc/cc as the assembler driver (handles .S preprocessing)
-        // Prefer C compiler if available, otherwise find cc directly
-        std::string asm_compiler = interp.get_variable("CMAKE_C_COMPILER");
-        std::string asm_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-        std::string asm_version = interp.get_variable("CMAKE_C_COMPILER_VERSION");
-        if (asm_compiler.empty()) {
-            asm_compiler = "cc";
-            asm_id = "GNU";
-            asm_version = "";
-        }
-        interp.set_variable("CMAKE_ASM_COMPILER", asm_compiler);
-        interp.set_variable("CMAKE_ASM_COMPILER_ID", asm_id);
-        interp.set_variable("CMAKE_ASM_COMPILER_VERSION", asm_version);
-        interp.set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
-        interp.set_variable("CMAKE_ASM_FLAGS", "");
-        interp.set_variable("CMAKE_ASM_FLAGS_DEBUG", "-g");
-        interp.set_variable("CMAKE_ASM_FLAGS_RELEASE", "");
-        interp.set_variable("CMAKE_ASM_FLAGS_RELWITHDEBINFO", "");
-        interp.set_variable("CMAKE_ASM_FLAGS_MINSIZEREL", "");
-
-        auto compiler = std::make_unique<GnuCompiler>(asm_compiler, Language::ASM);
-        interp.get_toolchain().set_compiler(Language::ASM, std::move(compiler));
-        return {};
-    }
-
-    return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
+    return interp.enable_compiler_for_language(lang);
 }
 
 // Check if a value is falsy for #cmakedefine purposes

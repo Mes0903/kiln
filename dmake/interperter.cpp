@@ -38,125 +38,174 @@ namespace {
 // 1. Implement proper platform detection (slow but correct)
 // 2. Cache the results of CMake's detection (run once, reuse)
 // 3. Incrementally add variables as projects need them
-static std::unordered_map<std::string, std::string> backup_vars; // We setup interperter multiple times during tests, so back up vars to avoid re-detecting compilers
-void fake_cmake_compiler_checks_and_init(
-    Interpreter& interp,
-    Toolchain& toolchain)
+// Cached compiler detection data. Static so we don't re-detect compilers when
+// multiple Interpreters are created (e.g. during tests).
+static std::unordered_map<std::string, std::string> backup_vars;
+
+// Variables for each language that enable_compiler_for_language() will apply.
+static constexpr std::array c_lang_vars = {
+    "CMAKE_C_COMPILER", "CMAKE_C_COMPILER_ID", "CMAKE_C_COMPILER_VERSION",
+    "CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_DIRECTORIES",
+    "CMAKE_C_IMPLICIT_LINK_LIBRARIES", "CMAKE_C_STANDARD_DEFAULT",
+    "CMAKE_C90_STANDARD_COMPILE_OPTION", "CMAKE_C99_STANDARD_COMPILE_OPTION",
+    "CMAKE_C11_STANDARD_COMPILE_OPTION", "CMAKE_C17_STANDARD_COMPILE_OPTION",
+    "CMAKE_C23_STANDARD_COMPILE_OPTION",
+};
+static constexpr std::array cxx_lang_vars = {
+    "CMAKE_CXX_COMPILER", "CMAKE_CXX_COMPILER_ID", "CMAKE_CXX_COMPILER_VERSION",
+    "CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES",
+    "CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", "CMAKE_CXX_STANDARD_DEFAULT",
+    "CMAKE_CXX98_STANDARD_COMPILE_OPTION", "CMAKE_CXX11_STANDARD_COMPILE_OPTION",
+    "CMAKE_CXX14_STANDARD_COMPILE_OPTION", "CMAKE_CXX17_STANDARD_COMPILE_OPTION",
+    "CMAKE_CXX20_STANDARD_COMPILE_OPTION", "CMAKE_CXX23_STANDARD_COMPILE_OPTION",
+};
+static constexpr std::array asm_lang_vars = {
+    "CMAKE_ASM_COMPILER", "CMAKE_ASM_COMPILER_ID", "CMAKE_ASM_COMPILER_VERSION",
+    "CMAKE_ASM_FLAGS", "CMAKE_ASM_FLAGS_DEBUG", "CMAKE_ASM_FLAGS_RELEASE",
+    "CMAKE_ASM_FLAGS_RELWITHDEBINFO", "CMAKE_ASM_FLAGS_MINSIZEREL",
+};
+
+void fake_cmake_compiler_checks_and_init(Interpreter& interp)
 {
-    if(!backup_vars.empty()) {
-        interp.get_variables().merge(backup_vars);
-        auto cxx_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_CXX_COMPILER"), Language::CXX);
-        auto c_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_C_COMPILER"), Language::C);
-        toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
-        toolchain.set_compiler(Language::C, std::move(c_compiler));
-        if (!interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
-            auto asm_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_ASM_COMPILER"), Language::ASM);
-            toolchain.set_compiler(Language::ASM, std::move(asm_compiler));
+    auto apply_system_vars = [&] {
+        for (const char* name : {"CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR",
+                                  "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME",
+                                  "CMAKE_HOST_SYSTEM_PROCESSOR"}) {
+            auto it = backup_vars.find(name);
+            if (it != backup_vars.end()) {
+                interp.set_variable(name, it->second);
+            }
         }
+        interp.set_variable("CMAKE_CFG_INTDIR", ".");
+    };
+
+    if (!backup_vars.empty()) {
+        apply_system_vars();
         return;
     }
 
-    // Initialize compilers
-    interp.set_variable("CMAKE_CXX_COMPILER", "g++");
-    interp.set_variable("CMAKE_C_COMPILER", "gcc");
-    auto cxx_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_CXX_COMPILER"), Language::CXX);
-    auto c_compiler = std::make_unique<GnuCompiler>(interp.get_variable("CMAKE_C_COMPILER"), Language::C);
-
-    // C++ compiler platform info
+    // First-run: detect both C and CXX compilers and cache all data
+    auto cxx_compiler = std::make_unique<GnuCompiler>("g++", Language::CXX);
+    auto c_compiler = std::make_unique<GnuCompiler>("gcc", Language::C);
     auto cxx_info = cxx_compiler->detect_platform();
-    interp.set_variable("CMAKE_CXX_COMPILER_ID", cxx_info.compiler_id);
-    interp.set_variable("CMAKE_CXX_COMPILER_VERSION", cxx_info.compiler_version);
-    // Legacy compatibility variable for GCC
-    if (cxx_info.compiler_id == "GNU") {
-        interp.set_variable("CMAKE_COMPILER_IS_GNUCXX", "1");
-    }
-    if (!cxx_info.implicit_includes.empty()) {
-        interp.set_variable("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(cxx_info.implicit_includes).to_string());
-    }
-    if (!cxx_info.implicit_link_dirs.empty()) {
-        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", CMakeArray(cxx_info.implicit_link_dirs).to_string());
-    }
-    if (!cxx_info.implicit_link_libs.empty()) {
-        interp.set_variable("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeArray(cxx_info.implicit_link_libs).to_string());
-    }
-
-    // C compiler platform info
     auto c_info = c_compiler->detect_platform();
-    interp.set_variable("CMAKE_C_COMPILER_ID", c_info.compiler_id);
-    interp.set_variable("CMAKE_C_COMPILER_VERSION", c_info.compiler_version);
-    // Legacy compatibility variable for GCC
-    if (c_info.compiler_id == "GNU") {
-        interp.set_variable("CMAKE_COMPILER_IS_GNUCC", "1");
-    }
-    if (!c_info.implicit_includes.empty()) {
-        interp.set_variable("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(c_info.implicit_includes).to_string());
-    }
-    if (!c_info.implicit_link_dirs.empty()) {
-        interp.set_variable("CMAKE_C_IMPLICIT_LINK_DIRECTORIES", CMakeArray(c_info.implicit_link_dirs).to_string());
-    }
-    if (!c_info.implicit_link_libs.empty()) {
-        interp.set_variable("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeArray(c_info.implicit_link_libs).to_string());
-    }
 
-    // Compiler default language standards (used to suppress unnecessary -std= flags)
+    // Cache CXX data
+    backup_vars["CMAKE_CXX_COMPILER"] = "g++";
+    backup_vars["CMAKE_CXX_COMPILER_ID"] = cxx_info.compiler_id;
+    backup_vars["CMAKE_CXX_COMPILER_VERSION"] = cxx_info.compiler_version;
+    backup_vars["CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeArray(cxx_info.implicit_includes).to_string();
+    backup_vars["CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES"] = CMakeArray(cxx_info.implicit_link_dirs).to_string();
+    backup_vars["CMAKE_CXX_IMPLICIT_LINK_LIBRARIES"] = CMakeArray(cxx_info.implicit_link_libs).to_string();
     if (cxx_info.default_cxx_standard > 0)
-        interp.set_variable("CMAKE_CXX_STANDARD_DEFAULT", std::to_string(cxx_info.default_cxx_standard));
+        backup_vars["CMAKE_CXX_STANDARD_DEFAULT"] = std::to_string(cxx_info.default_cxx_standard);
+    backup_vars["CMAKE_CXX98_STANDARD_COMPILE_OPTION"] = "-std=c++98";
+    backup_vars["CMAKE_CXX11_STANDARD_COMPILE_OPTION"] = "-std=c++11";
+    backup_vars["CMAKE_CXX14_STANDARD_COMPILE_OPTION"] = "-std=c++14";
+    backup_vars["CMAKE_CXX17_STANDARD_COMPILE_OPTION"] = "-std=c++17";
+    backup_vars["CMAKE_CXX20_STANDARD_COMPILE_OPTION"] = "-std=c++20";
+    backup_vars["CMAKE_CXX23_STANDARD_COMPILE_OPTION"] = "-std=c++23";
+
+    // Cache C data
+    backup_vars["CMAKE_C_COMPILER"] = "gcc";
+    backup_vars["CMAKE_C_COMPILER_ID"] = c_info.compiler_id;
+    backup_vars["CMAKE_C_COMPILER_VERSION"] = c_info.compiler_version;
+    backup_vars["CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeArray(c_info.implicit_includes).to_string();
+    backup_vars["CMAKE_C_IMPLICIT_LINK_DIRECTORIES"] = CMakeArray(c_info.implicit_link_dirs).to_string();
+    backup_vars["CMAKE_C_IMPLICIT_LINK_LIBRARIES"] = CMakeArray(c_info.implicit_link_libs).to_string();
     if (c_info.default_c_standard > 0)
-        interp.set_variable("CMAKE_C_STANDARD_DEFAULT", std::to_string(c_info.default_c_standard));
+        backup_vars["CMAKE_C_STANDARD_DEFAULT"] = std::to_string(c_info.default_c_standard);
+    backup_vars["CMAKE_C90_STANDARD_COMPILE_OPTION"] = "-std=c90";
+    backup_vars["CMAKE_C99_STANDARD_COMPILE_OPTION"] = "-std=c99";
+    backup_vars["CMAKE_C11_STANDARD_COMPILE_OPTION"] = "-std=c11";
+    backup_vars["CMAKE_C17_STANDARD_COMPILE_OPTION"] = "-std=c17";
+    backup_vars["CMAKE_C23_STANDARD_COMPILE_OPTION"] = "-std=c23";
 
-    // Standard compile option flags (GNU compiler)
-    interp.set_variable("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
-    interp.set_variable("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
-    interp.set_variable("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
-    interp.set_variable("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
-    interp.set_variable("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
-    interp.set_variable("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
-    interp.set_variable("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
-    interp.set_variable("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
-    interp.set_variable("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
-    interp.set_variable("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
-    interp.set_variable("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+    // Cache system-level data (same for both compilers)
+    backup_vars["CMAKE_SYSTEM_NAME"] = cxx_info.system_name;
+    backup_vars["CMAKE_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
+    backup_vars["CMAKE_SIZEOF_VOID_P"] = cxx_info.sizeof_void_p;
+    backup_vars["CMAKE_HOST_SYSTEM_NAME"] = cxx_info.system_name;
+    backup_vars["CMAKE_HOST_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
 
-    // System-level info (same for both compilers)
-    interp.set_variable("CMAKE_SYSTEM_NAME", cxx_info.system_name);
-    interp.set_variable("CMAKE_SYSTEM_PROCESSOR", cxx_info.system_processor);
-    interp.set_variable("CMAKE_SIZEOF_VOID_P", cxx_info.sizeof_void_p);
-    interp.set_variable("CMAKE_HOST_SYSTEM_NAME", cxx_info.system_name);
-    interp.set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", cxx_info.system_processor);
-    interp.set_variable("CMAKE_C_COMPILER_LOADED", "1");
-    interp.set_variable("CMAKE_CXX_COMPILER_LOADED", "1");
-    interp.set_variable("CMAKE_CFG_INTDIR", ".");  // Single-config per invocation, like Make
-
-    toolchain.set_compiler(Language::CXX, std::move(cxx_compiler));
-    toolchain.set_compiler(Language::C, std::move(c_compiler));
-
-    // Cache only the compiler-related variables (not directory-specific ones)
-    static constexpr std::array compiler_vars = {
-        "CMAKE_CXX_COMPILER", "CMAKE_C_COMPILER",
-        "CMAKE_CXX_COMPILER_ID", "CMAKE_CXX_COMPILER_VERSION",
-        "CMAKE_C_COMPILER_ID", "CMAKE_C_COMPILER_VERSION",
-        "CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR",
-        "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME", "CMAKE_HOST_SYSTEM_PROCESSOR",
-        "CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", "CMAKE_CXX_IMPLICIT_LINK_LIBRARIES",
-        "CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_DIRECTORIES", "CMAKE_C_IMPLICIT_LINK_LIBRARIES",
-        "CMAKE_C_COMPILER_LOADED", "CMAKE_CXX_COMPILER_LOADED", "CMAKE_ASM_COMPILER_LOADED",
-        "CMAKE_ASM_COMPILER", "CMAKE_ASM_COMPILER_ID", "CMAKE_ASM_COMPILER_VERSION",
-        "CMAKE_ASM_FLAGS", "CMAKE_ASM_FLAGS_DEBUG", "CMAKE_ASM_FLAGS_RELEASE",
-        "CMAKE_ASM_FLAGS_RELWITHDEBINFO", "CMAKE_ASM_FLAGS_MINSIZEREL",
-        "CMAKE_CXX98_STANDARD_COMPILE_OPTION", "CMAKE_CXX11_STANDARD_COMPILE_OPTION",
-        "CMAKE_CXX14_STANDARD_COMPILE_OPTION", "CMAKE_CXX17_STANDARD_COMPILE_OPTION",
-        "CMAKE_CXX20_STANDARD_COMPILE_OPTION", "CMAKE_CXX23_STANDARD_COMPILE_OPTION",
-        "CMAKE_C90_STANDARD_COMPILE_OPTION", "CMAKE_C99_STANDARD_COMPILE_OPTION",
-        "CMAKE_C11_STANDARD_COMPILE_OPTION", "CMAKE_C17_STANDARD_COMPILE_OPTION",
-        "CMAKE_C23_STANDARD_COMPILE_OPTION",
-        "CMAKE_CXX_STANDARD_DEFAULT", "CMAKE_C_STANDARD_DEFAULT"
-    };
-    for (const auto& name : compiler_vars) {
-        backup_vars[name] = interp.get_variable(name);
-    }
+    apply_system_vars();
 }
 
 } // anonymous namespace
+
+std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
+    std::string loaded_var = "CMAKE_" + lang + "_COMPILER_LOADED";
+    if (!get_variable(loaded_var).empty()) return {}; // Already loaded
+
+    if (lang == "C") {
+        for (const auto& var : c_lang_vars) {
+            auto it = backup_vars.find(var);
+            if (it != backup_vars.end() && !it->second.empty())
+                set_variable(var, it->second);
+        }
+        if (backup_vars["CMAKE_C_COMPILER_ID"] == "GNU")
+            set_variable("CMAKE_COMPILER_IS_GNUCC", "1");
+        set_variable("CMAKE_C_COMPILER_LOADED", "1");
+        auto compiler = std::make_unique<GnuCompiler>(get_variable("CMAKE_C_COMPILER"), Language::C);
+        get_toolchain().set_compiler(Language::C, std::move(compiler));
+    } else if (lang == "CXX") {
+        for (const auto& var : cxx_lang_vars) {
+            auto it = backup_vars.find(var);
+            if (it != backup_vars.end() && !it->second.empty())
+                set_variable(var, it->second);
+        }
+        if (backup_vars["CMAKE_CXX_COMPILER_ID"] == "GNU")
+            set_variable("CMAKE_COMPILER_IS_GNUCXX", "1");
+        set_variable("CMAKE_CXX_COMPILER_LOADED", "1");
+        auto compiler = std::make_unique<GnuCompiler>(get_variable("CMAKE_CXX_COMPILER"), Language::CXX);
+        get_toolchain().set_compiler(Language::CXX, std::move(compiler));
+    } else if (lang == "ASM") {
+        // Check cache first
+        auto cached = backup_vars.find("CMAKE_ASM_COMPILER");
+        if (cached != backup_vars.end() && !cached->second.empty()) {
+            for (const auto& var : asm_lang_vars) {
+                auto it = backup_vars.find(var);
+                if (it != backup_vars.end() && !it->second.empty())
+                    set_variable(var, it->second);
+            }
+        } else {
+            // Derive from C compiler (prefer C, fallback to "cc")
+            std::string asm_compiler = get_variable("CMAKE_C_COMPILER");
+            std::string asm_id = get_variable("CMAKE_C_COMPILER_ID");
+            std::string asm_version = get_variable("CMAKE_C_COMPILER_VERSION");
+            if (asm_compiler.empty()) {
+                // C not enabled yet, pull from cache
+                asm_compiler = backup_vars["CMAKE_C_COMPILER"];
+                asm_id = backup_vars["CMAKE_C_COMPILER_ID"];
+                asm_version = backup_vars["CMAKE_C_COMPILER_VERSION"];
+            }
+            if (asm_compiler.empty()) {
+                asm_compiler = "cc";
+                asm_id = "GNU";
+                asm_version = "";
+            }
+            set_variable("CMAKE_ASM_COMPILER", asm_compiler);
+            set_variable("CMAKE_ASM_COMPILER_ID", asm_id);
+            set_variable("CMAKE_ASM_COMPILER_VERSION", asm_version);
+            set_variable("CMAKE_ASM_FLAGS", "");
+            set_variable("CMAKE_ASM_FLAGS_DEBUG", "-g");
+            set_variable("CMAKE_ASM_FLAGS_RELEASE", "");
+            set_variable("CMAKE_ASM_FLAGS_RELWITHDEBINFO", "");
+            set_variable("CMAKE_ASM_FLAGS_MINSIZEREL", "");
+
+            // Cache for next time
+            for (const auto& var : asm_lang_vars) {
+                backup_vars[var] = get_variable(var);
+            }
+        }
+        set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
+        auto compiler = std::make_unique<GnuCompiler>(get_variable("CMAKE_ASM_COMPILER"), Language::ASM);
+        get_toolchain().set_compiler(Language::ASM, std::move(compiler));
+    } else {
+        return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
+    }
+    return {};
+}
 
 Interpreter* Interpreter::get_root() {
     return this;  // No child interpreters anymore - we ARE the root
@@ -740,11 +789,11 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     // Initialize toolchain with compiler detection
     // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
     // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
-    fake_cmake_compiler_checks_and_init(*this, toolchain_);
+    fake_cmake_compiler_checks_and_init(*this);
 
     // Initialize built-in global properties
-    // CMake modules expect these to be set (e.g., CheckLanguage.cmake checks ENABLED_LANGUAGES)
-    global_properties_["ENABLED_LANGUAGES"] = "C;CXX";
+    // ENABLED_LANGUAGES starts empty; project()/enable_language() populates it
+    global_properties_["ENABLED_LANGUAGES"] = "";
     global_properties_["GENERATOR_IS_MULTI_CONFIG"] = "FALSE";
     global_properties_["TARGET_SUPPORTS_SHARED_LIBS"] = "TRUE";
     global_properties_["CMAKE_ROLE"] = "PROJECT";
