@@ -11,7 +11,7 @@ rm -rf build
 mkdir -p build
 
 # Run dmake (creates build/debug/)
-$DMAKE .
+$DMAKE
 
 # Navigate to the actual build directory
 cd build/debug

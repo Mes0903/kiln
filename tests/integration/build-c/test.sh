@@ -1,6 +1,6 @@
 #!/bin/bash
 
-"$1" .
+"$1"
 
 if [[ ! -f build/debug/main ]]
 then

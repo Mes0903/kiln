@@ -9,7 +9,7 @@ rm -rf build
 
 # Run dmake (which will interpret CMakeLists.txt and run try_compile tests)
 echo "Running try_compile integration tests..."
-$DMAKE . || {
+$DMAKE || {
     echo "ERROR: dmake failed"
     exit 1
 }
@@ -29,7 +29,7 @@ fi
 # Run again - should be faster (cache hits)
 echo "Testing cache hits (second run)..."
 START=$(date +%s%N)
-$DMAKE . || {
+$DMAKE || {
     echo "ERROR: Second build failed"
     exit 1
 }

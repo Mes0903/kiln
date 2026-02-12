@@ -7,5 +7,5 @@ if [ "$(uname -m)" != "x86_64" ]; then
     exit 0
 fi
 
-"$1" .
+"$1"
 ./build/debug/asm_test | grep -q "ASM test passed"

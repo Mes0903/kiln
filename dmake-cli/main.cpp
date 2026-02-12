@@ -38,6 +38,7 @@ struct GlobalOptions {
     std::string config = "debug";
     std::string script_path;
     std::string source_dir_str;  // -S flag for ExternalProject recursive invocation
+    std::string project_dir_str = ".";  // -C flag for project directory
     bool profile = false;
     bool trace = false;
     bool trace_expand = false;
@@ -400,145 +401,27 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
 } // namespace
 
 int main(int argc, char* argv[]) {
-    // Pre-process argv: handle "dmake [project] [opts] -- <verb> [args]" pattern.
-    // When "--" is followed by a known verb (run/test/build/clean/install) and no
-    // subcommand appears before "--", restructure args so CLI11 sees the verb as a
-    // proper subcommand. This allows e.g.: dmake ~/path -DVAR=VAL -- run cmake --help
-    std::vector<std::string> args_storage;
-    std::vector<char*> new_argv_ptrs;
-    {
-        static constexpr std::string_view known_verbs[] = {"build", "test", "run", "clean", "install"};
-        int separator_pos = -1;
-        bool verb_before_sep = false;
-
-        for (int i = 1; i < argc; ++i) {
-            std::string_view arg(argv[i]);
-            if (arg == "--") {
-                separator_pos = i;
-                break;
-            }
-            for (auto v : known_verbs) {
-                if (arg == v) { verb_before_sep = true; break; }
-            }
-            if (verb_before_sep) break;
-        }
-
-        if (separator_pos > 0 && !verb_before_sep && separator_pos + 1 < argc) {
-            std::string_view next_arg(argv[separator_pos + 1]);
-            bool is_verb = false;
-            for (auto v : known_verbs) {
-                if (next_arg == v) { is_verb = true; break; }
-            }
-            if (is_verb) {
-                // Restructure: [dmake, verb, pre_args..., --, verb_args...]
-                args_storage.emplace_back(argv[0]);
-                args_storage.emplace_back(argv[separator_pos + 1]); // verb moved to front
-                for (int i = 1; i < separator_pos; ++i) {
-                    args_storage.emplace_back(argv[i]);
-                }
-                if (separator_pos + 2 < argc) {
-                    args_storage.emplace_back("--");
-                    for (int i = separator_pos + 2; i < argc; ++i) {
-                        args_storage.emplace_back(argv[i]);
-                    }
-                }
-
-                new_argv_ptrs.reserve(args_storage.size() + 1);
-                for (auto& s : args_storage) {
-                    new_argv_ptrs.push_back(s.data());
-                }
-                new_argv_ptrs.push_back(nullptr);
-                argc = static_cast<int>(args_storage.size());
-                argv = new_argv_ptrs.data();
-            }
-        }
-    }
-
     CLI::App app{"dmake - A modern C++ build system with CMake compatibility.\n"
                   "  Use 'dmake <subcommand> --help' for subcommand-specific options."};
     app.set_version_flag("-v,--version", "0.1.0-alpha");
     GlobalOptions opt;
-    app.add_option("-P", opt.script_path, "Run a CMake script (script mode)");
-    app.add_option("-S", opt.source_dir_str, "Source directory (uses -B as-is, no config appended)");
-    app.add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)")
-       ->default_val(0);
-    app.add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
-    app.add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
     std::string ignored_generator;
-    app.add_option("-G", ignored_generator, "Generator (ignored, accepted for CMake compatibility)");
-    app.add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
-    app.add_flag("--trace", opt.trace, "Print each command as it is executed (raw arguments)");
-    app.add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
-    app.add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
-    app.add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
-    app.add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
-       ->default_val("debug")
-       ->transform([](const std::string& value) -> std::string {
-           auto copy = dmake::to_lower(value);
-           if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
-               return copy;
-           }
-           throw CLI::ValidationError("Invalid configuration");
-       }, "", "lowercase");
 
-    app.footer(R"(
-Examples:
-  dmake                             # Build current directory (debug)
-  dmake build -j8 --config release  # Build with 8 jobs in release mode
-  dmake run my_app -- --verbose     # Build and run a target with args
-  dmake test "parser.*"             # Run tests matching a regex
-  dmake -E copy file.txt dest/      # CMake-compatible tool command
-  dmake -P script.cmake -DFOO=bar   # Run a CMake script
-)");
-
-    std::string build_project_dir = ".";
-    std::vector<std::string> build_targets;
-    auto* build_cmd = app.add_subcommand("build", "Build specific targets (default if no subcommand given)");
-    build_cmd->add_option("project", build_project_dir, "Project directory (default: current directory)");
-    build_cmd->add_option("targets", build_targets, "Target names to build (default: all)");
-
-    std::string test_project_dir = ".";
-    std::string test_pattern;
-    auto* test_cmd = app.add_subcommand("test", "Build and run tests (parallel)");
-    test_cmd->add_option("project", test_project_dir, "Project directory (default: current directory)");
-    test_cmd->add_option("pattern", test_pattern, "Regex filter for test names");
-
-    std::string run_project_dir = ".";
-    std::string run_target;
-    std::vector<std::string> run_args;
-    auto* run_cmd = app.add_subcommand("run", "Build and run an executable target");
-    run_cmd->add_option("project", run_project_dir, "Project directory (default: current directory)");
-    run_cmd->add_option("target", run_target, "Executable target to run")->required();
-    run_cmd->add_option("args", run_args, "Arguments passed to the target (use -- to separate)");
-
-    auto* clean_cmd = app.add_subcommand("clean", "Remove build artifacts for the current config");
-    std::string clean_project_dir = ".";
-    clean_cmd->add_option("project", clean_project_dir, "Project directory (default: current directory)");
-
-    auto* install_cmd = app.add_subcommand("install", "Build and install project files");
-    std::string install_project_dir = ".";
-    std::string install_prefix;
-    std::string install_component;
-    install_cmd->add_option("project", install_project_dir, "Project directory (default: current directory)");
-    install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
-    install_cmd->add_option("--component", install_component, "Install only the specified component");
-
-    auto* e_cmd = app.add_subcommand("tool", "CMake-compatible tool commands (echo, touch, copy, ...)");
-    e_cmd->alias("-E");
-    e_cmd->prefix_command();
-
-    // Propagate global options to subcommands so e.g. "dmake build -j8" works
-    auto add_global_opts = [&](CLI::App* sub) {
-        sub->add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)");
-        sub->add_option("-B", opt.build_dir_str, "Build directory");
-        sub->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE)");
-        sub->add_option("-G", ignored_generator, "Generator (ignored, CMake compatibility)");
-        sub->add_flag("--profile", opt.profile, "Generate build profile");
-        sub->add_flag("--trace", opt.trace, "Print each command as it is executed");
-        sub->add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
-        sub->add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
-        sub->add_option("--break-on-message", opt.break_on_message, "Break into debugger on message pattern");
-        sub->add_option("-c,--config", opt.config, "Build configuration")
+    // Helper to add global options to app or subcommand
+    auto add_global_options = [&](CLI::App* target) {
+        target->add_option("-C,--project", opt.project_dir_str, "Project directory (default: current directory)");
+        target->add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)")
+           ->default_val(0);
+        target->add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
+        target->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
+        target->add_option("-G", ignored_generator, "Generator (ignored, CMake compatibility)");
+        target->add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
+        target->add_flag("--trace", opt.trace, "Print each command as it is executed (raw arguments)");
+        target->add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
+        target->add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
+        target->add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
+        target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
+           ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {
                auto copy = dmake::to_lower(value);
                if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
@@ -547,12 +430,60 @@ Examples:
                throw CLI::ValidationError("Invalid configuration");
            }, "", "lowercase");
     };
-    for (auto* sub : {build_cmd, test_cmd, run_cmd, clean_cmd, install_cmd}) {
-        add_global_opts(sub);
-    }
 
+    // Add global options to main app
+    add_global_options(&app);
+
+    // Special modes (only on main app)
+    app.add_option("-P", opt.script_path, "Run a CMake script (script mode)");
+    app.add_option("-S", opt.source_dir_str, "Source directory (CMake compat, requires -B)");
+
+    app.footer(R"(
+Examples:
+  dmake                             # Build current directory (debug)
+  dmake -j8 --config release        # Build with 8 jobs in release mode
+  dmake -C ~/other/project          # Build a different project
+  dmake run my_app -- --verbose     # Build and run a target with args
+  dmake test "parser.*"             # Run tests matching a regex
+  dmake -E copy file.txt dest/      # CMake-compatible tool command
+  dmake -P script.cmake -DFOO=bar   # Run a CMake script
+)");
+
+    // Subcommands
+    std::vector<std::string> build_targets;
+    auto* build_cmd = app.add_subcommand("build", "Build specific targets (default if no subcommand given)");
+    build_cmd->add_option("targets", build_targets, "Target names to build (default: all)");
+    add_global_options(build_cmd);
+
+    std::string test_pattern;
+    auto* test_cmd = app.add_subcommand("test", "Build and run tests (sets BUILD_TESTING=ON)");
+    test_cmd->add_option("pattern", test_pattern, "Regex filter for test names");
+    add_global_options(test_cmd);
+
+    std::string run_target;
+    std::vector<std::string> run_args;
+    auto* run_cmd = app.add_subcommand("run", "Build and run an executable target");
+    run_cmd->add_option("target", run_target, "Executable target to run")->required();
+    run_cmd->add_option("args", run_args, "Arguments passed to the target (use -- to separate)");
+    add_global_options(run_cmd);
+
+    auto* clean_cmd = app.add_subcommand("clean", "Remove build artifacts for the current config");
+    add_global_options(clean_cmd);
+
+    auto* install_cmd = app.add_subcommand("install", "Build and install project files");
+    std::string install_prefix;
+    std::string install_component;
+    install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
+    install_cmd->add_option("--component", install_component, "Install only the specified component");
+    add_global_options(install_cmd);
+
+    auto* e_cmd = app.add_subcommand("tool", "CMake-compatible tool commands (echo, touch, copy, ...)");
+    e_cmd->alias("-E");
+    e_cmd->prefix_command();
+
+    // Default targets when no subcommand (positionals go to build_targets)
     std::vector<std::string> positionals;
-    app.add_option("positionals", positionals, "Project directory and/or target names");
+    app.add_option("targets", positionals, "Target names to build (default: all)");
 
     app.require_subcommand(0, 1);
 
@@ -643,7 +574,7 @@ Examples:
     }
 
     if (clean_cmd->parsed()) {
-        std::filesystem::path project_path = std::filesystem::absolute(clean_project_dir);
+        std::filesystem::path project_path = std::filesystem::absolute(opt.project_dir_str);
         std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
         std::filesystem::path build_path = build_root / opt.config;
         if (std::filesystem::exists(build_path)) {
@@ -655,7 +586,7 @@ Examples:
 
     if (install_cmd->parsed()) {
         // Build project first
-        auto build_res = run_build_action(opt, debug_controller, install_project_dir, {});
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {});
         if (!build_res) {
             std::cerr << "Build failed: " << build_res.error() << std::endl;
             return 1;
@@ -693,14 +624,7 @@ Examples:
     }
 
     if (run_cmd->parsed()) {
-        if (!std::filesystem::exists(std::filesystem::path(run_project_dir) / "CMakeLists.txt")) {
-            if (std::filesystem::exists("CMakeLists.txt")) {
-                run_args.insert(run_args.begin(), run_target);
-                run_target = run_project_dir;
-                run_project_dir = ".";
-            }
-        }
-        auto build_res = run_build_action(opt, debug_controller, run_project_dir, {run_target});
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {run_target});
         if (!build_res) {
             std::cerr << "Error: " << build_res.error() << std::endl;
             return 1;
@@ -739,14 +663,7 @@ Examples:
     }
 
     if (test_cmd->parsed()) {
-        if (!std::filesystem::exists(std::filesystem::path(test_project_dir) / "CMakeLists.txt")) {
-            if (std::filesystem::exists("CMakeLists.txt")) {
-                test_pattern = test_project_dir;
-                test_project_dir = ".";
-            }
-        }
-
-        auto build_res = run_build_action(opt, debug_controller, test_project_dir, {}, true);
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {}, true);
         if (!build_res) {
             std::cerr << "Error: " << build_res.error() << std::endl;
             return 1;
@@ -755,7 +672,7 @@ Examples:
         return run_test_action(opt, build_res.value().get(), test_pattern);
     }
 
-    // Handle -S flag: override project_dir with the source directory
+    // Handle -S flag: CMake-style build (ExternalProject compatibility)
     if (!opt.source_dir_str.empty()) {
         auto build_res = run_build_action(opt, debug_controller, opt.source_dir_str, {});
         if (!build_res) {
@@ -765,26 +682,21 @@ Examples:
         return 0;
     }
 
-    std::string project_dir = build_project_dir;
-    std::vector<std::string> targets = build_targets;
+    // Determine targets: use build_targets if build subcommand, else positionals
+    std::vector<std::string> targets = build_cmd->parsed() ? build_targets : positionals;
 
-    if (!build_cmd->parsed() && !test_cmd->parsed() && !run_cmd->parsed() && !clean_cmd->parsed() && !install_cmd->parsed()) {
-        if (!positionals.empty()) {
-            project_dir = positionals[0];
-            for (size_t i = 1; i < positionals.size(); ++i) {
-                targets.push_back(positionals[i]);
-            }
+    // Migration hint: if a target looks like a project directory, suggest -C
+    for (const auto& target : targets) {
+        std::filesystem::path target_path(target);
+        if (std::filesystem::exists(target_path / "CMakeLists.txt")) {
+            std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_YELLOW) << "hint:"
+                      << dmake::c(std::cerr, dmake::colors::RESET)
+                      << " '" << target << "' looks like a project directory. "
+                      << "Use 'dmake -C " << target << "' to build it." << std::endl;
         }
     }
 
-    if (!std::filesystem::exists(std::filesystem::path(project_dir) / "CMakeLists.txt")) {
-        if (std::filesystem::exists("CMakeLists.txt")) {
-            targets.insert(targets.begin(), project_dir);
-            project_dir = ".";
-        }
-    }
-
-    auto build_res = run_build_action(opt, debug_controller, project_dir, targets);
+    auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, targets);
     if (!build_res) {
         std::cerr << "Error: " << build_res.error() << std::endl;
         return 1;

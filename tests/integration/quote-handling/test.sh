@@ -2,7 +2,7 @@
 set -e
 DMAKE=$1
 
-"$DMAKE" .
+"$DMAKE"
 
 # Verify custom command stripped quotes: should be -flag=hello, not -flag="hello"
 OUTPUT=$(cat build/debug/quote_output.txt)

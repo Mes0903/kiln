@@ -6,7 +6,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 output=$("$DMAKE" -P /dev/null -DCMAKE_CURRENT_SOURCE_DIR="$DIR" -- 2>&1 || true)
 
 # Run dmake on the test project
-output=$("$DMAKE" "$DIR" 2>&1)
+output=$("$DMAKE" -C "$DIR" 2>&1)
 
 echo "$output"
 

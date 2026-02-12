@@ -3,7 +3,7 @@ set -e
 DMAKE=$1
 
 # 1. Run default build (should only run all_target)
-"$DMAKE" .
+"$DMAKE"
 if [ ! -f build/debug/all_produced.txt ]; then
     echo "all_produced.txt not found (all_target didn't run)"
     exit 1
@@ -15,7 +15,7 @@ if [ -f build/debug/produced_file.txt ]; then
 fi
 
 # 2. Run explicit target (should run simple_target and dependent_target)
-"$DMAKE" build . dependent_target
+"$DMAKE" build dependent_target
 
 if [ ! -f build/debug/produced_file.txt ]; then
     echo "produced_file.txt not found (simple_target didn't run as dependency)"

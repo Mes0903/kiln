@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-"$1" .
+"$1"
 if [ ! -f build/debug/hello ]; then
     echo "Executable 'hello' not found"
     exit 1

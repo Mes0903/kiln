@@ -2,7 +2,7 @@
 set -e
 
 # Run dmake (first argument is the dmake binary path)
-"$1" .
+"$1"
 
 # Verify the executable was built
 if [ ! -f build/debug/find_test ]; then
