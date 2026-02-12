@@ -520,6 +520,11 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
         }
 
         auto& dep = dep_it->second;
+
+        // Skip self-references (e.g. link_libraries(Threads::Threads) applied back
+        // to Threads::Threads itself via finalize_directory_targets)
+        if (dep.get() == this) return;
+
         resolved_target_deps_.push_back(lib_name);
 
         if (dep->is_visiting()) {
