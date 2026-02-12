@@ -375,12 +375,20 @@ void register_variable_builtins(Interpreter& interp) {
             i++;
         }
 
-        // Set special output variables
-        CMakeArray unparsed_list(unparsed);
-        interp.set_variable(prefix + "_UNPARSED_ARGUMENTS", unparsed_list.to_string());
+        // Set special output variables - only define when non-empty (CMake behavior)
+        if (!unparsed.empty()) {
+            CMakeArray unparsed_list(unparsed);
+            interp.set_variable(prefix + "_UNPARSED_ARGUMENTS", unparsed_list.to_string());
+        } else {
+            interp.unset_variable(prefix + "_UNPARSED_ARGUMENTS");
+        }
 
-        CMakeArray missing_list(keywords_missing_values);
-        interp.set_variable(prefix + "_KEYWORDS_MISSING_VALUES", missing_list.to_string());
+        if (!keywords_missing_values.empty()) {
+            CMakeArray missing_list(keywords_missing_values);
+            interp.set_variable(prefix + "_KEYWORDS_MISSING_VALUES", missing_list.to_string());
+        } else {
+            interp.unset_variable(prefix + "_KEYWORDS_MISSING_VALUES");
+        }
     });
 
     interp.add_builtin("variable_watch", [](Interpreter& interp, const std::vector<std::string>& args) {
