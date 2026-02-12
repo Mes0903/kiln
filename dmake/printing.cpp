@@ -15,8 +15,8 @@ bool is_color_enabled(std::ostream& os) {
 }
 
 void print_message(std::ostream& os, std::string_view mode, std::string_view msg,
-                   std::string_view indent) {
-    bool color = is_color_enabled(os);
+                   std::string_view indent, bool force_color) {
+    bool color = force_color || is_color_enabled(os);
     std::string_view prefix, msg_color;
 
     if (mode == "FATAL_ERROR") {

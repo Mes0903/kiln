@@ -10,15 +10,10 @@ rm -rf build
 # Run dmake
 "$DMAKE" 2>&1 | tee build.log
 
-# Check: EP install output should exist (proves build-time execution)
-if [ ! -f build/debug/install/lib/mylib.txt ]; then
-    echo "FAIL: mylib.txt not found (EP BUILD_COMMAND didn't run)"
+# Check: EP library should have been built (in EP's binary dir)
+if [ ! -f build/debug/_ep/mylib/libmylib.a ]; then
+    echo "FAIL: libmylib.a not found in EP build dir (EP tasks didn't run)"
     cat build.log
-    exit 1
-fi
-
-if [ ! -f build/debug/install/lib/mylib_installed.txt ]; then
-    echo "FAIL: mylib_installed.txt not found (EP INSTALL_COMMAND didn't run)"
     exit 1
 fi
 
@@ -28,4 +23,12 @@ if [ ! -f build/debug/main_app ]; then
     exit 1
 fi
 
+# Run the main app to verify it works
+OUTPUT=$(./build/debug/main_app)
+if [[ "$OUTPUT" != "Value from mylib: 42" ]]; then
+    echo "FAIL: main_app output unexpected: $OUTPUT"
+    exit 1
+fi
+
+echo "Output: $OUTPUT"
 echo "=== ExternalProject Build-Time Test PASSED ==="

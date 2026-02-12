@@ -191,6 +191,92 @@ std::optional<std::string> BuildGraph::check_for_cycles() {
     return std::nullopt;
 }
 
+std::expected<std::pair<std::vector<BuildTask>, std::string>, std::string>
+BuildGraph::extract_dirty_tasks(const std::string& build_dir) {
+    // Similar to execute()'s pre-scan, but returns dirty tasks instead of executing them.
+    // Used by EP orchestrator to extract tasks for injection into parent graph.
+
+    // 1. Resolve cross-target dependencies (same as execute() step 1)
+    std::map<std::string, std::string> file_to_task;
+    for (const auto& [id, task] : tasks_) {
+        for (const auto& out : task.outputs) file_to_task[out] = id;
+    }
+    for (auto& [id, task] : tasks_) {
+        for (const auto& in : task.inputs) {
+            auto it = file_to_task.find(in);
+            if (it != file_to_task.end() && it->second != id) {
+                task.dependencies.insert(it->second);
+                tasks_[it->second].dependents.insert(id);
+            }
+        }
+    }
+
+    // 2. Load cache and compute dirty set
+    auto cache = load_cache(build_dir);
+
+    std::unordered_set<std::string> dirty_set;
+    for (const auto& [id, task] : tasks_) {
+        // Skip marker tasks
+        if (task.outputs.empty() && task.commands.empty() &&
+            !task.is_module_collator && !task.is_ep_orchestrator && !task.is_ep_sentinel) continue;
+
+        // Check if outputs exist
+        bool outputs_exist = true;
+        for (const auto& out : task.outputs) {
+            if (!std::filesystem::exists(out)) { outputs_exist = false; break; }
+        }
+
+        if (!outputs_exist || task.always_run) {
+            dirty_set.insert(id);
+            continue;
+        }
+
+        auto sig_res = calculate_signature(task);
+        if (!sig_res || !(cache.count(id) && cache[id] == *sig_res)) {
+            dirty_set.insert(id);
+        }
+    }
+
+    // 3. Propagate dirtiness
+    if (!dirty_set.empty()) {
+        bool changed;
+        do {
+            changed = false;
+            for (const auto& [id, task] : tasks_) {
+                if (dirty_set.count(id)) continue;
+                for (const auto& dep : task.dependencies) {
+                    if (dirty_set.count(dep)) {
+                        dirty_set.insert(id);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } while (changed);
+    }
+
+    // 4. Collect dirty tasks
+    std::vector<BuildTask> dirty_tasks;
+    std::string last_task_id;
+
+    for (const auto& id : dirty_set) {
+        dirty_tasks.push_back(tasks_[id]);
+        // Track the "last" task - the one with no dirty dependents (final output)
+        bool has_dirty_dependent = false;
+        for (const auto& dep_id : tasks_[id].dependents) {
+            if (dirty_set.count(dep_id)) {
+                has_dirty_dependent = true;
+                break;
+            }
+        }
+        if (!has_dirty_dependent && !tasks_[id].outputs.empty()) {
+            last_task_id = id;  // This could be the final task
+        }
+    }
+
+    return std::make_pair(std::move(dirty_tasks), last_task_id);
+}
+
 std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir, int jobs) {
     // 1. Resolve cross-target dependencies
     std::map<std::string, std::string> file_to_task;
@@ -344,11 +430,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
             }
         } while (changed);
     }
-    // Count dirty tasks, excluding EP sentinels (they're just synchronization points)
-    int dirty_task_count = 0;
-    for (const auto& id : dirty_set) {
-        if (!tasks_[id].is_ep_sentinel) dirty_task_count++;
-    }
+    int dirty_task_count = static_cast<int>(dirty_set.size());
     pre_scan_profile.stop();
 
     bool stdout_is_tty = isatty(STDOUT_FILENO);
@@ -529,7 +611,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                         // Run the EP orchestrator under the loop_mutex since it may call inject_tasks
                         // Actually, we need to call it outside the lock and acquire the lock when injecting
-                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_set, ready_set, progress, new_cache);
+                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_set, ready_set, progress, new_cache, stdout_is_tty);
                         if (ep_result) {
                             task_error = *ep_result;
                             break;
@@ -537,8 +619,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         // EP orchestrator completed successfully
 
                     } else if (task.is_ep_sentinel) {
-                        // Sentinel task - no-op, just a synchronization point
-                        // Don't print anything or count toward progress
+                        // Sentinel task - synchronization point, signals EP completion
+                        print_status("Ready", task.ep_name);
 
                     // C++20 modules: handle collator tasks specially (in-process execution)
                     } else if (task.is_module_collator) {
@@ -1128,15 +1210,16 @@ void BuildGraph::inject_tasks(
     if (!last_task_id.empty() && tasks_.count(sentinel_id) && tasks_.count(last_task_id)) {
         tasks_[sentinel_id].dependencies.insert(last_task_id);
         tasks_[last_task_id].dependents.insert(sentinel_id);
+        // Sentinel now has unsatisfied dependency - remove from ready set
+        ready_set.erase(sentinel_id);
     }
 
-    // 5. Mark all new tasks as dirty
-    for (const auto& [id, _] : new_file_to_task) {
-        // id here is the output, not task id - get task id from new_file_to_task
-    }
-    // Actually iterate over tasks
+    // 5. Mark all new tasks as dirty and ensure they're NOT in completed
+    //    (They may be in completed if parent pre-scan marked a file path as "clean"
+    //     before we injected the task that produces it)
     for (const auto& [out, task_id] : new_file_to_task) {
         dirty_set.insert(task_id);
+        completed.erase(task_id);
     }
     // Also ensure sentinel is dirty
     dirty_set.insert(sentinel_id);
@@ -1169,7 +1252,8 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
     std::unordered_set<std::string>& dirty_set,
     std::set<std::string>& ready_set,
     ProgressBar& progress,
-    std::map<std::string, std::string>& new_cache) {
+    std::map<std::string, std::string>& new_cache,
+    bool stdout_is_tty) {
 
     // Get the ExternalProjectTarget from the task
     auto* ep_target = dynamic_cast<ExternalProjectTarget*>(task.parent_target);
@@ -1179,6 +1263,20 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
 
     std::string ep_name = ep_target->get_name();
     std::string sentinel_id = ep_name;  // Sentinel task ID is the EP name
+
+    // Helper to print output lines with EP name prefix (for child interpreter output)
+    // DIM + WHITE gives gray text for the prefix
+    // Uses progress.print_line() to properly handle the progress bar
+    auto print_prefixed_output = [&](const std::string& output) {
+        if (output.empty()) return;
+        std::string prefix = std::string(c(stdout_is_tty, colors::DIM)) + std::string(c(stdout_is_tty, colors::WHITE)) + "[" + ep_name + "] " + std::string(c(stdout_is_tty, colors::RESET));
+        std::istringstream iss(output);
+        std::string line;
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        while (std::getline(iss, line)) {
+            progress.print_line(prefix + line);
+        }
+    };
 
     // Check if this is a cmake-based EP or custom commands EP
     if (ep_target->is_cmake_based()) {
@@ -1192,6 +1290,11 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         // Create isolated interpreter
         std::stringstream ep_output;
         auto ep_interp = std::make_unique<Interpreter>(source_dir, &ep_output, &ep_output, binary_dir);
+
+        // Force colors in child interpreter if parent stdout is a TTY
+        if (stdout_is_tty) {
+            ep_interp->set_force_colors(true);
+        }
 
         // Apply CMAKE_ARGS and CMAKE_CACHE_ARGS
         for (const auto& arg : ep_target->get_cmake_args()) {
@@ -1256,23 +1359,29 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                    (output.empty() ? "" : "\nOutput:\n" + output);
         }
 
-        // Run the build (this is recursive - it will resolve, generate tasks, and execute)
-        auto build_result = ep_interp->run_build(0, {});  // Use default jobs
-        if (!build_result) {
+        // Print any buffered interpretation output (with EP name prefix)
+        print_prefixed_output(ep_output.str());
+        ep_output.str("");  // Clear for next phase
+
+        // Generate dirty tasks (resolve -> generate -> dirty scan)
+        auto tasks_result = ep_interp->generate_dirty_tasks({});
+        if (!tasks_result) {
             std::string output = ep_output.str();
-            return "EP " + ep_name + ": Build error: " + build_result.error().message +
+            return "EP " + ep_name + ": Task generation error: " + tasks_result.error().message +
                    (output.empty() ? "" : "\nOutput:\n" + output);
         }
 
-        // Print any buffered output from the EP
-        std::string output = ep_output.str();
-        if (!output.empty()) {
-            std::lock_guard<std::mutex> lock(output_mutex_);
-            std::cout << output;
-        }
+        auto& [dirty_tasks, last_task_id] = *tasks_result;
 
-        // No tasks to inject - the EP build completed internally
-        // The sentinel just needs to complete
+        // Print any buffered task generation output
+        print_prefixed_output(ep_output.str());
+
+        // Inject dirty tasks into parent's graph
+        if (!dirty_tasks.empty()) {
+            inject_tasks(std::move(dirty_tasks), sentinel_id, last_task_id,
+                        completed, dirty_set, ready_set, progress);
+        }
+        // If no dirty tasks, sentinel will complete immediately after orchestrator
 
     } else {
         // === CUSTOM COMMANDS EP ===
@@ -1286,12 +1395,10 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         if (!configure_cmd.command.empty() && !configure_cmd.is_empty) {
             auto result = dmake::run_command(configure_cmd.command, working_dir);
             if (result.exit_code != 0) {
-                return "EP " + ep_name + " configure failed:\n" + result.output;
+                print_prefixed_output(result.output);
+                return "EP " + ep_name + " configure failed";
             }
-            if (!result.output.empty()) {
-                std::lock_guard<std::mutex> lock(output_mutex_);
-                std::cout << result.output;
-            }
+            print_prefixed_output(result.output);
         }
 
         // Build step
@@ -1299,12 +1406,10 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         if (!build_cmd.command.empty() && !build_cmd.is_empty) {
             auto result = dmake::run_command(build_cmd.command, working_dir);
             if (result.exit_code != 0) {
-                return "EP " + ep_name + " build failed:\n" + result.output;
+                print_prefixed_output(result.output);
+                return "EP " + ep_name + " build failed";
             }
-            if (!result.output.empty()) {
-                std::lock_guard<std::mutex> lock(output_mutex_);
-                std::cout << result.output;
-            }
+            print_prefixed_output(result.output);
         }
 
         // Install step
@@ -1312,12 +1417,10 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         if (!install_cmd.command.empty() && !install_cmd.is_empty) {
             auto result = dmake::run_command(install_cmd.command, working_dir);
             if (result.exit_code != 0) {
-                return "EP " + ep_name + " install failed:\n" + result.output;
+                print_prefixed_output(result.output);
+                return "EP " + ep_name + " install failed";
             }
-            if (!result.output.empty()) {
-                std::lock_guard<std::mutex> lock(output_mutex_);
-                std::cout << result.output;
-            }
+            print_prefixed_output(result.output);
         }
     }
 

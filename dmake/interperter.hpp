@@ -190,12 +190,22 @@ public:
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
     std::expected<Interpreter*, BuildError> run_build(int jobs = 0, const std::vector<std::string>& targets = {});
+
+    // For ExternalProject: generate tasks and return only dirty ones for injection.
+    // Returns pair of (dirty tasks, last task ID for sentinel wiring).
+    std::expected<std::pair<std::vector<BuildTask>, std::string>, BuildError>
+    generate_dirty_tasks(const std::vector<std::string>& targets = {});
+
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
     std::vector<std::string> expand_arguments(const std::vector<Argument>& args);
 
     void set_current_file(const std::string& file) { current_file_ = file; }
     std::string get_current_file() const { return current_file_; }
+
+    // Force color output even when writing to non-TTY (for child interpreters)
+    void set_force_colors(bool force) { force_colors_ = force; }
+    bool get_force_colors() const { return force_colors_; }
 
     // Public API for builtins and internal use
     void set_fatal_error(const std::string& message);
@@ -425,6 +435,7 @@ private:
     std::string build_dir_;
     std::ostream* out_;
     std::ostream* err_;
+    bool force_colors_ = false;  // Force color output even when not writing to TTY
 
     // Global state (managed by root)
     std::map<std::string, BuiltinFunction> builtins_;

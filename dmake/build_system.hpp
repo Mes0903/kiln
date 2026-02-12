@@ -83,6 +83,12 @@ public:
     // Call after generate_tasks() and before execute().
     std::expected<void, std::string> finalize(const GenexEvaluationContext& ctx);
 
+    // Extract dirty tasks from the graph (for EP task injection).
+    // Returns: pair of (dirty tasks vector, last task ID for sentinel wiring)
+    // The last task ID is the "final" task in the chain (e.g., install or link step).
+    std::expected<std::pair<std::vector<BuildTask>, std::string>, std::string>
+    extract_dirty_tasks(const std::string& build_dir);
+
     // Helpers for target task generation
     bool has_task(const std::string& id) const { return tasks_.count(id); }
     BuildTask& get_task(const std::string& id) { return tasks_.at(id); }
@@ -120,7 +126,8 @@ public:
         std::unordered_set<std::string>& dirty_set,
         std::set<std::string>& ready_set,
         ProgressBar& progress,
-        std::map<std::string, std::string>& new_cache);
+        std::map<std::string, std::string>& new_cache,
+        bool stdout_is_tty);
 
     // Inject tasks into the live build graph during execution.
     // Called by run_ep_orchestrator after extracting dirty tasks from a child interpreter.

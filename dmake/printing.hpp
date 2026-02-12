@@ -38,9 +38,15 @@ inline std::string_view c(std::ostream& os, std::string_view code) {
     return is_color_enabled(os) ? code : std::string_view{};
 }
 
+// Overload for forced color output (e.g., child interpreters writing to buffers)
+inline std::string_view c(bool force_color, std::string_view code) {
+    return force_color ? code : std::string_view{};
+}
+
 // Print a CMake-style message (e.g. [STATUS], [WARNING], etc.)
+// force_color: if true, output colors even when os is not a TTY
 void print_message(std::ostream& os, std::string_view mode, std::string_view msg,
-                   std::string_view indent = "");
+                   std::string_view indent = "", bool force_color = false);
 
 // Expand tabs to spaces (4-column tab stops) and return mapping from source column to visual column
 std::pair<std::string, std::vector<size_t>> expand_tabs(std::string_view line, size_t tab_width = 4);
