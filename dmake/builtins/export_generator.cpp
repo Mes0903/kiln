@@ -147,6 +147,8 @@ GenexEvaluationContext make_export_genex_context(
     ctx.system_name = export_ctx.system_name;
     ctx.cxx_compiler_id = export_ctx.cxx_compiler_id;
     ctx.c_compiler_id = export_ctx.c_compiler_id;
+    ctx.cxx_compiler_version = export_ctx.cxx_compiler_version;
+    ctx.c_compiler_version = export_ctx.c_compiler_version;
     ctx.all_targets = export_ctx.all_targets;
     ctx.target_aliases = export_ctx.target_aliases;
     ctx.current_target = target;

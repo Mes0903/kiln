@@ -325,6 +325,8 @@ GenexEvaluationContext Target::make_genex_context(
     ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
     ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
     ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    ctx.cxx_compiler_version = interp.get_variable("CMAKE_CXX_COMPILER_VERSION");
+    ctx.c_compiler_version = interp.get_variable("CMAKE_C_COMPILER_VERSION");
     ctx.all_targets = &all_targets;
     ctx.target_aliases = &interp.get_target_aliases();
     ctx.current_target = current_target;

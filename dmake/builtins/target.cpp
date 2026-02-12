@@ -693,14 +693,19 @@ void register_target_builtins(Interpreter& interp) {
             auto target = get_target_from_name(interp, name, cmd_name);
             if (!target) return;
 
-            // EARLY VALIDATION (Layer 1) - validate genex support before storing
+            // EARLY VALIDATION (Layer 1) - validate genex support before storing.
+            // CMake splits multi-line genex into separate arguments joined by semicolons,
+            // so we must validate the joined string (individual items may be fragments).
             auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
-                for (const auto& value : values) {
-                    auto validation = GenexParser::validate_genex_support(value);
-                    if (!validation) {
-                        interp.set_fatal_error(cmd_name + ": " + validation.error() + " in " + visibility + " scope");
-                        return false;
-                    }
+                std::string joined;
+                for (size_t i = 0; i < values.size(); ++i) {
+                    if (i > 0) joined += ';';
+                    joined += values[i];
+                }
+                auto validation = GenexParser::validate_genex_support(joined);
+                if (!validation) {
+                    interp.set_fatal_error(cmd_name + ": " + validation.error() + " in " + visibility + " scope");
+                    return false;
                 }
                 return true;
             };
@@ -737,14 +742,18 @@ void register_target_builtins(Interpreter& interp) {
         auto target = get_target_from_name(interp, name, "target_include_directories");
         if (!target) return;
 
-        // EARLY VALIDATION (Layer 1) - validate genex support before storing
+        // EARLY VALIDATION (Layer 1) - validate genex support before storing.
+        // Validate the joined string since multi-line genex become fragments across items.
         auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
-            for (const auto& value : values) {
-                auto validation = GenexParser::validate_genex_support(value);
-                if (!validation) {
-                    interp.set_fatal_error("target_include_directories: " + validation.error() + " in " + visibility + " scope");
-                    return false;
-                }
+            std::string joined;
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) joined += ';';
+                joined += values[i];
+            }
+            auto validation = GenexParser::validate_genex_support(joined);
+            if (!validation) {
+                interp.set_fatal_error("target_include_directories: " + validation.error() + " in " + visibility + " scope");
+                return false;
             }
             return true;
         };
@@ -827,14 +836,18 @@ void register_target_builtins(Interpreter& interp) {
         auto target = get_target_from_name(interp, name, "target_link_options");
         if (!target) return;
 
-        // EARLY VALIDATION (Layer 1) - validate genex support before storing
+        // EARLY VALIDATION (Layer 1) - validate genex support before storing.
+        // Validate the joined string since multi-line genex become fragments across items.
         auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
-            for (const auto& value : values) {
-                auto validation = GenexParser::validate_genex_support(value);
-                if (!validation) {
-                    interp.set_fatal_error("target_link_options: " + validation.error() + " in " + visibility + " scope");
-                    return false;
-                }
+            std::string joined;
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) joined += ';';
+                joined += values[i];
+            }
+            auto validation = GenexParser::validate_genex_support(joined);
+            if (!validation) {
+                interp.set_fatal_error("target_link_options: " + validation.error() + " in " + visibility + " scope");
+                return false;
             }
             return true;
         };
@@ -1009,14 +1022,18 @@ void register_target_builtins(Interpreter& interp) {
         auto target = get_target_from_name(interp, name, "target_link_libraries");
         if (!target) return;
 
-        // EARLY VALIDATION (Layer 1) - validate genex support before resolving
+        // EARLY VALIDATION (Layer 1) - validate genex support before resolving.
+        // Validate the joined string since multi-line genex become fragments across items.
         auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
-            for (const auto& value : values) {
-                auto validation = GenexParser::validate_genex_support(value);
-                if (!validation) {
-                    interp.set_fatal_error("target_link_libraries: " + validation.error() + " in " + visibility + " scope");
-                    return false;
-                }
+            std::string joined;
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) joined += ';';
+                joined += values[i];
+            }
+            auto validation = GenexParser::validate_genex_support(joined);
+            if (!validation) {
+                interp.set_fatal_error("target_link_libraries: " + validation.error() + " in " + visibility + " scope");
+                return false;
             }
             return true;
         };
@@ -1098,14 +1115,13 @@ void register_target_builtins(Interpreter& interp) {
                 // Split first to validate each item
                 CMakeArrayView items(value);
 
-                // EARLY VALIDATION (Layer 1) - validate genex support
-                for (auto sv : items) {
-                    auto validation = GenexParser::validate_genex_support(std::string(sv));
-                    if (!validation) {
-                        interp.set_fatal_error("set_target_properties: " + validation.error() +
-                                             " in INTERFACE_" + base_prop_name + " property");
-                        return;
-                    }
+                // EARLY VALIDATION (Layer 1) - validate genex support.
+                // Validate the full joined value since multi-line genex become fragments.
+                auto validation = GenexParser::validate_genex_support(value);
+                if (!validation) {
+                    interp.set_fatal_error("set_target_properties: " + validation.error() +
+                                         " in INTERFACE_" + base_prop_name + " property");
+                    return;
                 }
 
                 if (!items.empty()) {

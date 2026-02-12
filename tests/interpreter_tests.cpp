@@ -6797,3 +6797,137 @@ TEST_CASE("Embedded quotes in unquoted arguments are preserved", "[interpreter]"
         REQUIRE(output == "-combiners=\"foo\"\n");
     }
 }
+
+// ============================================================================
+// Multi-line argument parsing tests
+// CMake behavior: whitespace (spaces, tabs, newlines) separates arguments,
+// and multiple unquoted arguments are joined with semicolons in list contexts.
+// This is critical for generator expressions that span multiple lines.
+// ============================================================================
+
+TEST_CASE("Multi-line arguments are joined with semicolons", "[interpreter][multiline]") {
+    SECTION("newlines separate arguments into list") {
+        // CMake joins whitespace-separated arguments with semicolons
+        auto output = run_script(R"(
+            set(MY_LIST
+                item1
+                item2
+                item3
+            )
+            message("${MY_LIST}")
+        )");
+        REQUIRE(output == "item1;item2;item3\n");
+    }
+
+    SECTION("spaces separate arguments into list") {
+        auto output = run_script(R"(
+            set(MY_LIST item1 item2 item3)
+            message("${MY_LIST}")
+        )");
+        REQUIRE(output == "item1;item2;item3\n");
+    }
+
+    SECTION("mixed spaces and newlines") {
+        auto output = run_script(R"(
+            set(MY_LIST item1 item2
+                item3
+                item4 item5)
+            message("${MY_LIST}")
+        )");
+        REQUIRE(output == "item1;item2;item3;item4;item5\n");
+    }
+}
+
+TEST_CASE("Multi-line generator expressions", "[interpreter][multiline][genex]") {
+    // Critical test: CMake does NOT parse multi-line genex as a single argument.
+    // Instead, whitespace separates arguments, and they get joined with semicolons.
+    // Example: $<$<BOOL:TRUE>:\n-Wall\n-Wextra\n> becomes $<$<BOOL:TRUE>:;-Wall;-Wextra;>
+
+    SECTION("genex spanning multiple lines is split and joined") {
+        auto output = run_script(R"(
+            set(MY_OPTS
+                $<$<BOOL:TRUE>:
+                -Wall
+                -Wextra
+                >
+            )
+            message("${MY_OPTS}")
+        )");
+        // Each line becomes a separate argument, joined with semicolons
+        // Verify no newlines or extra whitespace in output
+        REQUIRE(output.find('\n') == output.size() - 1);  // Only trailing newline
+        REQUIRE(output.find("    ") == std::string::npos);  // No indentation preserved
+        REQUIRE(output == "$<$<BOOL:TRUE>:;-Wall;-Wextra;>\n");
+    }
+
+    SECTION("genex with spaces on single line is split") {
+        // Even on a single line, spaces inside genex cause splitting
+        auto output = run_script(R"(
+            set(MY_OPTS $<$<BOOL:TRUE>:-Wall -Wextra>)
+            message("${MY_OPTS}")
+        )");
+        // Spaces separate the arguments: "$<$<BOOL:TRUE>:-Wall" and "-Wextra>"
+        REQUIRE(output == "$<$<BOOL:TRUE>:-Wall;-Wextra>\n");
+    }
+
+    SECTION("complete genex on single line stays intact") {
+        // A genex that doesn't contain whitespace stays as one argument
+        auto output = run_script(R"(
+            set(MY_OPTS $<$<BOOL:TRUE>:-Wall>)
+            message("${MY_OPTS}")
+        )");
+        REQUIRE(output == "$<$<BOOL:TRUE>:-Wall>\n");
+    }
+
+    SECTION("real-world flatbuffers pattern") {
+        // This is the actual pattern that flatbuffers uses
+        auto output = run_script(R"(
+            set(STRICT_OPTS
+                $<$<BOOL:TRUE>:
+                    -Wall
+                    -Wextra
+                    -Werror
+                >
+            )
+            message("${STRICT_OPTS}")
+        )");
+        REQUIRE(output == "$<$<BOOL:TRUE>:;-Wall;-Wextra;-Werror;>\n");
+    }
+
+    SECTION("nested genex spanning multiple lines") {
+        auto output = run_script(R"(
+            set(OPTS
+                $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:
+                    -Wall
+                    -Wextra
+                >
+            )
+            message("${OPTS}")
+        )");
+        REQUIRE(output == "$<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:;-Wall;-Wextra;>\n");
+    }
+
+    SECTION("unclosed genex parses as literal string (MariaDB compatibility)") {
+        // CMake treats generator expressions as strings at parse time.
+        // Some projects (MariaDB) have unbalanced genex that split across lines.
+        // The unclosed $<... should parse as a literal string, not cause an error.
+        auto output = run_script(R"(
+            set(MY_VAR $<BOOL:TRUE)
+            message("${MY_VAR}")
+        )");
+        REQUIRE(output == "$<BOOL:TRUE\n");
+    }
+
+    SECTION("unclosed genex in multi-line context") {
+        // Each line is a separate argument, unclosed genex is just a string
+        auto output = run_script(R"(
+            set(MY_OPTS
+                $<$<BOOL:TRUE>:
+                -Wall
+            )
+            message("${MY_OPTS}")
+        )");
+        // The closing > never appears, so we get partial genex strings joined
+        REQUIRE(output == "$<$<BOOL:TRUE>:;-Wall\n");
+    }
+}

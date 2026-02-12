@@ -41,6 +41,8 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "PLATFORM_ID") return GenexNodeType::PLATFORM_ID;
     if (keyword == "CXX_COMPILER_ID") return GenexNodeType::CXX_COMPILER_ID;
     if (keyword == "C_COMPILER_ID") return GenexNodeType::C_COMPILER_ID;
+    if (keyword == "CXX_COMPILER_VERSION") return GenexNodeType::CXX_COMPILER_VERSION;
+    if (keyword == "C_COMPILER_VERSION") return GenexNodeType::C_COMPILER_VERSION;
 
     // Constant literal genexes ($<SEMICOLON>, $<COMMA>, etc.)
     // are handled specially in parse_genex_node(), not here.

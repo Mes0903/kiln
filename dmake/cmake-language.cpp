@@ -713,8 +713,13 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
 
     CommandInvocation cmd_inv{std::move(identifier), {}, cmd_row, cmd_col, cmd_offset, 0};
 
-    // Parse arguments
+    // Parse arguments, tracking genex balance across all arguments.
+    // Multi-line genex like $<$<BOOL:TRUE>:\n-Wall\n> split into fragments
+    // that are individually unbalanced but balanced across the command.
     int nesting = 0;
+    int genex_depth = 0;
+    size_t genex_start_row = 0, genex_start_col = 0, genex_start_offset = 0;
+
     while (pos_ < content_.length()) {
         consume_whitespace();
         if (pos_ >= content_.length()) {
@@ -724,6 +729,9 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
             break;
         }
 
+        // Record position before parsing this argument (for genex tracking)
+        size_t arg_start_row = row_, arg_start_col = col_, arg_start_offset = pos_;
+
         auto arg_or_error = parse_argument();
         if (arg_or_error) {
             const auto& arg = arg_or_error.value();
@@ -732,10 +740,42 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
                 if (s == "(") nesting++;
                 else if (s == ")") nesting--;
             }
+
+            // Track genex balance across all unquoted arguments
+            if (!arg.quoted) {
+                for (const auto& part : arg.parts) {
+                    if (auto* lit = std::get_if<std::string>(&part)) {
+                        for (size_t i = 0; i < lit->size(); ++i) {
+                            if ((*lit)[i] == '$' && i + 1 < lit->size() && (*lit)[i + 1] == '<') {
+                                if (genex_depth == 0) {
+                                    genex_start_row = arg_start_row;
+                                    genex_start_col = arg_start_col;
+                                    genex_start_offset = arg_start_offset;
+                                }
+                                genex_depth++;
+                                i++; // skip '<'
+                            } else if ((*lit)[i] == '>' && genex_depth > 0) {
+                                genex_depth--;
+                            }
+                        }
+                    }
+                }
+            }
+
             cmd_inv.arguments.push_back(std::move(arg_or_error.value()));
         } else {
             return std::unexpected(arg_or_error.error());
         }
+    }
+
+    // Warn about truly unbalanced genex (unbalanced across entire command)
+    if (genex_depth > 0) {
+        dmake::print_diagnostic(std::cerr, DiagnosticSeverity::Warning,
+            "Unbalanced generator expression (missing closing '>')",
+            filename_, genex_start_row, genex_start_col, genex_start_offset,
+            pos_ - genex_start_offset,
+            {}, std::string(content_),
+            "Accepting as-is - CMake treats generator expressions as strings at parse time.");
     }
 
     // Parse closing parenthesis
@@ -817,26 +857,14 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
 
     std::string current_literal;
 
-    // Advisory genex balance tracking (for warnings only, not control flow)
-    int genex_depth = 0;
-    size_t genex_start_row = 0, genex_start_col = 0, genex_start_offset = 0;
-
     while (pos_ < content_.length()) {
         char current = content_[pos_];
 
-        // Stop at whitespace, parens, or comments — but NOT inside a
-        // generator expression ($<...>), which may legally contain spaces
-        // and nested parens, e.g. $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
-        if (genex_depth > 0) {
-            // Inside a genex, spaces are legal so don't split on them.
-            // But ')', '(' and '#' always end an unquoted argument.
-            if (current == '(' || current == ')' || current == '#') {
-                break;
-            }
-        } else {
-            if (std::isspace(current) || current == '(' || current == ')' || current == '#') {
-                break;
-            }
+        // Stop at whitespace, parens, or comments.
+        // CMake ALWAYS splits on whitespace, even inside generator expressions.
+        // Multi-line genex become separate arguments joined with semicolons by commands.
+        if (std::isspace(current) || current == '(' || current == ')' || current == '#') {
+            break;
         }
 
         // Continue with normal parsing logic for special constructs
@@ -990,18 +1018,6 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
             }
         }
 
-        // Advisory genex depth tracking (for balance warning only)
-        if (content_[pos_] == '$' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '<') {
-            if (genex_depth == 0) {
-                genex_start_row = row_;
-                genex_start_col = col_;
-                genex_start_offset = pos_;
-            }
-            genex_depth++;
-        } else if (content_[pos_] == '>' && genex_depth > 0) {
-            genex_depth--;
-        }
-
         // Handle newlines in position tracking
         if (content_[pos_] == '\n') {
             row_++;
@@ -1018,16 +1034,6 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
     }
     if (!current_literal.empty()) {
         parts.emplace_back(std::move(current_literal));
-    }
-
-    // Warn about unbalanced generator expressions
-    if (genex_depth > 0 && !parts.empty()) {
-        dmake::print_diagnostic(std::cerr, DiagnosticSeverity::Warning,
-            "Unbalanced generator expression (missing closing '>')",
-            filename_, genex_start_row, genex_start_col, genex_start_offset,
-            pos_ - genex_start_offset,
-            {}, std::string(content_),
-            "Accepting as-is - CMake treats generator expressions as strings at parse time.");
     }
 
     if (parts.empty()) {

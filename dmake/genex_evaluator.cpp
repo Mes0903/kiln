@@ -579,6 +579,16 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return (node.raw_content == ctx_.c_compiler_id) ? "1" : "0";
         }
 
+        case GenexNodeType::CXX_COMPILER_VERSION: {
+            // $<CXX_COMPILER_VERSION> returns CMAKE_CXX_COMPILER_VERSION
+            return ctx_.cxx_compiler_version;
+        }
+
+        case GenexNodeType::C_COMPILER_VERSION: {
+            // $<C_COMPILER_VERSION> returns CMAKE_C_COMPILER_VERSION
+            return ctx_.c_compiler_version;
+        }
+
         case GenexNodeType::CONDITIONAL: {
             // $<cond:text> - first child is condition, remaining children are value.
             if (node.children.empty()) {
@@ -638,7 +648,40 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
     const std::vector<std::string>& values) {
     std::vector<std::string> result;
 
+    // Reassemble fragmented genex: multi-line genex like $<$<BOOL:TRUE>:\n-Wall\n>
+    // are stored as separate list items. Join fragments with semicolons until
+    // angle brackets balance, matching CMake's behavior.
+    std::vector<std::string> reassembled;
+    std::string pending;
+    int depth = 0;
     for (const auto& value : values) {
+        if (depth > 0) {
+            // We're inside a fragmented genex, join with semicolon
+            pending += ';';
+            pending += value;
+        } else {
+            pending = value;
+        }
+        // Count unbalanced $< and > in this item
+        for (size_t i = 0; i < value.size(); ++i) {
+            if (value[i] == '$' && i + 1 < value.size() && value[i + 1] == '<') {
+                depth++;
+                i++; // skip '<'
+            } else if (value[i] == '>' && depth > 0) {
+                depth--;
+            }
+        }
+        if (depth == 0) {
+            reassembled.push_back(std::move(pending));
+            pending.clear();
+        }
+    }
+    // If there's still a pending fragment (truly unbalanced), add it as-is
+    if (!pending.empty()) {
+        reassembled.push_back(std::move(pending));
+    }
+
+    for (const auto& value : reassembled) {
         // Parse to check if this is a pure generator expression
         GenexParser parser;
         auto parse_result = parser.parse(value);

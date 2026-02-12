@@ -21,6 +21,8 @@ struct ExportContext {
     std::string system_name;       // CMAKE_SYSTEM_NAME
     std::string cxx_compiler_id;   // CMAKE_CXX_COMPILER_ID
     std::string c_compiler_id;     // CMAKE_C_COMPILER_ID
+    std::string cxx_compiler_version; // CMAKE_CXX_COMPILER_VERSION
+    std::string c_compiler_version;   // CMAKE_C_COMPILER_VERSION
 
     // Pointers to target maps (not owned)
     const std::map<std::string, std::shared_ptr<Target>>* all_targets = nullptr;
