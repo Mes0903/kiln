@@ -362,14 +362,11 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         // Store the full loop variable argument (may contain variable references like _${PREFIX}_VAR)
         foreach_block.loop_var = foreach_command.arguments[0];
 
-        if (foreach_command.arguments.size() == 1) {
-            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach() requires items to iterate over"});
-        }
-
-        // Determine mode by checking second argument
+        // Determine mode by checking second argument (if present)
         // CMake foreach keywords (IN, RANGE, LISTS, ITEMS, ZIP_LISTS) are case-sensitive
         std::string mode_keyword;
-        if (!foreach_command.arguments[1].quoted &&
+        if (foreach_command.arguments.size() > 1 &&
+            !foreach_command.arguments[1].quoted &&
             foreach_command.arguments[1].parts.size() == 1 &&
             std::holds_alternative<std::string>(foreach_command.arguments[1].parts[0])) {
             mode_keyword = std::get<std::string>(foreach_command.arguments[1].parts[0]);
@@ -450,7 +447,10 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
 
     } else {
         // Simple mode: foreach(i item1 item2 ...)
-        // All arguments from index 1 onwards are items
+        // All arguments from index 1 onwards are items.
+        // NOTE: CMake allows foreach(var) with zero items — the body is never executed.
+        // An optimizer could detect empty item lists at parse time and skip body parsing,
+        // but the body must still be parsed for correctness (matching endforeach).
         ForeachSimple simple;
         simple.items.insert(simple.items.end(),
                            foreach_command.arguments.begin() + 1,

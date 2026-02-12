@@ -666,6 +666,47 @@ TEST_CASE("list(POP_FRONT) with multiple values", "[interpreter][list]") {
     REQUIRE(output == "c;d;e\na\nb\n");
 }
 
+TEST_CASE("list(POP_BACK) on empty list is silent no-op", "[interpreter][list]") {
+    // CMake silently handles POP_BACK/POP_FRONT on empty or undefined lists,
+    // setting output variables to empty. Qt6 relies on this for push/pop stacks.
+    auto output = run_script(R"(
+        set(mylist "")
+        list(POP_BACK mylist out)
+        message("list=[${mylist}] out=[${out}]")
+    )");
+    CHECK(output == "list=[] out=[]\n");
+
+    // Undefined list
+    output = run_script(R"(
+        list(POP_BACK undefined_list out)
+        message("list=[${undefined_list}] out=[${out}]")
+    )");
+    CHECK(output == "list=[] out=[]\n");
+
+    // No output var, just discard
+    output = run_script(R"(
+        set(mylist "")
+        list(POP_BACK mylist)
+        message("done")
+    )");
+    CHECK(output == "done\n");
+}
+
+TEST_CASE("list(POP_FRONT) on empty list is silent no-op", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(mylist "")
+        list(POP_FRONT mylist out)
+        message("list=[${mylist}] out=[${out}]")
+    )");
+    CHECK(output == "list=[] out=[]\n");
+
+    output = run_script(R"(
+        list(POP_FRONT undefined_list out)
+        message("list=[${undefined_list}] out=[${out}]")
+    )");
+    CHECK(output == "list=[] out=[]\n");
+}
+
 TEST_CASE("list(FILTER) INCLUDE filters list", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "apple" "banana" "apricot" "cherry" "avocado")
@@ -825,6 +866,40 @@ TEST_CASE("Foreach basic", "[interpreter][foreach]") {
         ENDFOREACH()
     )");
     REQUIRE(output == "1\n2\n3\n");
+}
+
+TEST_CASE("foreach with empty item list", "[interpreter][foreach]") {
+    // CMake allows foreach(var) and foreach(var <empty_expansion>) with no items.
+    // The body is never executed. This pattern appears in Qt6 config files.
+    // NOTE: An optimizer could elide the body entirely when items are statically empty.
+    auto output = run_script(R"(
+        message("before")
+        foreach(x )
+            message("item: ${x}")
+        endforeach()
+        message("after")
+    )");
+    CHECK(output == "before\nafter\n");
+
+    // Empty variable expands to nothing — same behavior
+    output = run_script(R"(
+        set(empty "")
+        foreach(x ${empty})
+            message("item: ${x}")
+        endforeach()
+        message("done")
+    )");
+    CHECK(output == "done\n");
+
+    // IN LISTS with empty list variable
+    output = run_script(R"(
+        set(mylist "")
+        foreach(x IN LISTS mylist)
+            message("item: ${x}")
+        endforeach()
+        message("done")
+    )");
+    CHECK(output == "done\n");
 }
 
 TEST_CASE("foreach with lowercase in is literal item", "[interpreter][foreach]") {

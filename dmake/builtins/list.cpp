@@ -130,23 +130,26 @@ void register_list_builtins(Interpreter& interp) {
 
             CMakeArray list(interp.get_variable(list_var));
 
+            // CMake silently does nothing when popping from empty/undefined lists,
+            // setting output variables to empty.
             if (list.empty()) {
-                interp.set_fatal_error("list(POP_BACK) cannot pop from empty list");
+                for (const auto& out_var : out_vars) {
+                    interp.set_variable(out_var, "");
+                }
                 return;
             }
 
             // Pop one element for each output variable (default 1)
-            size_t num_to_pop = out_vars.empty() ? 1 : out_vars.size();
-
-            if (num_to_pop > list.size()) {
-                interp.set_fatal_error("list(POP_BACK) not enough elements to pop");
-                return;
-            }
+            size_t num_to_pop = std::min(out_vars.empty() ? 1 : out_vars.size(), list.size());
 
             // Store popped values in output variables (in reverse order from back)
-            for (size_t i = 0; i < out_vars.size(); ++i) {
+            for (size_t i = 0; i < std::min(out_vars.size(), list.size()); ++i) {
                 size_t idx = list.size() - 1 - i;
                 interp.set_variable(out_vars[i], list[idx]);
+            }
+            // Any remaining output vars get empty
+            for (size_t i = list.size(); i < out_vars.size(); ++i) {
+                interp.set_variable(out_vars[i], "");
             }
 
             // Remove elements from the list
@@ -165,22 +168,22 @@ void register_list_builtins(Interpreter& interp) {
 
             CMakeArray list(interp.get_variable(list_var));
 
+            // CMake silently does nothing when popping from empty/undefined lists
             if (list.empty()) {
-                interp.set_fatal_error("list(POP_FRONT) cannot pop from empty list");
+                for (const auto& out_var : out_vars) {
+                    interp.set_variable(out_var, "");
+                }
                 return;
             }
 
-            // Pop one element for each output variable (default 1)
-            size_t num_to_pop = out_vars.empty() ? 1 : out_vars.size();
-
-            if (num_to_pop > list.size()) {
-                interp.set_fatal_error("list(POP_FRONT) not enough elements to pop");
-                return;
-            }
+            size_t num_to_pop = std::min(out_vars.empty() ? 1 : out_vars.size(), list.size());
 
             // Store popped values in output variables
-            for (size_t i = 0; i < out_vars.size(); ++i) {
+            for (size_t i = 0; i < std::min(out_vars.size(), list.size()); ++i) {
                 interp.set_variable(out_vars[i], list[i]);
+            }
+            for (size_t i = list.size(); i < out_vars.size(); ++i) {
+                interp.set_variable(out_vars[i], "");
             }
 
             // Remove elements from the front
