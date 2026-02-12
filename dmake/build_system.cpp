@@ -378,16 +378,18 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     auto cache = load_cache(build_dir);
     std::map<std::string, std::string> new_cache = cache; // Preserve entries for targets not built this time
 
+    // EP-specific caches: ep_binary_dir -> task_id -> signature
+    // Populated when EP tasks complete, saved separately at the end
+    std::map<std::string, std::map<std::string, std::string>> ep_caches;
+
     // 2b. Pre-scan: determine which tasks need to execute.
-    // This serves two purposes:
-    //   (a) Accurate progress count (avoids [3/2] when deps propagate dirtiness)
-    //   (b) Workers skip clean tasks instantly via dirty_set lookup instead of
-    //       redundantly recomputing signatures.
+    // Dirtiness is tracked as optional<bool>:
+    //   - true: definitely dirty, must execute
+    //   - nullopt: maybe dirty (depends on EP sentinel), schedule but re-check at runtime
+    //   - not in map: clean, skip
     ProfileScope pre_scan_profile("pre-scan incremental check", "build");
-    std::unordered_set<std::string> dirty_set;
-    if(tasks_.size() > 100) {
-        dirty_set.reserve(20);
-    }
+    std::unordered_map<std::string, std::optional<bool>> dirty_state;
+
     for (const auto& [id, task] : tasks_) {
         // Skip marker tasks (but NOT EP orchestrator/sentinel which run in-process)
         if (task.outputs.empty() && task.commands.empty() &&
@@ -401,51 +403,73 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         }
 
         if (!outputs_exist || task.always_run) {
-            dirty_set.insert(id);
+            // EP sentinels and orchestrators are "maybe" - we can't know if EP will inject tasks
+            // Their dependents should be re-checked at runtime
+            bool is_ep_task = task.is_ep_sentinel || task.is_ep_orchestrator;
+            dirty_state[id] = is_ep_task ? std::nullopt : std::optional<bool>(true);
             continue;
         }
 
         auto sig_res = calculate_signature(task);
         if (!sig_res || !(cache.count(id) && cache[id] == *sig_res)) {
-            dirty_set.insert(id);
+            dirty_state[id] = true;
         }
     }
 
-    // Propagate: any task with a dirty dependency is also dirty.
-    // This includes marker tasks (no outputs, no commands) like custom target
-    // grouping nodes — they must be scheduled so dependents wait for them.
-    if (!dirty_set.empty()) {
+    // Propagate: dirty deps → dirty, maybe deps → maybe (if not already in dirty_state)
+    if (!dirty_state.empty()) {
         bool changed;
         do {
             changed = false;
             for (const auto& [id, task] : tasks_) {
-                if (dirty_set.count(id)) continue;
+                if (dirty_state.count(id)) continue;
+
+                bool dominated_by_dirty = false;
+                bool dominated_by_maybe = false;
                 for (const auto& dep : task.dependencies) {
-                    if (dirty_set.count(dep)) {
-                        dirty_set.insert(id);
-                        changed = true;
-                        break;
+                    auto it = dirty_state.find(dep);
+                    if (it != dirty_state.end()) {
+                        if (it->second == true) {
+                            dominated_by_dirty = true;
+                            break;  // Dirty dominates, no need to check further
+                        } else {
+                            dominated_by_maybe = true;
+                        }
                     }
+                }
+
+                if (dominated_by_dirty) {
+                    dirty_state[id] = true;
+                    changed = true;
+                } else if (dominated_by_maybe) {
+                    dirty_state[id] = std::nullopt;
+                    changed = true;
                 }
             }
         } while (changed);
     }
-    int dirty_task_count = static_cast<int>(dirty_set.size());
+
+    // Count definitely dirty tasks for progress bar
+    int dirty_task_count = 0;
+    int maybe_dirty_count = 0;
+    for (const auto& [id, state] : dirty_state) {
+        if (state == true) dirty_task_count++;
+        else maybe_dirty_count++;
+    }
     pre_scan_profile.stop();
 
     bool stdout_is_tty = isatty(STDOUT_FILENO);
-    ProgressBar progress(dirty_task_count, stdout_is_tty);
+    // Include maybe-dirty tasks in progress total (they'll be skipped if clean at runtime)
+    ProgressBar progress(dirty_task_count + maybe_dirty_count, stdout_is_tty);
 
     // 3. Parallel execution with fixed worker threads
-    // Pre-populate completed with clean tasks whose deps are all clean.
-    // Tasks not in dirty_set but with dirty deps (e.g. marker/grouping targets)
-    // must flow through the worker loop to preserve ordering.
+    // Pre-populate completed with clean tasks (not in dirty_state).
     std::set<std::string> completed;
     for (const auto& [id, task] : tasks_) {
-        if (dirty_set.count(id)) continue;
+        if (dirty_state.count(id)) continue;
         bool has_dirty_dep = false;
         for (const auto& dep : task.dependencies) {
-            if (dirty_set.count(dep)) { has_dirty_dep = true; break; }
+            if (dirty_state.count(dep)) { has_dirty_dep = true; break; }
         }
         if (!has_dirty_dep) {
             completed.insert(id);
@@ -469,10 +493,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         return true;
     };
 
-    // Initialize ready_set with dirty tasks whose deps are all complete.
+    // Initialize ready_set with dirty/maybe tasks whose deps are all complete.
     // Using std::set for deterministic ordering (alphabetical by task ID).
     std::set<std::string> ready_set;
-    for (const std::string& id : dirty_set) {
+    for (const auto& [id, state] : dirty_state) {
         if (is_ready(id)) {
             ready_set.insert(id);
         }
@@ -484,7 +508,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     workers.reserve(jobs);
 
     for (int w = 0; w < jobs; w++) {
-        workers.emplace_back([this, &build_dir, &cache, &new_cache, &completed, &running, &fatal_error, &loop_mutex, &cv, &progress, stdout_is_tty, &dirty_set, &ready_set]() {
+        workers.emplace_back([this, &build_dir, &cache, &new_cache, &ep_caches, &completed, &running, &fatal_error, &loop_mutex, &cv, &progress, stdout_is_tty, &dirty_state, &ready_set]() {
             bool profiling = g_profiling_enabled.load(std::memory_order_relaxed);
 
             while (true) {
@@ -543,9 +567,27 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 auto task_start = std::chrono::steady_clock::now();
 
                 do { // do-while(false) for break-on-error
-                    // ready_set only contains dirty tasks. Marker tasks with dirty deps
-                    // are now included in dirty_set via propagation, so they flow through
-                    // here naturally (executing 0 commands, then completing).
+                    // Check for "maybe" dirty tasks: if state is nullopt (not true),
+                    // re-check signature at runtime. If clean, skip execution.
+                    auto state_it = dirty_state.find(id);
+                    if (state_it != dirty_state.end() && !state_it->second.has_value()) {
+                        // "Maybe" dirty - re-check signature now that deps are complete
+                        bool outputs_exist = !task.outputs.empty();
+                        if (outputs_exist) {
+                            for (const auto& out : task.outputs) {
+                                if (!get_file_time_if_exists(out)) { outputs_exist = false; break; }
+                            }
+                        }
+                        if (outputs_exist && !task.always_run) {
+                            auto sig_res = calculate_signature(task);
+                            if (sig_res && cache.count(id) && cache[id] == *sig_res) {
+                                // Actually clean - skip execution, adjust progress total
+                                progress.bump_total(-1);
+                                sig = *sig_res;
+                                break;  // Skip to completion handling
+                            }
+                        }
+                    }
 
                     int64_t profile_start = 0;
                     std::string profile_name;
@@ -611,7 +653,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                         // Run the EP orchestrator under the loop_mutex since it may call inject_tasks
                         // Actually, we need to call it outside the lock and acquire the lock when injecting
-                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_set, ready_set, progress, new_cache, stdout_is_tty);
+                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_state, ready_set, progress, new_cache, stdout_is_tty);
                         if (ep_result) {
                             task_error = *ep_result;
                             break;
@@ -769,14 +811,21 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     if (!task_error.empty()) {
                         fatal_error = task_error;
                     } else {
-                        new_cache[id] = sig;
+                        // Route cache entry to appropriate cache file
+                        if (!task.ep_binary_dir.empty()) {
+                            // EP task: save to EP-specific cache
+                            ep_caches[task.ep_binary_dir][id] = sig;
+                        } else {
+                            // Main project task
+                            new_cache[id] = sig;
+                        }
                     }
                     completed.insert(id);
                     running.erase(id);
 
-                    // Check if any dirty dependents are now ready
+                    // Check if any dirty/maybe dependents are now ready
                     for (const auto& dep_id : task.dependents) {
-                        if (!dirty_set.count(dep_id)) continue;  // clean task, skip
+                        if (!dirty_state.count(dep_id)) continue;  // clean task, skip
                         if (completed.count(dep_id)) continue;   // already done
                         if (running.count(dep_id)) continue;     // already running
                         if (ready_set.count(dep_id)) continue;   // already in ready set
@@ -802,6 +851,16 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     // Always save cache — even on failure, successful tasks should be cached
     // so we don't redo them on the next build.
     save_cache(build_dir, new_cache);
+
+    // Save EP-specific caches to their respective build directories
+    for (const auto& [ep_dir, ep_cache_entries] : ep_caches) {
+        // Load existing EP cache and merge with new entries
+        auto ep_cache = load_cache(ep_dir);
+        for (const auto& [task_id, sig] : ep_cache_entries) {
+            ep_cache[task_id] = sig;
+        }
+        save_cache(ep_dir, ep_cache);
+    }
 
     progress.finish();
 
@@ -1169,8 +1228,9 @@ void BuildGraph::inject_tasks(
     std::vector<BuildTask> new_tasks,
     const std::string& sentinel_id,
     const std::string& last_task_id,
+    const std::string& ep_binary_dir,
     std::set<std::string>& completed,
-    std::unordered_set<std::string>& dirty_set,
+    std::unordered_map<std::string, std::optional<bool>>& dirty_state,
     std::set<std::string>& ready_set,
     ProgressBar& progress) {
 
@@ -1189,8 +1249,9 @@ void BuildGraph::inject_tasks(
         }
     }
 
-    // 2. Add new tasks to the graph
+    // 2. Add new tasks to the graph with EP binary dir for cache routing
     for (auto& task : new_tasks) {
+        task.ep_binary_dir = ep_binary_dir;
         tasks_[task.id] = std::move(task);
     }
 
@@ -1214,15 +1275,14 @@ void BuildGraph::inject_tasks(
         ready_set.erase(sentinel_id);
     }
 
-    // 5. Mark all new tasks as dirty and ensure they're NOT in completed
+    // 5. Mark all new tasks as definitely dirty and ensure they're NOT in completed
     //    (They may be in completed if parent pre-scan marked a file path as "clean"
     //     before we injected the task that produces it)
     for (const auto& [out, task_id] : new_file_to_task) {
-        dirty_set.insert(task_id);
+        dirty_state[task_id] = true;  // Definitely dirty - just injected
         completed.erase(task_id);
     }
-    // Also ensure sentinel is dirty
-    dirty_set.insert(sentinel_id);
+    // Sentinel stays as maybe (nullopt) - it's still a sync point
 
     // 6. Update progress total
     progress.bump_total(static_cast<int>(new_file_to_task.size()));
@@ -1249,7 +1309,7 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
     BuildTask& task,
     const std::string& build_dir,
     std::set<std::string>& completed,
-    std::unordered_set<std::string>& dirty_set,
+    std::unordered_map<std::string, std::optional<bool>>& dirty_state,
     std::set<std::string>& ready_set,
     ProgressBar& progress,
     std::map<std::string, std::string>& new_cache,
@@ -1380,10 +1440,17 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         // Print any buffered task generation output
         print_prefixed_output(ep_output.str());
 
+        // Save EP's subsystem cache (try_compile, find_*, glob results)
+        auto cache_save_result = ep_interp->get_cache_store().save();
+        if (!cache_save_result) {
+            // Non-fatal - just warn
+            print_prefixed_output("warning: Failed to save subsystem cache: " + cache_save_result.error());
+        }
+
         // Inject dirty tasks into parent's graph
         if (!dirty_tasks.empty()) {
-            inject_tasks(std::move(dirty_tasks), sentinel_id, last_task_id,
-                        completed, dirty_set, ready_set, progress);
+            inject_tasks(std::move(dirty_tasks), sentinel_id, last_task_id, binary_dir,
+                        completed, dirty_state, ready_set, progress);
         }
         // If no dirty tasks, sentinel will complete immediately after orchestrator
 

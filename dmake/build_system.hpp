@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 #include <unordered_set>
+#include <unordered_map>
 #include <expected>
 #include <optional>
 #include <filesystem>
@@ -54,6 +55,7 @@ struct BuildTask {
     bool is_ep_orchestrator = false;   // True if this is an EP orchestrator task
     bool is_ep_sentinel = false;       // True if this is an EP sentinel task
     std::string ep_name;               // EP name (for orchestrator/sentinel identification)
+    std::string ep_binary_dir;         // EP binary dir for cache routing (empty = use main cache)
 
     // For COMPILE_LANGUAGE genex support
     std::optional<Language> compile_language;  // Language being compiled (for $<COMPILE_LANGUAGE:...>)
@@ -123,7 +125,7 @@ public:
         BuildTask& task,
         const std::string& build_dir,
         std::set<std::string>& completed,
-        std::unordered_set<std::string>& dirty_set,
+        std::unordered_map<std::string, std::optional<bool>>& dirty_state,
         std::set<std::string>& ready_set,
         ProgressBar& progress,
         std::map<std::string, std::string>& new_cache,
@@ -133,12 +135,14 @@ public:
     // Called by run_ep_orchestrator after extracting dirty tasks from a child interpreter.
     // sentinel_id: The EP sentinel task ID - its dependencies will be updated
     // last_task_id: The final task in the injected chain (sentinel will depend on this)
+    // ep_binary_dir: EP binary directory for cache routing
     void inject_tasks(
         std::vector<BuildTask> new_tasks,
         const std::string& sentinel_id,
         const std::string& last_task_id,
+        const std::string& ep_binary_dir,
         std::set<std::string>& completed,
-        std::unordered_set<std::string>& dirty_set,
+        std::unordered_map<std::string, std::optional<bool>>& dirty_state,
         std::set<std::string>& ready_set,
         ProgressBar& progress);
 
