@@ -1387,6 +1387,11 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         }
         // If no dirty tasks, sentinel will complete immediately after orchestrator
 
+        // Keep child interpreter targets alive — injected tasks hold raw parent_target pointers
+        for (auto& [_, target] : ep_interp->get_targets()) {
+            ep_target_owners_.push_back(std::move(target));
+        }
+
     } else {
         // === CUSTOM COMMANDS EP ===
         // Run CONFIGURE_COMMAND, BUILD_COMMAND, INSTALL_COMMAND sequentially

@@ -151,6 +151,9 @@ private:
     mutable std::mutex state_mutex_;
     mutable std::mutex graph_mutation_mutex_;  // For thread-safe module dependency injection
 
+    // Keeps EP child interpreter targets alive while injected tasks hold raw parent_target pointers
+    std::vector<std::shared_ptr<Target>> ep_target_owners_;
+
     // Incremental build logic
     std::expected<std::string, std::string> calculate_signature(const BuildTask& task);
     std::map<std::string, std::string> load_cache(const std::string& build_dir);
