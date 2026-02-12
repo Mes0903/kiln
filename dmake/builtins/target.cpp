@@ -1249,10 +1249,15 @@ void register_target_builtins(Interpreter& interp) {
             if (arg == "AFTER") { continue; }  // AFTER is default
             if (arg == "SYSTEM") { continue; }  // SYSTEM ignored for now
 
-            std::filesystem::path resolved = std::filesystem::path(arg).is_absolute() ?
-                std::filesystem::path(arg) :
-                std::filesystem::path(src_dir) / arg;
-            resolved_dirs.push_back(resolved.string());
+            // Generator expressions are resolved later; store as-is
+            if (arg.find("$<") != std::string::npos) {
+                resolved_dirs.push_back(arg);
+            } else {
+                std::filesystem::path resolved = std::filesystem::path(arg).is_absolute() ?
+                    std::filesystem::path(arg) :
+                    std::filesystem::path(src_dir) / arg;
+                resolved_dirs.push_back(resolved.string());
+            }
         }
 
         if (before) {

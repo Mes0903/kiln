@@ -1,6 +1,7 @@
 #include "condition_evaluator.hpp"
 #include "interperter.hpp"
 #include "regex.hpp"
+#include "clock_cache.hpp"
 #include "CMakeArray.hpp"
 #include <algorithm>
 #include <array>
@@ -354,18 +355,17 @@ std::expected<bool, InterpreterError> evaluate_condition(
                 return false;
             }
             std::string pattern = evaluate_token(condition[pos++]);
-            std::string regex_warning;
-            auto re = Regex::from_cmake_regex(pattern, &regex_warning);
+            static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                return Regex::from_cmake_regex(p);
+            });
+            auto re = cache.get(pattern);
             if (!re) {
                 error_msg = "MATCHES: invalid regex: " + re.error();
                 return false;
             }
-            if (!regex_warning.empty()) {
-                interp.print_message("WARNING", regex_warning);
-            }
             std::string left = evaluate_token(condition[start_pos]);
             std::vector<std::string> captures;
-            bool result = re->search(left, captures);
+            bool result = (*re)->search(left, captures);
 
             if (result) {
                 interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(captures.size() - 1));

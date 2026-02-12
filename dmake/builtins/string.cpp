@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include "../regex.hpp"
+#include "../clock_cache.hpp"
 #include <iomanip>
 #include <random>
 #include <ctime>
@@ -399,14 +400,17 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                auto re = Regex::from_cmake_regex(pattern);
+                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                    return Regex::from_cmake_regex(p);
+                });
+                auto re = cache.get(pattern);
                 if (!re) {
                     interp.set_fatal_error("string(REGEX MATCH) invalid regex: " + re.error());
                     return;
                 }
 
                 std::vector<std::string> captures;
-                if (re->search(input, captures)) {
+                if ((*re)->search(input, captures)) {
                     interp.set_variable(out_var, captures[0]);
                     for (size_t i = 0; i < captures.size(); ++i) {
                         interp.set_variable("CMAKE_MATCH_" + std::to_string(i), captures[i]);
@@ -439,13 +443,16 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                auto re = Regex::from_cmake_regex(pattern);
+                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                    return Regex::from_cmake_regex(p);
+                });
+                auto re = cache.get(pattern);
                 if (!re) {
                     interp.set_fatal_error("string(REGEX MATCHALL) invalid regex: " + re.error());
                     return;
                 }
 
-                auto all_matches = re->match_all(input);
+                auto all_matches = (*re)->match_all(input);
                 CMakeArray result;
                 for (const auto& m : all_matches) {
                     if (!m.empty()) result.append(m[0]);
@@ -471,7 +478,10 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                auto re = Regex::from_cmake_regex(pattern);
+                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                    return Regex::from_cmake_regex(p);
+                });
+                auto re = cache.get(pattern);
                 if (!re) {
                     interp.set_fatal_error("string(REGEX REPLACE) invalid regex: " + re.error());
                     return;
@@ -479,7 +489,7 @@ void register_string_builtins(Interpreter& interp) {
                 // replace_all handles CMake \1 \2 syntax natively
                 // PCRE2 already doesn't match \n with . (no PCRE2_DOTALL),
                 // matching CMake's behavior without needing line-by-line processing
-                std::string result = re->replace_all(input, replacement);
+                std::string result = (*re)->replace_all(input, replacement);
                 interp.set_variable(out_var, result);
 
             } else if (regex_op == "QUOTE") {

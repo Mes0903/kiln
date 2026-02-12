@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <set>
 #include "../regex.hpp"
+#include "../clock_cache.hpp"
 
 namespace dmake {
 
@@ -411,7 +412,10 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
 
-            auto rx = Regex::from_cmake_regex_match(pattern);
+            static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                return Regex::from_cmake_regex_match(p);
+            });
+            auto rx = cache.get(pattern);
             if (!rx) {
                 interp.set_fatal_error("list(FILTER) invalid regex: " + rx.error());
                 return;
@@ -421,7 +425,7 @@ void register_list_builtins(Interpreter& interp) {
             CMakeArray result;
 
             for (size_t i = 0; i < list.size(); ++i) {
-                bool matches = rx->match(list[i]);
+                bool matches = (*rx)->match(list[i]);
                 if ((mode == "INCLUDE" && matches) || (mode == "EXCLUDE" && !matches)) {
                     result.append(list[i]);
                 }
@@ -538,12 +542,15 @@ void register_list_builtins(Interpreter& interp) {
                         interp.set_fatal_error("list(TRANSFORM REPLACE) requires regex and replacement string");
                         return false;
                     }
-                    auto rx = Regex::from_cmake_regex(action_args[0]);
+                    static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                        return Regex::from_cmake_regex(p);
+                    });
+                    auto rx = cache.get(action_args[0]);
                     if (!rx) {
                         interp.set_fatal_error("list(TRANSFORM REPLACE) invalid regex: " + rx.error());
                         return false;
                     }
-                    element = rx->replace_all(element, action_args[1]);
+                    element = (*rx)->replace_all(element, action_args[1]);
                 } else {
                     interp.set_fatal_error("list(TRANSFORM) unknown action: " + action);
                     return false;
@@ -587,14 +594,17 @@ void register_list_builtins(Interpreter& interp) {
                     interp.set_fatal_error("list(TRANSFORM) REGEX requires a pattern");
                     return;
                 }
-                auto rx = Regex::from_cmake_regex_match(selector_params[0]);
+                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                    return Regex::from_cmake_regex_match(p);
+                });
+                auto rx = cache.get(selector_params[0]);
                 if (!rx) {
                     interp.set_fatal_error("list(TRANSFORM) invalid REGEX selector: " + rx.error());
                     return;
                 }
                 auto vec = result.to_vector();
                 for (size_t idx = 0; idx < vec.size(); ++idx) {
-                    if (rx->match(vec[idx])) {
+                    if ((*rx)->match(vec[idx])) {
                         if (!transform_element(vec[idx])) return;
                     }
                 }
