@@ -355,7 +355,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
                 return false;
             }
             std::string pattern = evaluate_token(condition[pos++]);
-            static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+            thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                 return Regex::from_cmake_regex(p);
             });
             auto re = cache.get(pattern);

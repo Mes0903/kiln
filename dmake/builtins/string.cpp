@@ -400,7 +400,7 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                     return Regex::from_cmake_regex(p);
                 });
                 auto re = cache.get(pattern);
@@ -443,7 +443,7 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                     return Regex::from_cmake_regex(p);
                 });
                 auto re = cache.get(pattern);
@@ -478,7 +478,7 @@ void register_string_builtins(Interpreter& interp) {
                     input += s;
                 }
 
-                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                     return Regex::from_cmake_regex(p);
                 });
                 auto re = cache.get(pattern);

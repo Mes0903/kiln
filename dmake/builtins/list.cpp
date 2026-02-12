@@ -415,7 +415,7 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
 
-            static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+            thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                 return Regex::from_cmake_regex_match(p);
             });
             auto rx = cache.get(pattern);
@@ -545,7 +545,7 @@ void register_list_builtins(Interpreter& interp) {
                         interp.set_fatal_error("list(TRANSFORM REPLACE) requires regex and replacement string");
                         return false;
                     }
-                    static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                    thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                         return Regex::from_cmake_regex(p);
                     });
                     auto rx = cache.get(action_args[0]);
@@ -597,7 +597,7 @@ void register_list_builtins(Interpreter& interp) {
                     interp.set_fatal_error("list(TRANSFORM) REGEX requires a pattern");
                     return;
                 }
-                static ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
+                thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                     return Regex::from_cmake_regex_match(p);
                 });
                 auto rx = cache.get(selector_params[0]);
