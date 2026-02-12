@@ -1359,6 +1359,10 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                    (output.empty() ? "" : "\nOutput:\n" + output);
         }
 
+        // Apply accumulated directory properties (include_directories, add_definitions, etc.)
+        // to all targets, matching what add_subdirectory/FetchContent do.
+        ep_interp->finalize_directory_targets();
+
         // Print any buffered interpretation output (with EP name prefix)
         print_prefixed_output(ep_output.str());
         ep_output.str("");  // Clear for next phase
