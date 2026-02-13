@@ -1,9 +1,11 @@
 #include "install_executor.hpp"
 #include "interperter.hpp"
 #include "target.hpp"
+#include "builtins/export_generator.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <sys/stat.h>
 #include <algorithm>
 
@@ -303,6 +305,38 @@ std::expected<void, std::string> execute_targets_rule(
                 }
             }
         }
+
+        // Install PUBLIC_HEADER files if destination specified
+        if (!rule.public_header_dest.destination.empty()) {
+            if (!should_skip_rule(rule.public_header_dest, current_config, component_filter)) {
+                std::string public_headers = target->get_property("PUBLIC_HEADER");
+                if (!public_headers.empty()) {
+                    std::filesystem::path header_dest_dir =
+                        std::filesystem::path(install_prefix) / rule.public_header_dest.destination;
+                    mode_t header_perms = parse_permissions(rule.public_header_dest.permissions, 0644);
+
+                    // PUBLIC_HEADER can be a semicolon-separated list
+                    std::istringstream ss(public_headers);
+                    std::string header;
+                    while (std::getline(ss, header, ';')) {
+                        if (header.empty()) continue;
+
+                        std::filesystem::path header_path = header;
+                        // Make relative paths absolute relative to source dir
+                        if (!header_path.is_absolute()) {
+                            header_path = std::filesystem::path(target->get_source_dir()) / header_path;
+                        }
+
+                        std::filesystem::path header_dest = header_dest_dir / header_path.filename();
+                        auto res = install_file(header_path, header_dest, header_perms,
+                                               rule.public_header_dest.optional, out);
+                        if (!res) {
+                            return res;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return {};
@@ -329,7 +363,14 @@ std::expected<void, std::string> execute_files_rule(
 
     for (const auto& source_file : rule.files) {
         std::filesystem::path source = source_file;
-        std::filesystem::path dest = dest_dir / source.filename();
+        std::filesystem::path dest;
+
+        // RENAME only valid with single file (validated during parsing)
+        if (!rule.rename.empty()) {
+            dest = dest_dir / rule.rename;
+        } else {
+            dest = dest_dir / source.filename();
+        }
 
         auto res = install_file(source, dest, perms, rule.destination.optional, out);
         if (!res) {
@@ -460,6 +501,7 @@ std::expected<void, std::string> execute_export_rule(
     Interpreter* interp,
     const InstallExportRule& rule,
     const std::string& install_prefix,
+    const std::string& current_config,
     const std::string& component_filter,
     std::ostream& out
 ) {
@@ -468,7 +510,94 @@ std::expected<void, std::string> execute_export_rule(
         return {};
     }
 
-    // No-op - warning already printed during script interpretation
+    if (!interp) {
+        return std::unexpected("install(EXPORT) requires interpreter context");
+    }
+
+    // Look up the export set
+    const auto& export_sets = interp->get_export_sets();
+    auto it = export_sets.find(rule.export_name);
+    if (it == export_sets.end() || it->second.empty()) {
+        // No targets in export set - nothing to install
+        return {};
+    }
+
+    // Collect targets
+    std::vector<Target*> targets_to_export;
+    for (const auto& entry : it->second) {
+        auto* target = interp->find_target(entry.target_name);
+        if (target) {
+            targets_to_export.push_back(target);
+        }
+    }
+
+    if (targets_to_export.empty()) {
+        return {};
+    }
+
+    // Determine output filename
+    std::string filename = rule.file_name;
+    if (filename.empty()) {
+        filename = rule.export_name + ".cmake";
+    }
+
+    // Compute the destination directory
+    std::filesystem::path dest_dir = std::filesystem::path(install_prefix) / rule.destination;
+    std::filesystem::create_directories(dest_dir);
+
+    // Generate export content
+    ExportContext ctx;
+    ctx.for_install = true;
+    ctx.namespace_prefix = rule.namespace_prefix;
+    ctx.destination = rule.destination;
+    ctx.install_prefix = install_prefix;
+    ctx.build_type = interp->get_variable("CMAKE_BUILD_TYPE");
+    ctx.config = current_config;
+    ctx.system_name = interp->get_variable("CMAKE_SYSTEM_NAME");
+    ctx.cxx_compiler_id = interp->get_variable("CMAKE_CXX_COMPILER_ID");
+    ctx.c_compiler_id = interp->get_variable("CMAKE_C_COMPILER_ID");
+    ctx.cxx_compiler_version = interp->get_variable("CMAKE_CXX_COMPILER_VERSION");
+    ctx.c_compiler_version = interp->get_variable("CMAKE_C_COMPILER_VERSION");
+    ctx.all_targets = &interp->get_targets();
+    ctx.target_aliases = &interp->get_target_aliases();
+
+    std::string content = generate_export_content(ctx, targets_to_export);
+
+    // Write main export file
+    std::filesystem::path main_export_file = dest_dir / filename;
+    std::ofstream out_file(main_export_file);
+    if (!out_file) {
+        return std::unexpected("Failed to create export file: " + main_export_file.string());
+    }
+    out_file << content;
+    out_file.close();
+    out << "-- Installing: " << main_export_file.string() << std::endl;
+
+    // CMake also generates per-config files like MyLibTargets-release.cmake
+    // Generate the config-specific file
+    std::string config_lower = current_config;
+    std::transform(config_lower.begin(), config_lower.end(), config_lower.begin(), ::tolower);
+
+    // Remove .cmake extension for config file naming
+    std::string base_name = filename;
+    if (base_name.size() > 6 && base_name.substr(base_name.size() - 6) == ".cmake") {
+        base_name = base_name.substr(0, base_name.size() - 6);
+    }
+
+    std::string config_filename = base_name + "-" + (config_lower.empty() ? "noconfig" : config_lower) + ".cmake";
+    std::filesystem::path config_export_file = dest_dir / config_filename;
+
+    // Generate config-specific content with per-config properties
+    std::string config_content = generate_config_export_content(ctx, targets_to_export, install_prefix);
+
+    std::ofstream config_out_file(config_export_file);
+    if (!config_out_file) {
+        return std::unexpected("Failed to create config export file: " + config_export_file.string());
+    }
+    config_out_file << config_content;
+    config_out_file.close();
+    out << "-- Installing: " << config_export_file.string() << std::endl;
+
     return {};
 }
 
@@ -549,6 +678,7 @@ std::expected<void, std::string> execute_install_rules(
                         interp,
                         *rule->export_rule,
                         install_prefix,
+                        current_config,
                         component_filter,
                         out
                     );

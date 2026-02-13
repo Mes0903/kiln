@@ -35,6 +35,13 @@ std::string generate_export_content(
     const ExportContext& ctx,
     const std::vector<Target*>& targets);
 
+// Generate the per-config export file content (e.g., MyLibTargets-release.cmake)
+// This contains IMPORTED_LOCATION_<CONFIG> and other per-configuration properties
+std::string generate_config_export_content(
+    const ExportContext& ctx,
+    const std::vector<Target*>& targets,
+    const std::string& install_prefix);
+
 // Helper to find a target by name, resolving aliases
 Target* find_target_in_context(const ExportContext& ctx, const std::string& name);
 
