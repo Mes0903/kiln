@@ -445,6 +445,11 @@ void register_property_builtins(Interpreter& interp) {
                         target->set_imported_location(value);
                     }
 
+                    // OUTPUT_NAME → update dedicated field (used by get_output_path())
+                    if (property_name == "OUTPUT_NAME") {
+                        target->set_output_name(value);
+                    }
+
                     // Generic property handling
                     if (append || append_string) {
                         std::string old_val = target->get_property(property_name);

@@ -68,6 +68,13 @@ std::expected<void, std::string> install_file(
         return std::unexpected("Source file does not exist: " + source.string());
     }
 
+    // Skip if source and destination are the same file
+    std::error_code equiv_ec;
+    if (std::filesystem::equivalent(source, destination, equiv_ec)) {
+        out << "-- Up-to-date: " << destination.string() << std::endl;
+        return {};
+    }
+
     // Create destination directory
     std::filesystem::path dest_dir = destination.parent_path();
     if (!dest_dir.empty()) {
@@ -212,6 +219,12 @@ std::expected<void, std::string> execute_targets_rule(
     const std::string& binary_dir,
     std::ostream& out
 ) {
+    // TARGETS rules require interpreter to look up targets
+    if (!interp) {
+        // Skip - targets were already built to their final location via CMAKE_ARCHIVE_OUTPUT_DIRECTORY
+        return {};
+    }
+
     for (const auto& target_name : rule.targets) {
         auto* target = interp->find_target(target_name);
         if (!target) {

@@ -662,6 +662,42 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                     } else if (task.is_ep_sentinel) {
                         // Sentinel task - synchronization point, signals EP completion
+                        // Also runs pending install rules for cmake-based EPs with build tasks
+                        auto* ep_target = dynamic_cast<ExternalProjectTarget*>(task.parent_target);
+                        if (ep_target) {
+                            const auto& install_rules = ep_target->get_pending_install_rules();
+                            if (!install_rules.empty()) {
+                                print_status("Installing", task.ep_name);
+                                std::string install_prefix = ep_target->get_ep_install_dir();
+                                std::string config = ep_target->get_pending_install_config();
+                                auto install_result = execute_install_rules(nullptr, install_rules,
+                                                                            install_prefix, config);
+                                if (!install_result) {
+                                    task_error = "EP " + task.ep_name + " install failed: " + install_result.error();
+                                    break;
+                                }
+                            }
+                            // Run extra install commands from INSTALL_COMMAND (skip "make install")
+                            const auto& install_cmd = ep_target->get_install_command();
+                            if (!install_cmd.is_empty && !install_cmd.commands.empty()) {
+                                std::string working_dir = ep_target->get_ep_binary_dir();
+                                for (const auto& cmd : install_cmd.commands) {
+                                    // Skip "make install" - we handle that with our install rules
+                                    if (cmd.size() >= 2 && cmd[0] == "make" && cmd[1] == "install") continue;
+                                    if (cmd.size() == 1 && cmd[0] == "make") continue;
+                                    auto result = dmake::run_command(cmd, working_dir);
+                                    if (result.exit_code != 0) {
+                                        {
+                                            std::lock_guard<std::mutex> lock(output_mutex_);
+                                            if (!result.output.empty()) std::cerr << result.output << std::endl;
+                                        }
+                                        task_error = "EP " + task.ep_name + " install command failed";
+                                        break;
+                                    }
+                                }
+                                if (!task_error.empty()) break;
+                            }
+                        }
                         print_status("Ready", task.ep_name);
 
                     // C++20 modules: handle collator tasks specially (in-process execution)
@@ -1606,25 +1642,52 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
 
         int dirty_count = *attach_result;
 
-        // For cmake-based EPs, execute install rules that were collected during interpretation.
-        // For header-only EPs (dirty_count == 0), we can run install immediately.
-        // TODO: For EPs with build tasks, we'd need a post-build install hook.
+        // For cmake-based EPs, we interpret CMakeLists.txt so we use install rules,
+        // not any custom INSTALL_COMMAND (which would require cmake-generated Makefile).
+        // However, we still run extra commands from INSTALL_COMMAND (those that aren't
+        // "make install") - e.g., extra cp commands to copy internal headers.
+        const auto& install_rules = ep_interp->get_install_rules();
+        std::string install_prefix = ep_target->get_ep_install_dir();
+        std::string config = ep_interp->get_variable("CMAKE_BUILD_TYPE");
+
+        // Helper to run extra install commands (skip "make install" which we replaced with install rules)
+        auto run_extra_install_cmds = [&]() -> std::optional<std::string> {
+            const auto& install_cmd = ep_target->get_install_command();
+            if (install_cmd.is_empty || install_cmd.commands.empty()) return std::nullopt;
+            std::string working_dir = ep_target->get_ep_binary_dir();
+            for (const auto& cmd : install_cmd.commands) {
+                // Skip "make install" - we handle that with our install rules
+                if (cmd.size() >= 2 && cmd[0] == "make" && cmd[1] == "install") continue;
+                if (cmd.size() == 1 && cmd[0] == "make") continue;  // "make" alone in install context
+                auto result = dmake::run_command(cmd, working_dir);
+                if (result.exit_code != 0) {
+                    print_prefixed_output(result.output);
+                    return "EP " + ep_name + " install command failed";
+                }
+                print_prefixed_output(result.output);
+            }
+            return std::nullopt;
+        };
+
         if (dirty_count == 0) {
-            const auto& install_rules = ep_interp->get_install_rules();
+            // Header-only EP or all tasks up-to-date - run install immediately
             if (!install_rules.empty()) {
-                print_prefixed_output("Installing headers...");
-
-                std::string install_prefix = ep_target->get_ep_install_dir();
-                std::string config = ep_interp->get_variable("CMAKE_BUILD_TYPE");
-
+                print_prefixed_output("Installing...");
                 auto install_result = execute_install_rules(ep_interp.get(), install_rules,
                                                             install_prefix, config);
                 if (!install_result) {
                     return "EP " + ep_name + " install failed: " + install_result.error();
                 }
             }
-
+            // Run extra install commands (e.g., cp for internal headers)
+            if (auto err = run_extra_install_cmds()) return *err;
             print_prefixed_output("EP is up-to-date");
+        } else {
+            // EP has build tasks - store install rules for sentinel to execute
+            if (!install_rules.empty()) {
+                ep_target->set_pending_install_rules(install_rules, config);
+            }
+            // Extra install commands will be run by sentinel (it has access to ep_target)
         }
 
         // Keep child interpreter targets alive — injected tasks hold raw parent_target pointers

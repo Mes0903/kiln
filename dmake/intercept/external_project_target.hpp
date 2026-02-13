@@ -4,10 +4,12 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 
 namespace dmake {
 
 class Interpreter;
+struct InstallRule;
 
 // Metadata for an ExternalProject step command (may contain multiple commands)
 struct EPStepCommand {
@@ -95,6 +97,14 @@ public:
     // Token replacements for step commands
     std::vector<std::pair<std::string, std::string>> get_token_replacements() const;
 
+    // Pending install rules (for cmake-based EPs, stored during orchestrator, run during sentinel)
+    void set_pending_install_rules(std::vector<std::shared_ptr<InstallRule>> rules, std::string config) {
+        pending_install_rules_ = std::move(rules);
+        pending_install_config_ = std::move(config);
+    }
+    const std::vector<std::shared_ptr<InstallRule>>& get_pending_install_rules() const { return pending_install_rules_; }
+    const std::string& get_pending_install_config() const { return pending_install_config_; }
+
 private:
     // EP directories
     std::string ep_source_dir_;
@@ -119,6 +129,10 @@ private:
     // Build options
     bool build_in_source_ = false;
     bool build_always_ = false;
+
+    // Pending install rules (for cmake-based EPs with build tasks)
+    std::vector<std::shared_ptr<InstallRule>> pending_install_rules_;
+    std::string pending_install_config_;
 };
 
 } // namespace dmake
