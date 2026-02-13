@@ -143,6 +143,53 @@ void register_external_project_builtins(Interpreter& interp) {
         exclude_from_all = !exclude_from_all_str.empty() && !Interpreter::is_falsy(exclude_from_all_str);
         build_always = !build_always_str.empty() && !Interpreter::is_falsy(build_always_str);
 
+        // Warn about ignored options that were actually specified
+        {
+            std::vector<std::string> ignored_used;
+            auto check_str = [&](const std::string& val, const char* name) {
+                if (!val.empty()) ignored_used.push_back(name);
+            };
+            auto check_bool = [&](bool val, const char* name) {
+                if (val) ignored_used.push_back(name);
+            };
+            auto check_list = [&](const std::vector<std::string>& val, const char* name) {
+                if (!val.empty()) ignored_used.push_back(name);
+            };
+
+            check_str(log_download, "LOG_DOWNLOAD");
+            check_str(log_configure, "LOG_CONFIGURE");
+            check_str(log_build, "LOG_BUILD");
+            check_str(log_install, "LOG_INSTALL");
+            check_str(log_update, "LOG_UPDATE");
+            check_str(log_patch, "LOG_PATCH");
+            check_str(log_test, "LOG_TEST");
+            check_str(log_merged_stdouterr, "LOG_MERGED_STDOUTERR");
+            check_str(log_output_on_failure, "LOG_OUTPUT_ON_FAILURE");
+            check_bool(uses_terminal_download, "USES_TERMINAL_DOWNLOAD");
+            check_bool(uses_terminal_configure, "USES_TERMINAL_CONFIGURE");
+            check_bool(uses_terminal_build, "USES_TERMINAL_BUILD");
+            check_bool(uses_terminal_install, "USES_TERMINAL_INSTALL");
+            check_list(git_config, "GIT_CONFIG");
+            check_str(git_remote_name, "GIT_REMOTE_NAME");
+            check_str(git_submodules, "GIT_SUBMODULES");
+            check_str(git_submodules_recurse, "GIT_SUBMODULES_RECURSE");
+            check_str(git_progress, "GIT_PROGRESS");
+            check_str(timeout, "TIMEOUT");
+            check_str(download_extract_timestamp, "DOWNLOAD_EXTRACT_TIMESTAMP");
+            check_list(http_header, "HTTP_HEADER");
+            check_str(cmake_generator, "CMAKE_GENERATOR");
+
+            if (!ignored_used.empty()) {
+                std::string opts;
+                for (size_t i = 0; i < ignored_used.size(); ++i) {
+                    if (i > 0) opts += ", ";
+                    opts += ignored_used[i];
+                }
+                interp.print_message("WARNING", "ExternalProject_Add(" + name +
+                    "): The following options are not yet implemented and will be ignored: " + opts);
+            }
+        }
+
         if (name.empty()) {
             interp.set_fatal_error("ExternalProject_Add requires a name");
             return;
@@ -371,10 +418,8 @@ void register_external_project_builtins(Interpreter& interp) {
                 }
 
                 // Extract unless DOWNLOAD_NO_EXTRACT
-                bool no_extract = (!download_no_extract_str.empty() &&
-                                   download_no_extract_str != "OFF" &&
-                                   download_no_extract_str != "FALSE" &&
-                                   download_no_extract_str != "0");
+                bool no_extract = !download_no_extract_str.empty() &&
+                                  !Interpreter::is_falsy(download_no_extract_str);
                 if (!no_extract) {
                     interp.print_message("STATUS", "  Extracting " + name + "...");
                     auto ex_result = extract_archive(archive_path, source_dir);
@@ -417,24 +462,8 @@ void register_external_project_builtins(Interpreter& interp) {
             apply_tokens(patch_command);
             interp.print_message("STATUS", "  Patching " + name + "...");
 
-            // Split on "COMMAND" tokens to get individual commands
-            std::vector<std::vector<std::string>> commands;
-            std::vector<std::string> current_cmd;
-            for (const auto& token : patch_command) {
-                if (token == "COMMAND") {
-                    if (!current_cmd.empty()) {
-                        commands.push_back(std::move(current_cmd));
-                        current_cmd.clear();
-                    }
-                } else {
-                    current_cmd.push_back(token);
-                }
-            }
-            if (!current_cmd.empty()) {
-                commands.push_back(std::move(current_cmd));
-            }
-
-            for (const auto& cmd : commands) {
+            auto patch_step = make_step_command(patch_command);
+            for (const auto& cmd : patch_step.commands) {
                 auto result = run_command(cmd, source_dir);
                 if (result.exit_code != 0) {
                     interp.set_fatal_error("ExternalProject_Add(" + name + ") patch failed:\n" + result.output);

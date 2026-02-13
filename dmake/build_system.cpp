@@ -35,6 +35,30 @@ struct CompileCommand {
     std::string output;
 };
 
+// Helper: Check if a command is a "make install" variant that should be skipped
+// when using dmake's install rules instead of invoking make.
+// Handles: "make install", "make -j4 install", "$(MAKE) install", etc.
+static bool is_make_install_command(const std::vector<std::string>& cmd) {
+    if (cmd.empty()) return false;
+
+    // Check if the command is "make" or ends with "/make" or is "$(MAKE)"
+    const std::string& exe = cmd[0];
+    bool is_make = (exe == "make" || exe == "$(MAKE)" ||
+                    exe.ends_with("/make") ||
+                    exe.find("make") != std::string::npos);
+    if (!is_make) return false;
+
+    // A bare "make" in install context is likely "make install" with default target
+    if (cmd.size() == 1) return true;
+
+    // Check if any argument is "install"
+    for (size_t i = 1; i < cmd.size(); ++i) {
+        if (cmd[i] == "install") return true;
+    }
+
+    return false;
+}
+
 std::expected<void, std::string> BuildGraph::generate_compile_commands(const std::string& build_dir) {
     std::string current_dir = std::filesystem::current_path().string();
 
@@ -683,8 +707,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 std::string working_dir = ep_target->get_ep_binary_dir();
                                 for (const auto& cmd : install_cmd.commands) {
                                     // Skip "make install" - we handle that with our install rules
-                                    if (cmd.size() >= 2 && cmd[0] == "make" && cmd[1] == "install") continue;
-                                    if (cmd.size() == 1 && cmd[0] == "make") continue;
+                                    if (is_make_install_command(cmd)) continue;
                                     auto result = dmake::run_command(cmd, working_dir);
                                     if (result.exit_code != 0) {
                                         {
@@ -1369,13 +1392,6 @@ BuildGraph::attach_ep_graph(
     // 3. Compute dirty status and move tasks into main graph
     int dirty_count = 0;
     for (auto& [id, task] : ep_graph.tasks_) {
-        // DEBUG: Check for system library dependencies coming from EP
-        for (const auto& dep : task.dependencies) {
-            if (dep.starts_with("/usr/") || dep.starts_with("/lib/") || dep.starts_with("/lib64/")) {
-                std::cerr << "DEBUG attach_ep_graph: task '" << id << "' has system dep: " << dep << std::endl;
-            }
-        }
-
         // Skip marker tasks
         if (task.outputs.empty() && task.commands.empty() &&
             !task.is_module_collator && !task.is_ep_orchestrator && !task.is_ep_sentinel) {
@@ -1664,8 +1680,7 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             std::string working_dir = ep_target->get_ep_binary_dir();
             for (const auto& cmd : install_cmd.commands) {
                 // Skip "make install" - we handle that with our install rules
-                if (cmd.size() >= 2 && cmd[0] == "make" && cmd[1] == "install") continue;
-                if (cmd.size() == 1 && cmd[0] == "make") continue;  // "make" alone in install context
+                if (is_make_install_command(cmd)) continue;
                 auto result = dmake::run_command(cmd, working_dir);
                 if (result.exit_code != 0) {
                     print_prefixed_output(result.output);
