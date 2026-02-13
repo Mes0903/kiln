@@ -284,6 +284,19 @@ void register_external_project_builtins(Interpreter& interp) {
         target->set_property("_EP_DOWNLOAD_DIR", download_dir);
         if (!source_subdir.empty()) target->set_property("_EP_SOURCE_SUBDIR", source_subdir);
 
+        // Create install directory structure at configure time (CMake does this)
+        if (!install_dir.empty()) {
+            std::string libdir = interp.get_variable("CMAKE_INSTALL_LIBDIR");
+            std::string includedir = interp.get_variable("CMAKE_INSTALL_INCLUDEDIR");
+            std::string bindir = interp.get_variable("CMAKE_INSTALL_BINDIR");
+            if (libdir.empty()) libdir = "lib";
+            if (includedir.empty()) includedir = "include";
+            if (bindir.empty()) bindir = "bin";
+            std::filesystem::create_directories(install_dir + "/" + libdir);
+            std::filesystem::create_directories(install_dir + "/" + includedir);
+            std::filesystem::create_directories(install_dir + "/" + bindir);
+        }
+
         // Add DEPENDS
         for (const auto& dep : depends) {
             target->add_custom_dependency(dep);

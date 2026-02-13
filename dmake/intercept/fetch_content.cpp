@@ -188,7 +188,7 @@ static void do_populate(Interpreter& interp, const std::string& name) {
                 std::string filename = std::filesystem::path(url).filename().string();
                 auto qpos = filename.find('?');
                 if (qpos != std::string::npos) filename = filename.substr(0, qpos);
-                std::string download_dir = base_dir + "/" + lower_name + "-subbuild";
+                std::string download_dir = build_root + "/" + lower_name + "-subbuild";
                 archive_path = download_dir + "/" + filename;
 
                 interp.print_message("STATUS", "Fetching " + name + " from " + url + "...");

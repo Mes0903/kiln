@@ -11,6 +11,7 @@
 #include "progress_bar.hpp"
 #include "interperter.hpp"
 #include "toolchain.hpp"
+#include "install_executor.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -1604,10 +1605,27 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         }
 
         int dirty_count = *attach_result;
+
+        // For cmake-based EPs, execute install rules that were collected during interpretation.
+        // For header-only EPs (dirty_count == 0), we can run install immediately.
+        // TODO: For EPs with build tasks, we'd need a post-build install hook.
         if (dirty_count == 0) {
+            const auto& install_rules = ep_interp->get_install_rules();
+            if (!install_rules.empty()) {
+                print_prefixed_output("Installing headers...");
+
+                std::string install_prefix = ep_target->get_ep_install_dir();
+                std::string config = ep_interp->get_variable("CMAKE_BUILD_TYPE");
+
+                auto install_result = execute_install_rules(ep_interp.get(), install_rules,
+                                                            install_prefix, config);
+                if (!install_result) {
+                    return "EP " + ep_name + " install failed: " + install_result.error();
+                }
+            }
+
             print_prefixed_output("EP is up-to-date");
         }
-        // Sentinel completes naturally after orchestrator - no special wiring needed
 
         // Keep child interpreter targets alive — injected tasks hold raw parent_target pointers
         for (auto& [_, target] : ep_interp->get_targets()) {
