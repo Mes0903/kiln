@@ -1659,7 +1659,16 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         for (const auto& lib : full_link_libs) {
              if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
                  link.inputs.push_back(lib);
-                 link.dependencies.insert(lib);
+
+                 // Only add to dependencies if a non-imported target produces this.
+                 // System libraries (from find_library) and IMPORTED target outputs
+                 // are pre-existing - we don't build them.
+                 for (const auto& [name, target] : all_targets) {
+                     if (target->get_output_path() == lib && !target->is_imported()) {
+                         link.dependencies.insert(lib);
+                         break;
+                     }
+                 }
              }
         }
     }

@@ -1369,6 +1369,13 @@ BuildGraph::attach_ep_graph(
     // 3. Compute dirty status and move tasks into main graph
     int dirty_count = 0;
     for (auto& [id, task] : ep_graph.tasks_) {
+        // DEBUG: Check for system library dependencies coming from EP
+        for (const auto& dep : task.dependencies) {
+            if (dep.starts_with("/usr/") || dep.starts_with("/lib/") || dep.starts_with("/lib64/")) {
+                std::cerr << "DEBUG attach_ep_graph: task '" << id << "' has system dep: " << dep << std::endl;
+            }
+        }
+
         // Skip marker tasks
         if (task.outputs.empty() && task.commands.empty() &&
             !task.is_module_collator && !task.is_ep_orchestrator && !task.is_ep_sentinel) {
