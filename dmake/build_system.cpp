@@ -35,6 +35,60 @@ struct CompileCommand {
     std::string output;
 };
 
+// Helper: Compute install task inputs and pre-compute target install paths.
+// Returns the output paths of targets being installed (so install task depends on link tasks).
+// Also populates ep_target with pre-computed (artifact_path, dest_path) pairs for TARGETS rules.
+static std::vector<std::string> compute_install_inputs(
+    const std::vector<std::shared_ptr<InstallRule>>& rules,
+    Interpreter* ep_interp,
+    const std::string& install_prefix,
+    ExternalProjectTarget* ep_target)
+{
+    std::vector<std::string> inputs;
+    if (!ep_interp) return inputs;
+
+    for (const auto& rule : rules) {
+        if (rule->targets_rule) {
+            const auto& tr = *rule->targets_rule;
+            // InstallTargetsRule: get output path of each target and compute destination
+            for (const auto& target_name : tr.targets) {
+                Target* target = ep_interp->find_target(target_name);
+                if (!target) continue;
+
+                std::string artifact_path = target->get_output_path();
+                if (artifact_path.empty()) continue;
+
+                inputs.push_back(artifact_path);
+
+                // Determine destination based on target type
+                const InstallDestination* dest = nullptr;
+                if (target->get_type() == TargetType::EXECUTABLE) {
+                    dest = &tr.runtime_dest;
+                } else if (target->get_type() == TargetType::SHARED_LIBRARY) {
+                    dest = &tr.library_dest;
+                } else if (target->get_type() == TargetType::STATIC_LIBRARY) {
+                    dest = &tr.archive_dest;
+                }
+
+                if (dest && !dest->destination.empty() && ep_target) {
+                    // Compute full destination path
+                    std::filesystem::path dest_path = std::filesystem::path(install_prefix) / dest->destination;
+                    dest_path /= std::filesystem::path(artifact_path).filename();
+
+                    PendingTargetInstall install;
+                    install.artifact_path = artifact_path;
+                    install.dest_path = dest_path.string();
+                    ep_target->add_pending_target_install(std::move(install));
+                }
+            }
+        }
+        // InstallFilesRule, InstallDirectoryRule: input files are already on disk,
+        // they don't depend on build tasks.
+        // InstallScriptRule, InstallExportRule: no predictable inputs.
+    }
+    return inputs;
+}
+
 // Helper: Check if a command is a "make install" variant that should be skipped
 // when using dmake's install rules instead of invoking make.
 // Handles: "make install", "make -j4 install", "$(MAKE) install", etc.
@@ -684,14 +738,31 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         }
                         // EP orchestrator completed successfully
 
-                    } else if (task.is_ep_sentinel) {
-                        // Sentinel task - synchronization point, signals EP completion
-                        // Also runs pending install rules for cmake-based EPs with build tasks
+                    } else if (task.is_ep_install) {
+                        // EP install task - runs install rules after EP build tasks complete
+                        print_status("Installing", task.ep_name);
                         auto* ep_target = dynamic_cast<ExternalProjectTarget*>(task.parent_target);
                         if (ep_target) {
+                            // 1. Install pre-computed target artifacts (TARGETS rules)
+                            for (const auto& install : ep_target->get_pending_target_installs()) {
+                                std::filesystem::path dest_dir = std::filesystem::path(install.dest_path).parent_path();
+                                std::filesystem::create_directories(dest_dir);
+                                std::error_code ec;
+                                std::filesystem::copy_file(install.artifact_path, install.dest_path,
+                                                          std::filesystem::copy_options::overwrite_existing, ec);
+                                if (ec) {
+                                    task_error = "EP " + task.ep_name + " install failed: cannot copy " +
+                                                install.artifact_path + " to " + install.dest_path + ": " + ec.message();
+                                    break;
+                                }
+                                std::cout << "-- Installing: " << install.dest_path << std::endl;
+                            }
+                            if (!task_error.empty()) break;
+
+                            // 2. Run other install rules (FILES, DIRECTORY, SCRIPT, CODE)
+                            // TARGETS rules are skipped since interp is null (we handled them above)
                             const auto& install_rules = ep_target->get_pending_install_rules();
                             if (!install_rules.empty()) {
-                                print_status("Installing", task.ep_name);
                                 std::string install_prefix = ep_target->get_ep_install_dir();
                                 std::string config = ep_target->get_pending_install_config();
                                 auto install_result = execute_install_rules(nullptr, install_rules,
@@ -721,6 +792,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 if (!task_error.empty()) break;
                             }
                         }
+
+                    } else if (task.is_ep_sentinel) {
+                        // Sentinel task - pure synchronization point, signals EP completion
+                        // Install is now handled by a separate install task that sentinel depends on
                         print_status("Ready", task.ep_name);
 
                     // C++20 modules: handle collator tasks specially (in-process execution)
@@ -1705,11 +1780,60 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             if (auto err = run_extra_install_cmds()) return *err;
             print_prefixed_output("EP is up-to-date");
         } else {
-            // EP has build tasks - store install rules for sentinel to execute
+            // EP has build tasks - create install task with proper dependencies
             if (!install_rules.empty()) {
                 ep_target->set_pending_install_rules(install_rules, config);
+
+                // Compute install task inputs and pre-compute target destinations
+                // (MUST be done BEFORE moving targets to ep_target_owners_)
+                auto install_inputs = compute_install_inputs(install_rules, ep_interp.get(),
+                                                             install_prefix, ep_target);
+
+                // Create install task
+                std::string install_id = ep_name + ":install";
+                BuildTask install_task;
+                install_task.id = install_id;
+                install_task.parent_target = ep_target;
+                install_task.is_ep_install = true;
+                install_task.ep_name = ep_name;
+                install_task.ep_binary_dir = binary_dir;
+                install_task.inputs = std::move(install_inputs);
+                // No outputs - install doesn't declare what it produces
+                // (consumers depend on sentinel, not installed files directly)
+
+                // Inject install task and wire sentinel to depend on it
+                {
+                    std::lock_guard<std::mutex> lock(loop_mutex);
+
+                    // Add install task to graph
+                    tasks_[install_id] = std::move(install_task);
+
+                    // Wire install task dependencies via file→task resolution
+                    for (const auto& in : tasks_[install_id].inputs) {
+                        for (const auto& [task_id, task] : tasks_) {
+                            for (const auto& out : task.outputs) {
+                                if (out == in) {
+                                    tasks_[install_id].dependencies.insert(task_id);
+                                    tasks_[task_id].dependents.insert(install_id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Wire sentinel to depend on install task (not directly on EP tasks)
+                    tasks_[sentinel_id].dependencies.insert(install_id);
+                    tasks_[install_id].dependents.insert(sentinel_id);
+
+                    // Mark install task as dirty
+                    dirty_state[install_id] = true;
+                    progress.bump_total(1);
+
+                    // Remove sentinel from ready set (has unsatisfied dependency now)
+                    ready_set.erase(sentinel_id);
+                }
             }
-            // Extra install commands will be run by sentinel (it has access to ep_target)
+            // Extra install commands will be run by install task (it has access to ep_target)
         }
 
         // Keep child interpreter targets alive — injected tasks hold raw parent_target pointers

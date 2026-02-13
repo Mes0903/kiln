@@ -55,6 +55,7 @@ struct BuildTask {
     // For ExternalProject support (build-time execution)
     bool is_ep_orchestrator = false;   // True if this is an EP orchestrator task
     bool is_ep_sentinel = false;       // True if this is an EP sentinel task
+    bool is_ep_install = false;        // True if this is an EP install task
     std::string ep_name;               // EP name (for orchestrator/sentinel identification)
     std::string ep_binary_dir;         // EP binary dir for cache routing (empty = use main cache)
 

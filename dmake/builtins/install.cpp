@@ -129,12 +129,21 @@ void parse_install_targets(
             else if (arg == "PUBLIC_HEADER") current_dest = &rule->public_header_dest;
             else if (arg == "PRIVATE_HEADER") current_dest = &rule->private_header_dest;
             ++i;
-        } else if (arg == "DESTINATION" && current_dest) {
+        } else if (arg == "DESTINATION") {
             if (i + 1 >= remaining_args.size()) {
                 interp.set_fatal_error("install(TARGETS) DESTINATION requires a value");
                 return;
             }
-            current_dest->destination = remaining_args[i + 1];
+            if (current_dest) {
+                // Destination type was specified (e.g., ARCHIVE DESTINATION lib)
+                current_dest->destination = remaining_args[i + 1];
+            } else {
+                // Shorthand form: DESTINATION applies to all applicable types
+                // (ARCHIVE for static, LIBRARY for shared, RUNTIME for executables)
+                rule->archive_dest.destination = remaining_args[i + 1];
+                rule->library_dest.destination = remaining_args[i + 1];
+                rule->runtime_dest.destination = remaining_args[i + 1];
+            }
             i += 2;
         } else if (arg == "PERMISSIONS" && current_dest) {
             ++i;

@@ -11,6 +11,13 @@ namespace dmake {
 class Interpreter;
 struct InstallRule;
 
+// Pre-computed target install info (computed while interpreter is alive,
+// used by install task after interpreter is destroyed)
+struct PendingTargetInstall {
+    std::string artifact_path;  // Built artifact (e.g., /build/libmylib.a)
+    std::string dest_path;      // Full destination path (e.g., /install/lib/libmylib.a)
+};
+
 // Metadata for an ExternalProject step command (may contain multiple commands)
 struct EPStepCommand {
     std::vector<std::vector<std::string>> commands;  // One or more commands
@@ -105,6 +112,12 @@ public:
     const std::vector<std::shared_ptr<InstallRule>>& get_pending_install_rules() const { return pending_install_rules_; }
     const std::string& get_pending_install_config() const { return pending_install_config_; }
 
+    // Pre-computed target installs (computed while interpreter is alive)
+    void add_pending_target_install(PendingTargetInstall install) {
+        pending_target_installs_.push_back(std::move(install));
+    }
+    const std::vector<PendingTargetInstall>& get_pending_target_installs() const { return pending_target_installs_; }
+
 private:
     // EP directories
     std::string ep_source_dir_;
@@ -133,6 +146,9 @@ private:
     // Pending install rules (for cmake-based EPs with build tasks)
     std::vector<std::shared_ptr<InstallRule>> pending_install_rules_;
     std::string pending_install_config_;
+
+    // Pre-computed target installs (artifact_path -> dest_path)
+    std::vector<PendingTargetInstall> pending_target_installs_;
 };
 
 } // namespace dmake
