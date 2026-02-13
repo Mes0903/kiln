@@ -715,6 +715,173 @@ Interpreter::generate_dirty_tasks(const std::vector<std::string>& requested_targ
     return *result;
 }
 
+std::expected<BuildGraph, BuildError>
+Interpreter::generate_build_graph(const std::vector<std::string>& requested_targets) {
+    // Same as generate_dirty_tasks(), but returns the full graph instead of just dirty tasks.
+    // Used by EP attachment to atomically add ALL EP tasks (clean tasks skip via normal signature check).
+
+    // Determine which targets to build
+    std::set<std::string> targets_to_build;
+    std::vector<std::string> initial_targets;
+
+    if (requested_targets.empty()) {
+        for (const auto& [name, target] : targets_) {
+            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+            if (custom) {
+                if (custom->is_build_by_default()) {
+                    initial_targets.push_back(name);
+                }
+            } else {
+                std::string exclude = target->get_property("EXCLUDE_FROM_ALL");
+                if (exclude.empty() || is_falsy(exclude)) {
+                    initial_targets.push_back(name);
+                }
+            }
+        }
+    } else {
+        for (const auto& t : requested_targets) {
+            std::string resolved = resolve_target_alias(t);
+            if (!targets_.count(resolved)) {
+                return std::unexpected(BuildError{current_file_, "Unknown target: " + t});
+            }
+            initial_targets.push_back(resolved);
+        }
+    }
+
+    // Resolve all initial targets
+    for (const auto& name : initial_targets) {
+        targets_[name]->resolve(targets_, *this);
+    }
+
+    // Collect targets to build
+    std::function<void(const std::string&)> collect = [&](const std::string& name) {
+        if (targets_to_build.count(name)) return;
+        if (!targets_.count(name)) return;
+        targets_to_build.insert(name);
+        auto target = targets_[name];
+
+        for (const auto& dep : target->get_resolved_target_deps()) {
+            collect(dep);
+        }
+
+        auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
+        if (custom) {
+            for (const auto& dep : custom->get_custom_dependencies()) {
+                collect(dep);
+            }
+        }
+
+        for (const auto& dep : target->get_manually_added_dependencies()) {
+            collect(dep);
+        }
+    };
+
+    for (const auto& name : initial_targets) {
+        collect(name);
+    }
+
+    std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
+    std::filesystem::create_directories(root_binary_dir);
+
+    BuildGraph graph;
+
+    // Build linker flags
+    std::vector<std::string> exe_linker_flags;
+    std::vector<std::string> shared_linker_flags;
+
+    std::string linker_type = get_variable("CMAKE_LINKER_TYPE");
+    if (!linker_type.empty()) {
+        std::string linker_type_upper = to_upper(linker_type);
+        if (linker_type_upper == "BFD" || linker_type_upper == "GOLD" ||
+            linker_type_upper == "MOLD" || linker_type_upper == "LLD") {
+            std::string flag = "-fuse-ld=" + to_lower(linker_type);
+            exe_linker_flags.push_back(flag);
+            shared_linker_flags.push_back(flag);
+        }
+    }
+
+    {
+        std::istringstream iss(get_variable("CMAKE_EXE_LINKER_FLAGS"));
+        std::string flag;
+        while (iss >> flag) exe_linker_flags.push_back(flag);
+    }
+    {
+        std::istringstream iss(get_variable("CMAKE_SHARED_LINKER_FLAGS"));
+        std::string flag;
+        while (iss >> flag) shared_linker_flags.push_back(flag);
+    }
+
+    // Generate tasks
+    for (const auto& name : targets_to_build) {
+        targets_[name]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+    }
+
+    // Resolve missing dependencies
+    std::unordered_map<std::string, std::string> output_to_target;
+    for (const auto& [name, target] : targets_) {
+        auto path = target->get_output_path();
+        if (!path.empty()) output_to_target[path] = name;
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& missing : graph.get_missing_dependencies()) {
+            auto it = output_to_target.find(missing);
+            if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
+                targets_to_build.insert(it->second);
+                targets_[it->second]->generate_tasks(graph, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                changed = true;
+            }
+        }
+    }
+
+    // Resolve circular deps
+    for (auto& [name, target] : targets_) {
+        target->resolve_deferred_circular_deps(targets_);
+    }
+
+    // Wire link dependencies
+    for (const auto& name : targets_to_build) {
+        auto target = targets_[name];
+        if (target->get_type() == TargetType::STATIC_LIBRARY)
+            continue;
+
+        std::string out_path = target->get_output_path();
+        std::string task_id = out_path.empty() ? target->get_name() : out_path;
+
+        if (graph.has_task(task_id)) {
+            auto& task = graph.get_task(task_id);
+            for (const auto& lib : target->get_resolved_property("LINK_LIBRARIES")) {
+                if (graph.has_task(lib)) {
+                    task.inputs.push_back(lib);
+                }
+            }
+        }
+    }
+
+    // Finalize graph (evaluate genex)
+    GenexEvaluationContext genex_ctx;
+    genex_ctx.build_type = get_variable("CMAKE_BUILD_TYPE");
+    genex_ctx.system_name = get_variable("CMAKE_SYSTEM_NAME");
+    genex_ctx.cxx_compiler_id = get_variable("CMAKE_CXX_COMPILER_ID");
+    genex_ctx.c_compiler_id = get_variable("CMAKE_C_COMPILER_ID");
+    genex_ctx.cxx_compiler_version = get_variable("CMAKE_CXX_COMPILER_VERSION");
+    genex_ctx.c_compiler_version = get_variable("CMAKE_C_COMPILER_VERSION");
+    genex_ctx.all_targets = &targets_;
+    genex_ctx.target_aliases = &target_aliases_;
+    genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
+    genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+    auto finalize_result = graph.finalize(genex_ctx);
+    if (!finalize_result) {
+        return std::unexpected(BuildError{current_file_, finalize_result.error()});
+    }
+
+    // Return full graph (not just dirty tasks)
+    return std::move(graph);
+}
+
 Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir)
     : out_(out), err_(err) {
 

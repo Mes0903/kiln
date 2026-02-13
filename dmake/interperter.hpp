@@ -201,8 +201,14 @@ public:
 
     // For ExternalProject: generate tasks and return only dirty ones for injection.
     // Returns pair of (dirty tasks, last task ID for sentinel wiring).
+    // DEPRECATED: Use generate_build_graph() + attach_ep_graph() instead.
     std::expected<std::pair<std::vector<BuildTask>, std::string>, BuildError>
     generate_dirty_tasks(const std::vector<std::string>& targets = {});
+
+    // For ExternalProject: generate full build graph for atomic EP attachment.
+    // Returns the complete BuildGraph (not just dirty tasks).
+    std::expected<BuildGraph, BuildError>
+    generate_build_graph(const std::vector<std::string>& targets = {});
 
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);

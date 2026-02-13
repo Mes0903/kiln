@@ -1664,6 +1664,35 @@ void Target::generate_tasks(BuildGraph& graph, const Toolchain& toolchain, const
         }
     }
 
+    // Propagate imported library dependencies to consumer link task.
+    // When linking against an imported library (e.g., mylib with IMPORTED_LOCATION),
+    // we need to inherit its manually_added_dependencies (e.g., mylib_ep EP target).
+    // This ensures the EP sentinel runs before we try to link against EP outputs.
+    for (const auto& [name, target] : all_targets) {
+        if (!target->is_imported()) continue;
+        std::string imported_out = target->get_output_path();
+        if (imported_out.empty()) continue;
+
+        // Check if we're linking against this imported library's output
+        bool is_linked = std::any_of(full_link_libs.begin(), full_link_libs.end(),
+            [&](const std::string& lib) { return lib == imported_out; });
+        if (!is_linked) continue;
+
+        // Inherit the imported library's manually_added_dependencies
+        for (const auto& dep_name : target->get_manually_added_dependencies()) {
+            auto dep_it = all_targets.find(dep_name);
+            if (dep_it != all_targets.end()) {
+                std::string dep_out = dep_it->second->get_output_path();
+                if (!dep_out.empty()) {
+                    link.dependencies.insert(dep_out);
+                } else {
+                    // Custom/EP targets may not have output paths - use target name as task ID
+                    link.dependencies.insert(dep_name);
+                }
+            }
+        }
+    }
+
     // Add manually added dependencies (from add_dependencies command)
     for (const auto& dep_name : manually_added_dependencies_) {
         auto dep_it = all_targets.find(dep_name);

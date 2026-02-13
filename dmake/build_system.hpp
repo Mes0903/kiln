@@ -10,6 +10,7 @@
 #include <optional>
 #include <filesystem>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include "utils.hpp"
 #include "language.hpp"
@@ -71,6 +72,31 @@ struct BuildTask {
 
 class BuildGraph {
 public:
+    BuildGraph() = default;
+
+    // Move constructor/assignment - needed because mutexes aren't movable
+    BuildGraph(BuildGraph&& other) noexcept
+        : tasks_(std::move(other.tasks_)),
+          ep_target_owners_(std::move(other.ep_target_owners_)),
+          stat_cache_(std::move(other.stat_cache_)),
+          deps_cache_(std::move(other.deps_cache_)),
+          compiler_version_cache_(std::move(other.compiler_version_cache_)) {}
+
+    BuildGraph& operator=(BuildGraph&& other) noexcept {
+        if (this != &other) {
+            tasks_ = std::move(other.tasks_);
+            ep_target_owners_ = std::move(other.ep_target_owners_);
+            stat_cache_ = std::move(other.stat_cache_);
+            deps_cache_ = std::move(other.deps_cache_);
+            compiler_version_cache_ = std::move(other.compiler_version_cache_);
+        }
+        return *this;
+    }
+
+    // Disable copying
+    BuildGraph(const BuildGraph&) = delete;
+    BuildGraph& operator=(const BuildGraph&) = delete;
+
     void add_task(BuildTask task);
 
     // Checks for cycles and returns an error message if one is found
@@ -129,13 +155,16 @@ public:
         std::set<std::string>& ready_set,
         ProgressBar& progress,
         std::map<std::string, std::string>& new_cache,
-        bool stdout_is_tty);
+        bool stdout_is_tty,
+        std::mutex& loop_mutex,
+        std::condition_variable& cv);
 
     // Inject tasks into the live build graph during execution.
     // Called by run_ep_orchestrator after extracting dirty tasks from a child interpreter.
     // sentinel_id: The EP sentinel task ID - its dependencies will be updated
     // last_task_id: The final task in the injected chain (sentinel will depend on this)
     // ep_binary_dir: EP binary directory for cache routing
+    // DEPRECATED: Use attach_ep_graph() instead for proper incremental builds.
     void inject_tasks(
         std::vector<BuildTask> new_tasks,
         const std::string& sentinel_id,
@@ -145,6 +174,23 @@ public:
         std::unordered_map<std::string, std::optional<bool>>& dirty_state,
         std::set<std::string>& ready_set,
         ProgressBar& progress);
+
+    // Atomically attach entire EP graph to main graph.
+    // Unlike inject_tasks(), this attaches ALL tasks (not just dirty ones).
+    // Clean tasks are added to completed immediately; dirty tasks execute normally.
+    // This fixes validation failures where partial shoveling causes missing dependencies.
+    // Returns dirty_count for progress reporting.
+    // IMPORTANT: Caller must NOT hold loop_mutex; this function acquires it.
+    std::expected<int, std::string>
+    attach_ep_graph(
+        BuildGraph&& ep_graph,
+        const std::string& ep_binary_dir,
+        std::set<std::string>& completed,
+        std::unordered_map<std::string, std::optional<bool>>& dirty_state,
+        std::set<std::string>& ready_set,
+        ProgressBar& progress,
+        std::mutex& loop_mutex,
+        std::condition_variable& cv);
 
     // Access to tasks map (needed by EP orchestrator for isolated interpreter)
     const std::map<std::string, BuildTask>& get_tasks() const { return tasks_; }

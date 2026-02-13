@@ -651,9 +651,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     if (task.is_ep_orchestrator) {
                         print_status("Configuring", task.ep_name);
 
-                        // Run the EP orchestrator under the loop_mutex since it may call inject_tasks
-                        // Actually, we need to call it outside the lock and acquire the lock when injecting
-                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_state, ready_set, progress, new_cache, stdout_is_tty);
+                        // Run the EP orchestrator outside the lock - it acquires loop_mutex when attaching the graph
+                        auto ep_result = run_ep_orchestrator(task, build_dir, completed, dirty_state, ready_set, progress, new_cache, stdout_is_tty, loop_mutex, cv);
                         if (ep_result) {
                             task_error = *ep_result;
                             break;
@@ -1305,6 +1304,153 @@ void BuildGraph::inject_tasks(
     }
 }
 
+std::expected<int, std::string>
+BuildGraph::attach_ep_graph(
+    BuildGraph&& ep_graph,
+    const std::string& ep_binary_dir,
+    std::set<std::string>& completed,
+    std::unordered_map<std::string, std::optional<bool>>& dirty_state,
+    std::set<std::string>& ready_set,
+    ProgressBar& progress,
+    std::mutex& loop_mutex,
+    std::condition_variable& cv) {
+
+    // Lock loop_mutex for thread safety - same lock used by execute() worker threads
+    std::lock_guard<std::mutex> lock(loop_mutex);
+
+    // 1. Load EP's cache for dirty computation
+    auto ep_cache = load_cache(ep_binary_dir);
+
+    // 2. Build file→task map for EP tasks (for dependency resolution)
+    std::unordered_map<std::string, std::string> ep_file_to_task;
+    for (const auto& [id, task] : ep_graph.tasks_) {
+        for (const auto& out : task.outputs) {
+            ep_file_to_task[out] = id;
+        }
+    }
+
+    // 3. Compute dirty status and move tasks into main graph
+    int dirty_count = 0;
+    for (auto& [id, task] : ep_graph.tasks_) {
+        // Skip marker tasks
+        if (task.outputs.empty() && task.commands.empty() &&
+            !task.is_module_collator && !task.is_ep_orchestrator && !task.is_ep_sentinel) {
+            continue;
+        }
+
+        // Check if outputs exist
+        bool outputs_exist = true;
+        for (const auto& out : task.outputs) {
+            if (!std::filesystem::exists(out)) {
+                outputs_exist = false;
+                break;
+            }
+        }
+
+        bool is_dirty = false;
+        if (!outputs_exist || task.always_run) {
+            is_dirty = true;
+        } else {
+            auto sig_res = calculate_signature(task);
+            if (!sig_res || !(ep_cache.count(id) && ep_cache[id] == *sig_res)) {
+                is_dirty = true;
+            }
+        }
+
+        // Set EP binary dir for cache routing
+        task.ep_binary_dir = ep_binary_dir;
+
+        // Remove from completed if this ID was pre-populated as a phantom task
+        completed.erase(id);
+
+        // Move task into main graph
+        tasks_[id] = std::move(task);
+
+        // Update state based on dirty status
+        if (is_dirty) {
+            dirty_state[id] = true;
+            dirty_count++;
+        } else {
+            // Clean task - add to completed immediately
+            completed.insert(id);
+        }
+    }
+
+    // 4. Resolve file→task dependencies for ALL tasks in main graph
+    std::set<std::string> tasks_with_new_deps;
+    for (auto& [id, task] : tasks_) {
+        for (const auto& in : task.inputs) {
+            auto it = ep_file_to_task.find(in);
+            if (it != ep_file_to_task.end() && it->second != id) {
+                if (task.dependencies.insert(it->second).second) {
+                    tasks_with_new_deps.insert(id);
+                }
+                if (tasks_.count(it->second)) {
+                    tasks_[it->second].dependents.insert(id);
+                }
+            }
+        }
+    }
+
+    // Remove tasks with new unsatisfied dependencies from ready_set
+    for (const auto& id : tasks_with_new_deps) {
+        bool has_unsatisfied = false;
+        for (const auto& dep : tasks_[id].dependencies) {
+            if (!completed.count(dep)) {
+                has_unsatisfied = true;
+                break;
+            }
+        }
+        if (has_unsatisfied) {
+            ready_set.erase(id);
+        }
+    }
+
+    // 5. Propagate dirtiness through dependencies
+    if (dirty_count > 0) {
+        bool changed;
+        do {
+            changed = false;
+            for (auto& [id, task] : tasks_) {
+                if (dirty_state.count(id)) continue;
+                for (const auto& dep : task.dependencies) {
+                    if (dirty_state.count(dep) && dirty_state[dep] == true) {
+                        dirty_state[id] = true;
+                        dirty_count++;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } while (changed);
+    }
+
+    // 6. Update progress and add ready dirty tasks to ready_set
+    progress.bump_total(dirty_count);
+
+    for (const auto& [id, state] : dirty_state) {
+        if (!state.has_value() || !*state) continue;  // Only check definitely-dirty
+        if (completed.count(id)) continue;
+        if (ready_set.count(id)) continue;
+
+        bool all_deps_done = true;
+        for (const auto& dep : tasks_[id].dependencies) {
+            if (!completed.count(dep)) {
+                all_deps_done = false;
+                break;
+            }
+        }
+        if (all_deps_done) {
+            ready_set.insert(id);
+        }
+    }
+
+    // Notify waiting threads that new tasks are available
+    cv.notify_all();
+
+    return dirty_count;
+}
+
 std::optional<std::string> BuildGraph::run_ep_orchestrator(
     BuildTask& task,
     const std::string& build_dir,
@@ -1313,7 +1459,9 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
     std::set<std::string>& ready_set,
     ProgressBar& progress,
     std::map<std::string, std::string>& new_cache,
-    bool stdout_is_tty) {
+    bool stdout_is_tty,
+    std::mutex& loop_mutex,
+    std::condition_variable& cv) {
 
     // Get the ExternalProjectTarget from the task
     auto* ep_target = dynamic_cast<ExternalProjectTarget*>(task.parent_target);
@@ -1427,15 +1575,14 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         print_prefixed_output(ep_output.str());
         ep_output.str("");  // Clear for next phase
 
-        // Generate dirty tasks (resolve -> generate -> dirty scan)
-        auto tasks_result = ep_interp->generate_dirty_tasks({});
-        if (!tasks_result) {
+        // Generate full build graph (not just dirty tasks)
+        // attach_ep_graph will handle dirty detection for each task
+        auto graph_result = ep_interp->generate_build_graph({});
+        if (!graph_result) {
             std::string output = ep_output.str();
-            return "EP " + ep_name + ": Task generation error: " + tasks_result.error().message +
+            return "EP " + ep_name + ": Task generation error: " + graph_result.error().message +
                    (output.empty() ? "" : "\nOutput:\n" + output);
         }
-
-        auto& [dirty_tasks, last_task_id] = *tasks_result;
 
         // Print any buffered task generation output
         print_prefixed_output(ep_output.str());
@@ -1447,12 +1594,20 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             print_prefixed_output("warning: Failed to save subsystem cache: " + cache_save_result.error());
         }
 
-        // Inject dirty tasks into parent's graph
-        if (!dirty_tasks.empty()) {
-            inject_tasks(std::move(dirty_tasks), sentinel_id, last_task_id, binary_dir,
-                        completed, dirty_state, ready_set, progress);
+        // Attach full EP graph to main graph
+        // This handles dirty detection and proper dependency wiring
+        auto attach_result = attach_ep_graph(std::move(*graph_result), binary_dir,
+                                             completed, dirty_state, ready_set, progress,
+                                             loop_mutex, cv);
+        if (!attach_result) {
+            return "EP " + ep_name + ": " + attach_result.error();
         }
-        // If no dirty tasks, sentinel will complete immediately after orchestrator
+
+        int dirty_count = *attach_result;
+        if (dirty_count == 0) {
+            print_prefixed_output("EP is up-to-date");
+        }
+        // Sentinel completes naturally after orchestrator - no special wiring needed
 
         // Keep child interpreter targets alive — injected tasks hold raw parent_target pointers
         for (auto& [_, target] : ep_interp->get_targets()) {

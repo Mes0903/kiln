@@ -23,3 +23,5 @@ add_dependencies(mylib mylib_ep)
 # Main executable that links against the imported library
 add_executable(main_app main.cpp)
 target_link_libraries(main_app PRIVATE mylib)
+
+dmake_dump_target_info(main_app AT_BUILD)
