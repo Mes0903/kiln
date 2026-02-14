@@ -1,2 +1,2 @@
 project(testproj)
-find_package(OpenMP REQUIRED)
+find_package(Qt6 COMPONENTS Core REQUIRED)

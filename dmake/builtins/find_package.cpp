@@ -796,6 +796,23 @@ void register_find_package_builtins(Interpreter& interp) {
                 return;
             }
 
+            // The config file may have set <Package>_FOUND to FALSE
+            // (e.g. Qt6Config.cmake does this when a required component is missing)
+            std::string post_found = interp.get_variable(found_var);
+            if (interp.is_falsy(post_found)) {
+                if (required) {
+                    std::string not_found_msg = interp.get_variable(package_name + "_NOT_FOUND_MESSAGE");
+                    std::string error_msg = "Could not find package " + package_name;
+                    if (!not_found_msg.empty()) {
+                        error_msg += ": " + not_found_msg;
+                    }
+                    interp.set_fatal_error(error_msg);
+                } else if (!quiet) {
+                    interp.print_message("STATUS", "Could not find package " + package_name + " (optional)");
+                }
+                return;
+            }
+
             validate_components();
         } else {
             // For config-preferred packages, fall back to system Find modules
