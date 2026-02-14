@@ -28,7 +28,7 @@ std::vector<std::pair<std::string, std::string>> ExternalProjectTarget::get_toke
 }
 
 void ExternalProjectTarget::generate_tasks(
-    BuildGraph& graph,
+    GraphTransaction& txn,
     const Toolchain&,
     const std::map<std::string, std::shared_ptr<Target>>& all_targets,
     const Interpreter& interp,
@@ -41,7 +41,7 @@ void ExternalProjectTarget::generate_tasks(
     //    - Runs at build time when all DEPENDS are satisfied
     //    - For cmake-based EPs: spawns isolated interpreter, extracts dirty tasks, injects them
     //    - For custom EPs: runs CONFIGURE_COMMAND/BUILD_COMMAND/INSTALL_COMMAND
-    //    - Marked as is_ep_orchestrator so execute() handles it specially
+    //    - Uses EPOrchestratorTask kind so execute() handles it specially
     //
     // 2. Sentinel task (name_)
     //    - Initially depends only on orchestrator
@@ -55,10 +55,9 @@ void ExternalProjectTarget::generate_tasks(
     // --- Orchestrator task ---
     BuildTask orchestrator;
     orchestrator.id = orchestrator_id;
+    orchestrator.kind = EPOrchestratorTask{name_};
     orchestrator.parent_target = this;
     orchestrator.always_run = true;  // Must check if EP needs rebuilding
-    orchestrator.is_ep_orchestrator = true;
-    orchestrator.ep_name = name_;
     orchestrator.working_dir = ep_binary_dir_;
 
     // Handle DEPENDS from add_custom_target/ExternalProject_Add
@@ -72,30 +71,29 @@ void ExternalProjectTarget::generate_tasks(
             // Target dependency - depend on the target's output or its task ID
             std::string dep_out = dep_it->second->get_output_path();
             if (!dep_out.empty()) {
-                orchestrator.dependencies.insert(dep_out);
+                orchestrator.explicit_deps.push_back(dep_out);
             } else {
                 // Custom/EP targets may not have output paths - use target name as task ID
-                orchestrator.dependencies.insert(dep_name);
+                orchestrator.explicit_deps.push_back(dep_name);
             }
         }
         // File dependencies are not relevant for orchestrator (it doesn't use files directly)
     }
 
-    graph.add_task(std::move(orchestrator));
+    txn.add(std::move(orchestrator));
 
     // --- Sentinel task ---
     BuildTask sentinel;
     sentinel.id = sentinel_id;
+    sentinel.kind = EPSentinelTask{name_};
     sentinel.parent_target = this;
     sentinel.always_run = true;  // Sentinel must run every build to check if EP is dirty
-    sentinel.is_ep_sentinel = true;
-    sentinel.ep_name = name_;
     // No commands - sentinel is just a synchronization point
 
     // Sentinel depends on orchestrator
-    sentinel.dependencies.insert(orchestrator_id);
+    sentinel.explicit_deps.push_back(orchestrator_id);
 
-    graph.add_task(std::move(sentinel));
+    txn.add(std::move(sentinel));
 }
 
 } // namespace dmake
