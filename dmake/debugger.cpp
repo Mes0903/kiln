@@ -268,17 +268,44 @@ bool Debugger::execute_debugger_command(const std::string& input) {
     std::string cmd;
     iss >> cmd;
 
+    // Check that no unexpected trailing arguments remain
+    auto expect_no_more_args = [&](const char* usage) -> bool {
+        std::string extra;
+        if (iss >> extra) {
+            std::cerr << "Unexpected argument: " << extra << "\n";
+            std::cerr << "Usage: " << usage << "\n";
+            return false;
+        }
+        return true;
+    };
+
+    // Parse an integer argument strictly (rejects "3abc", trailing garbage, etc.)
+    auto parse_int = [](const std::string& s) -> std::optional<int> {
+        if (s.empty()) return std::nullopt;
+        try {
+            size_t pos = 0;
+            int val = std::stoi(s, &pos);
+            if (pos != s.size()) return std::nullopt;
+            return val;
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+
     if (cmd == "continue" || cmd == "c") {
+        if (!expect_no_more_args("continue")) return false;
         action_ = Action::CONTINUE;
         return true;
     }
 
     if (cmd == "step" || cmd == "s") {
+        if (!expect_no_more_args("step")) return false;
         action_ = Action::STEP;
         return true;
     }
 
     if (cmd == "next" || cmd == "n") {
+        if (!expect_no_more_args("next")) return false;
         action_ = Action::NEXT;
         next_depth_ = call_depth_;
         return true;
@@ -295,6 +322,7 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             std::cerr << "Usage: print <variable_name>\n";
             return false;
         }
+        if (!expect_no_more_args("print <variable_name>")) return false;
         auto val = interp_.get_optional_variable(var_name);
         if (val.has_value()) {
             std::cerr << var_name << " = \"" << *val << "\"\n";
@@ -305,11 +333,13 @@ bool Debugger::execute_debugger_command(const std::string& input) {
     }
 
     if (cmd == "backtrace" || cmd == "bt") {
+        if (!expect_no_more_args("backtrace")) return false;
         show_backtrace();
         return false;
     }
 
     if (cmd == "list" || cmd == "l") {
+        if (!expect_no_more_args("list")) return false;
         auto [f, r] = selected_file_row();
         show_source_context(f, r);
         return false;
@@ -322,13 +352,15 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             show_selected_frame();
             return false;
         }
-        try {
-            int n = std::stoi(arg);
-            if (!select_frame(n)) {
-                std::cerr << "No frame " << n << ".\n";
-            }
-        } catch (...) {
+        auto n = parse_int(arg);
+        if (!n) {
+            std::cerr << "Invalid frame number: " << arg << "\n";
             std::cerr << "Usage: frame [N]\n";
+            return false;
+        }
+        if (!expect_no_more_args("frame [N]")) return false;
+        if (!select_frame(*n)) {
+            std::cerr << "No frame " << *n << ".\n";
         }
         return false;
     }
@@ -337,8 +369,15 @@ bool Debugger::execute_debugger_command(const std::string& input) {
         int count = 1;
         std::string arg;
         if (iss >> arg) {
-            try { count = std::stoi(arg); } catch (...) { count = 1; }
+            auto n = parse_int(arg);
+            if (!n) {
+                std::cerr << "Invalid count: " << arg << "\n";
+                std::cerr << "Usage: up [N]\n";
+                return false;
+            }
+            count = *n;
         }
+        if (!expect_no_more_args("up [N]")) return false;
         auto& stack = interp_.get_trace_stack();
         int max_frame = static_cast<int>(stack.size()) - 1;
         int target = selected_frame_ + count;
@@ -354,8 +393,15 @@ bool Debugger::execute_debugger_command(const std::string& input) {
         int count = 1;
         std::string arg;
         if (iss >> arg) {
-            try { count = std::stoi(arg); } catch (...) { count = 1; }
+            auto n = parse_int(arg);
+            if (!n) {
+                std::cerr << "Invalid count: " << arg << "\n";
+                std::cerr << "Usage: down [N]\n";
+                return false;
+            }
+            count = *n;
         }
+        if (!expect_no_more_args("down [N]")) return false;
         int target = selected_frame_ - count;
         if (target < 0) {
             std::cerr << "Already at innermost frame.\n";
@@ -369,8 +415,10 @@ bool Debugger::execute_debugger_command(const std::string& input) {
         std::string what;
         iss >> what;
         if (what == "variables") {
+            if (!expect_no_more_args("info variables")) return false;
             show_variables();
         } else if (what == "breakpoints") {
+            if (!expect_no_more_args("info breakpoints")) return false;
             show_breakpoints();
         } else {
             std::cerr << "Usage: info variables | info breakpoints\n";
@@ -385,9 +433,10 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             std::cerr << "Usage: break <line> | break <file>:<line> | break <command_name>\n";
             return false;
         }
+        if (!expect_no_more_args("break <line> | break <file>:<line> | break <command_name>")) return false;
 
         // Check if it's a plain line number (break on current file)
-        bool is_plain_number = !arg.empty() && std::all_of(arg.begin(), arg.end(), ::isdigit);
+        bool is_plain_number = std::all_of(arg.begin(), arg.end(), ::isdigit);
         if (is_plain_number) {
             size_t line = std::stoul(arg);
             warn_if_non_executable(current_file_, line);
@@ -403,14 +452,12 @@ bool Debugger::execute_debugger_command(const std::string& input) {
         if (colon != std::string::npos && colon > 0) {
             std::string file = arg.substr(0, colon);
             std::string line_str = arg.substr(colon + 1);
-            try {
-                size_t line = std::stoul(line_str);
-                warn_if_non_executable(file, line);
-                int id = add_location_breakpoint(file, line);
-                std::cerr << "Breakpoint " << id << " at " << file << ":" << line << "\n";
+            auto line = parse_int(line_str);
+            if (line && *line > 0) {
+                warn_if_non_executable(file, *line);
+                int id = add_location_breakpoint(file, *line);
+                std::cerr << "Breakpoint " << id << " at " << file << ":" << *line << "\n";
                 return false;
-            } catch (...) {
-                // Not a valid line number, treat as command breakpoint
             }
         }
 
@@ -451,6 +498,7 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             std::cerr << "Usage: watch <variable_name>\n";
             return false;
         }
+        if (!expect_no_more_args("watch <variable_name>")) return false;
         int id = add_variable_breakpoint(var_name);
         std::cerr << "Watchpoint " << id << " on variable \"" << var_name << "\"\n";
         return false;
@@ -463,13 +511,14 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             std::cerr << "Usage: delete <breakpoint_id>\n";
             return false;
         }
-        try {
-            int id = std::stoi(id_str);
-            delete_breakpoint(id);
-            std::cerr << "Deleted breakpoint " << id << "\n";
-        } catch (...) {
+        if (!expect_no_more_args("delete <breakpoint_id>")) return false;
+        auto id = parse_int(id_str);
+        if (!id) {
             std::cerr << "Invalid breakpoint id: " << id_str << "\n";
+            return false;
         }
+        delete_breakpoint(*id);
+        std::cerr << "Deleted breakpoint " << *id << "\n";
         return false;
     }
 
@@ -486,8 +535,8 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             "  backtrace            (bt) Show call stack\n"
             "  list                 (l) Show source around current line/frame\n"
             "  frame [N]            (f) Select stack frame N (show current if no arg)\n"
-            "  up                       Move up one stack frame (toward caller)\n"
-            "  down                     Move down one stack frame (toward callee)\n"
+            "  up [N]                   Move up N stack frames (default: 1)\n"
+            "  down [N]                 Move down N stack frames (default: 1)\n"
             "  info variables           List all visible variables\n"
             "  info breakpoints         List all breakpoints\n"
             "  break-on-message <p> (bm) Break when message matches pattern\n"
