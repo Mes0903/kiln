@@ -1343,9 +1343,12 @@ void register_target_builtins(Interpreter& interp) {
             if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'D') {
                 // -Dfoo -> definition "foo"
                 defs.push_back(arg.substr(2));
-            } else {
-                // Non-definition flags (e.g. -Wno-foo) go to compile options
+            } else if (!arg.empty() && arg[0] == '-') {
+                // Non-definition flags (e.g. -Wall) go to compile options
                 opts.push_back(arg);
+            } else if (!arg.empty()) {
+                // Bare name (e.g. HAS_SOCKLEN_T) -> definition
+                defs.push_back(arg);
             }
         }
     });
