@@ -460,6 +460,21 @@ void register_string_builtins(Interpreter& interp) {
 
                 interp.set_variable(out_var, result.to_string());
 
+                // Set CMAKE_MATCH_* from the last match (CMake behavior)
+                if (!all_matches.empty()) {
+                    const auto& last = all_matches.back();
+                    for (size_t i = 0; i < last.size(); ++i) {
+                        interp.set_variable("CMAKE_MATCH_" + std::to_string(i), last[i]);
+                    }
+                    interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(last.size() - 1));
+                } else {
+                    interp.set_variable("CMAKE_MATCH_COUNT", "0");
+                    interp.set_variable("CMAKE_MATCH_0", "");
+                    for (int i = 1; i <= 9; ++i) {
+                        interp.set_variable("CMAKE_MATCH_" + std::to_string(i), "");
+                    }
+                }
+
             } else if (regex_op == "REPLACE") {
                 CommandParser parser("string", "REGEX REPLACE");
                 std::string pattern, replacement, out_var;

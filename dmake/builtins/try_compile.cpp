@@ -360,6 +360,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string output_variable;
         std::string copy_file;
         std::string copy_file_error;
+        std::string log_description;  // Ignored but must be parsed to avoid polluting other keywords
+        bool no_cache = false;
+        bool no_log = false;
         std::vector<std::string> cmake_flags;
 
         parser.positional(result_var, "result variable");
@@ -382,6 +385,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         parser.value("OUTPUT_VARIABLE", output_variable);
         parser.value("COPY_FILE", copy_file);
         parser.value("COPY_FILE_ERROR", copy_file_error);
+        parser.value("LOG_DESCRIPTION", log_description);
+        parser.flag("NO_CACHE", no_cache);
+        parser.flag("NO_LOG", no_log);
 
         PARSE_OR_RETURN(parser, interp, args);
 
