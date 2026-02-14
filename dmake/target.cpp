@@ -1244,7 +1244,18 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                     if (!dep_path.is_absolute()) {
                         dep_path = std::filesystem::path(source_dir_) / dep_path;
                     }
-                    task.inputs.push_back(dep_path.lexically_normal().string());
+                    std::string dep_normalized = dep_path.lexically_normal().string();
+                    task.inputs.push_back(dep_normalized);
+
+                    // If this dependency is produced by a custom command, ensure
+                    // the task for it is generated (e.g. qt6_generate_moc outputs)
+                    auto od_cc_it = custom_rules.find(dep_normalized);
+                    if (od_cc_it != custom_rules.end()) {
+                        if (!generated_custom_tasks.count(od_cc_it->second->outputs[0])) {
+                            generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules, generated_custom_tasks);
+                        }
+                        task.explicit_deps.push_back(od_cc_it->second->outputs[0]);
+                    }
                 }
             }
         }

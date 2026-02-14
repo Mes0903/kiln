@@ -1347,13 +1347,26 @@ void register_target_builtins(Interpreter& interp) {
 
         auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
         auto& opts = interp.get_current_directory_context().accumulated["COMPILE_OPTIONS"];
+        bool next_is_option_value = false;
         for (const auto& arg : args) {
-            if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'D') {
+            if (next_is_option_value) {
+                // Argument to a preceding flag (e.g. "stdint.h" after "-include")
+                opts.push_back(arg);
+                next_is_option_value = false;
+            } else if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'D') {
                 // -Dfoo -> definition "foo"
                 defs.push_back(arg.substr(2));
             } else if (!arg.empty() && arg[0] == '-') {
                 // Non-definition flags (e.g. -Wall) go to compile options
                 opts.push_back(arg);
+                // HACK: some projects pass flags like "-include stdint.h" through
+                // add_definitions(). CMake keeps the argument with its flag; we do
+                // the same by consuming the next token as an option value.
+                if (arg == "-include" || arg == "-isystem" ||
+                    arg == "-I" || arg == "-D" || arg == "-U" ||
+                    arg == "-F" || arg == "-iframework") {
+                    next_is_option_value = true;
+                }
             } else if (!arg.empty()) {
                 // Bare name (e.g. HAS_SOCKLEN_T) -> definition
                 defs.push_back(arg);
