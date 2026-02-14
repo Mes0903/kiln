@@ -327,6 +327,114 @@ void register_process_builtins(Interpreter& interp) {
         }
     });
 
+    // build_command() - generate a command line to build the project
+    // Primary: build_command(<variable> [CONFIGURATION <config>] [PARALLEL_LEVEL <parallel>] [TARGET <target>] [PROJECT_NAME <projname>])
+    // Legacy:  build_command(<cachevariable> <makecommand>) - deprecated
+    interp.add_builtin("build_command", [](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            interp.set_fatal_error("build_command requires at least one argument (variable name)");
+            return;
+        }
+
+        std::string variable = args[0];
+        std::string config;
+        std::string parallel;
+        std::vector<std::string> targets;
+        bool has_project_name = false;
+
+        // Check for legacy signature: build_command(<cachevariable> <makecommand>)
+        // Legacy form has exactly 2 positional args and no keywords
+        bool is_legacy = false;
+        if (args.size() == 2) {
+            // Check if second arg is not a keyword
+            static const std::vector<std::string> keywords = {"CONFIGURATION", "PARALLEL_LEVEL", "TARGET", "PROJECT_NAME"};
+            bool second_is_keyword = std::find(keywords.begin(), keywords.end(), args[1]) != keywords.end();
+            if (!second_is_keyword) {
+                is_legacy = true;
+            }
+        }
+
+        if (is_legacy) {
+            // Legacy signature - second argument (makecommand) is ignored
+            // Output format: dmake (no --target option)
+            interp.set_variable(variable, "dmake");
+            return;
+        }
+
+        // Primary signature - parse keyword arguments
+        size_t i = 1;
+        while (i < args.size()) {
+            if (args[i] == "CONFIGURATION") {
+                ++i;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("build_command: CONFIGURATION requires a value");
+                    return;
+                }
+                config = args[i];
+                ++i;
+            } else if (args[i] == "PARALLEL_LEVEL") {
+                ++i;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("build_command: PARALLEL_LEVEL requires a value");
+                    return;
+                }
+                parallel = args[i];
+                ++i;
+            } else if (args[i] == "TARGET") {
+                ++i;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("build_command: TARGET requires a value");
+                    return;
+                }
+                targets.push_back(args[i]);
+                ++i;
+            } else if (args[i] == "PROJECT_NAME") {
+                ++i;
+                if (i >= args.size()) {
+                    interp.set_fatal_error("build_command: PROJECT_NAME requires a value");
+                    return;
+                }
+                // PROJECT_NAME is deprecated and ignored, but warn
+                has_project_name = true;
+                ++i;
+            } else {
+                interp.set_fatal_error("build_command: unknown argument '" + args[i] + "'");
+                return;
+            }
+        }
+
+        if (has_project_name) {
+            interp.print_message("WARNING", "build_command: PROJECT_NAME is deprecated and has no effect");
+        }
+
+        // Build command parts as vector, then join
+        std::vector<std::string> cmd_parts;
+        cmd_parts.push_back("dmake");
+
+        if (!config.empty()) {
+            cmd_parts.push_back("--config");
+            cmd_parts.push_back(config);
+        }
+
+        if (!parallel.empty()) {
+            cmd_parts.push_back("-j");
+            cmd_parts.push_back(parallel);
+        }
+
+        for (const auto& target : targets) {
+            cmd_parts.push_back(target);
+        }
+
+        // Join with spaces (no escaping needed for simple identifiers)
+        std::string cmd;
+        for (size_t j = 0; j < cmd_parts.size(); ++j) {
+            if (j > 0) cmd += " ";
+            cmd += cmd_parts[j];
+        }
+
+        interp.set_variable(variable, cmd);
+    });
+
     // Deprecated CMake command, still needed by projects like MariaDB
     interp.add_builtin("exec_program", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {

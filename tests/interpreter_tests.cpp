@@ -7083,3 +7083,74 @@ TEST_CASE("Multi-line generator expressions", "[interpreter][multiline][genex]")
         REQUIRE(output == "$<$<BOOL:TRUE>:;-Wall\n");
     }
 }
+
+TEST_CASE("build_command()", "[interpreter][build_command]") {
+    SECTION("basic - no options") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output == "dmake\n");
+    }
+
+    SECTION("with CONFIGURATION") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD CONFIGURATION Release)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output == "dmake --config Release\n");
+    }
+
+    SECTION("with PARALLEL_LEVEL") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD PARALLEL_LEVEL 8)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output == "dmake -j 8\n");
+    }
+
+    SECTION("with TARGET") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD TARGET myapp)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output == "dmake myapp\n");
+    }
+
+    SECTION("with multiple TARGETs") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD TARGET myapp TARGET mylib)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output == "dmake myapp mylib\n");
+    }
+
+    SECTION("with all options") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD CONFIGURATION Debug PARALLEL_LEVEL 4 TARGET foo TARGET bar)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output == "dmake --config Debug -j 4 foo bar\n");
+    }
+
+    SECTION("legacy signature") {
+        auto output = run_script(R"(
+            build_command(BUILD_CMD /usr/bin/make)
+            message("${BUILD_CMD}")
+        )");
+        // Legacy form ignores the makecommand and returns bare dmake (no --target)
+        REQUIRE(output == "dmake\n");
+    }
+
+    SECTION("PROJECT_NAME is accepted but ignored") {
+        // PROJECT_NAME is deprecated; it should be accepted with a warning
+        // and have no effect on the generated command
+        auto output = run_script(R"(
+            build_command(BUILD_CMD PROJECT_NAME MyProject TARGET myapp)
+            message("${BUILD_CMD}")
+        )");
+        REQUIRE(output.find("WARNING") != std::string::npos);
+        REQUIRE(output.find("PROJECT_NAME") != std::string::npos);
+        REQUIRE(output.find("dmake myapp") != std::string::npos);
+    }
+}
