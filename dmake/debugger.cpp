@@ -340,7 +340,7 @@ bool Debugger::execute_debugger_command(const std::string& input) {
             try { count = std::stoi(arg); } catch (...) { count = 1; }
         }
         auto& stack = interp_.get_trace_stack();
-        int max_frame = static_cast<int>(stack.size());
+        int max_frame = static_cast<int>(stack.size()) - 1;
         int target = selected_frame_ + count;
         if (target > max_frame) {
             std::cerr << "Already at outermost frame.\n";
@@ -530,12 +530,8 @@ bool Debugger::should_break(const std::string& file, size_t row,
 }
 
 std::pair<std::string, size_t> Debugger::selected_file_row() const {
-    // Frame 0 = current command, frames 1..N = callers from trace_stack
-    if (selected_frame_ == 0) {
-        return {current_file_, current_row_};
-    }
     auto& stack = interp_.get_trace_stack();
-    int idx = static_cast<int>(stack.size()) - selected_frame_;
+    int idx = static_cast<int>(stack.size()) - 1 - selected_frame_;
     if (idx < 0 || idx >= static_cast<int>(stack.size())) {
         return {current_file_, current_row_};
     }
@@ -544,8 +540,7 @@ std::pair<std::string, size_t> Debugger::selected_file_row() const {
 
 bool Debugger::select_frame(int n) {
     auto& stack = interp_.get_trace_stack();
-    // Frame 0 = current, 1..stack.size() = callers
-    if (n < 0 || n > static_cast<int>(stack.size())) {
+    if (n < 0 || n >= static_cast<int>(stack.size())) {
         return false;
     }
     selected_frame_ = n;
@@ -554,15 +549,10 @@ bool Debugger::select_frame(int n) {
 }
 
 void Debugger::show_selected_frame() {
+    auto& stack = interp_.get_trace_stack();
+    int idx = static_cast<int>(stack.size()) - 1 - selected_frame_;
     auto [file, row] = selected_file_row();
-    std::string cmd_name;
-    if (selected_frame_ == 0) {
-        cmd_name = current_cmd_;
-    } else {
-        auto& stack = interp_.get_trace_stack();
-        int idx = static_cast<int>(stack.size()) - selected_frame_;
-        cmd_name = stack[idx].command;
-    }
+    std::string cmd_name = stack[idx].command;
     std::cerr << "#" << selected_frame_ << "  "
               << file << ":" << row << "  " << cmd_name << "\n";
     show_source_context(file, row);
@@ -617,15 +607,10 @@ void Debugger::show_source_context(const std::string& file, size_t row) {
 void Debugger::show_backtrace() {
     auto& stack = interp_.get_trace_stack();
 
-    // Frame #0 = current command
-    char marker = (selected_frame_ == 0) ? '>' : ' ';
-    std::cerr << marker << " #0  " << current_file_ << ":" << current_row_
-              << "  " << current_cmd_ << "\n";
-
     for (int i = static_cast<int>(stack.size()) - 1; i >= 0; --i) {
-        int frame_num = static_cast<int>(stack.size()) - i;
+        int frame_num = static_cast<int>(stack.size()) - 1 - i;
         const auto& frame = stack[i];
-        marker = (frame_num == selected_frame_) ? '>' : ' ';
+        char marker = (frame_num == selected_frame_) ? '>' : ' ';
         std::cerr << marker << " #" << frame_num << "  "
                   << frame.file << ":" << frame.row
                   << "  " << frame.command << "\n";
