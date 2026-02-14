@@ -164,6 +164,10 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         // Set DMAKE_BUILD_ROOT - shared location for EP/FetchContent sources
         interpreter->set_variable("DMAKE_BUILD_ROOT", build_root_path.string());
 
+        // Initialize FETCHCONTENT_BASE_DIR (like CMake's FetchContent module does on include)
+        // This must be set before any FetchContent_Declare is parsed since args reference it
+        interpreter->set_cache_variable("FETCHCONTENT_BASE_DIR", build_root_path.string() + "/_deps");
+
         // Set BUILD_TESTING before user definitions (user can override with -D)
         interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
         apply_definitions(*interpreter, opt.definitions);

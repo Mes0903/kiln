@@ -12,6 +12,8 @@
 
 namespace dmake {
 
+namespace fs = std::filesystem;
+
 // Internal helper to populate a dependency (download + patch).
 // Sets <name>_POPULATED, <name>_SOURCE_DIR, <name>_BINARY_DIR in the interpreter.
 static void do_populate(Interpreter& interp, const std::string& name) {
@@ -121,10 +123,12 @@ static void do_populate(Interpreter& interp, const std::string& name) {
     std::string build_root = interp.get_variable("DMAKE_BUILD_ROOT");
     std::string binary_base = interp.get_variable("CMAKE_BINARY_DIR");
 
-    // Check for user override
+    // Check for user override via FETCHCONTENT_BASE_DIR
+    // When set, it's the directory containing <name>-src and <name>-build directly
     std::string base_dir = interp.get_variable("FETCHCONTENT_BASE_DIR");
-    if (!base_dir.empty()) {
-        // User override - use same dir for both
+    bool use_base_dir_directly = !base_dir.empty();
+    if (use_base_dir_directly) {
+        // User/system set FETCHCONTENT_BASE_DIR - use it directly (no extra _deps)
         build_root = base_dir;
         binary_base = base_dir;
     } else {
@@ -135,10 +139,21 @@ static void do_populate(Interpreter& interp, const std::string& name) {
     }
 
     std::string source_dir = get_detail("SOURCE_DIR");
-    if (source_dir.empty()) source_dir = build_root + "/_deps/" + lower_name + "-src";
+    if (source_dir.empty()) {
+        // If FETCHCONTENT_BASE_DIR is set, it already points to the _deps directory
+        fs::path src_path = use_base_dir_directly
+            ? fs::path(build_root) / (lower_name + "-src")
+            : fs::path(build_root) / "_deps" / (lower_name + "-src");
+        source_dir = src_path.string();
+    }
 
     std::string binary_dir = get_detail("BINARY_DIR");
-    if (binary_dir.empty()) binary_dir = binary_base + "/_deps/" + lower_name + "-build";
+    if (binary_dir.empty()) {
+        fs::path bin_path = use_base_dir_directly
+            ? fs::path(binary_base) / (lower_name + "-build")
+            : fs::path(binary_base) / "_deps" / (lower_name + "-build");
+        binary_dir = bin_path.string();
+    }
 
     // Check if source dir already has content
     bool has_content = false;
@@ -185,11 +200,11 @@ static void do_populate(Interpreter& interp, const std::string& name) {
                 interp.print_message("STATUS", "Extracting " + name + " from local archive " + archive_path + "...");
             } else {
                 // Remote URL: download first
-                std::string filename = std::filesystem::path(url).filename().string();
+                std::string filename = fs::path(url).filename().string();
                 auto qpos = filename.find('?');
                 if (qpos != std::string::npos) filename = filename.substr(0, qpos);
-                std::string download_dir = build_root + "/" + lower_name + "-subbuild";
-                archive_path = download_dir + "/" + filename;
+                fs::path download_dir = fs::path(build_root) / (lower_name + "-subbuild");
+                archive_path = (download_dir / filename).string();
 
                 interp.print_message("STATUS", "Fetching " + name + " from " + url + "...");
                 auto dl_result = download_url(url, archive_path, hash_algo, hash_value);
@@ -350,6 +365,18 @@ void register_fetch_content_builtins(Interpreter& interp) {
             return;
         }
 
+        // Initialize FETCHCONTENT_BASE_DIR if not set (matches CMake's FetchContent module)
+        // This must happen before args are processed since they may reference this variable
+        if (interp.get_variable("FETCHCONTENT_BASE_DIR").empty()) {
+            std::string build_root = interp.get_variable("DMAKE_BUILD_ROOT");
+            if (build_root.empty()) {
+                build_root = interp.get_variable("CMAKE_BINARY_DIR");
+            }
+            if (!build_root.empty()) {
+                interp.set_cache_variable("FETCHCONTENT_BASE_DIR", build_root + "/_deps");
+            }
+        }
+
         std::string name = args[0];
         std::string lower_name = name;
         std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
@@ -393,10 +420,15 @@ void register_fetch_content_builtins(Interpreter& interp) {
             // Check for local override
             std::string override_dir = interp.get_variable("FETCHCONTENT_SOURCE_DIR_" + upper_name);
             if (!override_dir.empty()) {
-                // Binary dir is always config-specific
+                // Binary dir computation - if FETCHCONTENT_BASE_DIR is set, use it directly
                 std::string base_dir = interp.get_variable("FETCHCONTENT_BASE_DIR");
-                std::string binary_base = base_dir.empty() ? interp.get_variable("CMAKE_BINARY_DIR") : base_dir;
-                std::string binary_dir = binary_base + "/_deps/" + lower_name + "-build";
+                fs::path bin_path;
+                if (!base_dir.empty()) {
+                    bin_path = fs::path(base_dir) / (lower_name + "-build");
+                } else {
+                    bin_path = fs::path(interp.get_variable("CMAKE_BINARY_DIR")) / "_deps" / (lower_name + "-build");
+                }
+                std::string binary_dir = bin_path.string();
 
                 interp.set_cache_variable(lower_name + "_POPULATED", "TRUE");
                 interp.set_cache_variable(lower_name + "_SOURCE_DIR", override_dir);
@@ -443,7 +475,7 @@ void register_fetch_content_builtins(Interpreter& interp) {
                     size_t end = details.find(';', start);
                     std::string subdir(details.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
                     if (!subdir.empty()) {
-                        source_dir = source_dir + "/" + subdir;
+                        source_dir = (fs::path(source_dir) / subdir).string();
                     }
                 }
             }
