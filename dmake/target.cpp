@@ -562,8 +562,10 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                     + name_ + "': " + eval_result.error());
             }
             if (!eval_result->value.empty()) {
-                process_one_dep(eval_result->value, is_public,
-                               is_interface_only, eval_result->link_only);
+                for (auto part : CMakeArrayView(eval_result->value)) {
+                    process_one_dep(std::string(part), is_public,
+                                   is_interface_only, eval_result->link_only);
+                }
             }
         }
     };
