@@ -686,7 +686,14 @@ void generate_autogen_tasks(
     if (do_uic) {
         std::set<std::string> generated_uic_outputs;
 
-        for (const auto& src : cpp_sources) {
+        // Scan both sources and headers for #include "ui_*.h" patterns
+        // (CMake's AUTOUIC scans both; some projects include ui_ headers from .hpp files)
+        std::vector<std::string> uic_scan_files;
+        uic_scan_files.reserve(cpp_sources.size() + all_headers.size());
+        uic_scan_files.insert(uic_scan_files.end(), cpp_sources.begin(), cpp_sources.end());
+        uic_scan_files.insert(uic_scan_files.end(), all_headers.begin(), all_headers.end());
+
+        for (const auto& src : uic_scan_files) {
             auto sp_it = source_props.find(src);
             bool skip = false;
             if (sp_it != source_props.end()) {
