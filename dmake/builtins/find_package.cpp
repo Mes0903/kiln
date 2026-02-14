@@ -208,7 +208,7 @@ void register_find_package_builtins(Interpreter& interp) {
         std::vector<std::string> all_components = components;
         all_components.insert(all_components.end(), optional_components.begin(), optional_components.end());
 
-        if (!all_components.empty()) {
+        {
             std::string components_str;
             for (size_t i = 0; i < all_components.size(); ++i) {
                 if (i > 0) components_str += ";";
