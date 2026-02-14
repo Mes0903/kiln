@@ -12,6 +12,25 @@
 
 namespace dmake {
 
+// Target names reserved by the build system. Users cannot create targets with these names
+// because they collide with built-in build targets (e.g. "make all", "make test").
+static constexpr std::string_view kBannedTargetNames[] = {
+    "all",
+    "test",
+    "clean",
+    "install",
+    "package",
+    "rebuild_cache",
+    "edit_cache",
+};
+
+static bool is_banned_target_name(std::string_view name) {
+    for (auto banned : kBannedTargetNames) {
+        if (name == banned) return true;
+    }
+    return false;
+}
+
 void register_target_builtins(Interpreter& interp) {
     // Helper to configure common target properties (C/C++ standards, flags, inherited directories)
     auto configure_target = [](Interpreter& interp, const std::shared_ptr<Target>& target) {
@@ -130,6 +149,11 @@ void register_target_builtins(Interpreter& interp) {
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
 
+        if (is_banned_target_name(name)) {
+            interp.set_fatal_error("add_executable() target name '" + name + "' is reserved by the build system");
+            return;
+        }
+
         // Handle ALIAS targets
         if (is_alias) {
             if (sources.size() != 1) {
@@ -198,6 +222,11 @@ void register_target_builtins(Interpreter& interp) {
         parser.flag("ALIAS", is_alias);
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
+
+        if (is_banned_target_name(name)) {
+            interp.set_fatal_error("add_library() target name '" + name + "' is reserved by the build system");
+            return;
+        }
 
         // Handle ALIAS targets
         if (is_alias) {
@@ -627,6 +656,11 @@ void register_target_builtins(Interpreter& interp) {
         // Note: VERBATIM is ignored as we currently use shell execution via popen
         parser.flag("VERBATIM", verbatim);
         PARSE_OR_RETURN(parser, interp, normalized_args);
+
+        if (is_banned_target_name(name)) {
+            interp.set_fatal_error("add_custom_target() target name '" + name + "' is reserved by the build system");
+            return;
+        }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
