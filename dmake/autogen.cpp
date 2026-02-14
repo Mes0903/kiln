@@ -481,10 +481,10 @@ void generate_autogen_tasks(
 
         if (ext == ".qrc") {
             if (!check_skip("SKIP_AUTORCC")) {
-                qrc_files.push_back(abs);
+                qrc_files.push_back(abs);  // existence checked later in AUTORCC section
             }
         } else if (ext == ".h" || ext == ".hpp" || ext == ".hxx" || ext == ".hh") {
-            if (!check_skip("SKIP_AUTOMOC")) {
+            if (!check_skip("SKIP_AUTOMOC") && fs::exists(abs)) {
                 explicit_headers.push_back(abs);
                 all_headers_set.insert(abs);
             }
@@ -804,9 +804,28 @@ void generate_autogen_tasks(
 
     // ========== AUTORCC ==========
     if (do_rcc) {
+        std::set<std::string> rcc_output_names;  // track used output names to disambiguate
         for (const auto& qrc_file : qrc_files) {
+            // Skip non-existent .qrc files with a warning
+            if (!fs::exists(qrc_file)) {
+                dmake::print_message(std::cerr, "WARNING",
+                    "AUTORCC: .qrc file does not exist: " + qrc_file +
+                    " (target '" + target.get_name() + "')");
+                target.remove_source(qrc_file);
+                continue;
+            }
+
             std::string qrc_name = fs::path(qrc_file).stem().string();
-            std::string rcc_output = (fs::path(autogen_dir) / ("qrc_" + qrc_name + ".cpp")).string();
+
+            // Disambiguate when multiple .qrc files share the same basename
+            std::string output_name = "qrc_" + qrc_name + ".cpp";
+            if (!rcc_output_names.insert(output_name).second) {
+                // Collision — append a dir checksum to make it unique
+                std::string checksum = dir_checksum(fs::path(qrc_file).parent_path().string());
+                output_name = "qrc_" + qrc_name + "_" + checksum.substr(0, 8) + ".cpp";
+                rcc_output_names.insert(output_name);
+            }
+            std::string rcc_output = (fs::path(autogen_dir) / output_name).string();
 
             // Parse .qrc to find resource files (for incremental build tracking)
             auto resource_files = parse_qrc_resources(qrc_file);

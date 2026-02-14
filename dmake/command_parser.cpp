@@ -33,6 +33,10 @@ void CommandParser::multi_list(std::string keyword, std::vector<std::vector<std:
     keywords_[keyword] = {KeywordType::MULTI_LIST, &var, keyword};
 }
 
+void CommandParser::unparsed(std::vector<std::string>& var) {
+    unparsed_ = &var;
+}
+
 std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::span<const std::string> args) {
     // Build error prefix: "cmd(subcmd)" or "cmd"
     std::string error_prefix = cmd_name_;
@@ -97,6 +101,8 @@ std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::s
             } else if (positional_list_) {
                 // Then fill the positional list
                 positional_list_->var->push_back(arg);
+            } else if (unparsed_) {
+                unparsed_->push_back(arg);
             } else {
                 return std::unexpected(error_prefix + ": unexpected argument '" + arg + "'");
             }

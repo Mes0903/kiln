@@ -130,20 +130,84 @@ TEST_CASE("CommandParser: default list after positionals", "[command_parser]") {
 TEST_CASE("CommandParser: flags do not interrupt positional parsing", "[command_parser]") {
     // Actually, according to docs/command_parser.md:
     // "If a recognized keyword is encountered during this phase, it terminates positional parsing (unless the keyword is a flag)."
-    
+
     std::vector<std::string> args = {"pos1", "MY_FLAG", "pos2"};
     CommandParser parser("test_cmd");
-    
+
     std::string p1, p2;
     bool flag = false;
-    
+
     parser.positional(p1, "p1");
     parser.positional(p2, "p2");
     parser.flag("MY_FLAG", flag);
-    
+
     auto res = parser.parse(args);
     REQUIRE(res.has_value());
     CHECK(p1 == "pos1");
     CHECK(p2 == "pos2");
     CHECK(flag == true);
+}
+
+TEST_CASE("CommandParser: unparsed collects bare args after keywords", "[command_parser]") {
+    // Simulates: find_package(Qt5 REQUIRED Gui Widgets QUIET)
+    std::vector<std::string> args = {"Qt5", "REQUIRED", "Gui", "Widgets", "QUIET"};
+    CommandParser parser("find_package");
+
+    std::string name;
+    bool required = false;
+    bool quiet = false;
+    std::vector<std::string> components;
+    std::vector<std::string> bare;
+
+    parser.positional(name, "name");
+    parser.flag("REQUIRED", required);
+    parser.flag("QUIET", quiet);
+    parser.list("COMPONENTS", components);
+    parser.unparsed(bare);
+
+    auto res = parser.parse(args);
+    REQUIRE(res.has_value());
+    CHECK(name == "Qt5");
+    CHECK(required == true);
+    CHECK(quiet == true);
+    CHECK(bare == std::vector<std::string>{"Gui", "Widgets"});
+}
+
+TEST_CASE("CommandParser: without unparsed, bare args still error", "[command_parser]") {
+    std::vector<std::string> args = {"Qt5", "REQUIRED", "Gui"};
+    CommandParser parser("find_package");
+
+    std::string name;
+    bool required = false;
+
+    parser.positional(name, "name");
+    parser.flag("REQUIRED", required);
+
+    auto res = parser.parse(args);
+    REQUIRE_FALSE(res.has_value());
+    CHECK(res.error().find("unexpected argument") != std::string::npos);
+}
+
+TEST_CASE("CommandParser: unparsed with explicit COMPONENTS", "[command_parser]") {
+    // find_package(Qt5 COMPONENTS Core REQUIRED Widgets)
+    // "Widgets" is bare after REQUIRED, "Core" is explicit via COMPONENTS
+    std::vector<std::string> args = {"Qt5", "COMPONENTS", "Core", "REQUIRED", "Widgets"};
+    CommandParser parser("find_package");
+
+    std::string name;
+    bool required = false;
+    std::vector<std::string> components;
+    std::vector<std::string> bare;
+
+    parser.positional(name, "name");
+    parser.flag("REQUIRED", required);
+    parser.list("COMPONENTS", components);
+    parser.unparsed(bare);
+
+    auto res = parser.parse(args);
+    REQUIRE(res.has_value());
+    CHECK(name == "Qt5");
+    CHECK(required == true);
+    CHECK(components == std::vector<std::string>{"Core"});
+    CHECK(bare == std::vector<std::string>{"Widgets"});
 }

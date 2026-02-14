@@ -293,16 +293,36 @@ std::expected<void, std::string> BuildGraph::validate() {
     auto cycle_err = check_for_cycles();
     if (cycle_err) return std::unexpected(*cycle_err);
 
-    // Warn about inputs that don't exist and aren't produced by any task
+    // Check for missing inputs.
+    // Compile tasks with missing source files are errors (the source won't appear).
+    // Other missing inputs are warnings (resource files, etc.).
+    std::map<std::string, std::vector<std::string>> missing_sources_by_target;  // target name -> source files
+
     for (const auto& task_ptr : tasks_) {
         for (const auto& in : task_ptr->inputs) {
-            if (!std::filesystem::exists(in) && !output_to_task_.count(in)) {
+            if (std::filesystem::exists(in) || output_to_task_.count(in)) continue;
+
+            if (task_ptr->is_compilation() && task_ptr->parent_target) {
+                // Source file for a compile task — this is a hard error
+                missing_sources_by_target[task_ptr->parent_target->get_name()].push_back(in);
+            } else {
                 dmake::print_message(std::cerr, "WARNING",
                     "Task '" + task_ptr->id + "' references '" + in +
-                    "' which doesn't exist and isn't produced by any task "
-                    "(CMake/Ninja resolves DEPENDS at generation time)");
+                    "' which doesn't exist and isn't produced by any task");
             }
         }
+    }
+
+    if (!missing_sources_by_target.empty()) {
+        std::string err;
+        for (const auto& [target_name, sources] : missing_sources_by_target) {
+            err += "Target '" + target_name + "' has source files that do not exist:\n";
+            for (const auto& src : sources) {
+                err += "    " + src + "\n";
+            }
+        }
+        err += "Remove them from the target's source list, or ensure they are generated.";
+        return std::unexpected(err);
     }
 
     return {};

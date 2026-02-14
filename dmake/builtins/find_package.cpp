@@ -84,6 +84,7 @@ void register_find_package_builtins(Interpreter& interp) {
         bool no_module = false;
         bool quiet = false;
         std::vector<std::string> components;
+        std::vector<std::string> bare_components;
         std::vector<std::string> optional_components;
         std::vector<std::string> hints;
         std::vector<std::string> paths;
@@ -141,8 +142,16 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.list("NAMES", names);
         parser.list("CONFIGS", configs);
         parser.value("REGISTRY_VIEW", registry_view);
+        // CMake treats bare args as implicit components
+        // e.g. find_package(Qt5 REQUIRED Gui Widgets QUIET)
+        parser.unparsed(bare_components);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Merge bare components into components list
+        for (auto& c : bare_components) {
+            components.push_back(std::move(c));
+        }
 
         // --- Step 1: CMAKE_DISABLE_FIND_PACKAGE_<Name> ---
         std::string disable_var = interp.get_variable("CMAKE_DISABLE_FIND_PACKAGE_" + package_name);
