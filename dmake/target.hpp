@@ -178,7 +178,11 @@ public:
     // Get the module mapper file path for this target
     std::string get_module_mapper_path() const;
 
-protected:
+    // Qt autogen helpers — called by generate_autogen_tasks()
+    void inject_autogen_include(const std::string& dir);
+    void inject_autogen_source(const std::string& path);
+    void remove_source(const std::string& path);
+
     // Factory for GenexEvaluationContext. Populates from interpreter variables.
     static GenexEvaluationContext make_genex_context(
         const Target* current_target,
@@ -187,6 +191,7 @@ protected:
         std::optional<Language> compile_language = std::nullopt,
         bool allow_deferred = false);
 
+protected:
     // Metadata for a transitive property during resolve().
     struct PropInfo {
         std::string name;

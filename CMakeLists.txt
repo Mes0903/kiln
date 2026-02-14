@@ -53,6 +53,7 @@ add_library(dmake SHARED
     dmake/condition_evaluator.cpp
     dmake/ast_cache.cpp
     dmake/debugger.cpp
+    dmake/autogen.cpp
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -68,6 +69,10 @@ target_link_libraries(dmake PUBLIC CURL::libcurl)
 pkg_check_modules(ARCHIVE REQUIRED libarchive)
 target_include_directories(dmake PUBLIC ${ARCHIVE_INCLUDE_DIRS})
 target_link_libraries(dmake PUBLIC ${ARCHIVE_LIBRARIES})
+
+pkg_check_modules(PUGIXML REQUIRED pugixml)
+target_include_directories(dmake PUBLIC ${PUGIXML_INCLUDE_DIRS})
+target_link_libraries(dmake PUBLIC ${PUGIXML_LIBRARIES})
 
 find_library(LINENOISE_LIBRARY NAMES linenoise REQUIRED)
 

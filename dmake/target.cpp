@@ -1,5 +1,6 @@
 #include "target.hpp"
 #include "build_system.hpp"
+#include "autogen.hpp"
 #include "language.hpp"
 #include "toolchain.hpp"
 #include "module_scanner.hpp"
@@ -663,6 +664,37 @@ std::string Target::get_output_path() const {
     }
 
     return dir.empty() ? path.string() : path.lexically_normal().string();
+}
+
+// --- Qt Autogen Helpers ---
+
+void Target::inject_autogen_include(const std::string& dir) {
+    // Prepend to resolved INCLUDE_DIRECTORIES so autogen headers are found first
+    auto& resolved = resolved_properties_["INCLUDE_DIRECTORIES"];
+    if (std::find(resolved.begin(), resolved.end(), dir) == resolved.end()) {
+        resolved.insert(resolved.begin(), dir);
+    }
+}
+
+void Target::inject_autogen_source(const std::string& path) {
+    append_property("SOURCES", {path}, PropertyVisibility::PRIVATE);
+}
+
+void Target::remove_source(const std::string& path) {
+    for (auto vis : {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE}) {
+        auto prop_it = list_properties_.find("SOURCES");
+        if (prop_it == list_properties_.end()) continue;
+        auto vis_it = prop_it->second.find(vis);
+        if (vis_it == prop_it->second.end()) continue;
+        std::erase_if(vis_it->second, [&](const std::string& s) {
+            // Match by exact path or by normalized absolute path
+            if (s == path) return true;
+            std::filesystem::path sp(s);
+            std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
+                : (std::filesystem::path(source_dir_) / sp).lexically_normal().string();
+            return abs == path;
+        });
+    }
 }
 
 // Strip trailing slashes to normalize include paths for comparison.
@@ -1407,6 +1439,15 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         resolve_command_target_references(pre_build.commands, pre_build, all_targets);
 
         txn.add(std::move(pre_build));
+    }
+
+    // Qt autogen: generate moc/uic/rcc tasks before compilation.
+    // This scans sources/headers for Qt macros, creates moc/uic/rcc tasks,
+    // injects generated sources into SOURCES, and adds the autogen include dir.
+    if (!Interpreter::is_falsy(get_property("AUTOMOC")) ||
+        !Interpreter::is_falsy(get_property("AUTOUIC")) ||
+        !Interpreter::is_falsy(get_property("AUTORCC"))) {
+        generate_autogen_tasks(*this, txn, const_cast<Interpreter&>(interp), all_targets, pre_build_task_id);
     }
 
     // Read compiler default standards (for suppressing unnecessary -std= flags)

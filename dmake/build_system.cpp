@@ -735,6 +735,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             [&](const CompileTask& t) { return "compile " + std::filesystem::path(t.source_file).filename().string(); },
                             [&](const PCHTask& t) { return "compile " + std::filesystem::path(t.source_file).filename().string(); },
                             [&](const LinkTask&) { return "link " + artifact; },
+                            [&](const MocTask& t) { return "moc " + std::filesystem::path(t.source_file).filename().string(); },
+                            [&](const UicTask& t) { return "uic " + std::filesystem::path(t.source_file).filename().string(); },
+                            [&](const RccTask& t) { return "rcc " + std::filesystem::path(t.source_file).filename().string(); },
                             [&](const auto&) { return "run " + std::filesystem::path(id).filename().string(); }
                         }, task.kind);
                     }
@@ -914,6 +917,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                             if (task.is_compilation()) {
                                  verb = "Compiling";
+                            } else if (std::holds_alternative<MocTask>(task.kind)) {
+                                verb = "  Moc'ing";
+                            } else if (std::holds_alternative<UicTask>(task.kind)) {
+                                verb = "  Uic'ing";
+                            } else if (std::holds_alternative<RccTask>(task.kind)) {
+                                verb = "  Rcc'ing";
                             } else if (task.parent_target && id == task.parent_target->get_output_path() && task.parent_target->get_type() != TargetType::CUSTOM) {
                                 verb = "  Linking";
                             }

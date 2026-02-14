@@ -21,12 +21,13 @@ CMake’s generator model was designed for a different era. This project keeps C
 
 ## Building
 
-The project has very few dependencies:
+The project has a few dependencies:
 
 * CLI11 (https://github.com/CLIUtils/CLI11)
 * Catch2 3.x (https://github.com/catchorg/Catch2)
 * PCRE2 (https://github.com/PCRE2Project/pcre2)
 * Glaze (https://github.com/stephenberry/glaze)
+* pugixml (https://github.com/zeux/pugixml)
 * libcurl
 * C++23 apable compiler (GCC 13+)
 * CMake (dmake is an execution engine, you still need the CMake shipped modules)
@@ -63,7 +64,7 @@ dmake run my_app -- --arg1 --arg2
 ### Testing
 Run tests defined with `add_test()`:
 ```bash
-dmake test                # Run all tests
+dmake test                 # Run all tests
 dmake test "RegexPattern"  # Run matching tests
 ```
 Tests run in parallel with buffered output to keep the terminal clean.

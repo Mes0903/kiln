@@ -89,6 +89,14 @@ void register_target_builtins(Interpreter& interp) {
             if (!val.empty()) target->set_property(prop, val);
         }
 
+        // Set AUTOMOC/AUTOUIC/AUTORCC from CMAKE_ globals
+        for (const auto& prop : {"AUTOMOC", "AUTOUIC", "AUTORCC"}) {
+            std::string val = interp.get_variable(std::string("CMAKE_") + prop);
+            if (!val.empty() && !interp.is_falsy(val)) {
+                target->set_property(prop, "ON");
+            }
+        }
+
         // Note: Accumulated directory properties are applied retroactively via
         // finalize_directory_targets() to match CMake's behavior where directory-level
         // commands like add_definitions() affect all targets in the directory,
