@@ -2129,64 +2129,110 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
 
         loop_depth_++;
 
-        // Iterate over all lists in parallel
-        for (size_t i = 0; i < max_length; ++i) {
-            // Set loop variables for this iteration
-            for (size_t list_idx = 0; list_idx < evaluated_lists.size(); ++list_idx) {
-                const auto& list = evaluated_lists[list_idx];
-                std::string value = (i < list.size()) ? list[i] : "";  // Pad with empty string
+        // Fast path: use Entry handles to avoid per-iteration hash lookups
+        if (variable_watches_.empty()) {
+            // Pre-create Entry handles for all loop variables
+            std::vector<ShadowMap::Entry> loop_entries;
+            loop_entries.reserve(var_names_to_save.size());
+            for (const auto& var_name : var_names_to_save) {
+                loop_entries.push_back(variables_.entry(var_name));
+            }
 
-                // Determine variable name
-                std::string var_name;
-                if (zip.loop_vars.size() == 1) {
-                    // Single loop var: set var_0, var_1, etc.
-                    var_name = zip.loop_vars[0] + "_" + std::to_string(list_idx);
+            for (size_t i = 0; i < max_length; ++i) {
+                for (size_t list_idx = 0; list_idx < evaluated_lists.size(); ++list_idx) {
+                    const auto& list = evaluated_lists[list_idx];
+                    std::string value = (i < list.size()) ? list[i] : "";
+
+                    size_t entry_idx;
+                    if (zip.loop_vars.size() == 1) {
+                        entry_idx = list_idx;
+                    } else {
+                        if (list_idx < zip.loop_vars.size()) {
+                            entry_idx = list_idx;
+                        } else {
+                            continue;
+                        }
+                    }
+                    if (entry_idx < loop_entries.size()) {
+                        loop_entries[entry_idx].set(value);
+                    }
+                }
+
+                auto res = interpret(block.body);
+                if (!res) {
+                    set_fatal_error(res.error());
+                    if (loop_depth_ <= 0) {
+                        std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                        std::abort();
+                    }
+                    loop_depth_--;
+                    for (size_t j = 0; j < loop_entries.size(); ++j) {
+                        if (saved_vars[j].second) loop_entries[j].set(saved_values[j]);
+                        else loop_entries[j].set("");
+                    }
+                    pop_trace_stack();
+                    return res;
+                }
+
+                if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+                if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+                if (return_requested_) break;
+            }
+
+            for (size_t j = 0; j < loop_entries.size(); ++j) {
+                if (saved_vars[j].second) loop_entries[j].set(saved_values[j]);
+                else loop_entries[j].set("");
+            }
+        } else {
+            // Slow path: use set_variable() which fires watches
+            for (size_t i = 0; i < max_length; ++i) {
+                for (size_t list_idx = 0; list_idx < evaluated_lists.size(); ++list_idx) {
+                    const auto& list = evaluated_lists[list_idx];
+                    std::string value = (i < list.size()) ? list[i] : "";
+
+                    std::string var_name;
+                    if (zip.loop_vars.size() == 1) {
+                        var_name = zip.loop_vars[0] + "_" + std::to_string(list_idx);
+                    } else {
+                        if (list_idx < zip.loop_vars.size()) {
+                            var_name = zip.loop_vars[list_idx];
+                        } else {
+                            continue;
+                        }
+                    }
+                    set_variable(var_name, value);
+                }
+
+                auto res = interpret(block.body);
+                if (!res) {
+                    set_fatal_error(res.error());
+                    if (loop_depth_ <= 0) {
+                        std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                        std::abort();
+                    }
+                    loop_depth_--;
+                    for (size_t j = 0; j < saved_vars.size(); ++j) {
+                        if (saved_vars[j].second) {
+                            set_variable(saved_vars[j].first, saved_values[j]);
+                        } else {
+                            set_variable(saved_vars[j].first, "");
+                        }
+                    }
+                    pop_trace_stack();
+                    return res;
+                }
+
+                if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+                if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+                if (return_requested_) break;
+            }
+
+            for (size_t j = 0; j < saved_vars.size(); ++j) {
+                if (saved_vars[j].second) {
+                    set_variable(saved_vars[j].first, saved_values[j]);
                 } else {
-                    // Multiple loop vars: set directly (if we have enough variables)
-                    if (list_idx < zip.loop_vars.size()) {
-                        var_name = zip.loop_vars[list_idx];
-                    } else {
-                        // More lists than variables - skip extra lists
-                        continue;
-                    }
+                    set_variable(saved_vars[j].first, "");
                 }
-
-                set_variable(var_name, value);
-            }
-
-            // Execute loop body
-            auto res = interpret(block.body);
-            if (!res) {
-                set_fatal_error(res.error());
-                if (loop_depth_ <= 0) {
-                    std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
-                    std::abort();
-                }
-                loop_depth_--;
-                // Restore all loop variables
-                for (size_t j = 0; j < saved_vars.size(); ++j) {
-                    if (saved_vars[j].second) {
-                        set_variable(saved_vars[j].first, saved_values[j]);
-                    } else {
-                        set_variable(saved_vars[j].first, "");
-                    }
-                }
-                pop_trace_stack();
-                return res;
-            }
-
-            if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
-            if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
-            if (return_requested_) break;
-        }
-
-        // Restore all loop variables
-        // CMake sets loop vars to empty string if they weren't defined before the loop
-        for (size_t j = 0; j < saved_vars.size(); ++j) {
-            if (saved_vars[j].second) {
-                set_variable(saved_vars[j].first, saved_values[j]);
-            } else {
-                set_variable(saved_vars[j].first, "");
             }
         }
 
@@ -2211,6 +2257,41 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     }
 
     loop_depth_++;
+
+    // Validate RANGE step=0 before any early-out
+    if (std::holds_alternative<ForeachRange>(block.params)) {
+        const auto& r = std::get<ForeachRange>(block.params);
+        if (r.step) {
+            long step = std::stol(evaluate_argument(*r.step));
+            if (step == 0) {
+                if (loop_depth_ <= 0) {
+                    std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling step=0 error\n";
+                    std::abort();
+                }
+                loop_depth_--;
+                set_fatal_error("Step cannot be zero");
+                auto err = get_fatal_error();
+                clear_fatal_error();
+                pop_trace_stack();
+                return std::unexpected(*err);
+            }
+        }
+    }
+
+    // Empty body: skip building items and iteration entirely.
+    // The loop var restore below handles the post-loop state.
+    if (block.body.empty()) {
+        // CMake sets loop var to empty string after loop if it wasn't defined before
+        if (!loop_var_was_set) set_variable(loop_var_name, "");
+        if (loop_depth_ <= 0) {
+            std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when trying to decrement in foreach\n";
+            std::abort();
+        }
+        loop_depth_--;
+        pop_trace_stack();
+        return {};
+    }
+
     CMakeArray items;
     if (std::holds_alternative<ForeachSimple>(block.params)) {
         // CMake filters out empty elements during unquoted expansion in simple foreach
@@ -2221,25 +2302,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         const auto& r = std::get<ForeachRange>(block.params);
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
         long stop = std::stol(evaluate_argument(r.stop));
-        // If step not provided, infer direction from start/stop
         long step;
         if (r.step) {
             step = std::stol(evaluate_argument(*r.step));
         } else {
-            // Default step: 1 if ascending, -1 if descending
             step = (start <= stop) ? 1 : -1;
-        }
-        if (step == 0) {
-            if (loop_depth_ <= 0) {
-                std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling step=0 error\n";
-                std::abort();
-            }
-            loop_depth_--;
-            set_fatal_error("Step cannot be zero");
-            auto err = get_fatal_error();
-            clear_fatal_error();
-            pop_trace_stack();
-            return std::unexpected(*err);
         }
         for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
     } else if (std::holds_alternative<ForeachIn>(block.params)) {
@@ -2248,36 +2315,59 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         items.append(from_arguments(expand_arguments(in.items)));
     }
 
-    for (const auto& item : items) {
-        set_variable(loop_var_name, item);
-        auto res = interpret(block.body);
-        if (!res) {
-            set_fatal_error(res.error());
-            if (loop_depth_ <= 0) {
-                std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
-                std::abort();
+    // Fast path: use Entry to avoid per-iteration hash lookups (watches almost always empty)
+    if (variable_watches_.empty()) {
+        auto loop_entry = variables_.entry(loop_var_name);
+        for (const auto& item : items) {
+            loop_entry.set(item);
+            auto res = interpret(block.body);
+            if (!res) {
+                set_fatal_error(res.error());
+                if (loop_depth_ <= 0) {
+                    std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                    std::abort();
+                }
+                loop_depth_--;
+                if (loop_var_was_set) loop_entry.set(loop_var_old_value);
+                else loop_entry.set("");
+                pop_trace_stack();
+                return res;
             }
-            loop_depth_--;
-            // Restore loop variable before returning
-            if (loop_var_was_set) {
-                set_variable(loop_var_name, loop_var_old_value);
-            } else {
-                set_variable(loop_var_name, "");
-            }
-            pop_trace_stack();
-            return res;
+            if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+            if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+            if (return_requested_) break;
         }
-        if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
-        if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
-        if (return_requested_) break;  // return() exits the loop and propagates to caller
-    }
-
-    // Restore loop variable after loop completes
-    // CMake sets the loop var to empty string if it wasn't defined before the loop
-    if (loop_var_was_set) {
-        set_variable(loop_var_name, loop_var_old_value);
+        if (loop_var_was_set) loop_entry.set(loop_var_old_value);
+        else loop_entry.set("");
     } else {
-        set_variable(loop_var_name, "");
+        // Slow path: use set_variable() which fires watches
+        for (const auto& item : items) {
+            set_variable(loop_var_name, item);
+            auto res = interpret(block.body);
+            if (!res) {
+                set_fatal_error(res.error());
+                if (loop_depth_ <= 0) {
+                    std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                    std::abort();
+                }
+                loop_depth_--;
+                if (loop_var_was_set) {
+                    set_variable(loop_var_name, loop_var_old_value);
+                } else {
+                    set_variable(loop_var_name, "");
+                }
+                pop_trace_stack();
+                return res;
+            }
+            if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+            if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+            if (return_requested_) break;
+        }
+        if (loop_var_was_set) {
+            set_variable(loop_var_name, loop_var_old_value);
+        } else {
+            set_variable(loop_var_name, "");
+        }
     }
 
     // Sanity check: loop depth should never go negative
@@ -2345,8 +2435,8 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
             // Save propagated variable values before popping
             std::unordered_map<std::string, std::string> propagated_values;
             for (const auto& var_name : block.propagate_vars) {
-                if (variables_.is_defined(var_name)) {
-                    propagated_values[var_name] = variables_.get(var_name);
+                if (auto* val = variables_.try_get(var_name)) {
+                    propagated_values[var_name] = *val;
                 }
             }
 
@@ -2729,8 +2819,8 @@ bool Interpreter::is_variable_set(std::string_view name) const {
         }
     }
 
-    // Check local variables (O(1) via ShadowMap with transparent lookup)
-    if (variables_.is_defined(name)) {
+    // Check local variables (single-lookup via ShadowMap with transparent lookup)
+    if (variables_.try_get(name)) {
         return true;
     }
 
@@ -2773,10 +2863,9 @@ std::optional<std::string> Interpreter::get_optional_variable(std::string_view n
         return std::nullopt;  // Not in a function
     }
 
-    // Check local variables (use is_defined to distinguish "not set" from "set to empty")
-    // ShadowMap now handles all scoping including subdirectory scope (O(1) with transparent lookup)
-    if (variables_.is_defined(name)) {
-        return std::string(variables_.get(name));
+    // Check local variables (single-lookup via ShadowMap with transparent lookup)
+    if (auto* val = variables_.try_get(name)) {
+        return std::string(*val);
     }
 
     // Check cache variables (CACHE variables are globally accessible)

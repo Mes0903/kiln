@@ -425,3 +425,185 @@ TEST_CASE("ShadowMap edge cases", "[shadow_map]") {
         }
     }
 }
+
+TEST_CASE("ShadowMap try_get", "[shadow_map]") {
+    ShadowMap map;
+
+    SECTION("Returns nullptr for missing variable") {
+        REQUIRE(map.try_get("MISSING") == nullptr);
+    }
+
+    SECTION("Returns pointer to existing variable") {
+        map.set("VAR", "hello");
+        auto* val = map.try_get("VAR");
+        REQUIRE(val != nullptr);
+        REQUIRE(*val == "hello");
+    }
+
+    SECTION("Returns nullptr for tombstoned variable") {
+        map.set("VAR", "outer");
+        map.push_scope();
+        map.set("VAR", "inner");
+        map.unset("VAR");
+        REQUIRE(map.try_get("VAR") == nullptr);
+        map.pop_scope();
+        REQUIRE(*map.try_get("VAR") == "outer");
+    }
+
+    SECTION("Returns pointer to empty string value") {
+        map.set("VAR", "");
+        auto* val = map.try_get("VAR");
+        REQUIRE(val != nullptr);
+        REQUIRE(*val == "");
+    }
+}
+
+TEST_CASE("ShadowMap ConstEntry", "[shadow_map]") {
+    ShadowMap map;
+
+    SECTION("const_entry returns nullopt for missing variable") {
+        auto entry = map.const_entry("MISSING");
+        REQUIRE_FALSE(entry.has_value());
+    }
+
+    SECTION("const_entry reads existing variable") {
+        map.set("VAR", "hello");
+        auto entry = map.const_entry("VAR");
+        REQUIRE(entry.has_value());
+        REQUIRE(entry->is_defined());
+        REQUIRE(entry->get() == "hello");
+    }
+
+    SECTION("ConstEntry sees mutations from set()") {
+        map.set("VAR", "before");
+        auto entry = map.const_entry("VAR");
+        REQUIRE(entry->get() == "before");
+
+        map.set("VAR", "after");
+        REQUIRE(entry->get() == "after");
+    }
+
+    SECTION("ConstEntry survives scope changes") {
+        map.set("VAR", "outer");
+        auto entry = map.const_entry("VAR");
+
+        map.push_scope();
+        map.set("VAR", "inner");
+        REQUIRE(entry->get() == "inner");
+
+        map.pop_scope();
+        REQUIRE(entry->get() == "outer");
+    }
+
+    SECTION("ConstEntry sees tombstone from unset") {
+        map.set("VAR", "value");
+        auto entry = map.const_entry("VAR");
+        REQUIRE(entry->is_defined());
+
+        map.push_scope();
+        map.unset("VAR");
+        REQUIRE_FALSE(entry->is_defined());
+        REQUIRE(entry->get() == "");
+
+        map.pop_scope();
+        REQUIRE(entry->is_defined());
+        REQUIRE(entry->get() == "value");
+    }
+}
+
+TEST_CASE("ShadowMap Entry", "[shadow_map]") {
+    ShadowMap map;
+
+    SECTION("Entry set and get") {
+        auto e = map.entry("VAR");
+        REQUIRE_FALSE(e.is_defined());
+
+        e.set("hello");
+        REQUIRE(e.is_defined());
+        REQUIRE(e.get() == "hello");
+        REQUIRE(map.get("VAR") == "hello");
+    }
+
+    SECTION("Entry set at same depth modifies in place") {
+        auto e = map.entry("VAR");
+        e.set("first");
+        e.set("second");
+        e.set("third");
+        REQUIRE(e.get() == "third");
+        REQUIRE(map.get("VAR") == "third");
+    }
+
+    SECTION("Entry set at different depth pushes version") {
+        map.set("VAR", "depth0");
+        map.push_scope();
+        auto e = map.entry("VAR");
+        REQUIRE(e.get() == "depth0");
+
+        e.set("depth1");
+        REQUIRE(e.get() == "depth1");
+
+        map.pop_scope();
+        REQUIRE(map.get("VAR") == "depth0");
+    }
+
+    SECTION("Entry unset with tombstone") {
+        map.set("VAR", "outer");
+        map.push_scope();
+        auto e = map.entry("VAR");
+        e.set("inner");
+        e.unset();
+        REQUIRE_FALSE(e.is_defined());
+        REQUIRE(e.get() == "");
+
+        map.pop_scope();
+        REQUIRE(map.get("VAR") == "outer");
+    }
+
+    SECTION("Entry loop pattern — amortized single lookup") {
+        auto e = map.entry("LOOP_VAR");
+        for (int i = 0; i < 100; ++i) {
+            e.set(std::to_string(i));
+            REQUIRE(e.get() == std::to_string(i));
+        }
+        REQUIRE(map.get("LOOP_VAR") == "99");
+    }
+
+    SECTION("Entry implicit conversion to ConstEntry") {
+        map.set("VAR", "value");
+        auto e = map.entry("VAR");
+        ShadowMap::ConstEntry ce = e;
+        REQUIRE(ce.is_defined());
+        REQUIRE(ce.get() == "value");
+
+        // ConstEntry still sees mutations via Entry
+        e.set("new_value");
+        REQUIRE(ce.get() == "new_value");
+    }
+
+    SECTION("Entry and ConstEntry survive insertion of other variables") {
+        map.set("VAR1", "val1");
+        auto e = map.entry("VAR1");
+        auto ce = map.const_entry("VAR1");
+
+        // Insert many other variables to potentially trigger rehash
+        for (int i = 0; i < 1000; ++i) {
+            map.set("OTHER_" + std::to_string(i), "x");
+        }
+
+        // Original handles still valid (reference stability guarantee)
+        REQUIRE(e.get() == "val1");
+        REQUIRE(ce->get() == "val1");
+
+        e.set("modified");
+        REQUIRE(e.get() == "modified");
+        REQUIRE(ce->get() == "modified");
+        REQUIRE(map.get("VAR1") == "modified");
+    }
+
+    SECTION("Entry visible through ShadowMap::get and is_defined") {
+        auto e = map.entry("VAR");
+        e.set("test");
+        REQUIRE(map.is_defined("VAR"));
+        REQUIRE(map.get("VAR") == "test");
+    }
+}

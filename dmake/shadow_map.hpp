@@ -41,8 +41,123 @@ struct TransparentStringEqual {
  * - Exception-safe RAII pattern
  */
 class ShadowMap {
+    struct VariableVersion {
+        std::optional<std::string> value;  // nullopt = tombstone (unset masking parent)
+        int depth;
+    };
+
 public:
+    class ConstEntry;
+    class Entry;
+
     ShadowMap() = default;
+
+    /**
+     * Single-lookup read. Returns nullptr if undefined/tombstone.
+     */
+    const std::string* try_get(std::string_view name) const {
+        auto it = variables_.find(name);
+        if (it == variables_.end() || it->second.empty()) return nullptr;
+        auto& val = it->second.back().value;
+        return val.has_value() ? &*val : nullptr;
+    }
+
+    /**
+     * Cached read-only handle (8 bytes). Hash lookup at creation;
+     * subsequent reads are pointer deref + back(). Sees mutations
+     * immediately (points to live vector).
+     */
+    class ConstEntry {
+        friend class ShadowMap;
+        friend class Entry;
+        const std::vector<VariableVersion>* versions_;
+        explicit ConstEntry(const std::vector<VariableVersion>* v) : versions_(v) {}
+    public:
+        bool is_defined() const {
+            return !versions_->empty() && versions_->back().value.has_value();
+        }
+        const std::string& get() const {
+            static const std::string empty;
+            if (!is_defined()) return empty;
+            return *versions_->back().value;
+        }
+    };
+
+    /**
+     * Returns a cached read-only handle. nullopt if variable has no map entry.
+     * No insertion.
+     */
+    std::optional<ConstEntry> const_entry(std::string_view name) const {
+        auto it = variables_.find(name);
+        if (it == variables_.end()) return std::nullopt;
+        return ConstEntry(&it->second);
+    }
+
+    /**
+     * Cached read-write handle (24 bytes). Hash lookup at creation;
+     * subsequent reads/writes are pointer deref + back().
+     */
+    class Entry {
+        friend class ShadowMap;
+        ShadowMap& map_;
+        std::vector<VariableVersion>* versions_;
+        const std::string* key_;
+
+        Entry(ShadowMap& m, std::vector<VariableVersion>* v, const std::string* k)
+            : map_(m), versions_(v), key_(k) {}
+    public:
+        bool is_defined() const {
+            return !versions_->empty() && versions_->back().value.has_value();
+        }
+        const std::string& get() const {
+            static const std::string empty;
+            if (!is_defined()) return empty;
+            return *versions_->back().value;
+        }
+        void set(const std::string& value) {
+            int depth = map_.current_depth_;
+            if (!versions_->empty() && versions_->back().depth == depth) {
+                // Reuse existing string allocation when possible
+                auto& opt = versions_->back().value;
+                if (opt.has_value())
+                    opt->assign(value);
+                else
+                    opt = value;
+                return;
+            }
+            versions_->push_back({std::optional<std::string>(value), depth});
+            if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
+                map_.modified_per_depth_[depth].insert(*key_);
+            }
+        }
+        void unset() {
+            if (versions_->empty()) return;
+            int depth = map_.current_depth_;
+            if (versions_->back().depth == depth) {
+                versions_->pop_back();
+                if (!versions_->empty() && versions_->back().value.has_value()) {
+                    versions_->push_back({std::nullopt, depth});
+                    if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
+                        map_.modified_per_depth_[depth].insert(*key_);
+                    }
+                }
+            } else if (versions_->back().depth < depth && versions_->back().value.has_value()) {
+                versions_->push_back({std::nullopt, depth});
+                if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
+                    map_.modified_per_depth_[depth].insert(*key_);
+                }
+            }
+        }
+        operator ConstEntry() const { return ConstEntry(versions_); }
+    };
+
+    /**
+     * Returns a cached read-write handle. Creates map entry if needed.
+     */
+    Entry entry(const std::string& name) {
+        auto [it, _] = variables_.try_emplace(name);
+        return Entry(*this, &it->second, &it->first);
+    }
 
     /**
      * Get the current value of a variable.
@@ -346,11 +461,6 @@ public:
     }
 
 private:
-    struct VariableVersion {
-        std::optional<std::string> value;  // nullopt = tombstone (unset masking parent)
-        int depth;
-    };
-
     // Variable name -> [version history sorted by depth]
     // Uses transparent hash/equal for string_view lookup without allocation
     std::unordered_map<std::string, std::vector<VariableVersion>,
