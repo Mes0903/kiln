@@ -72,6 +72,23 @@ constexpr std::array boolean_constants = {
     "FALSE", "IGNORE", "N", "NO", "NOTFOUND", "OFF", "ON", "TRUE", "Y", "YES"
 };
 
+// Case-insensitive check against boolean_constants without allocating a to_upper copy.
+bool is_boolean_constant_ci(std::string_view token) {
+    for (const auto& bc : boolean_constants) {
+        std::string_view b(bc);
+        if (token.size() != b.size()) continue;
+        bool match = true;
+        for (size_t i = 0; i < token.size(); ++i) {
+            if (static_cast<char>(std::toupper(static_cast<unsigned char>(token[i]))) != b[i]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
 // Set of binary operator keywords
 constexpr std::array binary_operators = {
     "EQUAL", "GREATER", "GREATER_EQUAL", "IN_LIST", "IS_NEWER_THAN",
@@ -100,12 +117,27 @@ private:
     const std::vector<Argument>& condition_;
     size_t pos_ = 0;
     std::string error_msg_;
+    std::string eval_buffer_;  // Reusable buffer for get_token_string slow path
 
-    std::string get_token_string(const Argument& arg) {
+    // Returns a reference to the token string. Fast path returns reference into
+    // the AST; slow path evaluates into eval_buffer_ and returns reference to that.
+    // WARNING: reference is invalidated by the next call to get_token_string.
+    const std::string& get_token_string(const Argument& arg) {
         if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
             return std::get<std::string>(arg.parts[0]);
         }
-        return interp_.evaluate_argument(arg);
+        eval_buffer_ = interp_.evaluate_argument(arg);
+        return eval_buffer_;
+    }
+
+    // Return the literal text of the current token without expanding or allocating.
+    // Returns empty string_view if pos_ is out of range or the token is quoted/composite.
+    std::string_view peek_bare() const {
+        if (pos_ >= condition_.size()) return {};
+        const auto& arg = condition_[pos_];
+        if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0]))
+            return std::get<std::string>(arg.parts[0]);
+        return {};
     }
 
     static bool is_numeric_constant(const std::string& s) {
@@ -129,15 +161,14 @@ private:
     //   - If defined, return the variable's value (even if empty)
     //   - If undefined, return empty string
     std::string evaluate_token(const Argument& arg) {
-        std::string token = get_token_string(arg);
+        const std::string& token = get_token_string(arg);
 
         // Don't dereference keywords (operators), boolean constants, or quoted strings.
         // CMake keywords are case-sensitive (must be uppercase: NOT, AND, TARGET, etc.)
         // Boolean constants are case-insensitive (OFF, off, Off all work)
-        std::string upper_token = dmake::to_upper(token);
         if (arg.quoted ||
             std::find(keywords.begin(), keywords.end(), token) != keywords.end() ||
-            std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
+            is_boolean_constant_ci(token)) {
             return token;
         }
 
@@ -160,7 +191,7 @@ private:
         // This matches CMake behavior where bare words that don't name a defined
         // variable are kept as literal strings (e.g., "AIX" stays "AIX" in MATCHES)
         auto opt = interp_.get_optional_variable(token);
-        return opt.has_value() ? *opt : token;
+        return opt.has_value() ? *opt : std::string(token);
     }
 
     static bool is_binary_operator(const std::string& token) {
@@ -174,8 +205,7 @@ private:
         bool left = parse_and();
 
         while (pos_ < condition_.size() && error_msg_.empty()) {
-            std::string token = get_token_string(condition_[pos_]);
-            if (!condition_[pos_].quoted && token == "OR") {
+            if (peek_bare() == "OR") {
                 pos_++;
                 if (pos_ >= condition_.size()) {
                     error_msg_ = "OR operator requires a right operand";
@@ -194,8 +224,7 @@ private:
         bool left = parse_not();
 
         while (pos_ < condition_.size() && error_msg_.empty()) {
-            std::string token = get_token_string(condition_[pos_]);
-            if (!condition_[pos_].quoted && token == "AND") {
+            if (peek_bare() == "AND") {
                 pos_++;
                 if (pos_ >= condition_.size()) {
                     error_msg_ = "AND operator requires a right operand";
@@ -217,13 +246,12 @@ private:
             return false;
         }
 
-        std::string token = get_token_string(condition_[pos_]);
-        if (!condition_[pos_].quoted && token == "NOT") {
+        if (peek_bare() == "NOT") {
             // CMake compatibility: If NOT is followed by a binary operator,
             // treat NOT as a value (left operand), not as a negation operator.
             // Example: if(NOT STREQUAL "X") -> "NOT" STREQUAL "X" = false
             if (pos_ + 1 < condition_.size()) {
-                std::string next_token = get_token_string(condition_[pos_ + 1]);
+                const std::string& next_token = get_token_string(condition_[pos_ + 1]);
                 if (is_binary_operator(next_token)) {
                     // NOT is actually a left operand here, not a negation
                     return parse_comparison();
@@ -246,8 +274,7 @@ private:
         // CMake special case: MATCHES without left operand returns false
         // Example: if(${UNDEFINED} MATCHES "pat") where UNDEFINED expands to nothing
         // becomes if(MATCHES "pat") which CMake evaluates as false
-        std::string current_token = get_token_string(condition_[pos_]);
-        if (!condition_[pos_].quoted && current_token == "MATCHES" && pos_ + 1 < condition_.size()) {
+        if (peek_bare() == "MATCHES" && pos_ + 1 < condition_.size()) {
             // Consume MATCHES and the pattern, return false
             pos_ += 2;
             return false;
@@ -256,9 +283,12 @@ private:
         // CMake error case: other binary operators without left operand
         // Example: if(STREQUAL "") -> error "Unknown arguments specified"
         // Note: This does NOT apply when NOT precedes the operator (handled in parse_not)
-        if (!condition_[pos_].quoted && is_binary_operator(current_token) && pos_ + 1 < condition_.size()) {
-            error_msg_ = "if given arguments: \"" + current_token + "\" - missing left operand";
-            return false;
+        if (!condition_[pos_].quoted) {
+            const std::string& current_token = get_token_string(condition_[pos_]);
+            if (is_binary_operator(current_token) && pos_ + 1 < condition_.size()) {
+                error_msg_ = "if given arguments: \"" + current_token + "\" - missing left operand";
+                return false;
+            }
         }
 
         // Save start position in case this isn't a comparison
@@ -272,6 +302,7 @@ private:
             return unary_result;
         }
 
+        // Copy needed: op is used in error messages after get_token_string may be called again
         std::string op = get_token_string(condition_[pos_]);
 
         // Numeric comparisons
@@ -421,24 +452,26 @@ private:
     bool parse_unary_or_primary() {
         if (pos_ >= condition_.size()) return false;
 
-        std::string token = get_token_string(condition_[pos_]);
-
-        // Parentheses for grouping
-        if (token == "(") {
+        // Parentheses for grouping - peek at AST directly
+        if (peek_bare() == "(") {
             pos_++;
             // CMake behavior: empty parentheses () evaluate to false
-            if (pos_ < condition_.size() && get_token_string(condition_[pos_]) == ")") {
+            if (peek_bare() == ")") {
                 pos_++;
                 return false;
             }
             bool result = parse_or();
-            if (pos_ >= condition_.size() || get_token_string(condition_[pos_]) != ")") {
+            if (peek_bare() != ")") {
                 error_msg_ = "Expected ')' to close group";
                 return false;
             }
             pos_++;
             return result;
         }
+
+        // Need the token string for unary operator checks
+        // Copy needed: token is used after get_token_string may be called again below
+        std::string token = get_token_string(condition_[pos_]);
 
         // Unary operators that take one argument
         // If there's no next token, treat the keyword as a primary value instead
@@ -502,9 +535,7 @@ private:
 
         // Check if this is a boolean constant (case-insensitive)
         // These have fixed truthiness regardless of quoting
-        std::string upper_token = token_str;
-        std::transform(upper_token.begin(), upper_token.end(), upper_token.begin(), ::toupper);
-        if (std::find(boolean_constants.begin(), boolean_constants.end(), upper_token) != boolean_constants.end()) {
+        if (is_boolean_constant_ci(token_str)) {
             return !Interpreter::is_falsy(token_str);
         }
 
