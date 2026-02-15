@@ -455,7 +455,7 @@ void Target::handle_circular_dep(
     if (dep.get_type() != TargetType::STATIC_LIBRARY &&
         dep.get_type() != TargetType::OBJECT_LIBRARY) {
         throw std::runtime_error(
-            "Circular dependency detected involving target: " + dep.get_name());
+            "Circular dependency: " + name_ + " -> " + dep.get_name());
     }
     dmake::print_message(std::cerr, "WARNING",
         "Circular dependency between static libraries '" + name_ +
@@ -493,7 +493,7 @@ void Target::resolve_deferred_circular_deps(
 
 void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp) {
     if (resolved_) return;
-    if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
+    if (visiting_) throw std::runtime_error("Circular dependency: " + name_);
     visiting_ = true;
 
     auto props_to_resolve = build_props_to_resolve();
@@ -534,7 +534,19 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
             return;
         }
 
-        dep->resolve(all_targets, interp);
+        try {
+            dep->resolve(all_targets, interp);
+        } catch (std::runtime_error& e) {
+            std::string_view msg = e.what();
+            constexpr std::string_view prefix = "Circular dependency: ";
+            if (msg.starts_with(prefix)) {
+                // Build the chain as the stack unwinds: each frame prepends itself.
+                // Seed is "X", first catch makes "C -> X", next "B -> C -> X", etc.
+                std::string chain(msg.substr(prefix.size()));
+                throw std::runtime_error(std::string(prefix) + name_ + " -> " + chain);
+            }
+            throw;
+        }
 
         // For building THIS target (PRIVATE or PUBLIC dep)
         if (!is_interface_only) {
