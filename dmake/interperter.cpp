@@ -2592,31 +2592,51 @@ bool Interpreter::call_user_function(const std::string& name, const std::vector<
 }
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const MacroBlock& macro, const std::vector<std::string>& args) {
-    // Save and set up macro parameter substitutions (text-replacement, not variables)
-    std::map<std::string, std::string> saved_substitutions = macro_substitutions_;
+    // Save only the entries we're about to overwrite (not the entire map)
+    struct SavedEntry { std::string key; std::optional<std::string> old_value; };
+    std::vector<SavedEntry> saved;
+    saved.reserve(args.size() + macro.parameters.size() + 3);
 
-    // Build ARGC/ARGV/ARGN directly from args (avoid CMakeArray construction)
-    macro_substitutions_["ARGC"] = std::to_string(args.size());
+    auto save_and_set = [&](const std::string& key, std::string value) {
+        auto it = macro_substitutions_.find(key);
+        if (it != macro_substitutions_.end())
+            saved.push_back({key, std::move(it->second)});
+        else
+            saved.push_back({key, std::nullopt});
+        macro_substitutions_[key] = std::move(value);
+    };
+
+    auto save_and_set_ref = [&](const std::string& key, const std::string& value) {
+        auto it = macro_substitutions_.find(key);
+        if (it != macro_substitutions_.end())
+            saved.push_back({key, std::move(it->second)});
+        else
+            saved.push_back({key, std::nullopt});
+        macro_substitutions_[key] = value;
+    };
+
+    // Build ARGC/ARGV/ARGN directly from args
+    save_and_set("ARGC", std::to_string(args.size()));
 
     std::string argv_str;
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) argv_str += ';';
         argv_str += args[i];
     }
-    macro_substitutions_["ARGV"] = std::move(argv_str);
+    save_and_set("ARGV", std::move(argv_str));
 
     std::string argn_str;
     for (size_t i = macro.parameters.size(); i < args.size(); ++i) {
         if (i > macro.parameters.size()) argn_str += ';';
         argn_str += args[i];
     }
-    macro_substitutions_["ARGN"] = std::move(argn_str);
+    save_and_set("ARGN", std::move(argn_str));
 
     for (size_t i = 0; i < args.size(); ++i) {
-        macro_substitutions_["ARGV" + std::to_string(i)] = args[i];
+        save_and_set("ARGV" + std::to_string(i), args[i]);
     }
     for (size_t i = 0; i < macro.parameters.size() && i < args.size(); ++i) {
-        macro_substitutions_[macro.parameters[i]] = args[i];
+        save_and_set_ref(macro.parameters[i], args[i]);
     }
 
     std::string saved_file = current_file_;
@@ -2649,8 +2669,13 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     current_file_interned_ = saved_file_interned;
     if (!res) set_fatal_error(res.error());
 
-    // Restore macro substitutions
-    macro_substitutions_ = saved_substitutions;
+    // Restore only the entries we modified
+    for (auto& [key, old_val] : saved) {
+        if (old_val)
+            macro_substitutions_[key] = std::move(*old_val);
+        else
+            macro_substitutions_.erase(key);
+    }
 
     return res;
 }
@@ -2659,33 +2684,39 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
 // Only 1/Y/ON/YES/TRUE (case-insensitive) are truthy.
 // This is NOT the inverse of is_falsy() — values like "/usr/local/bin"
 // are neither is_truthy() nor is_falsy().
+// Case-insensitive equality without allocation
+static bool ci_equal(const char* a, const char* b, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        if (std::toupper(static_cast<unsigned char>(a[i])) !=
+            std::toupper(static_cast<unsigned char>(b[i]))) return false;
+    }
+    return true;
+}
+
 bool Interpreter::is_truthy(const std::string& val) {
-    auto upper = to_upper(val);
-    return upper == "1" || upper == "Y" || upper == "ON" ||
-           upper == "YES" || upper == "TRUE";
+    switch (val.size()) {
+        case 1: return val[0] == '1' || val[0] == 'Y' || val[0] == 'y';
+        case 2: return ci_equal(val.data(), "ON", 2);
+        case 3: return ci_equal(val.data(), "YES", 3);
+        case 4: return ci_equal(val.data(), "TRUE", 4);
+        default: return false;
+    }
 }
 
 bool Interpreter::is_falsy(const std::string& val) {
     if (val.empty()) return true;
-
-    // Exact match for "0" only (not "00", "0.0", "-0", etc.)
-    if (val == "0") return true;
-
-    std::string upper_val = to_upper(val);
-
-    // False constants (case-insensitive, exact match)
-    if (upper_val == "OFF" || upper_val == "NO" ||
-        upper_val == "FALSE" || upper_val == "N" ||
-        upper_val == "IGNORE" || upper_val == "NOTFOUND") {
+    switch (val.size()) {
+        case 1: return val[0] == '0' || val[0] == 'N' || val[0] == 'n';
+        case 2: return ci_equal(val.data(), "NO", 2);
+        case 3: return ci_equal(val.data(), "OFF", 3);
+        case 5: return ci_equal(val.data(), "FALSE", 5);
+        case 6: return ci_equal(val.data(), "IGNORE", 6);
+        case 8: return ci_equal(val.data(), "NOTFOUND", 8);
+    }
+    // *-NOTFOUND (case-insensitive suffix)
+    if (val.size() > 9 && ci_equal(val.data() + val.size() - 9, "-NOTFOUND", 9)) {
         return true;
     }
-
-    // Ends with -NOTFOUND
-    if (upper_val.ends_with("-NOTFOUND")) {
-        return true;
-    }
-
-    // Everything else is truthy (including "2x", "0.0", "00", "-0", etc.)
     return false;
 }
 

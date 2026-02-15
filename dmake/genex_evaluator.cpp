@@ -1,4 +1,5 @@
 #include "genex_evaluator.hpp"
+#include "interperter.hpp"
 #include "target.hpp"
 #include "CMakeArray.hpp"
 #include "language.hpp"
@@ -40,22 +41,8 @@ Target* GenexEvaluator::find_target(const std::string& name) const {
 }
 
 bool GenexEvaluator::is_truthy(const std::string& value) const {
-    // CMake truthiness: falsy values are empty string, 0, OFF, NO, FALSE, N, IGNORE, NOTFOUND, *-NOTFOUND
-    if (value.empty()) return false;
-
-    std::string lower = to_lower(value);
-    if (lower == "0" || lower == "off" || lower == "no" ||
-        lower == "false" || lower == "n" || lower == "ignore" ||
-        lower == "notfound") {
-        return false;
-    }
-
-    // Check for *-NOTFOUND pattern
-    if (lower.size() > 9 && lower.substr(lower.size() - 9) == "-notfound") {
-        return false;
-    }
-
-    return true;
+    // Inverse of Interpreter::is_falsy — avoids to_lower allocation
+    return !Interpreter::is_falsy(value);
 }
 
 std::expected<std::string, std::string> GenexEvaluator::evaluate_nodes(

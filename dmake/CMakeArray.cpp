@@ -10,37 +10,54 @@ std::vector<std::string> CMakeArray::split_by_semicolon(const std::string& str) 
         return {};
     }
 
+    // CMake's list() does NOT track genex nesting -- semicolons inside $<...>
+    // are still separators. Only \; is treated as an escaped (non-separator) semicolon.
+
+    // Fast path: no backslashes means no escaped semicolons
+    if (str.find('\\') == std::string::npos) {
+        std::vector<std::string> result;
+        size_t start = 0;
+        for (size_t i = 0; i < str.size(); ++i) {
+            if (str[i] == ';') {
+                result.emplace_back(str, start, i - start);
+                start = i + 1;
+            }
+        }
+        result.emplace_back(str, start, str.size() - start);
+        return result;
+    }
+
+    // Slow path: handle \; escaping
     std::vector<std::string> result;
     std::string current;
-    int genex_depth = 0;  // Track $<...> nesting
-
     for (size_t i = 0; i < str.size(); ++i) {
         char c = str[i];
-
-        // Track genex nesting
-        if (c == '$' && i + 1 < str.size() && str[i + 1] == '<') {
-            genex_depth++;
-            current += c;
-        } else if (c == '>' && genex_depth > 0) {
-            genex_depth--;
-            current += c;
-        } else if (c == '\\' && i + 1 < str.size() && str[i + 1] == ';') {
+        if (c == '\\' && i + 1 < str.size() && str[i + 1] == ';') {
             // Escaped semicolon - not a separator, unescape it
             current += ';';
             i++; // skip the semicolon
-        } else if (c == ';' && genex_depth == 0) {
-            // Only split on unescaped semicolons outside of genex
-            result.push_back(current);
+        } else if (c == ';') {
+            result.push_back(std::move(current));
             current.clear();
         } else {
             current += c;
         }
     }
-
-    // Push final element (even if empty)
-    result.push_back(current);
-
+    result.push_back(std::move(current));
     return result;
+}
+
+size_t CMakeArray::count_elements(std::string_view str) {
+    if (str.empty()) return 0;
+    size_t count = 1;
+    for (size_t i = 0; i < str.size(); ++i) {
+        if (str[i] == '\\' && i + 1 < str.size() && str[i + 1] == ';') {
+            i++; // skip escaped semicolon
+        } else if (str[i] == ';') {
+            count++;
+        }
+    }
+    return count;
 }
 
 CMakeArray::CMakeArray(const std::string& semicolon_separated)
@@ -185,16 +202,13 @@ CMakeArrayView::CMakeArrayView(std::string_view semicolon_separated)
     : source_(semicolon_separated) {
     if (source_.empty()) return;
 
-    int genex_depth = 0;
+    // CMake does NOT track genex nesting for list splitting.
+    // Only \; is treated as an escaped (non-separator) semicolon.
     for (size_t i = 0; i < source_.size(); ++i) {
         char c = source_[i];
-        if (c == '$' && i + 1 < source_.size() && source_[i + 1] == '<') {
-            genex_depth++;
-        } else if (c == '>' && genex_depth > 0) {
-            genex_depth--;
-        } else if (c == '\\' && i + 1 < source_.size() && source_[i + 1] == ';') {
+        if (c == '\\' && i + 1 < source_.size() && source_[i + 1] == ';') {
             i++; // skip escaped semicolon
-        } else if (c == ';' && genex_depth == 0) {
+        } else if (c == ';') {
             separators_.push_back(i);
         }
     }

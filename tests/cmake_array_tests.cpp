@@ -119,11 +119,14 @@ TEST_CASE("CMakeArray: contains", "[cmake_array]") {
     CHECK_FALSE(arr.contains("d"));
 }
 
-TEST_CASE("CMakeArray: genex semicolons not split", "[cmake_array]") {
+TEST_CASE("CMakeArray: genex semicolons are split (CMake behavior)", "[cmake_array]") {
+    // CMake's list() does NOT protect semicolons inside genex -- they are still separators.
+    // Genex are only evaluated later during build graph generation.
     CMakeArray arr(std::string("$<1:a;b>;c"));
-    REQUIRE(arr.size() == 2);
-    CHECK(arr[0] == "$<1:a;b>");
-    CHECK(arr[1] == "c");
+    REQUIRE(arr.size() == 3);
+    CHECK(arr[0] == "$<1:a");
+    CHECK(arr[1] == "b>");
+    CHECK(arr[2] == "c");
 }
 
 // --- CMakeArrayView tests ---
@@ -182,12 +185,14 @@ TEST_CASE("CMakeArrayView: range-for iteration", "[cmake_array]") {
     CHECK(items[2] == "three");
 }
 
-TEST_CASE("CMakeArrayView: genex semicolons not split", "[cmake_array]") {
+TEST_CASE("CMakeArrayView: genex semicolons are split (CMake behavior)", "[cmake_array]") {
+    // CMake's list splitting does NOT protect semicolons inside genex.
     std::string src = "$<1:a;b>;c";
     CMakeArrayView view(src);
-    REQUIRE(view.size() == 2);
-    CHECK(view[0] == "$<1:a;b>");
-    CHECK(view[1] == "c");
+    REQUIRE(view.size() == 3);
+    CHECK(view[0] == "$<1:a");
+    CHECK(view[1] == "b>");
+    CHECK(view[2] == "c");
 }
 
 TEST_CASE("CMakeArrayView: single element", "[cmake_array]") {

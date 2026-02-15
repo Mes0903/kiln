@@ -44,8 +44,8 @@ void register_list_builtins(Interpreter& interp) {
                 interp.set_fatal_error("list(LENGTH) requires exactly 2 arguments: list(LENGTH <list> <output variable>)");
                 return;
             }
-            CMakeArray list(interp.get_variable(sub_args[0]));
-            interp.set_variable(sub_args[1], std::to_string(list.size()));
+            interp.set_variable(sub_args[1], std::to_string(
+                CMakeArray::count_elements(interp.get_variable(sub_args[0]))));
         } else if (operation == "GET") {
             // list(GET <list> <index> [<index> ...] <output variable>)
             if (sub_args.size() < 3) {
@@ -98,9 +98,14 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
             const std::string& list_var = sub_args[0];
-            CMakeArray list(interp.get_variable(list_var));
-            for (size_t i = 1; i < sub_args.size(); ++i) list.append(sub_args[i]);
-            interp.set_variable(list_var, list.to_string());
+            // String concatenation -- matches CMake behavior of preserving \; in raw string
+            std::string val = interp.get_variable(list_var);
+            for (size_t i = 1; i < sub_args.size(); ++i) {
+                if (sub_args[i].empty()) continue;
+                if (!val.empty()) val += ';';
+                val += sub_args[i];
+            }
+            interp.set_variable(list_var, val);
         } else if (operation == "PREPEND") {
             CommandParser parser("list", "PREPEND");
             std::string list_var;

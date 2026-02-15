@@ -43,6 +43,7 @@ struct GlobalOptions {
     bool trace = false;
     bool trace_expand = false;
     bool debugger = false;
+    bool config_only = false;  // Debug: interpret + save cache, then exit (no build)
     std::string break_on_message;
 };
 
@@ -205,6 +206,16 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             // Execute deferred calls and apply retroactive directory properties
             interpreter->execute_deferred_calls();
             interpreter->finalize_directory_targets();
+        }
+
+        if (opt.config_only) {
+            save_cache();
+            if (dmake::g_profiling_enabled.load(std::memory_order_relaxed)) {
+                auto profile_path = (build_path / "profile.json").string();
+                dmake::Profiler::instance().write(profile_path);
+                std::cerr << dmake::c(std::cerr, dmake::colors::BOLD_CYAN) << "Profile" << dmake::c(std::cerr, dmake::colors::RESET) << " written to " << profile_path << std::endl;
+            }
+            return interpreter;
         }
 
         auto build_result = interpreter->run_build(opt.jobs, targets);
@@ -432,6 +443,7 @@ int main(int argc, char* argv[]) {
         target->add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
         target->add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
         target->add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
+        target->add_flag("--config-only", opt.config_only, "[debug] Interpret CMakeLists.txt and save cache, then exit without building");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
            ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {

@@ -42,6 +42,9 @@ public:
     CMakeArray sublist(size_t begin_idx, size_t length) const;
     bool contains(const std::string& item) const;
 
+    // Count list elements without allocating (for LENGTH)
+    static size_t count_elements(std::string_view str);
+
 private:
     std::vector<std::string> items_;
     static std::vector<std::string> split_by_semicolon(const std::string& str);
