@@ -2142,7 +2142,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
                     if (saved_vars[j].second) {
                         set_variable(saved_vars[j].first, saved_values[j]);
                     } else {
-                        unset_variable(saved_vars[j].first);
+                        set_variable(saved_vars[j].first, "");
                     }
                 }
                 safe_pop_trace_stack("foreach zip_lists body error");
@@ -2155,11 +2155,12 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         }
 
         // Restore all loop variables
+        // CMake sets loop vars to empty string if they weren't defined before the loop
         for (size_t j = 0; j < saved_vars.size(); ++j) {
             if (saved_vars[j].second) {
                 set_variable(saved_vars[j].first, saved_values[j]);
             } else {
-                unset_variable(saved_vars[j].first);
+                set_variable(saved_vars[j].first, "");
             }
         }
 
@@ -2235,7 +2236,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
             if (loop_var_was_set) {
                 set_variable(loop_var_name, loop_var_old_value);
             } else {
-                unset_variable(loop_var_name);
+                set_variable(loop_var_name, "");
             }
             safe_pop_trace_stack("foreach body error");
             return res;
@@ -2246,10 +2247,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     }
 
     // Restore loop variable after loop completes
+    // CMake sets the loop var to empty string if it wasn't defined before the loop
     if (loop_var_was_set) {
         set_variable(loop_var_name, loop_var_old_value);
     } else {
-        unset_variable(loop_var_name);
+        set_variable(loop_var_name, "");
     }
 
     // Sanity check: loop depth should never go negative

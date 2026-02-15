@@ -1012,6 +1012,66 @@ TEST_CASE("foreach loop variable is cleared after loop", "[interpreter][foreach]
     REQUIRE(output == "in loop: 0\nin loop: 1\nin loop: 2\nafter loop: ''\n");
 }
 
+TEST_CASE("foreach loop var is DEFINED after loop even if unset before", "[interpreter][foreach]") {
+    // Match CMake: loop variable becomes defined (empty string) after loop,
+    // even if it was never set before the loop. CMake does NOT unset it.
+    auto output = run_script(R"(
+        foreach(V1 a b)
+        endforeach()
+        if(DEFINED V1)
+            message("V1 DEFINED='${V1}'")
+        else()
+            message("V1 NOT DEFINED")
+        endif()
+    )");
+    REQUIRE(output == "V1 DEFINED=''\n");
+}
+
+TEST_CASE("foreach loop var restored to original if previously set", "[interpreter][foreach]") {
+    // Match CMake: loop variable is restored to its pre-loop value
+    auto output = run_script(R"(
+        set(V "original")
+        foreach(V x y z)
+        endforeach()
+        if(DEFINED V)
+            message("V='${V}'")
+        else()
+            message("V NOT DEFINED")
+        endif()
+    )");
+    REQUIRE(output == "V='original'\n");
+}
+
+TEST_CASE("foreach loop var DEFINED after loop when explicitly unset before", "[interpreter][foreach]") {
+    // Match CMake: even if variable was set then unset before the loop,
+    // it still becomes defined (empty string) after the loop
+    auto output = run_script(R"(
+        set(V "something")
+        unset(V)
+        foreach(V a b)
+        endforeach()
+        if(DEFINED V)
+            message("V DEFINED='${V}'")
+        else()
+            message("V NOT DEFINED")
+        endif()
+    )");
+    REQUIRE(output == "V DEFINED=''\n");
+}
+
+TEST_CASE("foreach variable used before set in loop body", "[interpreter][foreach]") {
+    // Match CMake: loop body shares parent scope, so variables set in one
+    // iteration are visible in the next
+    auto output = run_script(R"(
+        foreach(i a b c)
+            message("${i}:${MYVAR}")
+            set(MYVAR "val_${i}")
+        endforeach()
+        message("after:${MYVAR}")
+    )");
+    REQUIRE(output == "a:\nb:val_a\nc:val_b\nafter:val_c\n");
+}
+
 TEST_CASE("foreach can iterate over variable references", "[interpreter][foreach]") {
     auto output = run_script(R"(
         set(STOP "3")
@@ -1231,6 +1291,64 @@ TEST_CASE("foreach IN ZIP_LISTS variables are cleared after loop", "[interpreter
         message("after: '${x}','${y}'")
     )");
     REQUIRE(output == "1,a\nafter: '',''\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS vars are DEFINED after loop even if unset before", "[interpreter][foreach][zip_lists]") {
+    // Match CMake: ZIP_LISTS loop variables become defined (empty string) after loop,
+    // even if they were never set before the loop. CMake does NOT unset them.
+    auto output = run_script(R"(
+        set(L1 "x;y")
+        set(L2 "1;2")
+        foreach(zv1 zv2 IN ZIP_LISTS L1 L2)
+        endforeach()
+        if(DEFINED zv1)
+            message("zv1 DEFINED='${zv1}'")
+        else()
+            message("zv1 NOT DEFINED")
+        endif()
+        if(DEFINED zv2)
+            message("zv2 DEFINED='${zv2}'")
+        else()
+            message("zv2 NOT DEFINED")
+        endif()
+    )");
+    REQUIRE(output == "zv1 DEFINED=''\nzv2 DEFINED=''\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS single var DEFINED after loop", "[interpreter][foreach][zip_lists]") {
+    // Match CMake: single-variable ZIP_LISTS creates var_0, var_1, etc.
+    // These become defined (empty string) after the loop, not unset.
+    auto output = run_script(R"(
+        set(L1 "x;y")
+        set(L2 "1;2")
+        foreach(zs IN ZIP_LISTS L1 L2)
+        endforeach()
+        if(DEFINED zs_0)
+            message("zs_0 DEFINED='${zs_0}'")
+        else()
+            message("zs_0 NOT DEFINED")
+        endif()
+        if(DEFINED zs_1)
+            message("zs_1 DEFINED='${zs_1}'")
+        else()
+            message("zs_1 NOT DEFINED")
+        endif()
+    )");
+    REQUIRE(output == "zs_0 DEFINED=''\nzs_1 DEFINED=''\n");
+}
+
+TEST_CASE("foreach IN ZIP_LISTS vars restored if previously set", "[interpreter][foreach][zip_lists]") {
+    // Match CMake: if loop variables were set before the loop, they are restored
+    auto output = run_script(R"(
+        set(L1 "x;y")
+        set(L2 "1;2")
+        set(zv1 "orig1")
+        set(zv2 "orig2")
+        foreach(zv1 zv2 IN ZIP_LISTS L1 L2)
+        endforeach()
+        message("zv1='${zv1}' zv2='${zv2}'")
+    )");
+    REQUIRE(output == "zv1='orig1' zv2='orig2'\n");
 }
 
 TEST_CASE("foreach IN ZIP_LISTS with break", "[interpreter][foreach][zip_lists]") {
