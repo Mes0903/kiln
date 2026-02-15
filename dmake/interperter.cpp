@@ -2630,6 +2630,16 @@ std::string Interpreter::evaluate_variable_reference(const VariableReference& re
 }
 
 std::string Interpreter::evaluate_argument(const Argument& arg) {
+    // Fast path: single-part arguments (covers bare keywords like "EXPR"
+    // and simple variable refs like ${var} — the vast majority of arguments)
+    if (arg.parts.size() == 1) {
+        auto& p = arg.parts[0];
+        if (std::holds_alternative<std::string>(p))
+            return std::get<std::string>(p);
+        return evaluate_variable_reference(std::get<VariableReference>(p));
+    }
+
+    // General path: multi-part arguments (e.g. "${prefix}_suffix")
     std::string res;
     for (const auto& p : arg.parts) {
         if (std::holds_alternative<std::string>(p)) {
