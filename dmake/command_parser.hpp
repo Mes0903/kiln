@@ -59,6 +59,12 @@ public:
     void multi_list(std::string keyword, std::vector<std::vector<std::string>>& var);
 
     /**
+     * @brief Collect any unrecognized arguments instead of erroring.
+     * Useful for commands like find_package where bare args are implicit components.
+     */
+    void unparsed(std::vector<std::string>& var);
+
+    /**
      * @brief Parse the arguments.
      * @return Success or an error message.
      */
@@ -96,6 +102,7 @@ private:
     std::vector<SinglePositional> single_positionals_;
     std::optional<PositionalList> positional_list_;
     std::map<std::string, KeywordInfo> keywords_;
+    std::vector<std::string>* unparsed_ = nullptr;
 };
 
 #define PARSE_OR_RETURN(parser, interp, args) \

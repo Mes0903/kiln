@@ -12,6 +12,25 @@
 
 namespace dmake {
 
+// Target names reserved by the build system. Users cannot create targets with these names
+// because they collide with built-in build targets (e.g. "make all", "make test").
+static constexpr std::string_view kBannedTargetNames[] = {
+    "all",
+    "test",
+    "clean",
+    "install",
+    "package",
+    "rebuild_cache",
+    "edit_cache",
+};
+
+static bool is_banned_target_name(std::string_view name) {
+    for (auto banned : kBannedTargetNames) {
+        if (name == banned) return true;
+    }
+    return false;
+}
+
 void register_target_builtins(Interpreter& interp) {
     // Helper to configure common target properties (C/C++ standards, flags, inherited directories)
     auto configure_target = [](Interpreter& interp, const std::shared_ptr<Target>& target) {
@@ -89,6 +108,14 @@ void register_target_builtins(Interpreter& interp) {
             if (!val.empty()) target->set_property(prop, val);
         }
 
+        // Set AUTOMOC/AUTOUIC/AUTORCC from CMAKE_ globals
+        for (const auto& prop : {"AUTOMOC", "AUTOUIC", "AUTORCC"}) {
+            std::string val = interp.get_variable(std::string("CMAKE_") + prop);
+            if (!val.empty() && !interp.is_falsy(val)) {
+                target->set_property(prop, "ON");
+            }
+        }
+
         // Note: Accumulated directory properties are applied retroactively via
         // finalize_directory_targets() to match CMake's behavior where directory-level
         // commands like add_definitions() affect all targets in the directory,
@@ -121,6 +148,11 @@ void register_target_builtins(Interpreter& interp) {
         parser.flag("EXCLUDE_FROM_ALL", exclude_from_all);
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
+
+        if (is_banned_target_name(name)) {
+            interp.set_fatal_error("add_executable() target name '" + name + "' is reserved by the build system");
+            return;
+        }
 
         // Handle ALIAS targets
         if (is_alias) {
@@ -190,6 +222,11 @@ void register_target_builtins(Interpreter& interp) {
         parser.flag("ALIAS", is_alias);
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
+
+        if (is_banned_target_name(name)) {
+            interp.set_fatal_error("add_library() target name '" + name + "' is reserved by the build system");
+            return;
+        }
 
         // Handle ALIAS targets
         if (is_alias) {
@@ -619,6 +656,11 @@ void register_target_builtins(Interpreter& interp) {
         // Note: VERBATIM is ignored as we currently use shell execution via popen
         parser.flag("VERBATIM", verbatim);
         PARSE_OR_RETURN(parser, interp, normalized_args);
+
+        if (is_banned_target_name(name)) {
+            interp.set_fatal_error("add_custom_target() target name '" + name + "' is reserved by the build system");
+            return;
+        }
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
@@ -1339,13 +1381,26 @@ void register_target_builtins(Interpreter& interp) {
 
         auto& defs = interp.get_current_directory_context().accumulated["COMPILE_DEFINITIONS"];
         auto& opts = interp.get_current_directory_context().accumulated["COMPILE_OPTIONS"];
+        bool next_is_option_value = false;
         for (const auto& arg : args) {
-            if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'D') {
+            if (next_is_option_value) {
+                // Argument to a preceding flag (e.g. "stdint.h" after "-include")
+                opts.push_back(arg);
+                next_is_option_value = false;
+            } else if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'D') {
                 // -Dfoo -> definition "foo"
                 defs.push_back(arg.substr(2));
             } else if (!arg.empty() && arg[0] == '-') {
                 // Non-definition flags (e.g. -Wall) go to compile options
                 opts.push_back(arg);
+                // HACK: some projects pass flags like "-include stdint.h" through
+                // add_definitions(). CMake keeps the argument with its flag; we do
+                // the same by consuming the next token as an option value.
+                if (arg == "-include" || arg == "-isystem" ||
+                    arg == "-I" || arg == "-D" || arg == "-U" ||
+                    arg == "-F" || arg == "-iframework") {
+                    next_is_option_value = true;
+                }
             } else if (!arg.empty()) {
                 // Bare name (e.g. HAS_SOCKLEN_T) -> definition
                 defs.push_back(arg);

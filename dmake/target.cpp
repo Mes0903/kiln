@@ -1,5 +1,6 @@
 #include "target.hpp"
 #include "build_system.hpp"
+#include "autogen.hpp"
 #include "language.hpp"
 #include "toolchain.hpp"
 #include "module_scanner.hpp"
@@ -454,7 +455,7 @@ void Target::handle_circular_dep(
     if (dep.get_type() != TargetType::STATIC_LIBRARY &&
         dep.get_type() != TargetType::OBJECT_LIBRARY) {
         throw std::runtime_error(
-            "Circular dependency detected involving target: " + dep.get_name());
+            "Circular dependency: " + name_ + " -> " + dep.get_name());
     }
     dmake::print_message(std::cerr, "WARNING",
         "Circular dependency between static libraries '" + name_ +
@@ -492,7 +493,7 @@ void Target::resolve_deferred_circular_deps(
 
 void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp) {
     if (resolved_) return;
-    if (visiting_) throw std::runtime_error("Circular dependency detected involving target: " + name_);
+    if (visiting_) throw std::runtime_error("Circular dependency: " + name_);
     visiting_ = true;
 
     auto props_to_resolve = build_props_to_resolve();
@@ -533,7 +534,19 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
             return;
         }
 
-        dep->resolve(all_targets, interp);
+        try {
+            dep->resolve(all_targets, interp);
+        } catch (std::runtime_error& e) {
+            std::string_view msg = e.what();
+            constexpr std::string_view prefix = "Circular dependency: ";
+            if (msg.starts_with(prefix)) {
+                // Build the chain as the stack unwinds: each frame prepends itself.
+                // Seed is "X", first catch makes "C -> X", next "B -> C -> X", etc.
+                std::string chain(msg.substr(prefix.size()));
+                throw std::runtime_error(std::string(prefix) + name_ + " -> " + chain);
+            }
+            throw;
+        }
 
         // For building THIS target (PRIVATE or PUBLIC dep)
         if (!is_interface_only) {
@@ -663,6 +676,37 @@ std::string Target::get_output_path() const {
     }
 
     return dir.empty() ? path.string() : path.lexically_normal().string();
+}
+
+// --- Qt Autogen Helpers ---
+
+void Target::inject_autogen_include(const std::string& dir) {
+    // Prepend to resolved INCLUDE_DIRECTORIES so autogen headers are found first
+    auto& resolved = resolved_properties_["INCLUDE_DIRECTORIES"];
+    if (std::find(resolved.begin(), resolved.end(), dir) == resolved.end()) {
+        resolved.insert(resolved.begin(), dir);
+    }
+}
+
+void Target::inject_autogen_source(const std::string& path) {
+    append_property("SOURCES", {path}, PropertyVisibility::PRIVATE);
+}
+
+void Target::remove_source(const std::string& path) {
+    for (auto vis : {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE}) {
+        auto prop_it = list_properties_.find("SOURCES");
+        if (prop_it == list_properties_.end()) continue;
+        auto vis_it = prop_it->second.find(vis);
+        if (vis_it == prop_it->second.end()) continue;
+        std::erase_if(vis_it->second, [&](const std::string& s) {
+            // Match by exact path or by normalized absolute path
+            if (s == path) return true;
+            std::filesystem::path sp(s);
+            std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
+                : (std::filesystem::path(source_dir_) / sp).lexically_normal().string();
+            return abs == path;
+        });
+    }
 }
 
 // Strip trailing slashes to normalize include paths for comparison.
@@ -1212,7 +1256,18 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                     if (!dep_path.is_absolute()) {
                         dep_path = std::filesystem::path(source_dir_) / dep_path;
                     }
-                    task.inputs.push_back(dep_path.lexically_normal().string());
+                    std::string dep_normalized = dep_path.lexically_normal().string();
+                    task.inputs.push_back(dep_normalized);
+
+                    // If this dependency is produced by a custom command, ensure
+                    // the task for it is generated (e.g. qt6_generate_moc outputs)
+                    auto od_cc_it = custom_rules.find(dep_normalized);
+                    if (od_cc_it != custom_rules.end()) {
+                        if (!generated_custom_tasks.count(od_cc_it->second->outputs[0])) {
+                            generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules, generated_custom_tasks);
+                        }
+                        task.explicit_deps.push_back(od_cc_it->second->outputs[0]);
+                    }
                 }
             }
         }
@@ -1407,6 +1462,15 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         resolve_command_target_references(pre_build.commands, pre_build, all_targets);
 
         txn.add(std::move(pre_build));
+    }
+
+    // Qt autogen: generate moc/uic/rcc tasks before compilation.
+    // This scans sources/headers for Qt macros, creates moc/uic/rcc tasks,
+    // injects generated sources into SOURCES, and adds the autogen include dir.
+    if (!Interpreter::is_falsy(get_property("AUTOMOC")) ||
+        !Interpreter::is_falsy(get_property("AUTOUIC")) ||
+        !Interpreter::is_falsy(get_property("AUTORCC"))) {
+        generate_autogen_tasks(*this, txn, const_cast<Interpreter&>(interp), all_targets, pre_build_task_id);
     }
 
     // Read compiler default standards (for suppressing unnecessary -std= flags)

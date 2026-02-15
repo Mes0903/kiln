@@ -34,12 +34,16 @@ struct ModuleCollatorTask {};
 struct EPOrchestratorTask { std::string ep_name; };
 struct EPSentinelTask     { std::string ep_name; };
 struct EPInstallTask      { std::string ep_name; };
+struct MocTask            { std::string source_file; };
+struct UicTask            { std::string source_file; };
+struct RccTask            { std::string source_file; };
 
 using TaskKind = std::variant<
     CompileTask, PCHTask, LinkTask,
     CustomCommandTask, CustomTargetTask, PreBuildTask, PostBuildTask,
     ModuleScannerTask, ModuleCollatorTask,
-    EPOrchestratorTask, EPSentinelTask, EPInstallTask
+    EPOrchestratorTask, EPSentinelTask, EPInstallTask,
+    MocTask, UicTask, RccTask
 >;
 
 // Forward declarations
@@ -89,7 +93,10 @@ struct BuildTask {
     bool is_shell_command() const {
         return std::holds_alternative<CustomCommandTask>(kind)
             || std::holds_alternative<CustomTargetTask>(kind)
-            || std::holds_alternative<PostBuildTask>(kind);
+            || std::holds_alternative<PostBuildTask>(kind)
+            || std::holds_alternative<MocTask>(kind)
+            || std::holds_alternative<UicTask>(kind)
+            || std::holds_alternative<RccTask>(kind);
     }
 
     bool is_ep_task() const {
@@ -112,6 +119,9 @@ struct BuildTask {
             [](const CompileTask& t) -> std::string_view { return t.source_file; },
             [](const PCHTask& t) -> std::string_view { return t.source_file; },
             [](const ModuleScannerTask& t) -> std::string_view { return t.source_file; },
+            [](const MocTask& t) -> std::string_view { return t.source_file; },
+            [](const UicTask& t) -> std::string_view { return t.source_file; },
+            [](const RccTask& t) -> std::string_view { return t.source_file; },
             [](const auto&) -> std::string_view { return {}; }
         }, kind);
     }

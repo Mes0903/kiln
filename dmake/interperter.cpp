@@ -2821,9 +2821,14 @@ void Interpreter::finalize_directory_targets() {
     }
 
     for (const auto& target : ctx.owned_targets) {
+        // Imported targets are not affected by directory-level commands like
+        // link_libraries(), include_directories(), add_definitions(), etc.
+        // CMake only applies these to targets created with add_executable/add_library
+        // (non-IMPORTED) in the current directory scope.
+        if (target->is_imported()) continue;
+
         // Apply CMAKE_INCLUDE_CURRENT_DIR (binary dir first, then source dir — CMake order)
         if (include_current_dir &&
-            !target->is_imported() &&
             target->get_type() != TargetType::INTERFACE_LIBRARY) {
             std::string src_dir = get_variable("CMAKE_CURRENT_SOURCE_DIR");
             std::string bin_dir = get_variable("CMAKE_CURRENT_BINARY_DIR");

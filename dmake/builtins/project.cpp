@@ -227,6 +227,11 @@ void register_project_builtins(Interpreter& interp) {
 
         std::string project_name = args[0];
         interp.set_variable("PROJECT_NAME", project_name);
+
+        // CMAKE_PROJECT_NAME tracks the top-level project name
+        if (interp.get_variable("CMAKE_PROJECT_NAME").empty()) {
+            interp.set_variable("CMAKE_PROJECT_NAME", project_name);
+        }
         interp.set_variable("PROJECT_SOURCE_DIR", interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
         interp.set_variable("PROJECT_BINARY_DIR", interp.get_variable("CMAKE_CURRENT_BINARY_DIR"));
 
@@ -315,14 +320,21 @@ void register_project_builtins(Interpreter& interp) {
             }
 
             // Set version variables
+            bool is_top_level = (interp.get_variable("CMAKE_PROJECT_NAME") == project_name);
             interp.set_variable("PROJECT_VERSION", version);
             interp.set_variable(project_name + "_VERSION", version);
+            if (is_top_level) {
+                interp.set_variable("CMAKE_PROJECT_VERSION", version);
+            }
 
             const char* suffixes[] = {"_MAJOR", "_MINOR", "_PATCH", "_TWEAK"};
             for (size_t i = 0; i < 4; ++i) {
                 std::string value = (i < components.size()) ? components[i] : "";
                 interp.set_variable("PROJECT_VERSION" + std::string(suffixes[i]), value);
                 interp.set_variable(project_name + "_VERSION" + std::string(suffixes[i]), value);
+                if (is_top_level) {
+                    interp.set_variable("CMAKE_PROJECT_VERSION" + std::string(suffixes[i]), value);
+                }
             }
         }
     });

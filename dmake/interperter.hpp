@@ -89,6 +89,7 @@ struct InstallTargetsRule {
     InstallDestination runtime_dest;        // Executables
     InstallDestination public_header_dest;  // Public headers
     InstallDestination private_header_dest; // Private headers
+    InstallDestination bundle_dest;         // macOS app bundles (.app)
 };
 
 struct InstallFilesRule {

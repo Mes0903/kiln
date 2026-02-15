@@ -75,7 +75,7 @@ void parse_install_targets(
         const auto& arg = parse_args[i];
         // Stop at first keyword
         if (arg == "EXPORT" || arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
-            arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER" ||
+            arg == "BUNDLE" || arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER" ||
             arg == "DESTINATION" || arg == "PERMISSIONS" || arg == "CONFIGURATIONS" ||
             arg == "COMPONENT" || arg == "OPTIONAL" || arg == "EXCLUDE_FROM_ALL") {
             break;
@@ -121,11 +121,12 @@ void parse_install_targets(
             export_name = remaining_args[i + 1];
             i += 2;
         } else if (arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
-            arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER") {
+            arg == "BUNDLE" || arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER") {
             current_dest_type = arg;
             if (arg == "ARCHIVE") current_dest = &rule->archive_dest;
             else if (arg == "LIBRARY") current_dest = &rule->library_dest;
             else if (arg == "RUNTIME") current_dest = &rule->runtime_dest;
+            else if (arg == "BUNDLE") current_dest = &rule->bundle_dest;
             else if (arg == "PUBLIC_HEADER") current_dest = &rule->public_header_dest;
             else if (arg == "PRIVATE_HEADER") current_dest = &rule->private_header_dest;
             ++i;
@@ -160,6 +161,7 @@ void parse_install_targets(
             while (i < remaining_args.size() &&
                    remaining_args[i] != "EXPORT" && remaining_args[i] != "ARCHIVE" &&
                    remaining_args[i] != "LIBRARY" && remaining_args[i] != "RUNTIME" &&
+                   remaining_args[i] != "BUNDLE" &&
                    remaining_args[i] != "PUBLIC_HEADER" && remaining_args[i] != "PRIVATE_HEADER" &&
                    remaining_args[i] != "DESTINATION" && remaining_args[i] != "PERMISSIONS" &&
                    remaining_args[i] != "COMPONENT" && remaining_args[i] != "OPTIONAL" &&

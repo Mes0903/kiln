@@ -84,6 +84,7 @@ void register_find_package_builtins(Interpreter& interp) {
         bool no_module = false;
         bool quiet = false;
         std::vector<std::string> components;
+        std::vector<std::string> bare_components;
         std::vector<std::string> optional_components;
         std::vector<std::string> hints;
         std::vector<std::string> paths;
@@ -141,8 +142,16 @@ void register_find_package_builtins(Interpreter& interp) {
         parser.list("NAMES", names);
         parser.list("CONFIGS", configs);
         parser.value("REGISTRY_VIEW", registry_view);
+        // CMake treats bare args as implicit components
+        // e.g. find_package(Qt5 REQUIRED Gui Widgets QUIET)
+        parser.unparsed(bare_components);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // Merge bare components into components list
+        for (auto& c : bare_components) {
+            components.push_back(std::move(c));
+        }
 
         // --- Step 1: CMAKE_DISABLE_FIND_PACKAGE_<Name> ---
         std::string disable_var = interp.get_variable("CMAKE_DISABLE_FIND_PACKAGE_" + package_name);
@@ -784,6 +793,23 @@ void register_find_package_builtins(Interpreter& interp) {
             auto res = interp.include_file(found_path.string());
             if (!res) {
                 interp.set_fatal_error(res.error());
+                return;
+            }
+
+            // The config file may have set <Package>_FOUND to FALSE
+            // (e.g. Qt6Config.cmake does this when a required component is missing)
+            std::string post_found = interp.get_variable(found_var);
+            if (interp.is_falsy(post_found)) {
+                if (required) {
+                    std::string not_found_msg = interp.get_variable(package_name + "_NOT_FOUND_MESSAGE");
+                    std::string error_msg = "Could not find package " + package_name;
+                    if (!not_found_msg.empty()) {
+                        error_msg += ": " + not_found_msg;
+                    }
+                    interp.set_fatal_error(error_msg);
+                } else if (!quiet) {
+                    interp.print_message("STATUS", "Could not find package " + package_name + " (optional)");
+                }
                 return;
             }
 

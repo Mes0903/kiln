@@ -1,0 +1,3 @@
+project(FindPackageRequiredTest)
+
+find_package(ThisPackageLegitDoesNotExist123XYZ REQUIRED)
