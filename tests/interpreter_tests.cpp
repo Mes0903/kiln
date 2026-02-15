@@ -6151,7 +6151,7 @@ TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_propertie
 
     dmake::Parser parser(R"(
         add_definitions(-DFOO -DBAR=123)
-        add_executable(test test.cpp)
+        add_executable(mytest test.cpp)
     )");
     auto ast = parser.parse();
     REQUIRE(ast.has_value());
@@ -6162,9 +6162,9 @@ TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_propertie
 
     // Check that definitions were added without -D prefix
     auto& targets = interp.get_targets();
-    REQUIRE(targets.find("test") != targets.end());
+    REQUIRE(targets.find("mytest") != targets.end());
 
-    auto& target = targets["test"];
+    auto& target = targets["mytest"];
     const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
     REQUIRE(defs.size() == 2);
     REQUIRE(defs[0] == "FOO");
@@ -6183,7 +6183,7 @@ TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][direct
 
     dmake::Parser parser(R"(
         add_compile_definitions(FOO BAR=456)
-        add_executable(test test.cpp)
+        add_executable(mytest test.cpp)
     )");
     auto ast = parser.parse();
     REQUIRE(ast.has_value());
@@ -6193,7 +6193,7 @@ TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][direct
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
-    auto& target = targets["test"];
+    auto& target = targets["mytest"];
     const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
     REQUIRE(defs.size() == 2);
     REQUIRE(defs[0] == "FOO");
@@ -6212,7 +6212,7 @@ TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_pro
 
     dmake::Parser parser(R"(
         add_compile_options(-Wall -Werror)
-        add_executable(test test.cpp)
+        add_executable(mytest test.cpp)
     )");
     auto ast = parser.parse();
     REQUIRE(ast.has_value());
@@ -6222,7 +6222,7 @@ TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_pro
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
-    auto& target = targets["test"];
+    auto& target = targets["mytest"];
     const auto& opts = target->get_property_list("COMPILE_OPTIONS", dmake::PropertyVisibility::PRIVATE);
     REQUIRE(opts.size() == 2);
     REQUIRE(opts[0] == "-Wall");
@@ -6241,7 +6241,7 @@ TEST_CASE("add_link_options applies to targets", "[interpreter][directory_proper
 
     dmake::Parser parser(R"(
         add_link_options(-Wl,--as-needed)
-        add_executable(test test.cpp)
+        add_executable(mytest test.cpp)
     )");
     auto ast = parser.parse();
     REQUIRE(ast.has_value());
@@ -6251,7 +6251,7 @@ TEST_CASE("add_link_options applies to targets", "[interpreter][directory_proper
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
-    auto& target = targets["test"];
+    auto& target = targets["mytest"];
     const auto& opts = target->get_property_list("LINK_OPTIONS", dmake::PropertyVisibility::PRIVATE);
     REQUIRE(opts.size() == 1);
     REQUIRE(opts[0] == "-Wl,--as-needed");
@@ -6271,7 +6271,7 @@ TEST_CASE("link_libraries applies to targets", "[interpreter][directory_properti
     dmake::Parser parser(R"(
         add_library(mylib STATIC lib.cpp)
         link_libraries(mylib pthread)
-        add_executable(test test.cpp)
+        add_executable(mytest test.cpp)
     )");
     auto ast = parser.parse();
     REQUIRE(ast.has_value());
@@ -6282,7 +6282,7 @@ TEST_CASE("link_libraries applies to targets", "[interpreter][directory_properti
     REQUIRE(result.has_value());
 
     auto& targets = interp.get_targets();
-    auto& target = targets["test"];
+    auto& target = targets["mytest"];
     const auto& libs = target->get_property_list("LINK_LIBRARIES", dmake::PropertyVisibility::PRIVATE);
     // Check that required libs are present (may have duplicates due to creation + finalization)
     REQUIRE(libs.size() >= 2);
@@ -6345,7 +6345,7 @@ TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_p
         add_definitions(-DFOO=1)
         add_compile_definitions(BAR=2)
         add_compile_options(-Wall)
-        add_executable(test test.cpp)
+        add_executable(mytest test.cpp)
         add_definitions(-DBAZ=3)
     )");
     auto ast = parser.parse();
@@ -6358,7 +6358,7 @@ TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_p
     interp.finalize_directory_targets();
 
     auto& targets = interp.get_targets();
-    auto& target = targets["test"];
+    auto& target = targets["mytest"];
 
     const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
     REQUIRE(defs.size() >= 3);
