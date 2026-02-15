@@ -69,7 +69,7 @@ std::string Target::get_property(const std::string& name) const {
 void Target::append_property(const std::string& name, const std::vector<std::string>& values, PropertyVisibility visibility) {
     auto& list = list_properties_[name][visibility];
     for (const auto& v : values) {
-        for (auto item : CMakeArrayView(v)) {
+        for (auto item : CMakeArrayIterator(v)) {
             if (!item.empty()) list.emplace_back(item);
         }
     }
@@ -84,7 +84,7 @@ void Target::prepend_property(const std::string& name, const std::vector<std::st
     auto& list = list_properties_[name][visibility];
     std::vector<std::string> split;
     for (const auto& v : values) {
-        for (auto item : CMakeArrayView(v)) {
+        for (auto item : CMakeArrayIterator(v)) {
             if (!item.empty()) split.emplace_back(item);
         }
     }
@@ -575,7 +575,7 @@ void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_t
                     + name_ + "': " + eval_result.error());
             }
             if (!eval_result->value.empty()) {
-                for (auto part : CMakeArrayView(eval_result->value)) {
+                for (auto part : CMakeArrayIterator(eval_result->value)) {
                     process_one_dep(std::string(part), is_public,
                                    is_interface_only, eval_result->link_only);
                 }
@@ -964,7 +964,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                     auto eval_result = lang_eval.evaluate(val);
                     if (eval_result && !eval_result->empty()) {
                         // Genex may produce semicolon-separated lists
-                        for (auto sv : CMakeArrayView(*eval_result)) {
+                        for (auto sv : CMakeArrayIterator(*eval_result)) {
                             result.emplace_back(sv);
                         }
                     }
@@ -1192,7 +1192,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
             if (co_it != sp_it->second.end()) {
                 // Lazily construct per-source evaluator only if genex present
                 std::optional<GenexEvaluator> src_eval_storage;
-                for (auto sv : CMakeArrayView(co_it->second)) {
+                for (auto sv : CMakeArrayIterator(co_it->second)) {
                     std::string opt(sv);
                     if (GenexParser::contains_genex(opt)) {
                         if (!src_eval_storage) {
@@ -1203,7 +1203,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                         auto result = src_eval_storage->evaluate(opt);
                         if (result && !result->empty()) {
                             // Genex may produce semicolon-separated lists
-                            for (auto sv : CMakeArrayView(*result)) {
+                            for (auto sv : CMakeArrayIterator(*result)) {
                                 ctx.options.emplace_back(sv);
                             }
                         }
@@ -1215,14 +1215,14 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
 
             auto cd_it = sp_it->second.find("COMPILE_DEFINITIONS");
             if (cd_it != sp_it->second.end()) {
-                for (auto sv : CMakeArrayView(cd_it->second)) {
+                for (auto sv : CMakeArrayIterator(cd_it->second)) {
                     ctx.definitions.emplace_back(sv);
                 }
             }
 
             auto id_it = sp_it->second.find("INCLUDE_DIRECTORIES");
             if (id_it != sp_it->second.end()) {
-                for (auto sv : CMakeArrayView(id_it->second)) {
+                for (auto sv : CMakeArrayIterator(id_it->second)) {
                     ctx.includes.emplace_back(sv);
                 }
             }
@@ -1251,7 +1251,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         if (sp_it != source_props.end()) {
             auto od_it = sp_it->second.find("OBJECT_DEPENDS");
             if (od_it != sp_it->second.end()) {
-                for (auto sv : CMakeArrayView(od_it->second)) {
+                for (auto sv : CMakeArrayIterator(od_it->second)) {
                     std::filesystem::path dep_path(sv);
                     if (!dep_path.is_absolute()) {
                         dep_path = std::filesystem::path(source_dir_) / dep_path;
@@ -1499,7 +1499,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
                 auto eval_result = pch_evaluator.evaluate(val);
                 if (eval_result && !eval_result->empty()) {
                     // Genex may produce semicolon-separated lists
-                    for (auto sv : CMakeArrayView(*eval_result)) {
+                    for (auto sv : CMakeArrayIterator(*eval_result)) {
                         result.emplace_back(sv);
                     }
                 }

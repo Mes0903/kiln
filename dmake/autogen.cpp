@@ -386,7 +386,7 @@ void generate_autogen_tasks(
         std::string custom_macros = target.get_property("AUTOMOC_MACRO_NAMES");
         if (!custom_macros.empty()) {
             moc_macro_names.clear();
-            for (auto sv : CMakeArrayView(custom_macros)) {
+            for (auto sv : CMakeArrayIterator(custom_macros)) {
                 moc_macro_names.emplace_back(sv);
             }
         }
@@ -397,7 +397,7 @@ void generate_autogen_tasks(
     {
         std::string opts = target.get_property("AUTOMOC_MOC_OPTIONS");
         if (!opts.empty()) {
-            for (auto sv : CMakeArrayView(opts)) {
+            for (auto sv : CMakeArrayIterator(opts)) {
                 moc_options.emplace_back(sv);
             }
         }
@@ -407,7 +407,7 @@ void generate_autogen_tasks(
     {
         std::string opts = target.get_property("AUTOUIC_OPTIONS");
         if (!opts.empty()) {
-            for (auto sv : CMakeArrayView(opts)) {
+            for (auto sv : CMakeArrayIterator(opts)) {
                 target_uic_options.emplace_back(sv);
             }
         }
@@ -417,7 +417,7 @@ void generate_autogen_tasks(
     {
         std::string opts = target.get_property("AUTORCC_OPTIONS");
         if (!opts.empty()) {
-            for (auto sv : CMakeArrayView(opts)) {
+            for (auto sv : CMakeArrayIterator(opts)) {
                 target_rcc_options.emplace_back(sv);
             }
         }
@@ -428,7 +428,7 @@ void generate_autogen_tasks(
     {
         std::string paths = target.get_property("AUTOUIC_SEARCH_PATHS");
         if (!paths.empty()) {
-            for (auto sv : CMakeArrayView(paths)) {
+            for (auto sv : CMakeArrayIterator(paths)) {
                 uic_search_paths.emplace_back(sv);
             }
         }
@@ -761,7 +761,7 @@ void generate_autogen_tasks(
                     auto opts_it = ui_sp_it->second.find("AUTOUIC_OPTIONS");
                     if (opts_it != ui_sp_it->second.end()) {
                         uic_options.clear();
-                        for (auto sv : CMakeArrayView(opts_it->second)) {
+                        for (auto sv : CMakeArrayIterator(opts_it->second)) {
                             uic_options.emplace_back(sv);
                         }
                     }
@@ -837,7 +837,7 @@ void generate_autogen_tasks(
                 auto opts_it = sp_it->second.find("AUTORCC_OPTIONS");
                 if (opts_it != sp_it->second.end()) {
                     rcc_options.clear();
-                    for (auto sv : CMakeArrayView(opts_it->second)) {
+                    for (auto sv : CMakeArrayIterator(opts_it->second)) {
                         rcc_options.emplace_back(sv);
                     }
                 }

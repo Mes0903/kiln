@@ -1154,9 +1154,6 @@ void register_target_builtins(Interpreter& interp) {
         for (auto* target : targets) {
             // Helper to validate genex and append as INTERFACE property (uses append_property_from_string for splitting)
             auto parse_and_append_interface = [&](const std::string& base_prop_name, const std::string& value) {
-                // Split first to validate each item
-                CMakeArrayView items(value);
-
                 // EARLY VALIDATION (Layer 1) - validate genex support.
                 // Validate the full joined value since multi-line genex become fragments.
                 auto validation = GenexParser::validate_genex_support(value);
@@ -1166,7 +1163,7 @@ void register_target_builtins(Interpreter& interp) {
                     return;
                 }
 
-                if (!items.empty()) {
+                if (!value.empty()) {
                     target->append_property_from_string(base_prop_name, value, PropertyVisibility::INTERFACE);
                 }
             };
@@ -1364,7 +1361,7 @@ void register_target_builtins(Interpreter& interp) {
 
         for (const auto& arg : args) {
             // Split semicolons - CMake treats all args as lists
-            for (const auto& item : CMakeArrayView(arg)) {
+            for (const auto& item : CMakeArrayIterator(arg)) {
                 if (item.empty()) continue;
                 std::filesystem::path resolved = std::filesystem::path(item).is_absolute() ?
                     std::filesystem::path(item) :
@@ -1416,7 +1413,7 @@ void register_target_builtins(Interpreter& interp) {
         // Build set of items to remove (args may be semicolon-separated lists)
         std::set<std::string> to_remove;
         for (const auto& arg : args) {
-            for (auto sv : CMakeArrayView(arg)) {
+            for (auto sv : CMakeArrayIterator(arg)) {
                 std::string def(sv);
                 // Strip -D prefix if present (CMake compatibility)
                 if (def.size() >= 2 && def[0] == '-' && def[1] == 'D') {

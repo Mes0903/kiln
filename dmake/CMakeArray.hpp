@@ -96,4 +96,71 @@ private:
     std::string_view element_at(size_t i) const;
 };
 
+// Zero-allocation forward range for iterating semicolon-separated lists.
+// Unlike CMakeArrayView, does no pre-scanning or heap allocation.
+// Use this when you only need sequential iteration (95% of cases).
+class CMakeArrayIterator {
+public:
+    struct sentinel {};
+
+    class iterator {
+    public:
+        using value_type = std::string_view;
+        using difference_type = std::ptrdiff_t;
+
+        explicit iterator(std::string_view source)
+            : source_(source) {
+            if (source_.empty()) {
+                done_ = true;
+            } else {
+                find_end();
+            }
+        }
+
+        std::string_view operator*() const {
+            return source_.substr(pos_, end_ - pos_);
+        }
+
+        iterator& operator++() {
+            if (end_ >= source_.size()) {
+                done_ = true;
+            } else {
+                pos_ = end_ + 1;
+                find_end();
+            }
+            return *this;
+        }
+
+        friend bool operator==(const iterator& it, sentinel) { return it.done_; }
+        friend bool operator!=(const iterator& it, sentinel) { return !it.done_; }
+
+    private:
+        void find_end() {
+            end_ = pos_;
+            while (end_ < source_.size()) {
+                if (source_[end_] == '\\' && end_ + 1 < source_.size() && source_[end_ + 1] == ';') {
+                    end_ += 2;
+                } else if (source_[end_] == ';') {
+                    break;
+                } else {
+                    ++end_;
+                }
+            }
+        }
+
+        std::string_view source_;
+        size_t pos_ = 0;
+        size_t end_ = 0;
+        bool done_ = false;
+    };
+
+    explicit CMakeArrayIterator(std::string_view source) : source_(source) {}
+
+    iterator begin() const { return iterator(source_); }
+    sentinel end() const { return {}; }
+
+private:
+    std::string_view source_;
+};
+
 }

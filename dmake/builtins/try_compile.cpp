@@ -531,7 +531,7 @@ void register_try_compile_builtins(Interpreter& interp) {
                 // 2. Shell-style command line: -DFOO -DBAR "-DBAZ=hello world"
                 // 3. A mix: items separated by semicolons, each potentially space-separated
                 // First split on semicolons, then shell-split each item
-                for (auto list_item : CMakeArrayView(value)) {
+                for (auto list_item : CMakeArrayIterator(value)) {
                     // Shell-split this item to handle spaces and quotes
                     for (const auto& item : shell_split(list_item)) {
                         if (item.empty()) continue;
@@ -550,22 +550,22 @@ void register_try_compile_builtins(Interpreter& interp) {
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
-                for (auto lib : CMakeArrayView(value)) {
+                for (auto lib : CMakeArrayIterator(value)) {
                     link_libraries.emplace_back(lib);
                 }
             } else if (var_name == "LINK_DIRECTORIES") {
                 // Add to link options as -L flags
-                for (auto dir : CMakeArrayView(value)) {
+                for (auto dir : CMakeArrayIterator(value)) {
                     if (!dir.empty()) {
                         link_options.push_back(std::string("-L").append(dir));
                     }
                 }
             } else if (var_name == "LINK_OPTIONS") {
-                for (auto opt : CMakeArrayView(value)) {
+                for (auto opt : CMakeArrayIterator(value)) {
                     link_options.emplace_back(opt);
                 }
             } else if (var_name == "INCLUDE_DIRECTORIES") {
-                for (auto dir : CMakeArrayView(value)) {
+                for (auto dir : CMakeArrayIterator(value)) {
                     if (!dir.empty()) {
                         raw_compile_flags.push_back("-I" + std::string(dir));
                     }
@@ -1069,7 +1069,7 @@ void register_try_compile_builtins(Interpreter& interp) {
                 // 2. Shell-style command line: -DFOO -DBAR "-DBAZ=hello world"
                 // 3. A mix: items separated by semicolons, each potentially space-separated
                 // First split on semicolons, then shell-split each item
-                for (auto list_item : CMakeArrayView(value)) {
+                for (auto list_item : CMakeArrayIterator(value)) {
                     // Shell-split this item to handle spaces and quotes
                     for (const auto& item : shell_split(list_item)) {
                         if (item.empty()) continue;
@@ -1087,17 +1087,17 @@ void register_try_compile_builtins(Interpreter& interp) {
                     }
                 }
             } else if (var_name == "LINK_LIBRARIES") {
-                for (auto lib : CMakeArrayView(value)) {
+                for (auto lib : CMakeArrayIterator(value)) {
                     link_libraries.emplace_back(lib);
                 }
             } else if (var_name == "LINK_DIRECTORIES") {
-                for (auto dir : CMakeArrayView(value)) {
+                for (auto dir : CMakeArrayIterator(value)) {
                     if (!dir.empty()) {
                         link_options.push_back(std::string("-L").append(dir));
                     }
                 }
             } else if (var_name == "LINK_OPTIONS") {
-                for (auto opt : CMakeArrayView(value)) {
+                for (auto opt : CMakeArrayIterator(value)) {
                     link_options.emplace_back(opt);
                 }
             }
@@ -1421,7 +1421,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         if (is_cross_compiling) {
             std::string emulator = interp.get_variable("CMAKE_CROSSCOMPILING_EMULATOR");
             if (!emulator.empty()) {
-                for (auto part : CMakeArrayView(emulator)) {
+                for (auto part : CMakeArrayIterator(emulator)) {
                     run_cmd.emplace_back(part);
                 }
             }

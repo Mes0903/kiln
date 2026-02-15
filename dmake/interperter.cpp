@@ -863,7 +863,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE", staging_prefix);
 
         int icount = 0, scount = 0;
-        CMakeArrayView path_view(system_prefix_path);
+        CMakeArrayIterator path_view(system_prefix_path);
         for (auto entry : path_view) {
             if (!install_prefix.empty() && entry == install_prefix) ++icount;
             if (!staging_prefix.empty() && entry == staging_prefix) ++scount;
@@ -920,7 +920,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE", staging_prefix);
 
             int icount = 0, scount = 0;
-            CMakeArrayView path_view(sys_prefix_path);
+            CMakeArrayIterator path_view(sys_prefix_path);
             for (auto entry : path_view) {
                 if (!install_prefix.empty() && entry == install_prefix) ++icount;
                 if (!staging_prefix.empty() && entry == staging_prefix) ++scount;
@@ -1544,7 +1544,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         // If not found, search CMAKE_MODULE_PATH
         if (!found_path) {
             auto module_path_str = get_variable("CMAKE_MODULE_PATH");
-            for (auto dir : CMakeArrayView(module_path_str)) {
+            for (auto dir : CMakeArrayIterator(module_path_str)) {
                 if (!dir.empty()) {
                     found_path = find_in_dir(dir, file_path);
                     if (found_path) break;
@@ -1869,7 +1869,7 @@ std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argumen
             }
 
             // Split by semicolon for unquoted arguments (list expansion)
-            for (auto item : CMakeArrayView(val)) {
+            for (auto item : CMakeArrayIterator(val)) {
                 // CMake removes empty elements when expanding variable references
                 if (has_var_ref && item.empty()) {
                     continue;
@@ -1972,7 +1972,7 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
                     continue;  // Skip this argument (elision)
                 }
                 // Split semicolon-separated lists into separate arguments
-                for (auto item : CMakeArrayView(val)) {
+                for (auto item : CMakeArrayIterator(val)) {
                     if (item.empty()) continue;
                     Argument new_arg;
                     new_arg.quoted = false;

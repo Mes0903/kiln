@@ -454,7 +454,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             // Recursively evaluate any nested genex in individual list elements
             if (prop_value.find("$<") != std::string::npos) {
                 std::string result;
-                for (auto sv : CMakeArrayView(prop_value)) {
+                for (auto sv : CMakeArrayIterator(prop_value)) {
                     auto eval = evaluate(std::string(sv));
                     if (!eval) return eval;
                     if (!eval->empty()) {
@@ -700,7 +700,7 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
                 // This allows:
                 //   - $<1:-Wall -Wextra> to expand into multiple separate flags
                 //   - $<$<BOOL:ON>:${LIST_VAR}> to expand semicolon-separated lists
-                for (auto sv : CMakeArrayView(*eval_result)) {
+                for (auto sv : CMakeArrayIterator(*eval_result)) {
                     // Further split by whitespace
                     std::istringstream iss{std::string(sv)};
                     std::string token;

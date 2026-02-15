@@ -192,7 +192,7 @@ void register_find_package_builtins(Interpreter& interp) {
                 // Save per-component FIND_REQUIRED vars
                 std::string comps = interp.get_variable(pkg + "_FIND_COMPONENTS");
                 if (!comps.empty()) {
-                    for (auto c : CMakeArrayView(comps)) {
+                    for (auto c : CMakeArrayIterator(comps)) {
                         std::string n = std::string(pkg) + "_FIND_REQUIRED_" + std::string(c);
                         saved.emplace_back(n, interp.get_variable(n));
                     }
@@ -349,7 +349,7 @@ void register_find_package_builtins(Interpreter& interp) {
             if (module_path_var.empty()) return false;
 
             std::string module_filename = "Find" + package_name + ".cmake";
-            for (auto path_sv : CMakeArrayView(module_path_var)) {
+            for (auto path_sv : CMakeArrayIterator(module_path_var)) {
                 std::filesystem::path path(path_sv);
                 if (interp.cached_file_exists(path, module_filename)) {
                     if (try_find_module(path / module_filename)) return true;
@@ -514,7 +514,7 @@ void register_find_package_builtins(Interpreter& interp) {
                 bool use = use_var.empty() || !interp.is_falsy(use_var);
                 if (use) {
                     std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
-                    for (auto p : CMakeArrayView(prefix_path)) {
+                    for (auto p : CMakeArrayIterator(prefix_path)) {
                         expand_prefix(std::string(p));
                     }
                 }
@@ -599,7 +599,7 @@ void register_find_package_builtins(Interpreter& interp) {
                     // CMAKE_SYSTEM_PREFIX_PATH if set
                     std::string sys_prefix = interp.get_variable("CMAKE_SYSTEM_PREFIX_PATH");
                     if (!sys_prefix.empty()) {
-                        for (auto p : CMakeArrayView(sys_prefix)) {
+                        for (auto p : CMakeArrayIterator(sys_prefix)) {
                             expand_prefix(std::string(p));
                         }
                     }

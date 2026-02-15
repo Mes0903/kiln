@@ -208,7 +208,7 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
                         "  Error: " + eval.error());
                 }
                 if (!eval->empty()) {
-                    for (auto sv : CMakeArrayView(*eval)) {
+                    for (auto sv : CMakeArrayIterator(*eval)) {
                         evaluated_cmd.emplace_back(sv);
                     }
                 }

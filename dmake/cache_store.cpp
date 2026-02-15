@@ -1,6 +1,5 @@
 #include "cache_store.hpp"
 #include <fstream>
-#include <sstream>
 #include <iostream>
 #include "glaze/glaze.hpp"
 
@@ -19,15 +18,16 @@ std::expected<void, std::string> CacheStore::load() {
         return {};
     }
 
-    // Read file contents
-    std::ifstream file(cache_file_);
+    // Read file directly into string (no stringstream double-copy)
+    std::ifstream file(cache_file_, std::ios::ate | std::ios::binary);
     if (!file) {
         return std::unexpected("Failed to open cache file: " + cache_file_.string());
     }
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string json_str = buffer.str();
+    auto file_size = file.tellg();
+    file.seekg(0);
+    std::string json_str(static_cast<size_t>(file_size), '\0');
+    file.read(json_str.data(), file_size);
 
     // Parse JSON using Glaze
     auto parse_result = glz::read_json(cache_data_, json_str);
