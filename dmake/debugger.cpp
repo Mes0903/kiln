@@ -584,7 +584,7 @@ std::pair<std::string, size_t> Debugger::selected_file_row() const {
     if (idx < 0 || idx >= static_cast<int>(stack.size())) {
         return {current_file_, current_row_};
     }
-    return {stack[idx].file, stack[idx].row};
+    return {stack[idx].file ? *stack[idx].file : std::string(), stack[idx].row};
 }
 
 bool Debugger::select_frame(int n) {
@@ -601,9 +601,8 @@ void Debugger::show_selected_frame() {
     auto& stack = interp_.get_trace_stack();
     int idx = static_cast<int>(stack.size()) - 1 - selected_frame_;
     auto [file, row] = selected_file_row();
-    std::string cmd_name = stack[idx].command;
     std::cerr << "#" << selected_frame_ << "  "
-              << file << ":" << row << "  " << cmd_name << "\n";
+              << file << ":" << row << "  " << stack[idx].command << "\n";
     show_source_context(file, row);
 }
 
@@ -661,7 +660,7 @@ void Debugger::show_backtrace() {
         const auto& frame = stack[i];
         char marker = (frame_num == selected_frame_) ? '>' : ' ';
         std::cerr << marker << " #" << frame_num << "  "
-                  << frame.file << ":" << frame.row
+                  << (frame.file ? *frame.file : std::string()) << ":" << frame.row
                   << "  " << frame.command << "\n";
     }
 }

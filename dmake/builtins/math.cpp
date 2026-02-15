@@ -97,7 +97,7 @@ private:
     int64_t parse_shift() {
         int64_t left = parse_additive();
         while (peek() == "<<" || peek() == ">>") {
-            std::string op = consume();
+            auto op = consume();
             int64_t right = parse_additive();
             if (op == "<<") left <<= right;
             else left >>= right;
@@ -108,7 +108,7 @@ private:
     int64_t parse_additive() {
         int64_t left = parse_multiplicative();
         while (peek() == "+" || peek() == "-") {
-            std::string op = consume();
+            auto op = consume();
             int64_t right = parse_multiplicative();
             if (op == "+") left += right;
             else left -= right;
@@ -119,7 +119,7 @@ private:
     int64_t parse_multiplicative() {
         int64_t left = parse_unary();
         while (peek() == "*" || peek() == "/" || peek() == "%") {
-            std::string op = consume();
+            auto op = consume();
             int64_t right = parse_unary();
             if (op == "*") left *= right;
             else if (op == "/") {
@@ -148,7 +148,7 @@ private:
     }
 
     int64_t parse_primary() {
-        std::string t = consume();
+        auto t = consume();
         if (t == "(") {
             int64_t result = parse_bitwise_or();
             if (consume() != ")") throw std::runtime_error("Expected ')'");
@@ -156,21 +156,23 @@ private:
         }
 
         try {
-            if (t.size() > 2 && (t[0] == '0' && (t[1] == 'x' || t[1] == 'X'))) {
-                return std::stoll(t, nullptr, 16);
+            // stoll needs a null-terminated string; t is a view into tokens_
+            std::string ts(t);
+            if (ts.size() > 2 && (ts[0] == '0' && (ts[1] == 'x' || ts[1] == 'X'))) {
+                return std::stoll(ts, nullptr, 16);
             }
-            return std::stoll(t, nullptr, 10);
+            return std::stoll(ts, nullptr, 10);
         } catch (...) {
-            throw std::runtime_error("Invalid number: " + t);
+            throw std::runtime_error("Invalid number: " + std::string(t));
         }
     }
 
-    std::string peek() {
+    std::string_view peek() const {
         if (token_pos_ < tokens_.size()) return tokens_[token_pos_];
-        return "";
+        return {};
     }
 
-    std::string consume() {
+    std::string_view consume() {
         if (token_pos_ < tokens_.size()) return tokens_[token_pos_++];
         throw std::runtime_error("Unexpected end of expression");
     }

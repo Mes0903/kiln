@@ -18,6 +18,7 @@
 #include "intercept/fetch_content.hpp"
 #include "condition_evaluator.hpp"
 #include "CMakeArray.hpp"
+#include <cassert>
 
 namespace dmake {
 
@@ -1309,8 +1310,11 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                      Interpreter* root = interp.get_root();
                      if (!root->trace_stack_.empty()) {
                          // For parse errors during EVAL, the current command (cmake_language)
-                         // should be part of the backtrace.
-                         backtrace = root->trace_stack_;
+                         // should be part of the backtrace. Convert TraceEntry → CallLocation.
+                         backtrace.reserve(root->trace_stack_.size());
+                         for (const auto& te : root->trace_stack_) {
+                             backtrace.push_back({te.file ? *te.file : std::string(), te.row, te.col, te.offset, te.length, std::string(te.command)});
+                         }
                      }
                      InterpreterError err{"<EVAL>", ast.error().row, ast.error().col, ast.error().offset, ast.error().length, "cmake_language(EVAL) parse error: " + ast.error().reason, backtrace, code};
                      interp.set_fatal_error(err);
@@ -1806,12 +1810,14 @@ void Interpreter::set_fatal_error(const std::string& message) {
     std::vector<CallLocation> backtrace;
     if (!root->trace_stack_.empty()) {
         // The last element is the current command, we want everything BEFORE it as backtrace
+        // Convert TraceEntry (non-owning) → CallLocation (owning) for the error
         for (size_t i = 0; i < root->trace_stack_.size() - 1; ++i) {
-            backtrace.push_back(root->trace_stack_[i]);
+            const auto& te = root->trace_stack_[i];
+            backtrace.push_back({te.file ? *te.file : std::string(), te.row, te.col, te.offset, te.length, std::string(te.command)});
         }
 
         const auto& current = root->trace_stack_.back();
-        set_fatal_error(InterpreterError{current.file, current.row, current.col, current.offset, current.length, message, backtrace});
+        set_fatal_error(InterpreterError{current.file ? *current.file : std::string(), current.row, current.col, current.offset, current.length, message, backtrace});
     } else {
         set_fatal_error(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, message, {}});
     }
@@ -1879,7 +1885,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
 
     // Push to backtrace stack
     Interpreter* root = get_root();
-    root->trace_stack_.push_back({current_file_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
+    root->trace_stack_.push_back({current_file_interned_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
 
     // Expand arguments once
     std::vector<std::string> expanded_args = expand_arguments(cmd.arguments);
@@ -1895,18 +1901,25 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     if (!res) {
         if (auto err = get_fatal_error()) {
              // The error is already set, just clean up stack and return it
-             safe_pop_trace_stack("error in: " + cmd.identifier);
+             pop_trace_stack();
              return std::unexpected(*err);
         }
     }
 
-    safe_pop_trace_stack("command: " + cmd.identifier);
+    pop_trace_stack();
     return res;
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_command_with_args(const std::string& identifier, const std::vector<std::string>& args) {
     Interpreter* root = get_root();
-    std::string lower_identifier = to_lower(identifier);
+
+    // Fast path: check if already lowercase (common case) to avoid allocation
+    bool is_lower = true;
+    for (char c : identifier) {
+        if (c >= 'A' && c <= 'Z') { is_lower = false; break; }
+    }
+    thread_local std::string lower_buf;
+    const std::string& lower_identifier = is_lower ? identifier : (lower_buf = to_lower(identifier), lower_buf);
 
     auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
@@ -1933,7 +1946,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
 
 std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBlock& if_block) {
     Interpreter* root = get_root();
-    root->trace_stack_.push_back({current_file_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
+    root->trace_stack_.push_back({current_file_interned_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
 
     // CMake argument elision and list expansion: Remove arguments that evaluate
     // to empty strings, and split semicolon-separated lists into separate arguments
@@ -1971,40 +1984,53 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
         return filtered;
     };
 
-    auto filtered_condition = filter_empty_args(if_block.condition);
-    auto cond_result = evaluate_condition(filtered_condition, if_block.row, if_block.col, if_block.offset, if_block.length);
+    // Fast path: skip filtering if no unquoted variable references exist
+    auto needs_filtering = [](const std::vector<Argument>& args) -> bool {
+        for (const auto& arg : args) {
+            if (arg.quoted) continue;
+            for (const auto& part : arg.parts) {
+                if (std::holds_alternative<VariableReference>(part)) return true;
+            }
+        }
+        return false;
+    };
+
+    const auto& condition_to_eval = needs_filtering(if_block.condition)
+        ? filter_empty_args(if_block.condition) : if_block.condition;
+    auto cond_result = evaluate_condition(condition_to_eval, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
         set_fatal_error(cond_result.error());
-        safe_pop_trace_stack("if block condition error");
+        pop_trace_stack();
         return std::unexpected(cond_result.error());
     }
 
     if (cond_result.value()) {
         auto res = interpret(if_block.then_branch);
         if (!res) set_fatal_error(res.error());
-        safe_pop_trace_stack("if block");
+        pop_trace_stack();
         return res;
     }
 
     for (const auto& elseif : if_block.elseif_branches) {
-        auto filtered_elseif_cond = filter_empty_args(elseif.condition);
-        auto elseif_cond = evaluate_condition(filtered_elseif_cond, elseif.row, elseif.col, elseif.offset, elseif.length);
+        const auto& elseif_cond_to_eval = needs_filtering(elseif.condition)
+            ? filter_empty_args(elseif.condition) : elseif.condition;
+        auto elseif_cond = evaluate_condition(elseif_cond_to_eval, elseif.row, elseif.col, elseif.offset, elseif.length);
         if (!elseif_cond) {
             set_fatal_error(elseif_cond.error());
-            safe_pop_trace_stack("elseif block condition error");
+            pop_trace_stack();
             return std::unexpected(elseif_cond.error());
         }
         if (elseif_cond.value()) {
             auto res = interpret(elseif.body);
             if (!res) set_fatal_error(res.error());
-            safe_pop_trace_stack("elseif block");
+            pop_trace_stack();
             return res;
         }
     }
 
     auto res = interpret(if_block.else_branch);
     if (!res) set_fatal_error(res.error());
-    safe_pop_trace_stack("if block");
+    pop_trace_stack();
     return res;
 }
 
@@ -2061,7 +2087,7 @@ std::expected<void, InterpreterError> Interpreter::execute_macro_block(const Mac
 
 std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const ForeachBlock& block) {
     Interpreter* root = get_root();
-    root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "foreach"});
+    root->trace_stack_.push_back({current_file_interned_, block.row, block.col, block.offset, block.length, "foreach"});
 
     // Handle ZIP_LISTS mode separately due to different variable handling
     if (std::holds_alternative<ForeachZipLists>(block.params)) {
@@ -2145,7 +2171,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
                         set_variable(saved_vars[j].first, "");
                     }
                 }
-                safe_pop_trace_stack("foreach zip_lists body error");
+                pop_trace_stack();
                 return res;
             }
 
@@ -2169,7 +2195,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
             std::abort();
         }
         loop_depth_--;
-        safe_pop_trace_stack("foreach zip_lists");
+        pop_trace_stack();
         return {};
     }
 
@@ -2212,7 +2238,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
             set_fatal_error("Step cannot be zero");
             auto err = get_fatal_error();
             clear_fatal_error();
-            safe_pop_trace_stack("foreach step=0 error");
+            pop_trace_stack();
             return std::unexpected(*err);
         }
         for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
@@ -2238,7 +2264,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
             } else {
                 set_variable(loop_var_name, "");
             }
-            safe_pop_trace_stack("foreach body error");
+            pop_trace_stack();
             return res;
         }
         if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
@@ -2260,13 +2286,13 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         std::abort();
     }
     loop_depth_--;
-    safe_pop_trace_stack("foreach");
+    pop_trace_stack();
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_while_block(const WhileBlock& block) {
     Interpreter* root = get_root();
-    root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "while"});
+    root->trace_stack_.push_back({current_file_interned_, block.row, block.col, block.offset, block.length, "while"});
 
     loop_depth_++;
 
@@ -2275,7 +2301,7 @@ std::expected<void, InterpreterError> Interpreter::execute_while_block(const Whi
         auto cond_result = evaluate_condition(block.condition, block.row, block.col, block.offset, block.length);
         if (!cond_result) {
             loop_depth_--;
-            safe_pop_trace_stack("while condition error");
+            pop_trace_stack();
             return std::unexpected(cond_result.error());
         }
 
@@ -2288,7 +2314,7 @@ std::expected<void, InterpreterError> Interpreter::execute_while_block(const Whi
         auto res = interpret(block.body);
         if (!res) {
             loop_depth_--;
-            safe_pop_trace_stack("while body error");
+            pop_trace_stack();
             return res;
         }
 
@@ -2298,13 +2324,13 @@ std::expected<void, InterpreterError> Interpreter::execute_while_block(const Whi
     }
 
     loop_depth_--;
-    safe_pop_trace_stack("while");
+    pop_trace_stack();
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_block_block(const BlockBlock& block) {
     Interpreter* root = get_root();
-    root->trace_stack_.push_back({current_file_, block.row, block.col, block.offset, block.length, "block"});
+    root->trace_stack_.push_back({current_file_interned_, block.row, block.col, block.offset, block.length, "block"});
 
     // Create a new variable scope if SCOPE_FOR VARIABLES is set
     if (block.scope_for_variables) {
@@ -2337,19 +2363,19 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
         }
 
         if (!res) {
-            safe_pop_trace_stack("block error");
+            pop_trace_stack();
             return res;
         }
     } else {
         // No variable scope, just execute the body
         auto res = interpret(block.body);
         if (!res) {
-            safe_pop_trace_stack("block error");
+            pop_trace_stack();
             return res;
         }
     }
 
-    safe_pop_trace_stack("block");
+    pop_trace_stack();
     return {};
 }
 
@@ -2360,30 +2386,50 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     // Push variable scope
     variables_.push_scope();
 
-    // Set function parameters
-    CMakeArray all(args);
-    variables_.set("ARGC", std::to_string(all.size()));
-    variables_.set("ARGV", all.to_string());
-    variables_.set("ARGN", all.sublist(func.parameters.size(), all.size()).to_string());
-    for (size_t i = 0; i < all.size(); ++i) {
-        variables_.set("ARGV" + std::to_string(i), all[i]);
-    }
-    for (size_t i = 0; i < func.parameters.size() && i < all.size(); ++i) {
-        variables_.set(func.parameters[i], all[i]);
-    }
+    // Set function parameters — build ARGV/ARGN strings directly from args
+    variables_.set("ARGC", std::to_string(args.size()));
 
+    // ARGV: join all args with semicolons
+    std::string argv_str;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) argv_str += ';';
+        argv_str += args[i];
+    }
+    variables_.set("ARGV", std::move(argv_str));
+
+    // ARGN: join args past the declared parameters
+    std::string argn_str;
+    for (size_t i = func.parameters.size(); i < args.size(); ++i) {
+        if (i > func.parameters.size()) argn_str += ';';
+        argn_str += args[i];
+    }
+    variables_.set("ARGN", std::move(argn_str));
+
+    // ARGVn and named parameters
+    for (size_t i = 0; i < args.size(); ++i) {
+        variables_.set("ARGV" + std::to_string(i), args[i]);
+    }
+    for (size_t i = 0; i < func.parameters.size() && i < args.size(); ++i) {
+        variables_.set(func.parameters[i], args[i]);
+    }
 
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
     std::string saved_file = current_file_;
     // Save and clear macro substitutions - functions create a new scope so outer
-    // macro parameters should not bleed into the function's variable lookups
-    std::map<std::string, std::string> saved_macro_substitutions = macro_substitutions_;
-    macro_substitutions_.clear();
+    // macro parameters should not bleed into the function's variable lookups.
+    // Skip save/restore when empty (common case — no macros in scope).
+    bool had_macro_subs = !macro_substitutions_.empty();
+    std::map<std::string, std::string> saved_macro_substitutions;
+    if (had_macro_subs) {
+        saved_macro_substitutions = std::move(macro_substitutions_);
+        macro_substitutions_.clear();
+    }
 
     loop_depth_ = 0;
     loop_control_ = LoopControl::NONE;
     current_file_ = func.definition_file;
+    current_file_interned_ = intern_file(current_file_);
 
     if (debugger_) debugger_->push_call_depth();
 
@@ -2404,16 +2450,21 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
 
     // Clean up any deferred function deletions we've passed
     Interpreter* root = get_root();
-    std::erase_if(root->deferred_function_deletions_, [&](const auto& entry) {
-        return root->frame_stack_.size() <= entry.first;
-    });
+    if (!root->deferred_function_deletions_.empty()) {
+        std::erase_if(root->deferred_function_deletions_, [&](const auto& entry) {
+            return root->frame_stack_.size() <= entry.first;
+        });
+    }
 
     if (!res) set_fatal_error(res.error());
 
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
     current_file_ = saved_file;
-    macro_substitutions_ = saved_macro_substitutions;
+    current_file_interned_ = intern_file(current_file_);
+    if (had_macro_subs) {
+        macro_substitutions_ = std::move(saved_macro_substitutions);
+    }
     return res;
 }
 
@@ -2440,19 +2491,33 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     // Save and set up macro parameter substitutions (text-replacement, not variables)
     std::map<std::string, std::string> saved_substitutions = macro_substitutions_;
 
-    CMakeArray all(args);
-    macro_substitutions_["ARGC"] = std::to_string(all.size());
-    macro_substitutions_["ARGV"] = all.to_string();
-    macro_substitutions_["ARGN"] = all.sublist(macro.parameters.size(), all.size()).to_string();
-    for (size_t i = 0; i < all.size(); ++i) {
-        macro_substitutions_["ARGV" + std::to_string(i)] = all[i];
+    // Build ARGC/ARGV/ARGN directly from args (avoid CMakeArray construction)
+    macro_substitutions_["ARGC"] = std::to_string(args.size());
+
+    std::string argv_str;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) argv_str += ';';
+        argv_str += args[i];
     }
-    for (size_t i = 0; i < macro.parameters.size() && i < all.size(); ++i) {
-        macro_substitutions_[macro.parameters[i]] = all[i];
+    macro_substitutions_["ARGV"] = std::move(argv_str);
+
+    std::string argn_str;
+    for (size_t i = macro.parameters.size(); i < args.size(); ++i) {
+        if (i > macro.parameters.size()) argn_str += ';';
+        argn_str += args[i];
+    }
+    macro_substitutions_["ARGN"] = std::move(argn_str);
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        macro_substitutions_["ARGV" + std::to_string(i)] = args[i];
+    }
+    for (size_t i = 0; i < macro.parameters.size() && i < args.size(); ++i) {
+        macro_substitutions_[macro.parameters[i]] = args[i];
     }
 
     std::string saved_file = current_file_;
     current_file_ = macro.definition_file;
+    current_file_interned_ = intern_file(current_file_);
 
     // Track macro execution depth for deferred deletion
     Interpreter* root = get_root();
@@ -2466,14 +2531,17 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     // Decrement and cleanup deferred deletions
     int& depth = root->macro_execution_depth_[lower_name];
     --depth;
-    std::erase_if(root->deferred_macro_deletions_, [&lower_name, depth](const auto& entry) {
-        return entry.name == lower_name && entry.depth > static_cast<size_t>(depth);
-    });
+    if (!root->deferred_macro_deletions_.empty()) {
+        std::erase_if(root->deferred_macro_deletions_, [&lower_name, depth](const auto& entry) {
+            return entry.name == lower_name && entry.depth > static_cast<size_t>(depth);
+        });
+    }
     if (depth == 0) {
         root->macro_execution_depth_.erase(lower_name);
     }
 
     current_file_ = saved_file;
+    current_file_interned_ = intern_file(current_file_);
     if (!res) set_fatal_error(res.error());
 
     // Restore macro substitutions
@@ -2644,20 +2712,19 @@ bool Interpreter::unset_variable(const std::string& name) {
 }
 
 bool Interpreter::is_variable_set(std::string_view name) const {
-    // Check macro substitutions first
-    // Note: macro_substitutions_ is std::map<string,string>, need string for lookup
-    if (auto it = macro_substitutions_.find(std::string(name)); it != macro_substitutions_.end()) {
-        return true;
+    // Check macro substitutions first (skip when empty — common case for non-macro code)
+    if (!macro_substitutions_.empty()) {
+        if (auto it = macro_substitutions_.find(std::string(name)); it != macro_substitutions_.end()) {
+            return true;
+        }
     }
 
     // Check local variables (O(1) via ShadowMap with transparent lookup)
-    // ShadowMap now handles all scoping including subdirectory scope
     if (variables_.is_defined(name)) {
         return true;
     }
 
     // Check cache variables
-    // Note: cache_variables_ is std::map<string,string>, need string for lookup
     return cache_variables_.contains(std::string(name));
 }
 
@@ -2668,9 +2735,11 @@ std::optional<std::string> Interpreter::get_optional_variable(std::string_view n
     }
 
     // Check macro substitutions first (macro parameters take precedence)
-    // Note: macro_substitutions_ is std::map<string,string>, need string for lookup
-    if (auto macro_it = macro_substitutions_.find(std::string(name)); macro_it != macro_substitutions_.end()) {
-        return macro_it->second;
+    // Skip when empty — common case for non-macro code paths
+    if (!macro_substitutions_.empty()) {
+        if (auto macro_it = macro_substitutions_.find(std::string(name)); macro_it != macro_substitutions_.end()) {
+            return macro_it->second;
+        }
     }
 
     // Function-scoped special variables (lazy evaluation - check current frame only)
@@ -2799,13 +2868,9 @@ void Interpreter::check_invariants() const {
     }
 }
 
-void Interpreter::safe_pop_trace_stack(const std::string& context) {
-    Interpreter* root = get_root();
-    if (root->trace_stack_.empty()) {
-        std::cerr << "FATAL: Attempting to pop empty trace_stack_ in context: " << context << "\n";
-        std::cerr << "       This indicates a push/pop imbalance in the interpreter\n";
-        std::abort();
-    }
+void Interpreter::pop_trace_stack() {
+    auto* root = get_root();
+    assert(!root->trace_stack_.empty() && "push/pop imbalance in trace_stack_");
     root->trace_stack_.pop_back();
 }
 

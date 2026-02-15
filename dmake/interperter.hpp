@@ -190,6 +190,18 @@ struct DirectoryContext {
     int next_deferred_id = 0;                                         // Auto-increment for ID generation
 };
 
+// Lightweight trace stack entry — avoids copying file paths and command names.
+// file points into the interpreter's interned_files_ set; command is a view into
+// the AST node's identifier (valid while the node's body is executing).
+struct TraceEntry {
+    const std::string* file;        // non-owning pointer into intern pool
+    size_t row;
+    size_t col;
+    size_t offset;
+    size_t length;
+    std::string_view command;       // non-owning view into AST node
+};
+
 class Interpreter {
 public:
     using BuiltinFunction = std::function<void(Interpreter&, const std::vector<std::string>&)>;
@@ -209,7 +221,10 @@ public:
     std::string evaluate_argument(const Argument& arg);
     std::vector<std::string> expand_arguments(const std::vector<Argument>& args);
 
-    void set_current_file(const std::string& file) { current_file_ = file; }
+    void set_current_file(const std::string& file) {
+        current_file_ = file;
+        current_file_interned_ = intern_file(file);
+    }
     std::string get_current_file() const { return current_file_; }
 
     // Force color output even when writing to non-TTY (for child interpreters)
@@ -402,7 +417,7 @@ public:
 
     // Debug/validation helpers
     void check_invariants() const;
-    void safe_pop_trace_stack(const std::string& context);
+    void pop_trace_stack();
 
     // Call a user-defined function by name (returns false if function doesn't exist or execution failed)
     bool call_user_function(const std::string& name, const std::vector<std::string>& args);
@@ -425,7 +440,7 @@ public:
     const Interpreter* get_root() const;
 
     // Trace stack accessor (for debugger backtrace and source listing)
-    const std::vector<CallLocation>& get_trace_stack() const { return get_root()->trace_stack_; }
+    const std::vector<TraceEntry>& get_trace_stack() const { return get_root()->trace_stack_; }
 
     // Debugger accessor (may be null if debug/trace not enabled)
     Debugger* get_debugger() { return debugger_.get(); }
@@ -444,6 +459,10 @@ private:
     std::expected<void, InterpreterError> invoke_user_macro(const MacroBlock& macro, const std::vector<std::string>& args);
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);
     std::string evaluate_variable_reference(const VariableReference& ref);
+
+    const std::string* intern_file(const std::string& path) {
+        return &*get_root()->interned_files_.insert(path).first;
+    }
 
     void clear_fatal_error();
 
@@ -529,8 +548,10 @@ private:
     ShadowMap variables_;  // Regular variables with scope tracking
 
     std::deque<FrameMetadata> frame_stack_; // Metadata only (no variables)
-    std::vector<CallLocation> trace_stack_; // For backtraces
+    std::vector<TraceEntry> trace_stack_;   // For backtraces (lightweight, non-owning)
     std::string current_file_;
+    const std::string* current_file_interned_ = nullptr;  // Points into interned_files_
+    std::unordered_set<std::string> interned_files_;       // Owns file path strings
     std::optional<InterpreterError> fatal_error_;
     size_t current_cmd_row_ = 0;
     size_t current_cmd_col_ = 0;
