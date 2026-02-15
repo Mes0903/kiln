@@ -397,7 +397,7 @@ void Target::initialize_local_properties(
                     }
                 }
             } else {
-                merge_dedup(out, *eval_result);
+                out.insert(out.end(), eval_result->begin(), eval_result->end());
             }
         };
 
@@ -424,16 +424,16 @@ void Target::propagate_from_dependency(
     std::map<std::string, std::vector<std::string>>& output_props,
     bool skip_non_link)
 {
-    // 1. Merge non-link interface properties (includes, definitions, options, etc.)
+    // 1. Append non-link interface properties (includes, definitions, options, etc.)
+    // Deduplication is deferred to Phase 3 of resolve() via remove_duplicates().
     if (!skip_non_link) {
         for (const auto& info : props_to_resolve) {
             const auto& dep_iface = dep.get_resolved_interface_property(info.name);
             if (dep_iface.empty()) continue;
-            if (dep.is_imported() && info.name == "INCLUDE_DIRECTORIES") {
-                merge_dedup(output_props["SYSTEM_INCLUDE_DIRECTORIES"], dep_iface);
-            } else {
-                merge_dedup(output_props[info.name], dep_iface);
-            }
+            auto& dest = (dep.is_imported() && info.name == "INCLUDE_DIRECTORIES")
+                ? output_props["SYSTEM_INCLUDE_DIRECTORIES"]
+                : output_props[info.name];
+            dest.insert(dest.end(), dep_iface.begin(), dep_iface.end());
         }
     }
 
@@ -1612,22 +1612,32 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         // If the target is C but links against libraries containing C++ code,
         // upgrade to g++ for linking so C++ runtime symbols resolve.
         if (linker_lang == Language::C) {
-            auto has_cxx = [&]() {
+            // Cached map: output_path → has_cxx_sources (rebuilt when all_targets changes)
+            static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
+            static std::unordered_map<std::string, bool> output_has_cxx;
+            if (&all_targets != cached_source) {
+                cached_source = &all_targets;
+                output_has_cxx.clear();
                 for (const auto& [name, tgt] : all_targets) {
-                    if (tgt.get() == this) continue;
                     std::string tgt_output = tgt->get_output_path();
                     if (tgt_output.empty()) continue;
-                    bool is_linked = std::any_of(full_link_libs.begin(), full_link_libs.end(),
-                        [&](const std::string& lib) { return lib == tgt_output; });
-                    if (!is_linked) continue;
+                    bool has_cxx = false;
                     for (const auto& src : tgt->get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
-                        if (LanguageClassifier::from_path(src).lang == Language::CXX)
-                            return true;
+                        if (LanguageClassifier::from_path(src).lang == Language::CXX) {
+                            has_cxx = true;
+                            break;
+                        }
                     }
+                    output_has_cxx[tgt_output] = has_cxx;
                 }
-                return false;
-            };
-            if (has_cxx()) linker_lang = Language::CXX;
+            }
+            for (const auto& lib : full_link_libs) {
+                auto it = output_has_cxx.find(lib);
+                if (it != output_has_cxx.end() && it->second) {
+                    linker_lang = Language::CXX;
+                    break;
+                }
+            }
         }
     }
 
@@ -1716,47 +1726,53 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     // Static libraries are just .o archives — ar doesn't resolve symbols against
     // other libraries. Only executables/shared libraries need link-library deps.
     if (type_ != TargetType::STATIC_LIBRARY) {
+        // Cached maps: output_path → non-imported target, output_path → imported target
+        // Rebuilt when all_targets changes (pointer identity check).
+        static const std::map<std::string, std::shared_ptr<Target>>* cached_link_source = nullptr;
+        static std::unordered_set<std::string> non_imported_outputs;
+        static std::unordered_map<std::string, Target*> imported_by_output;
+        if (&all_targets != cached_link_source) {
+            cached_link_source = &all_targets;
+            non_imported_outputs.clear();
+            imported_by_output.clear();
+            for (const auto& [name, target] : all_targets) {
+                std::string out = target->get_output_path();
+                if (out.empty()) continue;
+                if (target->is_imported()) {
+                    imported_by_output[out] = target.get();
+                } else {
+                    non_imported_outputs.insert(out);
+                }
+            }
+        }
+
         for (const auto& lib : full_link_libs) {
              if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
                  link.inputs.push_back(lib);
 
                  // Only add to dependencies if a non-imported target produces this.
-                 // System libraries (from find_library) and IMPORTED target outputs
-                 // are pre-existing - we don't build them.
-                 for (const auto& [name, target] : all_targets) {
-                     if (target->get_output_path() == lib && !target->is_imported()) {
-                         link.explicit_deps.push_back(lib);
-                         break;
-                     }
+                 if (non_imported_outputs.count(lib)) {
+                     link.explicit_deps.push_back(lib);
                  }
              }
         }
-    }
 
-    // Propagate imported library dependencies to consumer link task.
-    // When linking against an imported library (e.g., mylib with IMPORTED_LOCATION),
-    // we need to inherit its manually_added_dependencies (e.g., mylib_ep EP target).
-    // This ensures the EP sentinel runs before we try to link against EP outputs.
-    for (const auto& [name, target] : all_targets) {
-        if (!target->is_imported()) continue;
-        std::string imported_out = target->get_output_path();
-        if (imported_out.empty()) continue;
+        // Propagate imported library dependencies to consumer link task.
+        // When linking against an imported library (e.g., mylib with IMPORTED_LOCATION),
+        // we need to inherit its manually_added_dependencies (e.g., mylib_ep EP target).
+        for (const auto& lib : full_link_libs) {
+            auto imp_it = imported_by_output.find(lib);
+            if (imp_it == imported_by_output.end()) continue;
 
-        // Check if we're linking against this imported library's output
-        bool is_linked = std::any_of(full_link_libs.begin(), full_link_libs.end(),
-            [&](const std::string& lib) { return lib == imported_out; });
-        if (!is_linked) continue;
-
-        // Inherit the imported library's manually_added_dependencies
-        for (const auto& dep_name : target->get_manually_added_dependencies()) {
-            auto dep_it = all_targets.find(dep_name);
-            if (dep_it != all_targets.end()) {
-                std::string dep_out = dep_it->second->get_output_path();
-                if (!dep_out.empty()) {
-                    link.explicit_deps.push_back(dep_out);
-                } else {
-                    // Custom/EP targets may not have output paths - use target name as task ID
-                    link.explicit_deps.push_back(dep_name);
+            for (const auto& dep_name : imp_it->second->get_manually_added_dependencies()) {
+                auto dep_it = all_targets.find(dep_name);
+                if (dep_it != all_targets.end()) {
+                    std::string dep_out = dep_it->second->get_output_path();
+                    if (!dep_out.empty()) {
+                        link.explicit_deps.push_back(dep_out);
+                    } else {
+                        link.explicit_deps.push_back(dep_name);
+                    }
                 }
             }
         }

@@ -279,8 +279,9 @@ void BuildGraph::apply_cmake_compat_deps() {
     if (!all_custom_tasks.empty()) {
         for (auto& task_ptr : tasks_) {
             if (!task_ptr->is_compilation() || excluded_tasks.count(task_ptr.get())) continue;
+            std::unordered_set<BuildTask*> dep_set(task_ptr->dependencies.begin(), task_ptr->dependencies.end());
             for (auto* ct : all_custom_tasks) {
-                if (std::find(task_ptr->dependencies.begin(), task_ptr->dependencies.end(), ct) == task_ptr->dependencies.end()) {
+                if (dep_set.insert(ct).second) {
                     add_dependency(task_ptr.get(), ct);
                 }
             }
@@ -300,7 +301,7 @@ std::expected<void, std::string> BuildGraph::validate() {
 
     for (const auto& task_ptr : tasks_) {
         for (const auto& in : task_ptr->inputs) {
-            if (std::filesystem::exists(in) || output_to_task_.count(in)) continue;
+            if (output_to_task_.count(in) || std::filesystem::exists(in)) continue;
 
             if (task_ptr->is_compilation() && task_ptr->parent_target) {
                 // Source file for a compile task — this is a hard error
@@ -374,11 +375,11 @@ void BuildGraph::resolve_explicit_deps(std::span<BuildTask*> batch) {
 
 void BuildGraph::resolve_file_deps(std::span<BuildTask*> batch) {
     for (auto* task : batch) {
+        std::unordered_set<BuildTask*> dep_set(task->dependencies.begin(), task->dependencies.end());
         for (const auto& in : task->inputs) {
             auto it = output_to_task_.find(in);
             if (it != output_to_task_.end() && it->second != task) {
-                // Avoid duplicate dependency edges
-                if (std::find(task->dependencies.begin(), task->dependencies.end(), it->second) == task->dependencies.end()) {
+                if (dep_set.insert(it->second).second) {
                     add_dependency(task, it->second);
                 }
             }
@@ -393,7 +394,9 @@ void BuildGraph::drain_pending_deps(std::span<BuildTask*> batch) {
             auto range = pending_file_deps_.equal_range(out);
             for (auto it = range.first; it != range.second; ++it) {
                 if (it->second != task) {
-                    if (std::find(it->second->dependencies.begin(), it->second->dependencies.end(), task) == it->second->dependencies.end()) {
+                    auto& deps = it->second->dependencies;
+                    // Linear search is acceptable here — pending deps are rare
+                    if (std::find(deps.begin(), deps.end(), task) == deps.end()) {
                         add_dependency(it->second, task);
                     }
                 }
@@ -565,37 +568,28 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         }
     }
 
-    // Propagate: dirty deps → dirty, maybe deps → maybe (if not already in dirty_state)
+    // Propagate: dirty deps → dirty, maybe deps → maybe via BFS on reverse edges
     if (!dirty_state.empty()) {
-        bool changed;
-        do {
-            changed = false;
-            for (const auto& task_ptr : tasks_) {
-                if (dirty_state.count(task_ptr.get())) continue;
-
-                bool dominated_by_dirty = false;
-                bool dominated_by_maybe = false;
-                for (auto* dep : task_ptr->dependencies) {
-                    auto it = dirty_state.find(dep);
-                    if (it != dirty_state.end()) {
-                        if (it->second == true) {
-                            dominated_by_dirty = true;
-                            break;  // Dirty dominates, no need to check further
-                        } else {
-                            dominated_by_maybe = true;
-                        }
-                    }
-                }
-
-                if (dominated_by_dirty) {
-                    dirty_state[task_ptr.get()] = true;
-                    changed = true;
-                } else if (dominated_by_maybe) {
-                    dirty_state[task_ptr.get()] = std::nullopt;
-                    changed = true;
+        std::vector<BuildTask*> worklist;
+        worklist.reserve(dirty_state.size());
+        for (auto& [ptr, ds] : dirty_state) {
+            worklist.push_back(ptr);
+        }
+        for (size_t i = 0; i < worklist.size(); ++i) {
+            auto* dirty_task = worklist[i];
+            bool is_definitely_dirty = dirty_state[dirty_task] == true;
+            for (auto* dependent : get_dependents(dirty_task)) {
+                auto [it, inserted] = dirty_state.try_emplace(dependent,
+                    is_definitely_dirty ? std::optional<bool>(true) : std::nullopt);
+                if (inserted) {
+                    worklist.push_back(dependent);
+                } else if (is_definitely_dirty && !it->second.has_value()) {
+                    // Upgrade maybe → definitely dirty
+                    it->second = true;
+                    // No need to re-enqueue: already propagated, and dirty dominates
                 }
             }
-        } while (changed);
+        }
     }
 
     // Count definitely dirty tasks for progress bar
@@ -1522,24 +1516,24 @@ BuildGraph::attach_ep_graph(
         }
     }
 
-    // 6. Propagate dirtiness through dependencies
+    // 6. Propagate dirtiness through reverse edges (BFS)
     if (dirty_count > 0) {
-        bool changed;
-        do {
-            changed = false;
-            for (auto& task_ptr : tasks_) {
-                if (state.dirty_state.count(task_ptr.get())) continue;
-                for (auto* dep : task_ptr->dependencies) {
-                    auto dit = state.dirty_state.find(dep);
-                    if (dit != state.dirty_state.end() && dit->second == true) {
-                        state.dirty_state[task_ptr.get()] = true;
-                        dirty_count++;
-                        changed = true;
-                        break;
-                    }
+        std::vector<BuildTask*> worklist;
+        worklist.reserve(dirty_count);
+        for (const auto& info : dirty_info) {
+            if (!info.is_marker && info.is_dirty) {
+                worklist.push_back(info.raw);
+            }
+        }
+        for (size_t i = 0; i < worklist.size(); ++i) {
+            for (auto* dependent : get_dependents(worklist[i])) {
+                if (!state.dirty_state.count(dependent)) {
+                    state.dirty_state[dependent] = true;
+                    dirty_count++;
+                    worklist.push_back(dependent);
                 }
             }
-        } while (changed);
+        }
     }
 
     // 7. Update progress and add ready dirty tasks to ready_set

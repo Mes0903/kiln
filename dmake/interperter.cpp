@@ -432,34 +432,43 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     {
         ProfileScope scope("generate tasks", "graph");
         auto txn = graph.begin();
-        for (const auto& name : targets_to_build) {
-            targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+        {
+            ProfileScope scope2("target generate_tasks", "graph");
+            for (const auto& name : targets_to_build) {
+                targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+            }
         }
 
         // Resolve missing dependencies: tasks may reference targets (e.g.
         // custom commands invoking llvm-min-tblgen) that weren't in the
         // initial targets_to_build set. Find them and generate their tasks.
-        std::unordered_map<std::string, std::string> output_to_target;
-        for (const auto& [name, target] : targets_) {
-            auto path = target->get_output_path();
-            if (!path.empty()) output_to_target[path] = name;
-        }
+        {
+            ProfileScope scope2("resolve missing deps", "graph");
+            std::unordered_map<std::string, std::string> output_to_target;
+            for (const auto& [name, target] : targets_) {
+                auto path = target->get_output_path();
+                if (!path.empty()) output_to_target[path] = name;
+            }
 
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (const auto& missing : graph.get_missing_dependencies()) {
-                auto it = output_to_target.find(missing);
-                if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
-                    targets_to_build.insert(it->second);
-                    targets_[it->second]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
-                    changed = true;
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (const auto& missing : graph.get_missing_dependencies()) {
+                    auto it = output_to_target.find(missing);
+                    if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
+                        targets_to_build.insert(it->second);
+                        targets_[it->second]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                        changed = true;
+                    }
                 }
             }
         }
-        auto commit_result = txn.commit();
-        if (!commit_result) {
-            return std::unexpected(BuildError{current_file_, commit_result.error()});
+        {
+            ProfileScope scope2("txn commit", "graph");
+            auto commit_result = txn.commit();
+            if (!commit_result) {
+                return std::unexpected(BuildError{current_file_, commit_result.error()});
+            }
         }
     }
 
@@ -521,15 +530,27 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
         genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
         genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
 
-        auto genex_result = graph.evaluate_genex(genex_ctx);
-        if (!genex_result) {
-            return std::unexpected(BuildError{current_file_, genex_result.error()});
+        {
+            ProfileScope scope2("evaluate genex", "graph");
+            auto genex_result = graph.evaluate_genex(genex_ctx);
+            if (!genex_result) {
+                return std::unexpected(BuildError{current_file_, genex_result.error()});
+            }
         }
-        graph.resolve_inferred_file_deps();
-        graph.apply_cmake_compat_deps();
-        auto validate_result = graph.validate();
-        if (!validate_result) {
-            return std::unexpected(BuildError{current_file_, validate_result.error()});
+        {
+            ProfileScope scope2("resolve inferred file deps", "graph");
+            graph.resolve_inferred_file_deps();
+        }
+        {
+            ProfileScope scope2("apply cmake compat deps", "graph");
+            graph.apply_cmake_compat_deps();
+        }
+        {
+            ProfileScope scope2("validate graph", "graph");
+            auto validate_result = graph.validate();
+            if (!validate_result) {
+                return std::unexpected(BuildError{current_file_, validate_result.error()});
+            }
         }
     }
 
