@@ -736,7 +736,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     std::filesystem::path abs_script_dir = script_dir.empty() ?
         std::filesystem::current_path() :
         std::filesystem::absolute(script_dir).lexically_normal();
-    frame_stack_.push_front({abs_script_dir.string(), nullptr});
+    frame_stack_.push_back({abs_script_dir.string(), nullptr});
 
     std::filesystem::path abs_binary_dir;
     if (build_dir.has_value()) {
@@ -1471,14 +1471,16 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
 std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<AstNode>& ast) {
     for (const auto& node : ast) {
-        std::expected<void, InterpreterError> res;
-        if (std::holds_alternative<CommandInvocation>(node)) res = execute_command(std::get<CommandInvocation>(node));
-        else if (std::holds_alternative<IfBlock>(node)) res = execute_if_block(std::get<IfBlock>(node));
-        else if (std::holds_alternative<FunctionBlock>(node)) res = execute_function_block(std::get<FunctionBlock>(node));
-        else if (std::holds_alternative<MacroBlock>(node)) res = execute_macro_block(std::get<MacroBlock>(node));
-        else if (std::holds_alternative<ForeachBlock>(node)) res = execute_foreach_block(std::get<ForeachBlock>(node));
-        else if (std::holds_alternative<WhileBlock>(node)) res = execute_while_block(std::get<WhileBlock>(node));
-        else if (std::holds_alternative<BlockBlock>(node)) res = execute_block_block(std::get<BlockBlock>(node));
+        auto res = std::visit([this](const auto& n) -> std::expected<void, InterpreterError> {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, CommandInvocation>) return execute_command(n);
+            else if constexpr (std::is_same_v<T, IfBlock>) return execute_if_block(n);
+            else if constexpr (std::is_same_v<T, FunctionBlock>) return execute_function_block(n);
+            else if constexpr (std::is_same_v<T, MacroBlock>) return execute_macro_block(n);
+            else if constexpr (std::is_same_v<T, ForeachBlock>) return execute_foreach_block(n);
+            else if constexpr (std::is_same_v<T, WhileBlock>) return execute_while_block(n);
+            else if constexpr (std::is_same_v<T, BlockBlock>) return execute_block_block(n);
+        }, node);
 
         if (!res) return res;
         if (loop_control_ != LoopControl::NONE) return {};
@@ -2044,18 +2046,18 @@ std::expected<void, InterpreterError> Interpreter::execute_function_block(const 
     if (!inserted && it->second) {
         // Replacing existing function - check if it's currently executing
         const FunctionBlock* old_ptr = it->second.get();
-        size_t deepest_index = 0;
+        size_t shallowest_index = 0;
         bool found = false;
         for (size_t i = 0; i < root->frame_stack_.size(); ++i) {
             if (root->frame_stack_[i].function_block == old_ptr) {
-                deepest_index = i;
+                shallowest_index = i;
                 found = true;
+                break; // first hit = outermost with push_back vector
             }
         }
         if (found) {
             // Defer deletion until we've popped past this frame
-            size_t delete_when = root->frame_stack_.size() - (deepest_index + 1);
-            root->deferred_function_deletions_.emplace_back(delete_when, std::move(it->second));
+            root->deferred_function_deletions_.emplace_back(shallowest_index, std::move(it->second));
         }
     }
 
@@ -2471,7 +2473,7 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_function(const FunctionBlock& func, const std::vector<std::string>& args) {
     // Push metadata frame (for script_dir and function_block tracking)
-    frame_stack_.push_front({func.definition_dir, &func});
+    frame_stack_.push_back({func.definition_dir, &func});
 
     // Push variable scope
     variables_.push_scope();
@@ -2479,21 +2481,32 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     // Set function parameters — build ARGV/ARGN strings directly from args
     variables_.set("ARGC", std::to_string(args.size()));
 
-    // ARGV: join all args with semicolons
-    std::string argv_str;
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (i > 0) argv_str += ';';
-        argv_str += args[i];
+    // ARGV: join all args with semicolons (pre-reserve to avoid reallocations)
+    {
+        size_t total = args.empty() ? 0 : args.size() - 1; // semicolons
+        for (const auto& a : args) total += a.size();
+        std::string argv_str;
+        argv_str.reserve(total);
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) argv_str += ';';
+            argv_str += args[i];
+        }
+        variables_.set("ARGV", std::move(argv_str));
     }
-    variables_.set("ARGV", std::move(argv_str));
 
     // ARGN: join args past the declared parameters
-    std::string argn_str;
-    for (size_t i = func.parameters.size(); i < args.size(); ++i) {
-        if (i > func.parameters.size()) argn_str += ';';
-        argn_str += args[i];
+    {
+        size_t extra = args.size() > func.parameters.size() ? args.size() - func.parameters.size() : 0;
+        size_t total = extra == 0 ? 0 : extra - 1;
+        for (size_t i = func.parameters.size(); i < args.size(); ++i) total += args[i].size();
+        std::string argn_str;
+        argn_str.reserve(total);
+        for (size_t i = func.parameters.size(); i < args.size(); ++i) {
+            if (i > func.parameters.size()) argn_str += ';';
+            argn_str += args[i];
+        }
+        variables_.set("ARGN", std::move(argn_str));
     }
-    variables_.set("ARGN", std::move(argn_str));
 
     // ARGVn and named parameters
     for (size_t i = 0; i < args.size(); ++i) {
@@ -2506,6 +2519,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     int saved_depth = loop_depth_;
     LoopControl saved_control = loop_control_;
     std::string saved_file = current_file_;
+    const std::string* saved_file_interned = current_file_interned_;
     // Save and clear macro substitutions - functions create a new scope so outer
     // macro parameters should not bleed into the function's variable lookups.
     // Skip save/restore when empty (common case — no macros in scope).
@@ -2536,7 +2550,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     variables_.pop_scope();
 
     // Pop metadata frame
-    frame_stack_.pop_front();
+    frame_stack_.pop_back();
 
     // Clean up any deferred function deletions we've passed
     Interpreter* root = get_root();
@@ -2551,7 +2565,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
     loop_depth_ = saved_depth;
     loop_control_ = saved_control;
     current_file_ = saved_file;
-    current_file_interned_ = intern_file(current_file_);
+    current_file_interned_ = saved_file_interned;
     if (had_macro_subs) {
         macro_substitutions_ = std::move(saved_macro_substitutions);
     }
@@ -2606,6 +2620,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     }
 
     std::string saved_file = current_file_;
+    const std::string* saved_file_interned = current_file_interned_;
     current_file_ = macro.definition_file;
     current_file_interned_ = intern_file(current_file_);
 
@@ -2631,7 +2646,7 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
     }
 
     current_file_ = saved_file;
-    current_file_interned_ = intern_file(current_file_);
+    current_file_interned_ = saved_file_interned;
     if (!res) set_fatal_error(res.error());
 
     // Restore macro substitutions
@@ -2854,7 +2869,7 @@ std::optional<std::string> Interpreter::get_optional_variable(std::string_view n
          name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
          name == "CMAKE_CURRENT_FUNCTION_LIST_DIR")) {
 
-        const auto* fb = frame_stack_.front().function_block;
+        const auto* fb = frame_stack_.back().function_block;
         if (fb != nullptr) {
             if (name == "CMAKE_CURRENT_FUNCTION") return fb->name;
             if (name == "CMAKE_CURRENT_FUNCTION_LIST_FILE") return fb->definition_file;

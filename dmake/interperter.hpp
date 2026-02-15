@@ -472,7 +472,7 @@ private:
     bool force_colors_ = false;  // Force color output even when not writing to TTY
 
     // Global state (managed by root)
-    std::map<std::string, BuiltinFunction> builtins_;
+    std::unordered_map<std::string, BuiltinFunction> builtins_;
     std::map<std::string, std::shared_ptr<Target>> targets_;
     std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
@@ -547,7 +547,7 @@ private:
     // Shadow Map-based variable scoping (O(1) access, automatic cleanup)
     ShadowMap variables_;  // Regular variables with scope tracking
 
-    std::deque<FrameMetadata> frame_stack_; // Metadata only (no variables)
+    std::vector<FrameMetadata> frame_stack_; // Metadata only (no variables)
     std::vector<TraceEntry> trace_stack_;   // For backtraces (lightweight, non-owning)
     std::string current_file_;
     const std::string* current_file_interned_ = nullptr;  // Points into interned_files_

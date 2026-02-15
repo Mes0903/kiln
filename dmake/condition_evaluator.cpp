@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
-#include <functional>
 #include <sstream>
 
 namespace dmake {
@@ -55,47 +54,61 @@ int compare_versions(const std::string& a, const std::string& b) {
     return 0;
 }
 
-} // anonymous namespace
+// Set of keywords that should not be dereferenced as variables
+// All keywords are in uppercase; comparisons are done case-insensitively
+// We use a sorted static array and linear search because it is more branch-prediction
+// friendly for small sets of strings compared to std::set or binary search.
+constexpr std::array keywords = {
+    "(", ")", "AND", "COMMAND", "DEFINED", "EQUAL", "EXISTS", "GREATER",
+    "GREATER_EQUAL", "IN_LIST", "IS_ABSOLUTE", "IS_DIRECTORY", "IS_NEWER_THAN",
+    "IS_SYMLINK", "LESS", "LESS_EQUAL", "MATCHES", "NOT", "NOT_EQUAL", "OR",
+    "POLICY", "STREQUAL", "STRGREATER", "STRGREATER_EQUAL", "STRLESS",
+    "STRLESS_EQUAL", "TARGET", "TEST", "VERSION_EQUAL", "VERSION_GREATER",
+    "VERSION_GREATER_EQUAL", "VERSION_LESS", "VERSION_LESS_EQUAL"
+};
 
-std::expected<bool, InterpreterError> evaluate_condition(
-    Interpreter& interp,
-    const std::vector<Argument>& condition,
-    size_t row, size_t col, size_t offset, size_t length)
-{
-    // Empty condition evaluates to FALSE (CMake behavior)
-    if (condition.empty()) {
-        return false;
+// Boolean constants that have fixed truthiness values (case-insensitive)
+constexpr std::array boolean_constants = {
+    "FALSE", "IGNORE", "N", "NO", "NOTFOUND", "OFF", "ON", "TRUE", "Y", "YES"
+};
+
+// Set of binary operator keywords
+constexpr std::array binary_operators = {
+    "EQUAL", "GREATER", "GREATER_EQUAL", "IN_LIST", "IS_NEWER_THAN",
+    "LESS", "LESS_EQUAL", "MATCHES", "NOT_EQUAL", "STREQUAL",
+    "STRGREATER", "STRGREATER_EQUAL", "STRLESS", "STRLESS_EQUAL",
+    "VERSION_EQUAL", "VERSION_GREATER", "VERSION_GREATER_EQUAL",
+    "VERSION_LESS", "VERSION_LESS_EQUAL"
+};
+
+// Recursive descent parser for CMake if() conditions.
+// Replaces std::function<bool()> lambdas with direct member function calls.
+class ConditionParser {
+public:
+    ConditionParser(Interpreter& interp, const std::vector<Argument>& condition)
+        : interp_(interp), condition_(condition) {}
+
+    bool parse() {
+        return parse_or();
     }
 
-    // Set of keywords that should not be dereferenced as variables
-    // All keywords are in uppercase; comparisons are done case-insensitively
-    // We use a sorted static array and linear search because it is more branch-prediction
-    // friendly for small sets of strings compared to std::set or binary search.
-    static constexpr std::array keywords = {
-        "(", ")", "AND", "COMMAND", "DEFINED", "EQUAL", "EXISTS", "GREATER",
-        "GREATER_EQUAL", "IN_LIST", "IS_ABSOLUTE", "IS_DIRECTORY", "IS_NEWER_THAN",
-        "IS_SYMLINK", "LESS", "LESS_EQUAL", "MATCHES", "NOT", "NOT_EQUAL", "OR",
-        "POLICY", "STREQUAL", "STRGREATER", "STRGREATER_EQUAL", "STRLESS",
-        "STRLESS_EQUAL", "TARGET", "TEST", "VERSION_EQUAL", "VERSION_GREATER",
-        "VERSION_GREATER_EQUAL", "VERSION_LESS", "VERSION_LESS_EQUAL"
-    };
+    const std::string& error() const { return error_msg_; }
+    size_t pos() const { return pos_; }
 
-    // Boolean constants that have fixed truthiness values (case-insensitive)
-    static constexpr std::array boolean_constants = {
-        "FALSE", "IGNORE", "N", "NO", "NOTFOUND", "OFF", "ON", "TRUE", "Y", "YES"
-    };
+private:
+    Interpreter& interp_;
+    const std::vector<Argument>& condition_;
+    size_t pos_ = 0;
+    std::string error_msg_;
 
-    // Helper to get the string value of an argument token
-    // For unquoted arguments that are not keywords, dereference as variable
-    auto get_token_string = [&](const Argument& arg) -> std::string {
+    std::string get_token_string(const Argument& arg) {
         if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
             return std::get<std::string>(arg.parts[0]);
         }
-        return interp.evaluate_argument(arg);
-    };
+        return interp_.evaluate_argument(arg);
+    }
 
-    // Helper to check if a string looks like a numeric constant
-    auto is_numeric_constant = [](const std::string& s) -> bool {
+    static bool is_numeric_constant(const std::string& s) {
         if (s.empty()) return false;
         size_t start = 0;
         if (s[0] == '-' || s[0] == '+') start = 1;
@@ -106,7 +119,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
             if (!std::isdigit(s[i]) && s[i] != '.') return false;
         }
         return true;
-    };
+    }
 
     // Helper to evaluate an argument, dereferencing variables unless it's a keyword or constant
     // CMake behavior (pre-CMP0054):
@@ -115,7 +128,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
     // - Everything else is dereferenced as a variable:
     //   - If defined, return the variable's value (even if empty)
     //   - If undefined, return empty string
-    auto evaluate_token = [&](const Argument& arg) -> std::string {
+    std::string evaluate_token(const Argument& arg) {
         std::string token = get_token_string(arg);
 
         // Don't dereference keywords (operators), boolean constants, or quoted strings.
@@ -146,46 +159,26 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // If undefined: return the literal token string
         // This matches CMake behavior where bare words that don't name a defined
         // variable are kept as literal strings (e.g., "AIX" stays "AIX" in MATCHES)
-        auto opt = interp.get_optional_variable(token);
+        auto opt = interp_.get_optional_variable(token);
         return opt.has_value() ? *opt : token;
-    };
+    }
 
-    // Set of binary operator keywords
-    static constexpr std::array binary_operators = {
-        "EQUAL", "GREATER", "GREATER_EQUAL", "IN_LIST", "IS_NEWER_THAN",
-        "LESS", "LESS_EQUAL", "MATCHES", "NOT_EQUAL", "STREQUAL",
-        "STRGREATER", "STRGREATER_EQUAL", "STRLESS", "STRLESS_EQUAL",
-        "VERSION_EQUAL", "VERSION_GREATER", "VERSION_GREATER_EQUAL",
-        "VERSION_LESS", "VERSION_LESS_EQUAL"
-    };
-
-    auto is_binary_operator = [&](const std::string& token) -> bool {
+    static bool is_binary_operator(const std::string& token) {
         // CMake keywords are case-sensitive (must be uppercase)
         return std::find(binary_operators.begin(), binary_operators.end(), token) != binary_operators.end();
-    };
-
-    // Recursive descent parser with proper CMake precedence
-    // Precedence (high to low): unary tests > binary tests > NOT > AND/OR
-    size_t pos = 0;
-    std::string error_msg;  // Track parsing errors
-
-    std::function<bool()> parse_or;
-    std::function<bool()> parse_and;
-    std::function<bool()> parse_not;
-    std::function<bool()> parse_comparison;
-    std::function<bool()> parse_unary_or_primary;
+    }
 
     // AND/OR have lowest precedence and evaluate left-to-right
     // NOTE: CMake does NOT short-circuit - both sides are always evaluated
-    parse_or = [&]() -> bool {
+    bool parse_or() {
         bool left = parse_and();
 
-        while (pos < condition.size() && error_msg.empty()) {
-            std::string token = get_token_string(condition[pos]);
-            if (!condition[pos].quoted && token == "OR") {
-                pos++;
-                if (pos >= condition.size()) {
-                    error_msg = "OR operator requires a right operand";
+        while (pos_ < condition_.size() && error_msg_.empty()) {
+            std::string token = get_token_string(condition_[pos_]);
+            if (!condition_[pos_].quoted && token == "OR") {
+                pos_++;
+                if (pos_ >= condition_.size()) {
+                    error_msg_ = "OR operator requires a right operand";
                     return false;
                 }
                 bool right = parse_and();  // Always evaluate right side (no short-circuit)
@@ -195,17 +188,17 @@ std::expected<bool, InterpreterError> evaluate_condition(
             }
         }
         return left;
-    };
+    }
 
-    parse_and = [&]() -> bool {
+    bool parse_and() {
         bool left = parse_not();
 
-        while (pos < condition.size() && error_msg.empty()) {
-            std::string token = get_token_string(condition[pos]);
-            if (!condition[pos].quoted && token == "AND") {
-                pos++;
-                if (pos >= condition.size()) {
-                    error_msg = "AND operator requires a right operand";
+        while (pos_ < condition_.size() && error_msg_.empty()) {
+            std::string token = get_token_string(condition_[pos_]);
+            if (!condition_[pos_].quoted && token == "AND") {
+                pos_++;
+                if (pos_ >= condition_.size()) {
+                    error_msg_ = "AND operator requires a right operand";
                     return false;
                 }
                 bool right = parse_not();  // Always evaluate right side (no short-circuit)
@@ -215,83 +208,83 @@ std::expected<bool, InterpreterError> evaluate_condition(
             }
         }
         return left;
-    };
+    }
 
     // NOT has higher precedence than AND/OR but lower than comparisons
-    parse_not = [&]() -> bool {
-        if (pos >= condition.size()) {
-            error_msg = "Unexpected end of condition";
+    bool parse_not() {
+        if (pos_ >= condition_.size()) {
+            error_msg_ = "Unexpected end of condition";
             return false;
         }
 
-        std::string token = get_token_string(condition[pos]);
-        if (!condition[pos].quoted && token == "NOT") {
+        std::string token = get_token_string(condition_[pos_]);
+        if (!condition_[pos_].quoted && token == "NOT") {
             // CMake compatibility: If NOT is followed by a binary operator,
             // treat NOT as a value (left operand), not as a negation operator.
             // Example: if(NOT STREQUAL "X") -> "NOT" STREQUAL "X" = false
-            if (pos + 1 < condition.size()) {
-                std::string next_token = get_token_string(condition[pos + 1]);
+            if (pos_ + 1 < condition_.size()) {
+                std::string next_token = get_token_string(condition_[pos_ + 1]);
                 if (is_binary_operator(next_token)) {
                     // NOT is actually a left operand here, not a negation
                     return parse_comparison();
                 }
                 if (next_token != "AND" && next_token != "OR") {
                     // Valid operand exists - NOT is an operator
-                    pos++;
+                    pos_++;
                     return !parse_not();  // Right-associative
                 }
             }
             // No valid operand - fall through to treat "NOT" as a primary value
         }
         return parse_comparison();
-    };
+    }
 
     // Binary comparison operators (EQUAL, LESS, STREQUAL, etc.)
-    parse_comparison = [&]() -> bool {
-        if (pos >= condition.size()) return false;
+    bool parse_comparison() {
+        if (pos_ >= condition_.size()) return false;
 
         // CMake special case: MATCHES without left operand returns false
         // Example: if(${UNDEFINED} MATCHES "pat") where UNDEFINED expands to nothing
         // becomes if(MATCHES "pat") which CMake evaluates as false
-        std::string current_token = get_token_string(condition[pos]);
-        if (!condition[pos].quoted && current_token == "MATCHES" && pos + 1 < condition.size()) {
+        std::string current_token = get_token_string(condition_[pos_]);
+        if (!condition_[pos_].quoted && current_token == "MATCHES" && pos_ + 1 < condition_.size()) {
             // Consume MATCHES and the pattern, return false
-            pos += 2;
+            pos_ += 2;
             return false;
         }
 
         // CMake error case: other binary operators without left operand
         // Example: if(STREQUAL "") -> error "Unknown arguments specified"
         // Note: This does NOT apply when NOT precedes the operator (handled in parse_not)
-        if (!condition[pos].quoted && is_binary_operator(current_token) && pos + 1 < condition.size()) {
-            error_msg = "if given arguments: \"" + current_token + "\" - missing left operand";
+        if (!condition_[pos_].quoted && is_binary_operator(current_token) && pos_ + 1 < condition_.size()) {
+            error_msg_ = "if given arguments: \"" + current_token + "\" - missing left operand";
             return false;
         }
 
         // Save start position in case this isn't a comparison
-        size_t start_pos = pos;
+        size_t start_pos = pos_;
 
         // Try to parse left operand
         bool unary_result = parse_unary_or_primary();
 
         // Check if next token is a binary operator
-        if (pos >= condition.size()) {
+        if (pos_ >= condition_.size()) {
             return unary_result;
         }
 
-        std::string op = get_token_string(condition[pos]);
+        std::string op = get_token_string(condition_[pos_]);
 
         // Numeric comparisons
         if (op == "EQUAL" || op == "LESS" || op == "GREATER" ||
             op == "LESS_EQUAL" || op == "GREATER_EQUAL" || op == "NOT_EQUAL") {
-            pos++;
-            if (pos >= condition.size()) {
-                error_msg = op + " operator requires a right operand";
+            pos_++;
+            if (pos_ >= condition_.size()) {
+                error_msg_ = op + " operator requires a right operand";
                 return false;
             }
 
-            std::string left = evaluate_token(condition[start_pos]);
-            std::string right = evaluate_token(condition[pos++]);
+            std::string left = evaluate_token(condition_[start_pos]);
+            std::string right = evaluate_token(condition_[pos_++]);
 
             try {
                 double left_num = std::stod(left);
@@ -313,14 +306,14 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // String comparisons
         else if (op == "STREQUAL" || op == "STRLESS" || op == "STRGREATER" ||
                  op == "STRLESS_EQUAL" || op == "STRGREATER_EQUAL") {
-            pos++;
-            if (pos >= condition.size()) {
-                error_msg = op + " operator requires a right operand";
+            pos_++;
+            if (pos_ >= condition_.size()) {
+                error_msg_ = op + " operator requires a right operand";
                 return false;
             }
 
-            std::string left = evaluate_token(condition[start_pos]);
-            std::string right = evaluate_token(condition[pos++]);
+            std::string left = evaluate_token(condition_[start_pos]);
+            std::string right = evaluate_token(condition_[pos_++]);
 
             if (op == "STREQUAL") return left == right;
             if (op == "STRLESS") return left < right;
@@ -330,14 +323,14 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
         // Version comparisons - component-wise numeric comparison (CMake behavior)
         else if (op.starts_with("VERSION_")) {
-            pos++;
-            if (pos >= condition.size()) {
-                error_msg = op + " operator requires a right operand";
+            pos_++;
+            if (pos_ >= condition_.size()) {
+                error_msg_ = op + " operator requires a right operand";
                 return false;
             }
 
-            std::string left = evaluate_token(condition[start_pos]);
-            std::string right = evaluate_token(condition[pos++]);
+            std::string left = evaluate_token(condition_[start_pos]);
+            std::string right = evaluate_token(condition_[pos_++]);
 
             int cmp = compare_versions(left, right);
 
@@ -349,64 +342,64 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
         // regex
         else if(op == "MATCHES") {
-            pos++; // Consume operator
-            if (pos >= condition.size()) {
-                error_msg = "MATCHES operator requires a right operand";
+            pos_++; // Consume operator
+            if (pos_ >= condition_.size()) {
+                error_msg_ = "MATCHES operator requires a right operand";
                 return false;
             }
-            std::string pattern = evaluate_token(condition[pos++]);
+            std::string pattern = evaluate_token(condition_[pos_++]);
             thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
                 return Regex::from_cmake_regex(p);
             });
             auto re = cache.get(pattern);
             if (!re) {
-                error_msg = "MATCHES: invalid regex: " + re.error();
+                error_msg_ = "MATCHES: invalid regex: " + re.error();
                 return false;
             }
-            std::string left = evaluate_token(condition[start_pos]);
+            std::string left = evaluate_token(condition_[start_pos]);
             std::vector<std::string> captures;
             bool result = (*re)->search(left, captures);
 
             if (result) {
-                interp.set_variable("CMAKE_MATCH_COUNT", std::to_string(captures.size() - 1));
+                interp_.set_variable("CMAKE_MATCH_COUNT", std::to_string(captures.size() - 1));
                 for (size_t i = 0; i < captures.size() && i < 10; ++i) {
-                    interp.set_variable("CMAKE_MATCH_" + std::to_string(i), captures[i]);
+                    interp_.set_variable("CMAKE_MATCH_" + std::to_string(i), captures[i]);
                 }
                 for (size_t i = captures.size(); i < 10; ++i) {
-                    interp.set_variable("CMAKE_MATCH_" + std::to_string(i), "");
+                    interp_.set_variable("CMAKE_MATCH_" + std::to_string(i), "");
                 }
             } else {
-                 interp.set_variable("CMAKE_MATCH_COUNT", "0");
+                 interp_.set_variable("CMAKE_MATCH_COUNT", "0");
                  for (size_t i = 0; i < 10; ++i) {
-                    interp.set_variable("CMAKE_MATCH_" + std::to_string(i), "");
+                    interp_.set_variable("CMAKE_MATCH_" + std::to_string(i), "");
                 }
             }
             return result;
         }
         // IN_LIST operator: checks if value is in a list variable
         else if (op == "IN_LIST") {
-            pos++; // Consume operator
-            if (pos >= condition.size()) {
-                error_msg = "IN_LIST operator requires a right operand";
+            pos_++; // Consume operator
+            if (pos_ >= condition_.size()) {
+                error_msg_ = "IN_LIST operator requires a right operand";
                 return false;
             }
 
-            std::string value = evaluate_token(condition[start_pos]);
-            std::string list_str = evaluate_token(condition[pos++]);
+            std::string value = evaluate_token(condition_[start_pos]);
+            std::string list_str = evaluate_token(condition_[pos_++]);
 
             // Parse the list (semicolon-separated) and check if value is in it
             return CMakeArrayView(list_str).contains(value);
         }
         // IS_NEWER_THAN - file timestamp comparison
         else if (op == "IS_NEWER_THAN") {
-            pos++;
-            if (pos >= condition.size()) {
-                error_msg = "IS_NEWER_THAN operator requires a right operand";
+            pos_++;
+            if (pos_ >= condition_.size()) {
+                error_msg_ = "IS_NEWER_THAN operator requires a right operand";
                 return false;
             }
 
-            std::string left = interp.evaluate_argument(condition[start_pos]);
-            std::string right = interp.evaluate_argument(condition[pos++]);
+            std::string left = interp_.evaluate_argument(condition_[start_pos]);
+            std::string right = interp_.evaluate_argument(condition_[pos_++]);
 
             // CMake behavior: returns true if file1 >= file2 OR either doesn't exist
             std::error_code ec1, ec2;
@@ -422,28 +415,28 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         // Not a comparison operator - return the unary/primary result
         return unary_result;
-    };
+    }
 
     // Unary operators (highest precedence) and primary values
-    parse_unary_or_primary = [&]() -> bool {
-        if (pos >= condition.size()) return false;
+    bool parse_unary_or_primary() {
+        if (pos_ >= condition_.size()) return false;
 
-        std::string token = get_token_string(condition[pos]);
+        std::string token = get_token_string(condition_[pos_]);
 
         // Parentheses for grouping
         if (token == "(") {
-            pos++;
+            pos_++;
             // CMake behavior: empty parentheses () evaluate to false
-            if (pos < condition.size() && get_token_string(condition[pos]) == ")") {
-                pos++;
+            if (pos_ < condition_.size() && get_token_string(condition_[pos_]) == ")") {
+                pos_++;
                 return false;
             }
             bool result = parse_or();
-            if (pos >= condition.size() || get_token_string(condition[pos]) != ")") {
-                error_msg = "Expected ')' to close group";
+            if (pos_ >= condition_.size() || get_token_string(condition_[pos_]) != ")") {
+                error_msg_ = "Expected ')' to close group";
                 return false;
             }
-            pos++;
+            pos_++;
             return result;
         }
 
@@ -451,51 +444,51 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // If there's no next token, treat the keyword as a primary value instead
         // Quoted arguments are never keywords — if("${VAR}" ...) where VAR expands
         // to "TARGET" etc. must be treated as a primary value, not a unary operator.
-        if (!condition[pos].quoted && token == "DEFINED" && pos + 1 < condition.size()) {
-            pos++;
+        if (!condition_[pos_].quoted && token == "DEFINED" && pos_ + 1 < condition_.size()) {
+            pos_++;
             // DEFINED takes a variable name (don't dereference it)
-            std::string var_name = get_token_string(condition[pos++]);
+            std::string var_name = get_token_string(condition_[pos_++]);
 
             // Check DEFINED CACHE{VAR} syntax - checks only cache variables
             if (var_name.size() > 6 &&
                 var_name.compare(0, 6, "CACHE{") == 0 &&
                 var_name.back() == '}') {
                 std::string cache_var = var_name.substr(6, var_name.size() - 7);
-                return interp.get_cache_variables().contains(cache_var);
+                return interp_.get_cache_variables().contains(cache_var);
             }
 
             // Check if variable is defined in any scope (local + cache)
-            return interp.is_variable_set(var_name);
-        } else if (!condition[pos].quoted && token == "TARGET" && pos + 1 < condition.size()) {
-            pos++;
-            std::string target_name = get_token_string(condition[pos++]);
+            return interp_.is_variable_set(var_name);
+        } else if (!condition_[pos_].quoted && token == "TARGET" && pos_ + 1 < condition_.size()) {
+            pos_++;
+            std::string target_name = get_token_string(condition_[pos_++]);
             // Use find_target() to handle aliases (CMake's if(TARGET) returns true for aliases)
-            return interp.find_target(target_name) != nullptr;
-        } else if (!condition[pos].quoted && token == "EXISTS" && pos + 1 < condition.size()) {
-            pos++;
+            return interp_.find_target(target_name) != nullptr;
+        } else if (!condition_[pos_].quoted && token == "EXISTS" && pos_ + 1 < condition_.size()) {
+            pos_++;
             // File test operators take paths literally (with variable expansion)
             // but do NOT dereference the entire path as a variable name
-            std::string path = interp.evaluate_argument(condition[pos++]);
+            std::string path = interp_.evaluate_argument(condition_[pos_++]);
             return std::filesystem::exists(path);
-        } else if (!condition[pos].quoted && token == "IS_DIRECTORY" && pos + 1 < condition.size()) {
-            pos++;
-            std::string path = interp.evaluate_argument(condition[pos++]);
+        } else if (!condition_[pos_].quoted && token == "IS_DIRECTORY" && pos_ + 1 < condition_.size()) {
+            pos_++;
+            std::string path = interp_.evaluate_argument(condition_[pos_++]);
             return std::filesystem::is_directory(path);
-        } else if (!condition[pos].quoted && token == "IS_ABSOLUTE" && pos + 1 < condition.size()) {
-            pos++;
-            std::string path = interp.evaluate_argument(condition[pos++]);
+        } else if (!condition_[pos_].quoted && token == "IS_ABSOLUTE" && pos_ + 1 < condition_.size()) {
+            pos_++;
+            std::string path = interp_.evaluate_argument(condition_[pos_++]);
             return std::filesystem::path(path).is_absolute();
-        } else if (!condition[pos].quoted && token == "IS_SYMLINK" && pos + 1 < condition.size()) {
-            pos++;
-            std::string path = interp.evaluate_argument(condition[pos++]);
+        } else if (!condition_[pos_].quoted && token == "IS_SYMLINK" && pos_ + 1 < condition_.size()) {
+            pos_++;
+            std::string path = interp_.evaluate_argument(condition_[pos_++]);
             return std::filesystem::is_symlink(path);
-        } else if (!condition[pos].quoted && token == "COMMAND" && pos + 1 < condition.size()) {
-            pos++;
-            std::string name = evaluate_token(condition[pos++]);
-            return interp.has_user_function(name);
-        } else if (!condition[pos].quoted && token == "POLICY" && pos + 1 < condition.size()) {
-            pos++;
-            pos++;  // Consume the policy name/number
+        } else if (!condition_[pos_].quoted && token == "COMMAND" && pos_ + 1 < condition_.size()) {
+            pos_++;
+            std::string name = evaluate_token(condition_[pos_++]);
+            return interp_.has_user_function(name);
+        } else if (!condition_[pos_].quoted && token == "POLICY" && pos_ + 1 < condition_.size()) {
+            pos_++;
+            pos_++;  // Consume the policy name/number
             // Always return true - dmake doesn't implement policies but we want
             // scripts to think we support the latest policies
             return true;
@@ -504,7 +497,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // Primary value - evaluate and check truthiness
         // For keywords that aren't being used as operators (like standalone DEFINED, TARGET, etc.),
         // we need to dereference them as variables, not treat them as keywords
-        const Argument& arg = condition[pos++];
+        const Argument& arg = condition_[pos_++];
         std::string token_str = get_token_string(arg);
 
         // Check if this is a boolean constant (case-insensitive)
@@ -530,25 +523,44 @@ std::expected<bool, InterpreterError> evaluate_condition(
         // dereference the result as a variable name
         // Example: if(VAR) should look up the value of variable VAR
         // Example: if(VAR_${suffix}) where suffix="" should expand to "VAR_", then look up VAR_
-        std::string val = interp.get_variable(token_str);
+        std::string val = interp_.get_variable(token_str);
         return !Interpreter::is_falsy(val);
-    };
+    }
+};
 
-    // Start parsing at the lowest precedence level (OR)
-    bool result = parse_or();
+} // anonymous namespace
+
+std::expected<bool, InterpreterError> evaluate_condition(
+    Interpreter& interp,
+    const std::vector<Argument>& condition,
+    size_t row, size_t col, size_t offset, size_t length)
+{
+    // Empty condition evaluates to FALSE (CMake behavior)
+    if (condition.empty()) {
+        return false;
+    }
+
+    ConditionParser parser(interp, condition);
+    bool result = parser.parse();
 
     // Check if there was an error during parsing
-    if (!error_msg.empty()) {
-        interp.set_fatal_error(error_msg);
+    if (!parser.error().empty()) {
+        interp.set_fatal_error(parser.error());
         return std::unexpected(*interp.get_fatal_error());
     }
 
     // CMake treats leftover tokens in conditions as an error
-    if (pos < condition.size()) {
+    if (parser.pos() < condition.size()) {
         std::string remaining;
-        for (size_t i = pos; i < condition.size(); ++i) {
+        for (size_t i = parser.pos(); i < condition.size(); ++i) {
             if (!remaining.empty()) remaining += " ";
-            remaining += get_token_string(condition[i]);
+            // Use evaluate_argument for remaining tokens
+            if (!condition[i].quoted && condition[i].parts.size() == 1 &&
+                std::holds_alternative<std::string>(condition[i].parts[0])) {
+                remaining += std::get<std::string>(condition[i].parts[0]);
+            } else {
+                remaining += interp.evaluate_argument(condition[i]);
+            }
         }
 
         // Trim whitespace (space, tab, CR, LF)

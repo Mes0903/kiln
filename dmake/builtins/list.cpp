@@ -39,28 +39,22 @@ void register_list_builtins(Interpreter& interp) {
         std::vector<std::string> sub_args(args.begin() + 1, args.end());
 
         if (operation == "LENGTH") {
-            CommandParser parser("list", "LENGTH");
-            std::string list_var, out_var;
-            parser.positional(list_var, "list variable");
-            parser.positional(out_var, "output variable");
-            PARSE_OR_RETURN(parser, interp, sub_args);
-
-            CMakeArray list(interp.get_variable(list_var));
-            interp.set_variable(out_var, std::to_string(list.size()));
-        } else if (operation == "GET") {
-            CommandParser parser("list", "GET");
-            std::string list_var, out_var;
-            std::vector<std::string> indices;
-            parser.positional(list_var, "list variable");
-            parser.positionals(indices, "indices");
-            PARSE_OR_RETURN(parser, interp, sub_args);
-
-            if (indices.empty()) {
-                interp.set_fatal_error("list(GET) requires at least one index");
+            // list(LENGTH <list> <output variable>)
+            if (sub_args.size() != 2) {
+                interp.set_fatal_error("list(LENGTH) requires exactly 2 arguments: list(LENGTH <list> <output variable>)");
                 return;
             }
-            out_var = indices.back();
-            indices.pop_back();
+            CMakeArray list(interp.get_variable(sub_args[0]));
+            interp.set_variable(sub_args[1], std::to_string(list.size()));
+        } else if (operation == "GET") {
+            // list(GET <list> <index> [<index> ...] <output variable>)
+            if (sub_args.size() < 3) {
+                interp.set_fatal_error("list(GET) requires at least 3 arguments: list(GET <list> <index> <output variable>)");
+                return;
+            }
+
+            const std::string& list_var = sub_args[0];
+            const std::string& out_var = sub_args.back();
 
             CMakeArray list(interp.get_variable(list_var));
 
@@ -70,9 +64,9 @@ void register_list_builtins(Interpreter& interp) {
             }
 
             CMakeArray result;
-            for (const auto& idx_str : indices) {
+            for (size_t i = 1; i + 1 < sub_args.size(); ++i) {
                 try {
-                    long idx = std::stol(idx_str);
+                    long idx = std::stol(sub_args[i]);
                     if (idx < 0) {
                         idx = static_cast<long>(list.size()) + idx;
                     }
@@ -82,7 +76,7 @@ void register_list_builtins(Interpreter& interp) {
                         result.append("NOTFOUND"); // match CMake behavior
                     }
                 } catch (...) {
-                    interp.set_fatal_error("list(GET) invalid index: " + idx_str);
+                    interp.set_fatal_error("list(GET) invalid index: " + sub_args[i]);
                     return;
                 }
             }
@@ -98,15 +92,14 @@ void register_list_builtins(Interpreter& interp) {
             CMakeArray list(interp.get_variable(list_var));
             interp.set_variable(out_var, join(list, glue));
         } else if (operation == "APPEND") {
-            CommandParser parser("list", "APPEND");
-            std::string list_var;
-            std::vector<std::string> items;
-            parser.positional(list_var, "list variable");
-            parser.positionals(items, "items");
-            PARSE_OR_RETURN(parser, interp, sub_args);
-
+            // list(APPEND <list> [<element> ...])
+            if (sub_args.empty()) {
+                interp.set_fatal_error("list(APPEND) requires at least the list variable name");
+                return;
+            }
+            const std::string& list_var = sub_args[0];
             CMakeArray list(interp.get_variable(list_var));
-            for (const auto& item : items) list.append(item);
+            for (size_t i = 1; i < sub_args.size(); ++i) list.append(sub_args[i]);
             interp.set_variable(list_var, list.to_string());
         } else if (operation == "PREPEND") {
             CommandParser parser("list", "PREPEND");

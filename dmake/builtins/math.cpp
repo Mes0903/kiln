@@ -1,76 +1,48 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
-#include "../command_parser.hpp"
 #include <string>
+#include <string_view>
 #include <vector>
-#include <iostream>
 #include <sstream>
 #include <iomanip>
 #include <cstdint>
 #include <stdexcept>
-#include <algorithm>
 
 namespace dmake {
 
+// Single-pass recursive descent math evaluator operating directly on string_view.
+// No intermediate tokenization step.
 class MathEvaluator {
 public:
-    explicit MathEvaluator(std::string expr) : expr_(std::move(expr)) {
-        tokenize();
-    }
+    explicit MathEvaluator(std::string_view expr) : expr_(expr), pos_(0) {}
 
     int64_t evaluate() {
-        if (tokens_.empty()) return 0;
-        token_pos_ = 0;
+        skip_whitespace();
+        if (pos_ >= expr_.size()) return 0;
         int64_t result = parse_bitwise_or();
-        if (token_pos_ < tokens_.size()) {
-            throw std::runtime_error("Unexpected token: " + tokens_[token_pos_]);
+        skip_whitespace();
+        if (pos_ < expr_.size()) {
+            throw std::runtime_error(std::string("Unexpected character in expression: '") + expr_[pos_] + "'");
         }
         return result;
     }
 
 private:
-    void tokenize() {
-        size_t i = 0;
-        while (i < expr_.size()) {
-            char c = expr_[i];
-            if (std::isspace(static_cast<unsigned char>(c))) {
-                i++;
-                continue;
-            }
+    std::string_view expr_;
+    size_t pos_;
 
-            if (std::isdigit(static_cast<unsigned char>(c))) {
-                size_t start = i;
-                if (i + 1 < expr_.size() && (expr_[i+1] == 'x' || expr_[i+1] == 'X')) {
-                    i += 2;
-                    while (i < expr_.size() && std::isxdigit(static_cast<unsigned char>(expr_[i]))) {
-                        i++;
-                    }
-                } else {
-                    while (i < expr_.size() && std::isdigit(static_cast<unsigned char>(expr_[i]))) {
-                        i++;
-                    }
-                }
-                tokens_.push_back(expr_.substr(start, i - start));
-            } else if (c == '(' || c == ')' || c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '|' || c == '&' || c == '^' || c == '~') {
-                tokens_.push_back(std::string(1, c));
-                i++;
-            } else if (c == '<' || c == '>') {
-                if (i + 1 < expr_.size() && expr_[i+1] == c) {
-                    tokens_.push_back(expr_.substr(i, 2));
-                    i += 2;
-                } else {
-                    throw std::runtime_error(std::string("Invalid operator: ") + c);
-                }
-            } else {
-                throw std::runtime_error(std::string("Invalid character in expression '" + expr_ + "': ") + c);
-            }
-        }
+    void skip_whitespace() {
+        while (pos_ < expr_.size() && expr_[pos_] == ' ') ++pos_;
+    }
+
+    char peek() const {
+        return pos_ < expr_.size() ? expr_[pos_] : '\0';
     }
 
     int64_t parse_bitwise_or() {
         int64_t left = parse_bitwise_xor();
-        while (peek() == "|") {
-            consume();
+        while (peek() == '|') {
+            ++pos_;
             left |= parse_bitwise_xor();
         }
         return left;
@@ -78,8 +50,8 @@ private:
 
     int64_t parse_bitwise_xor() {
         int64_t left = parse_bitwise_and();
-        while (peek() == "^") {
-            consume();
+        while (peek() == '^') {
+            ++pos_;
             left ^= parse_bitwise_and();
         }
         return left;
@@ -87,8 +59,8 @@ private:
 
     int64_t parse_bitwise_and() {
         int64_t left = parse_shift();
-        while (peek() == "&") {
-            consume();
+        while (peek() == '&') {
+            ++pos_;
             left &= parse_shift();
         }
         return left;
@@ -96,113 +68,152 @@ private:
 
     int64_t parse_shift() {
         int64_t left = parse_additive();
-        while (peek() == "<<" || peek() == ">>") {
-            auto op = consume();
-            int64_t right = parse_additive();
-            if (op == "<<") left <<= right;
-            else left >>= right;
+        for (;;) {
+            skip_whitespace();
+            if (pos_ + 1 < expr_.size() && expr_[pos_] == '<' && expr_[pos_ + 1] == '<') {
+                pos_ += 2;
+                left <<= parse_additive();
+            } else if (pos_ + 1 < expr_.size() && expr_[pos_] == '>' && expr_[pos_ + 1] == '>') {
+                pos_ += 2;
+                left >>= parse_additive();
+            } else {
+                break;
+            }
         }
         return left;
     }
 
     int64_t parse_additive() {
         int64_t left = parse_multiplicative();
-        while (peek() == "+" || peek() == "-") {
-            auto op = consume();
-            int64_t right = parse_multiplicative();
-            if (op == "+") left += right;
-            else left -= right;
+        for (;;) {
+            skip_whitespace();
+            char c = peek();
+            if (c == '+') { ++pos_; left += parse_multiplicative(); }
+            else if (c == '-') { ++pos_; left -= parse_multiplicative(); }
+            else break;
         }
         return left;
     }
 
     int64_t parse_multiplicative() {
         int64_t left = parse_unary();
-        while (peek() == "*" || peek() == "/" || peek() == "%") {
-            auto op = consume();
-            int64_t right = parse_unary();
-            if (op == "*") left *= right;
-            else if (op == "/") {
+        for (;;) {
+            skip_whitespace();
+            char c = peek();
+            if (c == '*') {
+                ++pos_;
+                left *= parse_unary();
+            } else if (c == '/') {
+                ++pos_;
+                int64_t right = parse_unary();
                 if (right == 0) throw std::runtime_error("Division by zero");
                 left /= right;
-            } else if (op == "%") {
+            } else if (c == '%') {
+                ++pos_;
+                int64_t right = parse_unary();
                 if (right == 0) throw std::runtime_error("Modulo by zero");
                 left %= right;
+            } else {
+                break;
             }
         }
         return left;
     }
 
     int64_t parse_unary() {
-        if (peek() == "+") {
-            consume();
-            return parse_unary();
-        } else if (peek() == "-") {
-            consume();
-            return -parse_unary();
-        } else if (peek() == "~") {
-            consume();
-            return ~parse_unary();
-        }
+        skip_whitespace();
+        char c = peek();
+        if (c == '+') { ++pos_; return parse_unary(); }
+        if (c == '-') { ++pos_; return -parse_unary(); }
+        if (c == '~') { ++pos_; return ~parse_unary(); }
         return parse_primary();
     }
 
     int64_t parse_primary() {
-        auto t = consume();
-        if (t == "(") {
+        skip_whitespace();
+        char c = peek();
+
+        if (c == '(') {
+            ++pos_;
             int64_t result = parse_bitwise_or();
-            if (consume() != ")") throw std::runtime_error("Expected ')'");
+            skip_whitespace();
+            if (peek() != ')') throw std::runtime_error("Expected ')'");
+            ++pos_;
             return result;
         }
 
-        try {
-            // stoll needs a null-terminated string; t is a view into tokens_
-            std::string ts(t);
-            if (ts.size() > 2 && (ts[0] == '0' && (ts[1] == 'x' || ts[1] == 'X'))) {
-                return std::stoll(ts, nullptr, 16);
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            return parse_number();
+        }
+
+        if (c == '\0') {
+            throw std::runtime_error("Unexpected end of expression");
+        }
+        throw std::runtime_error(std::string("Invalid character in expression: '") + c + "'");
+    }
+
+    int64_t parse_number() {
+        size_t start = pos_;
+
+        // Check for hex prefix
+        if (pos_ + 1 < expr_.size() && expr_[pos_] == '0' &&
+            (expr_[pos_ + 1] == 'x' || expr_[pos_ + 1] == 'X')) {
+            pos_ += 2;
+            while (pos_ < expr_.size() && std::isxdigit(static_cast<unsigned char>(expr_[pos_]))) {
+                ++pos_;
             }
-            return std::stoll(ts, nullptr, 10);
+            std::string num_str(expr_.substr(start, pos_ - start));
+            try {
+                return std::stoll(num_str, nullptr, 16);
+            } catch (...) {
+                throw std::runtime_error("Invalid hex number: " + num_str);
+            }
+        }
+
+        // Decimal
+        while (pos_ < expr_.size() && std::isdigit(static_cast<unsigned char>(expr_[pos_]))) {
+            ++pos_;
+        }
+        std::string num_str(expr_.substr(start, pos_ - start));
+        try {
+            return std::stoll(num_str, nullptr, 10);
         } catch (...) {
-            throw std::runtime_error("Invalid number: " + std::string(t));
+            throw std::runtime_error("Invalid number: " + num_str);
         }
     }
-
-    std::string_view peek() const {
-        if (token_pos_ < tokens_.size()) return tokens_[token_pos_];
-        return {};
-    }
-
-    std::string_view consume() {
-        if (token_pos_ < tokens_.size()) return tokens_[token_pos_++];
-        throw std::runtime_error("Unexpected end of expression");
-    }
-
-    std::string expr_;
-    std::vector<std::string> tokens_;
-    size_t token_pos_ = 0;
 };
 
 void register_math_builtins(Interpreter& interp) {
     interp.add_builtin("math", [](Interpreter& interp, const std::vector<std::string>& args) {
-        CommandParser parser("math");
-        std::string mode;
-        std::string var_name;
-        std::string expression;
-        std::string output_format;
-
-        parser.positional(mode, "mode (EXPR)");
-        parser.positional(var_name, "variable name");
-        parser.positional(expression, "expression");
-        parser.value("OUTPUT_FORMAT", output_format);
-
-        PARSE_OR_RETURN(parser, interp, args);
-
-        if (output_format.empty()) {
-            output_format = "DECIMAL";
+        // math(EXPR <variable> "<expression>" [OUTPUT_FORMAT <DECIMAL|HEXADECIMAL>])
+        if (args.size() < 3) {
+            interp.set_fatal_error("math() requires at least 3 arguments: math(EXPR <variable> <expression>)");
+            return;
         }
 
-        if (mode != "EXPR") {
-            interp.set_fatal_error("math() only supports EXPR mode");
+        if (args[0] != "EXPR") {
+            interp.set_fatal_error("math() only supports EXPR mode, got: " + args[0]);
+            return;
+        }
+
+        const std::string& var_name = args[1];
+        const std::string& expression = args[2];
+
+        // Parse optional OUTPUT_FORMAT
+        std::string_view output_format = "DECIMAL";
+        if (args.size() >= 5) {
+            if (args[3] == "OUTPUT_FORMAT") {
+                output_format = args[4];
+            } else {
+                interp.set_fatal_error("math(EXPR): unexpected argument '" + args[3] + "', expected OUTPUT_FORMAT");
+                return;
+            }
+            if (args.size() > 5) {
+                interp.set_fatal_error("math(EXPR): too many arguments");
+                return;
+            }
+        } else if (args.size() == 4) {
+            interp.set_fatal_error("math(EXPR): OUTPUT_FORMAT requires a value (DECIMAL or HEXADECIMAL)");
             return;
         }
 
@@ -218,7 +229,7 @@ void register_math_builtins(Interpreter& interp) {
             } else if (output_format == "DECIMAL") {
                 result_str = std::to_string(result);
             } else {
-                interp.set_fatal_error("Invalid OUTPUT_FORMAT: " + output_format + ". Must be DECIMAL or HEXADECIMAL.");
+                interp.set_fatal_error("Invalid OUTPUT_FORMAT: " + std::string(output_format) + ". Must be DECIMAL or HEXADECIMAL.");
                 return;
             }
 
