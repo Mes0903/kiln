@@ -395,17 +395,7 @@ void register_file_builtins(Interpreter& interp) {
                 p = base / p;
             }
 
-            try {
-                // lexically_normal + absolute is often what REAL_PATH wants if it doesn't exist,
-                // but CMake's REAL_PATH usually resolves symlinks too.
-                if (std::filesystem::exists(p)) {
-                    interp.set_variable(out_var, std::filesystem::canonical(p).string());
-                } else {
-                    interp.set_variable(out_var, p.lexically_normal().string());
-                }
-            } catch (...) {
-                interp.set_variable(out_var, p.lexically_normal().string());
-            }
+            interp.set_variable(out_var, interp.cached_weakly_canonical(p));
         } else if(ci_equals(operation, "REMOVE")) {
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(REMOVE) requires at least one file path");

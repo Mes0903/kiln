@@ -731,12 +731,7 @@ void register_path_builtins(Interpreter& interp) {
             }
 
             if (mode == "REALPATH") {
-                try {
-                    // weakly_canonical handles non-existent paths by resolving what it can
-                    result = std::filesystem::weakly_canonical(abs_path).string();
-                } catch (...) {
-                    result = abs_path.lexically_normal().string();
-                }
+                result = interp.cached_weakly_canonical(abs_path);
             } else {
                 result = abs_path.lexically_normal().string();
             }

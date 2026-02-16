@@ -3150,6 +3150,37 @@ std::optional<int64_t> Interpreter::get_dir_mtime_cached(const std::string& path
     return mtime;
 }
 
+std::string Interpreter::cached_weakly_canonical(const std::filesystem::path& p) {
+    auto parent = p.parent_path().string();
+    auto filename = p.filename().string();
+
+    // Look up resolved parent directory in cache
+    std::string resolved_parent;
+    auto it = canonical_dir_cache_.find(parent);
+    if (it != canonical_dir_cache_.end()) {
+        resolved_parent = it->second;
+    } else {
+        try {
+            resolved_parent = std::filesystem::weakly_canonical(parent).string();
+        } catch (...) {
+            resolved_parent = std::filesystem::path(parent).lexically_normal().string();
+        }
+        canonical_dir_cache_[parent] = resolved_parent;
+    }
+
+    // For the leaf: check if it's a symlink (single lstat syscall)
+    auto full = std::filesystem::path(resolved_parent) / filename;
+    std::error_code ec;
+    if (std::filesystem::is_symlink(full, ec)) {
+        try {
+            return std::filesystem::weakly_canonical(full).string();
+        } catch (...) {
+            return full.lexically_normal().string();
+        }
+    }
+    return full.lexically_normal().string();
+}
+
 bool Interpreter::is_project_path(const std::string& path) const {
     std::filesystem::path abs_path = std::filesystem::absolute(path);
     std::filesystem::path source_dir = std::filesystem::absolute(get_variable("CMAKE_SOURCE_DIR"));

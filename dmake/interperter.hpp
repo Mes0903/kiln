@@ -266,6 +266,9 @@ public:
     bool cached_file_exists(const std::filesystem::path& full_path);
     bool cached_file_exists(const std::filesystem::path& dir, const std::string& filename);
 
+    // Canonical path with directory-level caching (avoids redundant readlink syscalls)
+    std::string cached_weakly_canonical(const std::filesystem::path& p);
+
     // Get directory listing (caching handled internally)
     // Returns nullptr if directory doesn't exist or can't be read
     const std::unordered_set<std::string>* get_directory_listing(const std::filesystem::path& dir);
@@ -503,6 +506,10 @@ private:
     // Only caches directories outside source_dir and binary_dir
     // Key: absolute path, Value: mtime (or nullopt if doesn't exist)
     std::map<std::string, std::optional<int64_t>> dir_mtime_cache_;
+
+    // Session-wide canonical directory cache (avoids redundant readlink syscalls)
+    // Key: parent directory path, Value: resolved canonical path
+    std::unordered_map<std::string, std::string> canonical_dir_cache_;
 
     // Property system (managed by root)
     // Property definitions: scope -> property_name -> definition
