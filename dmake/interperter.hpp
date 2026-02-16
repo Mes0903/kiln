@@ -237,6 +237,9 @@ public:
 
     std::string get_variable(std::string_view var_name) const;
     std::optional<std::string> get_optional_variable(std::string_view var_name) const;
+    // Returns a non-owning view of the variable's stored value.
+    // Valid until the variable is next mutated or scope changes.
+    std::optional<std::string_view> get_variable_view(std::string_view var_name) const;
     void set_variable(const std::string& var_name, const std::string& value);
     std::expected<void, std::string> set_variable_parent_scope(const std::string& var_name, const std::string& value);
     std::expected<void, std::string> unset_variable_parent_scope(const std::string& var_name);

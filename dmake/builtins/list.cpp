@@ -44,8 +44,9 @@ void register_list_builtins(Interpreter& interp) {
                 interp.set_fatal_error("list(LENGTH) requires exactly 2 arguments: list(LENGTH <list> <output variable>)");
                 return;
             }
+            auto len_view = interp.get_variable_view(sub_args[0]);
             interp.set_variable(sub_args[1], std::to_string(
-                CMakeArray::count_elements(interp.get_variable(sub_args[0]))));
+                len_view ? CMakeArray::count_elements(*len_view) : 0));
         } else if (operation == "GET") {
             // list(GET <list> <index> [<index> ...] <output variable>)
             if (sub_args.size() < 3) {
@@ -56,31 +57,33 @@ void register_list_builtins(Interpreter& interp) {
             const std::string& list_var = sub_args[0];
             const std::string& out_var = sub_args.back();
 
-            CMakeArray list(interp.get_variable(list_var));
+            std::string list_str = interp.get_variable(list_var);
+            CMakeArrayView list(list_str);
 
             if (list.empty()) {
                 interp.set_variable(out_var, "NOTFOUND");
                 return;
             }
 
-            CMakeArray result;
+            std::string result_str;
             for (size_t i = 1; i + 1 < sub_args.size(); ++i) {
                 try {
                     long idx = std::stol(sub_args[i]);
                     if (idx < 0) {
                         idx = static_cast<long>(list.size()) + idx;
                     }
+                    if (!result_str.empty()) result_str += ';';
                     if (idx >= 0 && static_cast<size_t>(idx) < list.size()) {
-                        result.append(list[static_cast<size_t>(idx)]);
+                        result_str += list[static_cast<size_t>(idx)];
                     } else {
-                        result.append("NOTFOUND"); // match CMake behavior
+                        result_str += "NOTFOUND";
                     }
                 } catch (...) {
                     interp.set_fatal_error("list(GET) invalid index: " + sub_args[i]);
                     return;
                 }
             }
-            interp.set_variable(out_var, result.to_string());
+            interp.set_variable(out_var, result_str);
         } else if (operation == "JOIN") {
             CommandParser parser("list", "JOIN");
             std::string list_var, glue, out_var;
@@ -89,8 +92,12 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeArray list(interp.get_variable(list_var));
-            interp.set_variable(out_var, join(list, glue));
+            auto list_view = interp.get_variable_view(list_var);
+            if (!list_view || list_view->empty()) {
+                interp.set_variable(out_var, "");
+            } else {
+                interp.set_variable(out_var, join(CMakeArrayIterator(*list_view), glue));
+            }
         } else if (operation == "APPEND") {
             // list(APPEND <list> [<element> ...])
             if (sub_args.empty()) {
@@ -301,7 +308,8 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeArray list(interp.get_variable(list_var));
+            std::string list_str = interp.get_variable(list_var);
+            CMakeArrayView list(list_str);
             try {
                 long start = std::stol(start_str);
                 long length = std::stol(length_str);
@@ -316,7 +324,16 @@ void register_list_builtins(Interpreter& interp) {
                     return;
                 }
 
-                interp.set_variable(out_var, list.sublist(static_cast<size_t>(start), length).to_string());
+                // Build sublist string directly from views
+                size_t s = static_cast<size_t>(start);
+                size_t count = (length < 0) ? list.size() - s
+                             : std::min(static_cast<size_t>(length), list.size() - s);
+                std::string result_str;
+                for (size_t i = s; i < s + count; ++i) {
+                    if (!result_str.empty()) result_str += ';';
+                    result_str += list[i];
+                }
+                interp.set_variable(out_var, result_str);
             } catch (...) {
                 interp.set_fatal_error("list(SUBLIST) invalid indices");
             }
@@ -328,12 +345,13 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeArray list(interp.get_variable(list_var));
+            auto list_view = interp.get_variable_view(list_var);
             long found_index = -1;
-            for (size_t i = 0; i < list.size(); ++i) {
-                if (list[i] == value) {
-                    found_index = static_cast<long>(i);
-                    break;
+            if (list_view && !list_view->empty()) {
+                size_t idx = 0;
+                for (auto item : CMakeArrayIterator(*list_view)) {
+                    if (item == value) { found_index = static_cast<long>(idx); break; }
+                    ++idx;
                 }
             }
             interp.set_variable(out_var, std::to_string(found_index));
@@ -345,19 +363,16 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            CMakeArray list(interp.get_variable(list_var));
-            std::set<std::string> items_set(items.begin(), items.end());
-            std::vector<size_t> remove_idxs;
-            for(size_t i=0;i<list.size();i++) {
-                const auto& item = list[i];
-                if(items_set.contains(item)) {
-                    remove_idxs.push_back(i);
+            std::string list_str = interp.get_variable(list_var);
+            std::set<std::string, std::less<>> items_set(items.begin(), items.end());
+            std::string result_str;
+            for (auto item : CMakeArrayIterator(list_str)) {
+                if (!items_set.contains(item)) {
+                    if (!result_str.empty()) result_str += ';';
+                    result_str += item;
                 }
             }
-            for(auto it = remove_idxs.rbegin(); it != remove_idxs.rend(); it++) {
-                list.erase(*it);
-            }
-            interp.set_variable(list_var, list.to_string());
+            interp.set_variable(list_var, result_str);
         } else if (operation == "REMOVE_AT") {
             CommandParser parser("list", "REMOVE_AT");
             std::string list_var;
@@ -422,17 +437,17 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
 
-            CMakeArray list(interp.get_variable(list_var));
-            CMakeArray result;
-
-            for (size_t i = 0; i < list.size(); ++i) {
-                bool matches = (*rx)->match(list[i]);
-                if ((mode == "INCLUDE" && matches) || (mode == "EXCLUDE" && !matches)) {
-                    result.append(list[i]);
+            std::string list_str = interp.get_variable(list_var);
+            bool include = (mode == "INCLUDE");
+            std::string result_str;
+            for (auto item : CMakeArrayIterator(list_str)) {
+                bool matches = (*rx)->match(item);
+                if ((include && matches) || (!include && !matches)) {
+                    if (!result_str.empty()) result_str += ';';
+                    result_str += item;
                 }
             }
-
-            interp.set_variable(list_var, result.to_string());
+            interp.set_variable(list_var, result_str);
         } else if (operation == "TRANSFORM") {
             // list(TRANSFORM <list> <ACTION> [<SELECTOR>] [OUTPUT_VARIABLE <output variable>])
             if (sub_args.size() < 2) {

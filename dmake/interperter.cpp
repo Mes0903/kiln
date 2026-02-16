@@ -1865,6 +1865,27 @@ std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argumen
             continue;
         }
 
+        // Fast path: single ${VAR} reference, unquoted — iterate variable storage directly (zero copy)
+        if (arg.parts.size() == 1 && !arg.quoted &&
+            std::holds_alternative<VariableReference>(arg.parts[0])) {
+            const auto& ref = std::get<VariableReference>(arg.parts[0]);
+            if (ref.namespace_prefix.empty() &&
+                ref.name_parts.size() == 1 &&
+                std::holds_alternative<std::string>(ref.name_parts[0])) {
+                auto view = get_variable_view(std::get<std::string>(ref.name_parts[0]));
+                if (view && !view->empty()) {
+                    if (view->find(';') == std::string_view::npos) {
+                        result.emplace_back(*view);
+                    } else {
+                        for (auto item : CMakeArrayIterator(*view)) {
+                            if (!item.empty()) result.emplace_back(item);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
         std::string val = evaluate_argument(arg);
         if (arg.quoted) {
             result.push_back(std::move(val));
@@ -2932,6 +2953,38 @@ std::optional<std::string> Interpreter::get_optional_variable(std::string_view n
     if (auto cache_it = cache_variables_.find(std::string(name)); cache_it != cache_variables_.end()) {
         return cache_it->second;
     }
+
+    return std::nullopt;
+}
+
+std::optional<std::string_view> Interpreter::get_variable_view(std::string_view name) const {
+    // Check macro substitutions first (macro parameters take precedence)
+    if (!macro_substitutions_.empty()) {
+        if (auto it = macro_substitutions_.find(std::string(name)); it != macro_substitutions_.end())
+            return std::string_view(it->second);
+    }
+
+    // Function-scoped special variables
+    if (name.size() >= 22 && name[14] == 'F' &&
+        (name == "CMAKE_CURRENT_FUNCTION" ||
+         name == "CMAKE_CURRENT_FUNCTION_LIST_FILE" ||
+         name == "CMAKE_CURRENT_FUNCTION_LIST_DIR")) {
+        const auto* fb = frame_stack_.back().function_block;
+        if (fb != nullptr) {
+            if (name == "CMAKE_CURRENT_FUNCTION") return std::string_view(fb->name);
+            if (name == "CMAKE_CURRENT_FUNCTION_LIST_FILE") return std::string_view(fb->definition_file);
+            if (name == "CMAKE_CURRENT_FUNCTION_LIST_DIR") return std::string_view(fb->definition_dir);
+        }
+        return std::nullopt;
+    }
+
+    // Check local variables (ShadowMap stores std::string, pointer is stable)
+    if (auto* val = variables_.try_get(name))
+        return std::string_view(*val);
+
+    // Check cache variables
+    if (auto it = cache_variables_.find(std::string(name)); it != cache_variables_.end())
+        return std::string_view(it->second);
 
     return std::nullopt;
 }
