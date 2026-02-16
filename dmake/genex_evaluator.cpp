@@ -617,13 +617,16 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
 }
 
 std::expected<std::string, std::string> GenexEvaluator::evaluate(const std::string& input) {
+    if (!GenexParser::contains_genex(input)) {
+        return input;
+    }
+
     GenexParser parser;
     auto parse_result = parser.parse(input);
     if (!parse_result) {
         return std::unexpected(parse_result.error());
     }
 
-    // If no genex, return as-is
     if (!parse_result->has_genex) {
         return input;
     }
@@ -669,7 +672,15 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
     }
 
     for (const auto& value : reassembled) {
-        // Parse to check if this is a pure generator expression
+        // Fast path: no genex marker at all — skip parsing entirely
+        if (!GenexParser::contains_genex(value)) {
+            if (!value.empty()) {
+                result.push_back(value);
+            }
+            continue;
+        }
+
+        // Parse once — reuse for both genex classification and evaluation
         GenexParser parser;
         auto parse_result = parser.parse(value);
         if (!parse_result) {
@@ -683,7 +694,7 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
                              parse_result->nodes.size() == 1 &&
                              parse_result->nodes[0]->type != GenexNodeType::LITERAL;
 
-        auto eval_result = evaluate(value);
+        auto eval_result = evaluate_nodes(parse_result->nodes);
         if (!eval_result) {
             return std::unexpected(eval_result.error());
         }
@@ -719,6 +730,11 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
 }
 
 std::expected<LinkLibraryResult, std::string> GenexEvaluator::evaluate_link_library(const std::string& input) {
+    // Fast path: no genex — just a plain library name
+    if (!GenexParser::contains_genex(input)) {
+        return LinkLibraryResult{.value = input, .link_only = false};
+    }
+
     GenexParser parser;
     auto parse_result = parser.parse(input);
     if (!parse_result) {

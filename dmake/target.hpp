@@ -197,7 +197,7 @@ protected:
         std::string name;
         bool is_path;
     };
-    static std::vector<PropInfo> build_props_to_resolve();
+    static const std::vector<PropInfo>& build_props_to_resolve();
 
     // Resolve a possibly-relative path to absolute against source_dir_.
     std::string resolve_to_absolute_path(const std::string& p) const;

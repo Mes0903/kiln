@@ -353,14 +353,17 @@ void merge_dedup(std::vector<std::string>& target,
 }
 } // anonymous namespace
 
-std::vector<Target::PropInfo> Target::build_props_to_resolve() {
-    std::vector<PropInfo> result;
-    for (const auto& meta : kListProperties) {
-        if (meta.transitive && meta.name != "LINK_LIBRARIES") {
-            result.push_back({std::string(meta.name), meta.is_path});
+const std::vector<Target::PropInfo>& Target::build_props_to_resolve() {
+    static const std::vector<PropInfo> instance = [] {
+        std::vector<PropInfo> result;
+        for (const auto& meta : kListProperties) {
+            if (meta.transitive && meta.name != "LINK_LIBRARIES") {
+                result.push_back({std::string(meta.name), meta.is_path});
+            }
         }
-    }
-    return result;
+        return result;
+    }();
+    return instance;
 }
 
 std::string Target::resolve_to_absolute_path(const std::string& p) const {
@@ -381,6 +384,7 @@ void Target::initialize_local_properties(
 
         auto process_local = [&](PropertyVisibility vis, std::vector<std::string>& out) {
             const auto& val = get_property_list(info.name, vis);
+            if (val.empty()) return;
             auto eval_result = evaluator.evaluate_property_list(val);
             if (!eval_result) {
                 std::ostringstream oss;
