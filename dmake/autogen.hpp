@@ -1,12 +1,10 @@
 #pragma once
 
+#include "target.hpp"
 #include <string>
-#include <map>
-#include <memory>
 
 namespace dmake {
 
-class Target;
 class GraphTransaction;
 class Interpreter;
 
@@ -18,7 +16,7 @@ void generate_autogen_tasks(
     Target& target,
     GraphTransaction& txn,
     Interpreter& interp,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+    const TargetMap& all_targets,
     const std::string& pre_build_task_id);
 
 } // namespace dmake

@@ -158,6 +158,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
     CMakeArray results;
     std::filesystem::path base_path = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
     auto& cache = interp.get_cache_store();
+    bool all_presorted = true; // Track if all patterns came from cache (pre-sorted)
 
     for (const auto& pattern : patterns) {
         bool pattern_recurse = recurse;
@@ -268,11 +269,15 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
 
         if (!cache_hit) {
             // Cache miss — run the glob
+            all_presorted = false;
             CMakeArray pattern_results;
             std::map<std::string, int64_t> dir_mtimes;
             glob_components(interp, search_dir_str, pattern_components, compiled, 0, pattern_recurse, relative, pattern_results, dir_mtimes);
 
             match_count = pattern_results.size();
+
+            // Sort before caching so cache hits get pre-sorted data
+            pattern_results.sort();
 
             // Store in cache
             GlobCacheEntry entry;
@@ -298,7 +303,10 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
     }
 
     // CMake always returns FILE(GLOB) results sorted alphabetically
-    results.sort();
+    // Skip sort if single pattern and all data came from cache (pre-sorted)
+    if (!(patterns.size() == 1 && all_presorted)) {
+        results.sort();
+    }
     interp.set_variable(var, results.to_string());
 }
 } // namespace
@@ -310,10 +318,10 @@ void register_file_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string operation = dmake::to_upper(args[0]);
+        const auto& operation = args[0];
         std::span<const std::string> sub_args(args.begin() + 1, args.end());
 
-        if (operation == "WRITE" || operation == "APPEND") {
+        if (ci_equals(operation, "WRITE") || ci_equals(operation, "APPEND")) {
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(" + operation + ") requires a filename");
                 return;
@@ -324,7 +332,7 @@ void register_file_builtins(Interpreter& interp) {
             }
 
             std::filesystem::create_directories(path.parent_path());
-            std::ofstream file(path, (operation == "APPEND") ? std::ios::app : std::ios::trunc);
+            std::ofstream file(path, (ci_equals(operation, "APPEND")) ? std::ios::app : std::ios::trunc);
             if (!file) {
                 interp.set_fatal_error("file(" + operation + ") could not open file: " + path.string());
                 return;
@@ -332,7 +340,7 @@ void register_file_builtins(Interpreter& interp) {
             for (size_t i = 1; i < sub_args.size(); ++i) {
                 file << sub_args[i];
             }
-        } else if (operation == "READ") {
+        } else if (ci_equals(operation, "READ")) {
             CommandParser parser("file", "READ");
             std::string filename, var;
             parser.positional(filename, "filename");
@@ -351,7 +359,7 @@ void register_file_builtins(Interpreter& interp) {
             }
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             interp.set_variable(var, content);
-        } else if (operation == "GLOB" || operation == "GLOB_RECURSE") {
+        } else if (ci_equals(operation, "GLOB") || ci_equals(operation, "GLOB_RECURSE")) {
             // Profiling handled inside perform_glob per-pattern
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(" + operation + ") requires a variable name");
@@ -361,7 +369,7 @@ void register_file_builtins(Interpreter& interp) {
             std::string relative;
             std::vector<std::string> patterns;
 
-            bool recurse = (operation == "GLOB_RECURSE");
+            bool recurse = (ci_equals(operation, "GLOB_RECURSE"));
 
             for (size_t i = 1; i < sub_args.size(); ++i) {
                 if (sub_args[i] == "RELATIVE" && i + 1 < sub_args.size()) {
@@ -373,7 +381,7 @@ void register_file_builtins(Interpreter& interp) {
                 }
             }
             perform_glob(interp, var, patterns, recurse, relative);
-        } else if (operation == "REAL_PATH") {
+        } else if (ci_equals(operation, "REAL_PATH")) {
             CommandParser parser("file", "REAL_PATH");
             std::string input_path, out_var, base_dir;
             parser.positional(input_path, "input path");
@@ -398,7 +406,7 @@ void register_file_builtins(Interpreter& interp) {
             } catch (...) {
                 interp.set_variable(out_var, p.lexically_normal().string());
             }
-        } else if(operation == "REMOVE") {
+        } else if(ci_equals(operation, "REMOVE")) {
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(REMOVE) requires at least one file path");
                 return;
@@ -419,7 +427,7 @@ void register_file_builtins(Interpreter& interp) {
                     return;
                 }
             }
-        } else if (operation == "STRINGS") {
+        } else if (ci_equals(operation, "STRINGS")) {
             CommandParser parser("file", "STRINGS");
             std::string filename, var;
             std::string length_min_str, length_max_str;
@@ -642,7 +650,7 @@ void register_file_builtins(Interpreter& interp) {
                     interp.set_variable("CMAKE_MATCH_" + std::to_string(i), last_match_groups[i]);
                 }
             }
-        } else if (operation == "MAKE_DIRECTORY") {
+        } else if (ci_equals(operation, "MAKE_DIRECTORY")) {
             // file(MAKE_DIRECTORY <directories>...)
             // Creates the specified directories, including parent directories if needed
             if (sub_args.empty()) {
@@ -664,7 +672,7 @@ void register_file_builtins(Interpreter& interp) {
                     return;
                 }
             }
-        } else if (operation == "TOUCH") {
+        } else if (ci_equals(operation, "TOUCH")) {
             // file(TOUCH <files>...)
             // Creates files if they don't exist, updates timestamp if they do
             for (const auto& file_arg : sub_args) {
@@ -696,7 +704,7 @@ void register_file_builtins(Interpreter& interp) {
                     }
                 }
             }
-        } else if (operation == "TOUCH_NOCREATE") {
+        } else if (ci_equals(operation, "TOUCH_NOCREATE")) {
             // file(TOUCH_NOCREATE <files>...)
             // Updates timestamp only if file exists, silently ignores non-existent files
             for (const auto& file_arg : sub_args) {
@@ -711,7 +719,7 @@ void register_file_builtins(Interpreter& interp) {
                     // Silently ignore errors per CMake behavior
                 }
             }
-        } else if (operation == "REMOVE_RECURSE") {
+        } else if (ci_equals(operation, "REMOVE_RECURSE")) {
             // file(REMOVE_RECURSE <files>...)
             // Recursively removes files and directories
             for (const auto& file_arg : sub_args) {
@@ -727,7 +735,7 @@ void register_file_builtins(Interpreter& interp) {
                 std::filesystem::remove_all(path, ec);
                 // CMake silently ignores errors for non-existent paths
             }
-        } else if (operation == "RENAME") {
+        } else if (ci_equals(operation, "RENAME")) {
             // file(RENAME <oldname> <newname> [RESULT <result>] [NO_REPLACE])
             CommandParser parser("file", "RENAME");
             std::string oldname, newname, result_var;
@@ -769,7 +777,7 @@ void register_file_builtins(Interpreter& interp) {
             if (!result_var.empty()) {
                 interp.set_variable(result_var, "0");
             }
-        } else if (operation == "COPY_FILE") {
+        } else if (ci_equals(operation, "COPY_FILE")) {
             // file(COPY_FILE <oldname> <newname> [RESULT <result>] [ONLY_IF_DIFFERENT])
             CommandParser parser("file", "COPY_FILE");
             std::string oldname, newname, result_var;
@@ -829,7 +837,7 @@ void register_file_builtins(Interpreter& interp) {
             if (!result_var.empty()) {
                 interp.set_variable(result_var, "0");
             }
-        } else if (operation == "SIZE") {
+        } else if (ci_equals(operation, "SIZE")) {
             // file(SIZE <filename> <variable>)
             CommandParser parser("file", "SIZE");
             std::string filename, var;
@@ -849,7 +857,7 @@ void register_file_builtins(Interpreter& interp) {
                 return;
             }
             interp.set_variable(var, std::to_string(size));
-        } else if (operation == "READ_SYMLINK") {
+        } else if (ci_equals(operation, "READ_SYMLINK")) {
             // file(READ_SYMLINK <linkname> <variable>)
             CommandParser parser("file", "READ_SYMLINK");
             std::string linkname, var;
@@ -869,7 +877,7 @@ void register_file_builtins(Interpreter& interp) {
                 return;
             }
             interp.set_variable(var, target.string());
-        } else if (operation == "CREATE_LINK") {
+        } else if (ci_equals(operation, "CREATE_LINK")) {
             // file(CREATE_LINK <original> <linkname> [RESULT <result>] [COPY_ON_ERROR] [SYMBOLIC])
             CommandParser parser("file", "CREATE_LINK");
             std::string original, linkname, result_var;
@@ -926,7 +934,7 @@ void register_file_builtins(Interpreter& interp) {
             if (!result_var.empty()) {
                 interp.set_variable(result_var, "0");
             }
-        } else if (operation == "RELATIVE_PATH") {
+        } else if (ci_equals(operation, "RELATIVE_PATH")) {
             // file(RELATIVE_PATH <variable> <directory> <file>)
             CommandParser parser("file", "RELATIVE_PATH");
             std::string var, directory, file_path;
@@ -949,7 +957,7 @@ void register_file_builtins(Interpreter& interp) {
                 interp.set_variable(var, "");
             else
                 interp.set_variable(var, rel.string());
-        } else if (operation == "TO_CMAKE_PATH") {
+        } else if (ci_equals(operation, "TO_CMAKE_PATH")) {
             // file(TO_CMAKE_PATH "<path>" <variable>)
             // Converts native path separators to forward slashes
             if (sub_args.size() < 2) {
@@ -962,7 +970,7 @@ void register_file_builtins(Interpreter& interp) {
             // Replace backslashes with forward slashes
             std::replace(path.begin(), path.end(), '\\', '/');
             interp.set_variable(var, path);
-        } else if (operation == "TO_NATIVE_PATH") {
+        } else if (ci_equals(operation, "TO_NATIVE_PATH")) {
             // file(TO_NATIVE_PATH "<path>" <variable>)
             // Converts to native path separators
             if (sub_args.size() < 2) {
@@ -978,7 +986,7 @@ void register_file_builtins(Interpreter& interp) {
 #endif
             // On Unix, path separators are already forward slashes
             interp.set_variable(var, path);
-        } else if (operation == "TIMESTAMP") {
+        } else if (ci_equals(operation, "TIMESTAMP")) {
             // file(TIMESTAMP <filename> <variable> [<format>] [UTC])
             if (sub_args.size() < 2) {
                 interp.set_fatal_error("file(TIMESTAMP) requires filename and variable arguments");
@@ -1026,7 +1034,7 @@ void register_file_builtins(Interpreter& interp) {
                 return;
             }
             interp.set_variable(var, buffer);
-        } else if (operation == "COPY" || operation == "INSTALL") {
+        } else if (ci_equals(operation, "COPY") || ci_equals(operation, "INSTALL")) {
             // file(COPY <files>... DESTINATION <dir> [options...])
             // file(INSTALL <files>... DESTINATION <dir> [options...])
             std::vector<std::string> files;
@@ -1124,7 +1132,7 @@ void register_file_builtins(Interpreter& interp) {
                     }
                 }
             }
-        } else if (operation == "CHMOD" || operation == "CHMOD_RECURSE") {
+        } else if (ci_equals(operation, "CHMOD") || ci_equals(operation, "CHMOD_RECURSE")) {
             // file(CHMOD <files>... [PERMISSIONS <perms>...] [FILE_PERMISSIONS <perms>...] [DIRECTORY_PERMISSIONS <perms>...])
             std::vector<std::string> files;
             std::filesystem::perms file_perms = std::filesystem::perms::none;
@@ -1203,7 +1211,7 @@ void register_file_builtins(Interpreter& interp) {
                     path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
                 }
 
-                if (operation == "CHMOD_RECURSE" && std::filesystem::is_directory(path)) {
+                if (ci_equals(operation, "CHMOD_RECURSE") && std::filesystem::is_directory(path)) {
                     for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
                         apply_chmod(entry.path());
                     }
@@ -1212,7 +1220,7 @@ void register_file_builtins(Interpreter& interp) {
                     apply_chmod(path);
                 }
             }
-        } else if (operation == "CONFIGURE") {
+        } else if (ci_equals(operation, "CONFIGURE")) {
             // file(CONFIGURE OUTPUT <output-file> CONTENT <content> [ESCAPE_QUOTES] [@ONLY] [NEWLINE_STYLE ...])
             CommandParser parser("file", "CONFIGURE");
             std::string output_file, content, newline_style;
@@ -1348,7 +1356,7 @@ void register_file_builtins(Interpreter& interp) {
                 return;
             }
             out << result;
-        } else if (operation == "GENERATE") {
+        } else if (ci_equals(operation, "GENERATE")) {
             // file(GENERATE OUTPUT <output-file> [INPUT <input-file>|CONTENT <content>] ...)
             // Simplified implementation - doesn't support all generator expressions
             CommandParser parser("file", "GENERATE");
@@ -1400,7 +1408,7 @@ void register_file_builtins(Interpreter& interp) {
                 return;
             }
             out << file_content;
-        } else if (operation == "LOCK") {
+        } else if (ci_equals(operation, "LOCK")) {
             // file(LOCK <path> [DIRECTORY] [RELEASE] [GUARD <scope>] [RESULT_VARIABLE <var>] [TIMEOUT <sec>])
             // Simplified implementation - advisory locking is platform-specific
             CommandParser parser("file", "LOCK");
@@ -1419,7 +1427,7 @@ void register_file_builtins(Interpreter& interp) {
             if (!result_var.empty()) {
                 interp.set_variable(result_var, "0");
             }
-        } else if (operation == "DOWNLOAD") {
+        } else if (ci_equals(operation, "DOWNLOAD")) {
             // file(DOWNLOAD <url> [<file>] [STATUS <var>] [LOG <var>] [TIMEOUT <sec>]
             //      [INACTIVITY_TIMEOUT <sec>] [SHOW_PROGRESS] [TLS_VERIFY <ON|OFF>]
             //      [TLS_CAINFO <file>] [USERPWD <u:p>] [HTTPHEADER <hdr>...]
@@ -1658,7 +1666,7 @@ void register_file_builtins(Interpreter& interp) {
             if (!status_var.empty()) {
                 interp.set_variable(status_var, "0;\"No error\"");
             }
-        } else if (operation == "ARCHIVE_EXTRACT") {
+        } else if (ci_equals(operation, "ARCHIVE_EXTRACT")) {
             // file(ARCHIVE_EXTRACT INPUT <archive> [DESTINATION <dir>]
             //      [PATTERNS <pat>...] [LIST_ONLY] [VERBOSE] [TOUCH])
             CommandParser parser("file", "ARCHIVE_EXTRACT");
@@ -1790,7 +1798,7 @@ void register_file_builtins(Interpreter& interp) {
             }
             archive_read_close(a);
             archive_read_free(a);
-        } else if (operation == "SHA256" || operation == "MD5" || operation == "BLAKE2B") {
+        } else if (ci_equals(operation, "SHA256") || ci_equals(operation, "MD5") || ci_equals(operation, "BLAKE2B")) {
             // file(<HASH> <filename> <variable>)
             CommandParser parser("file", operation);
             std::string filename, out_var;
@@ -1819,9 +1827,9 @@ void register_file_builtins(Interpreter& interp) {
             std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
 
             std::string hash;
-            if (operation == "SHA256") {
+            if (ci_equals(operation, "SHA256")) {
                 hash = dmake::sha256(content).to_string();
-            } else if (operation == "MD5") {
+            } else if (ci_equals(operation, "MD5")) {
                 hash = dmake::md5(content).to_string();
             } else {
                 hash = dmake::blake2b(content, "").to_string();

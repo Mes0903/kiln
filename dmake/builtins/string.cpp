@@ -18,11 +18,6 @@ namespace dmake {
 
 namespace {
 
-// Helper to convert string to uppercase
-std::string to_upper(const std::string& str) {
-    return dmake::to_upper(str);
-}
-
 // Helper to convert string to lowercase
 std::string to_lower(const std::string& str) {
     return dmake::to_lower(str);
@@ -324,12 +319,12 @@ void register_string_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string operation = to_upper(args[0]);
+        const auto& operation = args[0];
         std::span<const std::string> sub_args(args.begin() + 1, args.end());
 
         // ========== Search and Replace ==========
 
-        if (operation == "FIND") {
+        if (ci_equals(operation, "FIND")) {
             CommandParser parser("string", "FIND");
             std::string input, substring, out_var;
             bool reverse = false;
@@ -350,7 +345,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, (pos == std::string::npos) ? "-1" : std::to_string(pos));
 
-        } else if (operation == "REPLACE") {
+        } else if (ci_equals(operation, "REPLACE")) {
             CommandParser parser("string", "REPLACE");
             std::string match_str, replace_str, out_var;
             std::vector<std::string> inputs;
@@ -373,17 +368,17 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, result);
 
-        } else if (operation == "REGEX") {
+        } else if (ci_equals(operation, "REGEX")) {
             // REGEX operations require a subcommand
             if (sub_args.empty()) {
                 interp.set_fatal_error("string(REGEX) requires a subcommand (MATCH, MATCHALL, REPLACE, QUOTE)");
                 return;
             }
 
-            std::string regex_op = to_upper(std::string(sub_args[0]));
+            const auto& regex_op_str = sub_args[0];
             std::span<const std::string> regex_args(sub_args.begin() + 1, sub_args.end());
 
-            if (regex_op == "MATCH") {
+            if (ci_equals(regex_op_str, "MATCH")) {
                 CommandParser parser("string", "REGEX MATCH");
                 std::string pattern, out_var;
                 std::vector<std::string> inputs;
@@ -426,7 +421,7 @@ void register_string_builtins(Interpreter& interp) {
                     }
                 }
 
-            } else if (regex_op == "MATCHALL") {
+            } else if (ci_equals(regex_op_str, "MATCHALL")) {
                 CommandParser parser("string", "REGEX MATCHALL");
                 std::string pattern, out_var;
                 std::vector<std::string> inputs;
@@ -475,7 +470,7 @@ void register_string_builtins(Interpreter& interp) {
                     }
                 }
 
-            } else if (regex_op == "REPLACE") {
+            } else if (ci_equals(regex_op_str, "REPLACE")) {
                 CommandParser parser("string", "REGEX REPLACE");
                 std::string pattern, replacement, out_var;
                 std::vector<std::string> inputs;
@@ -507,7 +502,7 @@ void register_string_builtins(Interpreter& interp) {
                 std::string result = (*re)->replace_all(input, replacement);
                 interp.set_variable(out_var, result);
 
-            } else if (regex_op == "QUOTE") {
+            } else if (ci_equals(regex_op_str, "QUOTE")) {
                 CommandParser parser("string", "REGEX QUOTE");
                 std::string out_var;
                 std::vector<std::string> inputs;
@@ -526,13 +521,13 @@ void register_string_builtins(Interpreter& interp) {
                 interp.set_variable(out_var, regex_quote(input));
 
             } else {
-                interp.set_fatal_error("string(REGEX) unknown subcommand: " + regex_op);
+                interp.set_fatal_error("string(REGEX) unknown subcommand: " + std::string(regex_op_str));
                 return;
             }
 
         // ========== Manipulation ==========
 
-        } else if (operation == "APPEND") {
+        } else if (ci_equals(operation, "APPEND")) {
             CommandParser parser("string", "APPEND");
             std::string var_name;
             std::vector<std::string> inputs;
@@ -549,7 +544,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(var_name, current);
 
-        } else if (operation == "PREPEND") {
+        } else if (ci_equals(operation, "PREPEND")) {
             CommandParser parser("string", "PREPEND");
             std::string var_name;
             std::vector<std::string> inputs;
@@ -567,7 +562,7 @@ void register_string_builtins(Interpreter& interp) {
             std::string current = interp.get_variable(var_name);
             interp.set_variable(var_name, prefix + current);
 
-        } else if (operation == "CONCAT") {
+        } else if (ci_equals(operation, "CONCAT")) {
             CommandParser parser("string", "CONCAT");
             std::string out_var;
             std::vector<std::string> inputs;
@@ -584,7 +579,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, result);
 
-        } else if (operation == "JOIN") {
+        } else if (ci_equals(operation, "JOIN")) {
             CommandParser parser("string", "JOIN");
             std::string glue, out_var;
             std::vector<std::string> inputs;
@@ -597,7 +592,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, join(inputs, glue));
 
-        } else if (operation == "TOLOWER") {
+        } else if (ci_equals(operation, "TOLOWER")) {
             CommandParser parser("string", "TOLOWER");
             std::string input, out_var;
 
@@ -608,7 +603,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, to_lower(input));
 
-        } else if (operation == "TOUPPER") {
+        } else if (ci_equals(operation, "TOUPPER")) {
             CommandParser parser("string", "TOUPPER");
             std::string input, out_var;
 
@@ -619,7 +614,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, to_upper(input));
 
-        } else if (operation == "LENGTH") {
+        } else if (ci_equals(operation, "LENGTH")) {
             CommandParser parser("string", "LENGTH");
             std::string input, out_var;
 
@@ -630,7 +625,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, std::to_string(input.size()));
 
-        } else if (operation == "SUBSTRING") {
+        } else if (ci_equals(operation, "SUBSTRING")) {
             CommandParser parser("string", "SUBSTRING");
             std::string input, begin_str, length_str, out_var;
 
@@ -664,7 +659,7 @@ void register_string_builtins(Interpreter& interp) {
                 return;
             }
 
-        } else if (operation == "STRIP") {
+        } else if (ci_equals(operation, "STRIP")) {
             CommandParser parser("string", "STRIP");
             std::string input, out_var;
 
@@ -675,7 +670,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, strip(input));
 
-        } else if (operation == "GENEX_STRIP") {
+        } else if (ci_equals(operation, "GENEX_STRIP")) {
             CommandParser parser("string", "GENEX_STRIP");
             std::string input, out_var;
 
@@ -686,7 +681,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, genex_strip(input));
 
-        } else if (operation == "REPEAT") {
+        } else if (ci_equals(operation, "REPEAT")) {
             CommandParser parser("string", "REPEAT");
             std::string input, count_str, out_var;
 
@@ -716,16 +711,16 @@ void register_string_builtins(Interpreter& interp) {
 
         // ========== Comparison ==========
 
-        } else if (operation == "COMPARE") {
+        } else if (ci_equals(operation, "COMPARE")) {
             if (sub_args.empty()) {
                 interp.set_fatal_error("string(COMPARE) requires an operator");
                 return;
             }
 
-            std::string op = to_upper(std::string(sub_args[0]));
+            const auto& op_str = sub_args[0];
             std::span<const std::string> cmp_args(sub_args.begin() + 1, sub_args.end());
 
-            CommandParser parser("string", "COMPARE " + op);
+            CommandParser parser("string", "COMPARE " + std::string(op_str));
             std::string str1, str2, out_var;
 
             parser.positional(str1, "string1");
@@ -736,20 +731,20 @@ void register_string_builtins(Interpreter& interp) {
 
             bool result = false;
 
-            if (op == "LESS") {
+            if (ci_equals(op_str, "LESS")) {
                 result = str1 < str2;
-            } else if (op == "GREATER") {
+            } else if (ci_equals(op_str, "GREATER")) {
                 result = str1 > str2;
-            } else if (op == "EQUAL") {
+            } else if (ci_equals(op_str, "EQUAL")) {
                 result = str1 == str2;
-            } else if (op == "NOTEQUAL") {
+            } else if (ci_equals(op_str, "NOTEQUAL")) {
                 result = str1 != str2;
-            } else if (op == "LESS_EQUAL") {
+            } else if (ci_equals(op_str, "LESS_EQUAL")) {
                 result = str1 <= str2;
-            } else if (op == "GREATER_EQUAL") {
+            } else if (ci_equals(op_str, "GREATER_EQUAL")) {
                 result = str1 >= str2;
             } else {
-                interp.set_fatal_error("string(COMPARE) unknown operator: " + op);
+                interp.set_fatal_error("string(COMPARE) unknown operator: " + std::string(op_str));
                 return;
             }
 
@@ -757,7 +752,7 @@ void register_string_builtins(Interpreter& interp) {
 
         // ========== Generation ==========
 
-        } else if (operation == "ASCII") {
+        } else if (ci_equals(operation, "ASCII")) {
             CommandParser parser("string", "ASCII");
             std::string out_var;
             std::vector<std::string> codes;
@@ -793,7 +788,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, result);
 
-        } else if (operation == "HEX") {
+        } else if (ci_equals(operation, "HEX")) {
             CommandParser parser("string", "HEX");
             std::string input, out_var;
 
@@ -809,7 +804,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, result);
 
-        } else if (operation == "CONFIGURE") {
+        } else if (ci_equals(operation, "CONFIGURE")) {
             CommandParser parser("string", "CONFIGURE");
             std::string input, out_var;
             bool at_only = false;
@@ -825,7 +820,7 @@ void register_string_builtins(Interpreter& interp) {
             std::string result = configure_string(input, interp, at_only, escape_quotes);
             interp.set_variable(out_var, result);
 
-        } else if (operation == "MAKE_C_IDENTIFIER") {
+        } else if (ci_equals(operation, "MAKE_C_IDENTIFIER")) {
             CommandParser parser("string", "MAKE_C_IDENTIFIER");
             std::string input, out_var;
 
@@ -836,7 +831,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, make_c_identifier(input));
 
-        } else if (operation == "RANDOM") {
+        } else if (ci_equals(operation, "RANDOM")) {
             // Manual parsing for RANDOM since it has complex argument structure
             std::string length_str;
             std::string alphabet;
@@ -846,15 +841,15 @@ void register_string_builtins(Interpreter& interp) {
             // Parse arguments manually
             size_t i = 0;
             while (i < sub_args.size()) {
-                std::string arg = to_upper(std::string(sub_args[i]));
+                const auto& arg = sub_args[i];
 
-                if (arg == "LENGTH" && i + 1 < sub_args.size()) {
+                if (ci_equals(arg, "LENGTH") && i + 1 < sub_args.size()) {
                     length_str = sub_args[i + 1];
                     i += 2;
-                } else if (arg == "ALPHABET" && i + 1 < sub_args.size()) {
+                } else if (ci_equals(arg, "ALPHABET") && i + 1 < sub_args.size()) {
                     alphabet = sub_args[i + 1];
                     i += 2;
-                } else if (arg == "RANDOM_SEED" && i + 1 < sub_args.size()) {
+                } else if (ci_equals(arg, "RANDOM_SEED") && i + 1 < sub_args.size()) {
                     seed_str = sub_args[i + 1];
                     i += 2;
                 } else {
@@ -910,7 +905,7 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, result);
 
-        } else if (operation == "TIMESTAMP") {
+        } else if (ci_equals(operation, "TIMESTAMP")) {
             CommandParser parser("string", "TIMESTAMP");
             std::string out_var, format;
             bool utc = false;
@@ -925,7 +920,7 @@ void register_string_builtins(Interpreter& interp) {
             // Extract format string (everything between out_var and UTC flag if present)
             if (sub_args.size() > 1) {
                 // Check if last arg is UTC
-                bool has_utc_flag = !sub_args.empty() && to_upper(std::string(sub_args.back())) == "UTC";
+                bool has_utc_flag = !sub_args.empty() && ci_equals(sub_args.back(), "UTC");
                 size_t format_end = has_utc_flag ? sub_args.size() - 1 : sub_args.size();
 
                 for (size_t i = 1; i < format_end; ++i) {
@@ -951,11 +946,11 @@ void register_string_builtins(Interpreter& interp) {
 
             interp.set_variable(out_var, std::string(buffer));
 
-        } else if (operation == "UUID") {
+        } else if (ci_equals(operation, "UUID")) {
             interp.set_fatal_error("string(UUID) is not implemented (requires hashing support)");
             return;
 
-        } else if (operation == "SHA256") {
+        } else if (ci_equals(operation, "SHA256")) {
             CommandParser parser("string", "SHA256");
             std::string input, out_var;
 
@@ -965,7 +960,7 @@ void register_string_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, sha256(input).to_string());
 
-        } else if (operation == "MD5") {
+        } else if (ci_equals(operation, "MD5")) {
             CommandParser parser("string", "MD5");
             std::string input, out_var;
 
@@ -975,7 +970,7 @@ void register_string_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, md5(input).to_string());
 
-        } else if (operation == "BLAKE2B") {
+        } else if (ci_equals(operation, "BLAKE2B")) {
             CommandParser parser("string", "BLAKE2B");
             std::string input, out_var, key;
 
@@ -1029,22 +1024,26 @@ void register_string_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string mode = to_upper(args[1]);
+        const auto& mode = args[1];
 
         // Validate mode
-        if (mode != "UNIX_COMMAND" && mode != "WINDOWS_COMMAND" && mode != "NATIVE_COMMAND") {
+        if (!ci_equals(mode, "UNIX_COMMAND") && !ci_equals(mode, "WINDOWS_COMMAND") && !ci_equals(mode, "NATIVE_COMMAND")) {
             interp.set_fatal_error("separate_arguments() invalid mode: " + args[1] + " (expected UNIX_COMMAND, WINDOWS_COMMAND, or NATIVE_COMMAND)");
             return;
         }
 
         // Determine actual parsing mode
-        std::string parse_mode = mode;
-        if (mode == "NATIVE_COMMAND") {
+        std::string parse_mode;
+        if (ci_equals(mode, "NATIVE_COMMAND")) {
 #ifdef _WIN32
             parse_mode = "WINDOWS_COMMAND";
 #else
             parse_mode = "UNIX_COMMAND";
 #endif
+        } else if (ci_equals(mode, "UNIX_COMMAND")) {
+            parse_mode = "UNIX_COMMAND";
+        } else {
+            parse_mode = "WINDOWS_COMMAND";
         }
 
         // Check for PROGRAM flag
@@ -1052,12 +1051,12 @@ void register_string_builtins(Interpreter& interp) {
         bool has_separate_args = false;
         size_t args_start = 2;
 
-        if (args.size() > 2 && to_upper(args[2]) == "PROGRAM") {
+        if (args.size() > 2 && ci_equals(args[2], "PROGRAM")) {
             has_program = true;
             args_start = 3;
 
             // Check for SEPARATE_ARGS flag
-            if (args.size() > 3 && to_upper(args[3]) == "SEPARATE_ARGS") {
+            if (args.size() > 3 && ci_equals(args[3], "SEPARATE_ARGS")) {
                 has_separate_args = true;
                 args_start = 4;
             }

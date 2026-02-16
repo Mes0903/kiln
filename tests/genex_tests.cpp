@@ -217,7 +217,7 @@ TEST_CASE("GenexEvaluator - IF expression", "[genex][evaluator]") {
 }
 
 TEST_CASE("GenexEvaluator - TARGET_EXISTS", "[genex][evaluator]") {
-    std::map<std::string, std::shared_ptr<Target>> targets;
+    TargetMap targets;
     targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
 
     GenexEvaluationContext ctx;
@@ -229,7 +229,7 @@ TEST_CASE("GenexEvaluator - TARGET_EXISTS", "[genex][evaluator]") {
 }
 
 TEST_CASE("GenexEvaluator - TARGET_FILE", "[genex][evaluator]") {
-    std::map<std::string, std::shared_ptr<Target>> targets;
+    TargetMap targets;
     targets["myexe"] = std::make_shared<Target>("myexe", TargetType::EXECUTABLE, "/src", "/build");
     targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
 

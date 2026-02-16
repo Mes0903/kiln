@@ -276,7 +276,7 @@ public:
     void clear_loop_control() { loop_control_ = LoopControl::NONE; }
 
     // Access to targets (for testing and build system)
-    std::map<std::string, std::shared_ptr<Target>>& get_targets() { return get_root()->targets_; }
+    TargetMap& get_targets() { return get_root()->targets_; }
     std::unordered_map<std::string, std::string>& get_target_aliases() { return get_root()->target_aliases_; }
     const std::unordered_map<std::string, std::string>& get_target_aliases() const { return get_root()->target_aliases_; }
 
@@ -473,7 +473,7 @@ private:
 
     // Global state (managed by root)
     std::unordered_map<std::string, BuiltinFunction> builtins_;
-    std::map<std::string, std::shared_ptr<Target>> targets_;
+    TargetMap targets_;
     std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
     bool testing_enabled_ = false;

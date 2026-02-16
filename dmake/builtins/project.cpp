@@ -28,12 +28,11 @@ std::string enable_language_impl(Interpreter& interp, const std::string& lang) {
 bool is_falsy_for_cmakedefine(const std::string& val) {
     if (val.empty()) return true;
 
-    std::string upper_val = dmake::to_upper(val);
-
     // False constants (case-insensitive)
-    if (upper_val == "0" || upper_val == "OFF" || upper_val == "NO" ||
-        upper_val == "FALSE" || upper_val == "N" || upper_val == "IGNORE" ||
-        upper_val == "NOTFOUND" || upper_val.ends_with("-NOTFOUND")) {
+    if (val == "0" || ci_equals(val, "OFF") || ci_equals(val, "NO") ||
+        ci_equals(val, "FALSE") || ci_equals(val, "N") || ci_equals(val, "IGNORE") ||
+        ci_equals(val, "NOTFOUND") ||
+        (val.size() >= 9 && ci_equals(std::string_view(val).substr(val.size() - 9), "-NOTFOUND"))) {
         return true;
     }
 

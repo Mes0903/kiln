@@ -3,14 +3,20 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <memory>
 #include <string_view>
 #include <algorithm>
 #include <optional>
 #include "language.hpp"
+#include "shadow_map.hpp"
 
 namespace dmake {
+
+class Target;
+using TargetMap = std::unordered_map<std::string, std::shared_ptr<Target>,
+                                     TransparentStringHash, TransparentStringEqual>;
 
 enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY, CUSTOM };
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
@@ -153,11 +159,11 @@ public:
     virtual std::string get_output_path() const;
 
     // The core task generation logic
-    virtual void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
+    virtual void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
 
     // Resolves transitive properties (includes, definitions, options, libraries).
     // Must be called before generating tasks. Safe to call multiple times (cached).
-    void resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const class Interpreter& interp);
+    void resolve(const TargetMap& all_targets, const class Interpreter& interp);
     
     // Access resolved properties (after resolve() is called)
     const std::vector<std::string>& get_resolved_property(const std::string& name) const;
@@ -166,7 +172,7 @@ public:
     // Second pass after all targets are resolved: pick up interface properties
     // from circular dependencies that were unavailable during the DFS.
     void resolve_deferred_circular_deps(
-        const std::map<std::string, std::shared_ptr<Target>>& all_targets);
+        const TargetMap& all_targets);
 
     // All direct target dependencies (canonical names) discovered during resolve().
     // Single source of truth for dependency discovery.
@@ -187,7 +193,7 @@ public:
     static GenexEvaluationContext make_genex_context(
         const Target* current_target,
         const class Interpreter& interp,
-        const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+        const TargetMap& all_targets,
         std::optional<Language> compile_language = std::nullopt,
         bool allow_deferred = false);
 
@@ -232,7 +238,7 @@ protected:
     // Helper methods for task generation
     void generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::string& pch_gch_path, const std::string& pch_include_arg,
-                               bool is_shared, bool is_pie, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                               bool is_shared, bool is_pie, const TargetMap& all_targets,
                                class GenexEvaluator& evaluator, const class Interpreter& interp,
                                const std::string& pre_build_task_id,
                                const std::string& module_mapper_path,
@@ -317,7 +323,7 @@ public:
     void set_build_by_default(bool b) { build_by_default_ = b; }
     bool is_build_by_default() const { return build_by_default_; }
 
-    void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {}) override;
+    void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {}) override;
 
 private:
     std::vector<CustomCommand> custom_commands_;

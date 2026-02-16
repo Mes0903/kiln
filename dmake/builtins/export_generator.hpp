@@ -1,14 +1,11 @@
 #pragma once
 
-#include <map>
-#include <memory>
+#include "../target.hpp"
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace dmake {
-
-class Target;
 
 // Context for generating export files
 struct ExportContext {
@@ -25,7 +22,7 @@ struct ExportContext {
     std::string c_compiler_version;   // CMAKE_C_COMPILER_VERSION
 
     // Pointers to target maps (not owned)
-    const std::map<std::string, std::shared_ptr<Target>>* all_targets = nullptr;
+    const TargetMap* all_targets = nullptr;
     const std::unordered_map<std::string, std::string>* target_aliases = nullptr;
 };
 

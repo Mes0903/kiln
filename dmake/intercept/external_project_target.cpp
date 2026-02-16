@@ -30,7 +30,7 @@ std::vector<std::pair<std::string, std::string>> ExternalProjectTarget::get_toke
 void ExternalProjectTarget::generate_tasks(
     GraphTransaction& txn,
     const Toolchain&,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+    const TargetMap& all_targets,
     const Interpreter& interp,
     const std::vector<std::string>&,
     const std::vector<std::string>&)

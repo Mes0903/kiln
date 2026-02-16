@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../utils.hpp"
 #include "../genex_evaluator.hpp"
 #include "../genex_parser.hpp"
 #include <sstream>
@@ -24,14 +25,13 @@ enum class LogLevel {
 };
 
 LogLevel parse_log_level(const std::string& level_str) {
-    std::string upper = dmake::to_upper(level_str);
-    if (upper == "ERROR") return LogLevel::ERROR;
-    if (upper == "WARNING") return LogLevel::WARNING;
-    if (upper == "NOTICE") return LogLevel::NOTICE;
-    if (upper == "STATUS") return LogLevel::STATUS;
-    if (upper == "VERBOSE") return LogLevel::VERBOSE;
-    if (upper == "DEBUG") return LogLevel::DEBUG;
-    if (upper == "TRACE") return LogLevel::TRACE;
+    if (ci_equals(level_str, "ERROR")) return LogLevel::ERROR;
+    if (ci_equals(level_str, "WARNING")) return LogLevel::WARNING;
+    if (ci_equals(level_str, "NOTICE")) return LogLevel::NOTICE;
+    if (ci_equals(level_str, "STATUS")) return LogLevel::STATUS;
+    if (ci_equals(level_str, "VERBOSE")) return LogLevel::VERBOSE;
+    if (ci_equals(level_str, "DEBUG")) return LogLevel::DEBUG;
+    if (ci_equals(level_str, "TRACE")) return LogLevel::TRACE;
     return LogLevel::STATUS; // Default
 }
 
@@ -56,8 +56,7 @@ void register_message_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string first_arg = args[0];
-        std::string mode_upper = dmake::to_upper(first_arg);
+        const auto& first_arg = args[0];
 
         std::string mode;
         LogLevel log_level = LogLevel::NOTICE;
@@ -65,25 +64,25 @@ void register_message_builtins(Interpreter& interp) {
         bool is_check_command = false;
 
         // Parse mode
-        if (mode_upper == "STATUS") {
+        if (ci_equals(first_arg, "STATUS")) {
             mode = "STATUS";
             log_level = LogLevel::STATUS;
-        } else if (mode_upper == "VERBOSE") {
+        } else if (ci_equals(first_arg, "VERBOSE")) {
             mode = "VERBOSE";
             log_level = LogLevel::VERBOSE;
-        } else if (mode_upper == "DEBUG") {
+        } else if (ci_equals(first_arg, "DEBUG")) {
             mode = "DEBUG";
             log_level = LogLevel::DEBUG;
-        } else if (mode_upper == "TRACE") {
+        } else if (ci_equals(first_arg, "TRACE")) {
             mode = "TRACE";
             log_level = LogLevel::TRACE;
-        } else if (mode_upper == "WARNING") {
+        } else if (ci_equals(first_arg, "WARNING")) {
             mode = "WARNING";
             log_level = LogLevel::WARNING;
-        } else if (mode_upper == "AUTHOR_WARNING") {
+        } else if (ci_equals(first_arg, "AUTHOR_WARNING")) {
             mode = "AUTHOR_WARNING";
             log_level = LogLevel::WARNING;
-        } else if (mode_upper == "DEPRECATION") {
+        } else if (ci_equals(first_arg, "DEPRECATION")) {
             // Check CMAKE_ERROR_DEPRECATED and CMAKE_WARN_DEPRECATED
             std::string error_deprecated = interp.get_variable("CMAKE_ERROR_DEPRECATED");
             std::string warn_deprecated = interp.get_variable("CMAKE_WARN_DEPRECATED");
@@ -98,28 +97,28 @@ void register_message_builtins(Interpreter& interp) {
                 // Silent - don't print anything
                 return;
             }
-        } else if (mode_upper == "NOTICE") {
+        } else if (ci_equals(first_arg, "NOTICE")) {
             mode = "NOTICE";
             log_level = LogLevel::NOTICE;
-        } else if (mode_upper == "SEND_ERROR") {
+        } else if (ci_equals(first_arg, "SEND_ERROR")) {
             mode = "SEND_ERROR";
             log_level = LogLevel::ERROR;
-        } else if (mode_upper == "FATAL_ERROR") {
+        } else if (ci_equals(first_arg, "FATAL_ERROR")) {
             mode = "FATAL_ERROR";
             log_level = LogLevel::ERROR;
-        } else if (mode_upper == "CHECK_START") {
+        } else if (ci_equals(first_arg, "CHECK_START")) {
             mode = "CHECK_START";
             log_level = LogLevel::STATUS;
             is_check_command = true;
-        } else if (mode_upper == "CHECK_PASS") {
+        } else if (ci_equals(first_arg, "CHECK_PASS")) {
             mode = "CHECK_PASS";
             log_level = LogLevel::STATUS;
             is_check_command = true;
-        } else if (mode_upper == "CHECK_FAIL") {
+        } else if (ci_equals(first_arg, "CHECK_FAIL")) {
             mode = "CHECK_FAIL";
             log_level = LogLevel::STATUS;
             is_check_command = true;
-        } else if (mode_upper == "CONFIGURE_LOG") {
+        } else if (ci_equals(first_arg, "CONFIGURE_LOG")) {
             // CONFIGURE_LOG - for now, just ignore (CMake 3.26+ feature for detailed logging)
             // This would write to a configure log file
             return;

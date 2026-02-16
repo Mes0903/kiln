@@ -2,8 +2,8 @@
 
 #include "genex_parser.hpp"
 #include "language.hpp"
+#include "target.hpp"
 #include <expected>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,9 +11,6 @@
 #include <vector>
 
 namespace dmake {
-
-// Forward declaration
-class Target;
 
 // Result of evaluating a link library entry
 // Carries semantic metadata alongside the evaluated value
@@ -33,7 +30,7 @@ struct GenexEvaluationContext {
     std::string cxx_compiler_version; // CMAKE_CXX_COMPILER_VERSION
     std::string c_compiler_version;   // CMAKE_C_COMPILER_VERSION
     std::optional<Language> compile_language;  // For per-source evaluation
-    const std::map<std::string, std::shared_ptr<Target>>* all_targets = nullptr;
+    const TargetMap* all_targets = nullptr;
     const std::unordered_map<std::string, std::string>* target_aliases = nullptr;
     const Target* current_target = nullptr;     // For error messages
     std::string install_prefix;       // CMAKE_INSTALL_PREFIX (for $<INSTALL_PREFIX>)

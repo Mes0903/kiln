@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cctype>
 #include <cstddef>
 #include <unistd.h>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dmake {
@@ -115,6 +117,19 @@ struct PipelineResult {
  * @brief Execute a pipeline of commands.
  */
 PipelineResult execute_pipeline(const std::vector<std::vector<std::string>>& commands, const ProcessOptions& options = {});
+
+/**
+ * @brief Case-insensitive equality comparison (no allocation).
+ */
+inline bool ci_equals(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (static_cast<unsigned char>(std::toupper(static_cast<unsigned char>(a[i]))) !=
+            static_cast<unsigned char>(std::toupper(static_cast<unsigned char>(b[i]))))
+            return false;
+    }
+    return true;
+}
 
 /**
  * @brief Convert string to uppercase using current locale.

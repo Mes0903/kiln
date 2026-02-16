@@ -317,7 +317,7 @@ const std::vector<std::string>& Target::get_language_flags(Language lang) const 
 GenexEvaluationContext Target::make_genex_context(
     const Target* current_target,
     const Interpreter& interp,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+    const TargetMap& all_targets,
     std::optional<Language> compile_language,
     bool allow_deferred)
 {
@@ -473,7 +473,7 @@ void Target::handle_circular_dep(
 }
 
 void Target::resolve_deferred_circular_deps(
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets)
+    const TargetMap& all_targets)
 {
     if (deferred_circular_deps_.empty()) return;
 
@@ -495,7 +495,7 @@ void Target::resolve_deferred_circular_deps(
     deferred_circular_deps_.clear();
 }
 
-void Target::resolve(const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp) {
+void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
     if (resolved_) return;
     if (visiting_) throw std::runtime_error("Circular dependency: " + name_);
     visiting_ = true;
@@ -743,7 +743,7 @@ std::string get_obj_path(const std::string& binary_dir, const std::string& targe
 static void resolve_command_target_references(
     std::vector<std::vector<std::string>>& commands,
     BuildTask& task,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets)
+    const TargetMap& all_targets)
 {
     for (auto& cmd : commands) {
         if (cmd.empty()) continue;
@@ -758,7 +758,7 @@ static void resolve_command_target_references(
 
         // Fall back: executable whose OUTPUT_NAME or output path matches the command
         if (!resolved) {
-            static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
+            static const TargetMap* cached_source = nullptr;
             static std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
             static std::unordered_map<std::string, std::shared_ptr<Target>> output_path_map;
             if (&all_targets != cached_source) {
@@ -796,7 +796,7 @@ static void resolve_command_target_references(
 // Helper to generate a task for a custom command rule.
 // Recursively generates tasks for any deps that are themselves custom command outputs.
 static void generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
-                                         const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                                         const TargetMap& all_targets,
                                          const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
                                          std::set<std::string>& generated) {
     if (generated.count(rule.outputs[0]) || txn.has_task(rule.outputs[0]))
@@ -861,7 +861,7 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
 
 void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
-                                      bool is_shared, bool is_pie, const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                                      bool is_shared, bool is_pie, const TargetMap& all_targets,
                                       GenexEvaluator& evaluator, const Interpreter& interp,
                                       const std::string& pre_build_task_id,
                                       const std::string& module_mapper_path,
@@ -1409,7 +1409,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     return {pch_gch_path, pch_include_arg};
 }
 
-void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
+void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
     if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
 
     resolve(all_targets, interp);
@@ -1617,7 +1617,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         // upgrade to g++ for linking so C++ runtime symbols resolve.
         if (linker_lang == Language::C) {
             // Cached map: output_path → has_cxx_sources (rebuilt when all_targets changes)
-            static const std::map<std::string, std::shared_ptr<Target>>* cached_source = nullptr;
+            static const TargetMap* cached_source = nullptr;
             static std::unordered_map<std::string, bool> output_has_cxx;
             if (&all_targets != cached_source) {
                 cached_source = &all_targets;
@@ -1732,7 +1732,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     if (type_ != TargetType::STATIC_LIBRARY) {
         // Cached maps: output_path → non-imported target, output_path → imported target
         // Rebuilt when all_targets changes (pointer identity check).
-        static const std::map<std::string, std::shared_ptr<Target>>* cached_link_source = nullptr;
+        static const TargetMap* cached_link_source = nullptr;
         static std::unordered_set<std::string> non_imported_outputs;
         static std::unordered_map<std::string, Target*> imported_by_output;
         if (&all_targets != cached_link_source) {
@@ -1844,7 +1844,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 }
 
-void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const std::map<std::string, std::shared_ptr<Target>>& all_targets, const Interpreter& interp, const std::vector<std::string>&, const std::vector<std::string>&) {
+void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const TargetMap& all_targets, const Interpreter& interp, const std::vector<std::string>&, const std::vector<std::string>&) {
     BuildTask task;
     task.id = name_;
     task.kind = CustomTargetTask{};

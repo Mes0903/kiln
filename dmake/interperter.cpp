@@ -1,5 +1,6 @@
 #include "interperter.hpp"
 #include "command_parser.hpp"
+#include "utils.hpp"
 #include "target.hpp"
 #include "build_system.hpp"
 #include "gnu_compiler.hpp"
@@ -398,10 +399,8 @@ std::expected<dmake::Interpreter*, dmake::BuildError> dmake::Interpreter::run_bu
     // Handle CMAKE_LINKER_TYPE (convert to -fuse-ld=<type>)
     std::string linker_type = get_variable("CMAKE_LINKER_TYPE");
     if (!linker_type.empty()) {
-        std::string linker_type_upper = to_upper(linker_type);
-
-        if (linker_type_upper == "BFD" || linker_type_upper == "GOLD" ||
-            linker_type_upper == "MOLD" || linker_type_upper == "LLD") {
+        if (ci_equals(linker_type, "BFD") || ci_equals(linker_type, "GOLD") ||
+            ci_equals(linker_type, "MOLD") || ci_equals(linker_type, "LLD")) {
             std::string linker_type_lower = to_lower(linker_type);
             std::string flag = "-fuse-ld=" + linker_type_lower;
             exe_linker_flags.push_back(flag);
@@ -631,9 +630,8 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
 
     std::string linker_type = get_variable("CMAKE_LINKER_TYPE");
     if (!linker_type.empty()) {
-        std::string linker_type_upper = to_upper(linker_type);
-        if (linker_type_upper == "BFD" || linker_type_upper == "GOLD" ||
-            linker_type_upper == "MOLD" || linker_type_upper == "LLD") {
+        if (ci_equals(linker_type, "BFD") || ci_equals(linker_type, "GOLD") ||
+            ci_equals(linker_type, "MOLD") || ci_equals(linker_type, "LLD")) {
             std::string flag = "-fuse-ld=" + to_lower(linker_type);
             exe_linker_flags.push_back(flag);
             shared_linker_flags.push_back(flag);
@@ -1852,9 +1850,24 @@ void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
 std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argument>& args) {
     std::vector<std::string> result;
     for (const auto& arg : args) {
+        // Fast path: single literal part, unquoted — skip evaluate_argument entirely
+        if (arg.parts.size() == 1 && !arg.quoted &&
+            std::holds_alternative<std::string>(arg.parts[0])) {
+            const auto& s = std::get<std::string>(arg.parts[0]);
+            if (s.empty()) continue;
+            if (s.find(';') == std::string::npos) {
+                result.push_back(s);
+            } else {
+                for (auto item : CMakeArrayIterator(s)) {
+                    result.emplace_back(item);
+                }
+            }
+            continue;
+        }
+
         std::string val = evaluate_argument(arg);
         if (arg.quoted) {
-            result.push_back(val);
+            result.push_back(std::move(val));
         } else {
             if (val.empty()) continue;
 

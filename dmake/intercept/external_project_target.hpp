@@ -44,7 +44,7 @@ public:
 
     // Generate tasks creates TWO tasks: orchestrator and sentinel
     void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain,
-                        const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+                        const TargetMap& all_targets,
                         const Interpreter& interp,
                         const std::vector<std::string>& exe_linker_flags = {},
                         const std::vector<std::string>& shared_linker_flags = {}) override;

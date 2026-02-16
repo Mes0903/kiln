@@ -61,7 +61,7 @@ static bool contains_word(const std::string& haystack, const std::string& needle
 static std::string find_qt_tool(
     const Target& target,
     const Interpreter& interp,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+    const TargetMap& all_targets,
     const std::string& tool_name)  // "moc", "uic", or "rcc"
 {
     // Map tool name to property/variable names
@@ -329,7 +329,7 @@ void generate_autogen_tasks(
     Target& target,
     GraphTransaction& txn,
     Interpreter& interp,
-    const std::map<std::string, std::shared_ptr<Target>>& all_targets,
+    const TargetMap& all_targets,
     const std::string& pre_build_task_id)
 {
     bool do_moc = !Interpreter::is_falsy(target.get_property("AUTOMOC"));
