@@ -1511,15 +1511,13 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     auto try_path = [this](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
         if (cached_file_exists(p)) {
             // Verify it's not a directory
-            std::error_code ec;
-            if (!std::filesystem::is_directory(p, ec)) return p;
+            if (!cached_is_directory(p)) return p;
         }
         if (!p.has_extension()) {
             std::filesystem::path with_ext = p;
             with_ext.replace_extension(".cmake");
             if (cached_file_exists(with_ext)) {
-                std::error_code ec;
-                if (!std::filesystem::is_directory(with_ext, ec)) return with_ext;
+                if (!cached_is_directory(with_ext)) return with_ext;
             }
         }
         return std::nullopt;
@@ -1798,6 +1796,55 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
 bool Interpreter::cached_file_exists(const std::filesystem::path& dir, const std::string& filename) {
     auto* entries = get_directory_listing(dir);
     return entries && entries->contains(filename);
+}
+
+bool Interpreter::cached_is_directory(const std::filesystem::path& path) {
+    auto parent = path.parent_path();
+    auto filename = path.filename().string();
+
+    if (!filename.empty()) {
+        std::error_code ec;
+        std::string parent_key = std::filesystem::absolute(parent, ec).string();
+        if (!ec) {
+            auto* root = get_root();
+
+            // 1. Check session cache (free — no I/O)
+            auto it = root->dir_scan_cache_.find(parent_key);
+            if (it != root->dir_scan_cache_.end()) {
+                return it->second.subdirs.contains(filename);
+            }
+
+            // 2. Check persistent cache (no directory scan triggered)
+            if (root->cache_store_) {
+                auto persistent = root->cache_store_->lookup<CacheSubsystem::FileListing>(parent_key);
+                if (persistent) {
+                    auto current_mtime = get_dir_mtime_cached(parent_key);
+                    if (current_mtime && *current_mtime == persistent->dir_mtime) {
+                        // Promote to session cache for future lookups
+                        auto sys_mtime = std::filesystem::last_write_time(parent, ec);
+                        if (!ec) {
+                            DirectoryCacheEntry cache_entry;
+                            cache_entry.mtime = sys_mtime;
+                            for (const auto& f : persistent->files) {
+                                cache_entry.entries.insert(f);
+                            }
+                            for (const auto& d : persistent->subdirs) {
+                                cache_entry.entries.insert(d);
+                                cache_entry.subdirs.insert(d);
+                            }
+                            bool is_dir = cache_entry.subdirs.contains(filename);
+                            root->dir_scan_cache_.emplace(parent_key, std::move(cache_entry));
+                            return is_dir;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to stat
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec);
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {

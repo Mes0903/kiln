@@ -368,8 +368,7 @@ SearchResult search_for_file(
                     continue;
                 }
                 // Verify it's actually a directory
-                std::error_code ec;
-                if (!std::filesystem::is_directory(check_dir, ec)) {
+                if (!interp.cached_is_directory(check_dir)) {
                     searched_dirs.push_back(check_dir.string());
                     continue;
                 }
@@ -438,8 +437,7 @@ SearchResult search_for_file(
                         continue;
                     }
                     // Verify it's actually a directory
-                    std::error_code ec;
-                    if (!std::filesystem::is_directory(check_dir, ec)) {
+                    if (!interp.cached_is_directory(check_dir)) {
                         searched_dirs.push_back(check_dir.string());
                         continue;
                     }

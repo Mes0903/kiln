@@ -723,8 +723,7 @@ void register_find_package_builtins(Interpreter& interp) {
                 if (!path_parent.empty() && !path_name.empty()) {
                     if (!interp.cached_file_exists(path_parent, path_name)) continue;
                 }
-                std::error_code ec;
-                if (!std::filesystem::is_directory(path, ec)) continue;
+                if (!interp.cached_is_directory(path)) continue;
 
                 if (check_directory_for_config(path)) break;
             }
@@ -742,8 +741,7 @@ void register_find_package_builtins(Interpreter& interp) {
                             if (!directory_matches_package(entry_name, name)) continue;
 
                             std::filesystem::path subdir = std::filesystem::path(root) / entry_name;
-                            std::error_code ec;
-                            if (!std::filesystem::is_directory(subdir, ec)) continue;
+                            if (!interp.cached_is_directory(subdir)) continue;
 
                             if (check_directory_for_config(subdir)) return true;
                         }

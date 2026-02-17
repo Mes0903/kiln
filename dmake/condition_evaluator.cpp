@@ -526,7 +526,7 @@ private:
         } else if (!condition_[pos_].quoted && token == "IS_DIRECTORY" && pos_ + 1 < condition_.size()) {
             pos_++;
             std::string path = interp_.evaluate_argument(condition_[pos_++]);
-            return std::filesystem::is_directory(path);
+            return interp_.cached_is_directory(path);
         } else if (!condition_[pos_].quoted && token == "IS_ABSOLUTE" && pos_ + 1 < condition_.size()) {
             pos_++;
             std::string path = interp_.evaluate_argument(condition_[pos_++]);
@@ -909,7 +909,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         case ConditionOp::IsDirectory: {
             std::string path = interp.evaluate_argument(*left_arg);
-            result = std::filesystem::is_directory(path);
+            result = interp.cached_is_directory(path);
             break;
         }
 
@@ -1073,7 +1073,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
     case ConditionOp::IsDirectory: {
         std::string path = interp.evaluate_argument(condition[pp.left_idx]);
-        result = std::filesystem::is_directory(path);
+        result = interp.cached_is_directory(path);
         break;
     }
 

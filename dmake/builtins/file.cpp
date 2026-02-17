@@ -109,6 +109,7 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
         auto* entries = interp.get_directory_listing(dir_str);
         if (!entries) return;
 
+        auto* subdirs = interp.get_directory_subdirs(dir_str);
         for (const auto& name : *entries) {
             if (!rx.match(name)) continue;
             if (!relative.empty()) {
@@ -121,7 +122,6 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
 
         // For GLOB_RECURSE, also descend into all subdirs with the same leaf
         if (recurse) {
-            auto* subdirs = interp.get_directory_subdirs(dir_str);
             if (subdirs) {
                 for (const auto& subdir_name : *subdirs) {
                     glob_components(interp, dir_str + '/' + subdir_name,
@@ -135,7 +135,7 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
         if (!has_wildcard) {
             // Fixed path component, just advance without listing
             std::string next = dir_str + '/' + comp;
-            if (std::filesystem::is_directory(next)) {
+            if (interp.cached_is_directory(next)) {
                 glob_components(interp, next, components, compiled,
                                 comp_idx + 1, recurse, relative,
                                 results, dir_mtimes);

@@ -266,6 +266,9 @@ public:
     bool cached_file_exists(const std::filesystem::path& full_path);
     bool cached_file_exists(const std::filesystem::path& dir, const std::string& filename);
 
+    // Directory check with caching (uses dir_scan_cache_ from directory listings)
+    bool cached_is_directory(const std::filesystem::path& path);
+
     // Canonical path with directory-level caching (avoids redundant readlink syscalls)
     std::string cached_weakly_canonical(const std::filesystem::path& p);
 
