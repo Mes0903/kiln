@@ -507,9 +507,12 @@ private:
     std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
 
     // Session-wide directory mtime cache (for find_xxx performance)
-    // Only caches directories outside source_dir and binary_dir
     // Key: absolute path, Value: mtime (or nullopt if doesn't exist)
     std::map<std::string, std::optional<int64_t>> dir_mtime_cache_;
+
+    // Cached absolute source/binary dir strings for is_project_path() (lazily populated)
+    mutable std::string cached_abs_source_dir_;
+    mutable std::string cached_abs_binary_dir_;
 
     // Session-wide canonical directory cache (avoids redundant readlink syscalls)
     // Key: parent directory path, Value: resolved canonical path

@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include "regex.hpp"
-#include <sys/stat.h>
 #include "builtins/registry.hpp"
 #include "intercept/external_project.hpp"
 #include "intercept/fetch_content.hpp"
@@ -1657,43 +1656,25 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(const 
 
     std::string dir_key = abs_dir.string();
 
-    // Check if directory exists
-    if (!std::filesystem::exists(abs_dir, ec) || ec) return nullptr;
-    if (!std::filesystem::is_directory(abs_dir, ec) || ec) return nullptr;
-
-    // Get current directory mtime
-    std::filesystem::file_time_type current_mtime;
-    try {
-        current_mtime = std::filesystem::last_write_time(abs_dir, ec);
-        if (ec) return nullptr;
-    } catch (...) {
-        return nullptr;
+    // Session cache lookup first — zero syscalls on hit
+    auto it = root->dir_scan_cache_.find(dir_key);
+    if (it != root->dir_scan_cache_.end()) {
+        return &it->second.entries;
     }
+
+    // Cache miss — single stat via last_write_time (replaces exists + is_directory + last_write_time)
+    auto current_mtime = std::filesystem::last_write_time(abs_dir, ec);
+    if (ec) return nullptr;  // doesn't exist, not accessible, or not a directory
 
     // Clock skew detection
     auto now = std::filesystem::file_time_type::clock::now();
     if (current_mtime > now) {
-        // Print warning once per directory
         static std::unordered_set<std::string> warned_dirs;
         if (!warned_dirs.contains(dir_key)) {
             *err_ << colors::YELLOW << "Warning: Directory has modification time in the future: "
                   << dir_key << ". Possible clock skew detected." << colors::RESET << std::endl;
             warned_dirs.insert(dir_key);
         }
-        // Invalidate cache entry
-        root->dir_scan_cache_.erase(dir_key);
-        // Continue with fresh scan
-    }
-
-    // Look up in session cache
-    auto it = root->dir_scan_cache_.find(dir_key);
-    if (it != root->dir_scan_cache_.end()) {
-        // Cache hit - validate mtime
-        if (it->second.mtime == current_mtime) {
-            return &it->second.entries;
-        }
-        // Mtime changed - invalidate
-        root->dir_scan_cache_.erase(it);
     }
 
     // Convert file_time_type to epoch seconds for persistent cache comparison
@@ -1778,7 +1759,11 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
     auto parent = full_path.parent_path();
     auto filename = full_path.filename().string();
 
-    if (filename.empty()) return false;
+    if (filename.empty()) {
+        // Path is a root or has trailing slash — check if directory itself exists
+        // by trying to get its listing (single stat on cache miss, zero on hit)
+        return get_directory_listing(full_path) != nullptr;
+    }
 
     // Try to get cached listing of parent directory
     // This will populate the cache on-demand if not already cached
@@ -1803,46 +1788,14 @@ bool Interpreter::cached_is_directory(const std::filesystem::path& path) {
     auto filename = path.filename().string();
 
     if (!filename.empty()) {
-        std::error_code ec;
-        std::string parent_key = std::filesystem::absolute(parent, ec).string();
-        if (!ec) {
-            auto* root = get_root();
-
-            // 1. Check session cache (free — no I/O)
-            auto it = root->dir_scan_cache_.find(parent_key);
-            if (it != root->dir_scan_cache_.end()) {
-                return it->second.subdirs.contains(filename);
-            }
-
-            // 2. Check persistent cache (no directory scan triggered)
-            if (root->cache_store_) {
-                auto persistent = root->cache_store_->lookup<CacheSubsystem::FileListing>(parent_key);
-                if (persistent) {
-                    auto current_mtime = get_dir_mtime_cached(parent_key);
-                    if (current_mtime && *current_mtime == persistent->dir_mtime) {
-                        // Promote to session cache for future lookups
-                        auto sys_mtime = std::filesystem::last_write_time(parent, ec);
-                        if (!ec) {
-                            DirectoryCacheEntry cache_entry;
-                            cache_entry.mtime = sys_mtime;
-                            for (const auto& f : persistent->files) {
-                                cache_entry.entries.insert(f);
-                            }
-                            for (const auto& d : persistent->subdirs) {
-                                cache_entry.entries.insert(d);
-                                cache_entry.subdirs.insert(d);
-                            }
-                            bool is_dir = cache_entry.subdirs.contains(filename);
-                            root->dir_scan_cache_.emplace(parent_key, std::move(cache_entry));
-                            return is_dir;
-                        }
-                    }
-                }
-            }
+        // get_directory_listing handles session cache → persistent cache → directory scan
+        auto* subdirs = get_directory_subdirs(parent);
+        if (subdirs) {
+            return subdirs->contains(filename);
         }
     }
 
-    // Fall back to stat
+    // Parent doesn't exist or can't be read — fall back to direct stat
     std::error_code ec;
     return std::filesystem::is_directory(path, ec);
 }
@@ -3124,26 +3077,19 @@ void Interpreter::finalize_directory_targets() {
 std::optional<int64_t> Interpreter::get_dir_mtime_cached(const std::string& path) {
     auto root = get_root();
 
-    // Skip caching for project paths (source/binary dirs) - they can change during build
-    if (is_project_path(path)) {
-        struct stat st;
-        if (stat(path.c_str(), &st) == 0) {
-            return st.st_mtime;
-        }
-        return std::nullopt;
-    }
-
-    // Check session cache
+    // Check session cache (project paths cached too — dirs don't change during a single run)
     auto it = root->dir_mtime_cache_.find(path);
     if (it != root->dir_mtime_cache_.end()) {
         return it->second;
     }
 
     // Not cached - stat and cache it
-    struct stat st;
+    std::error_code ec;
     std::optional<int64_t> mtime;
-    if (stat(path.c_str(), &st) == 0) {
-        mtime = st.st_mtime;
+    auto ft = std::filesystem::last_write_time(path, ec);
+    if (!ec) {
+        auto sys_tp = std::chrono::file_clock::to_sys(ft);
+        mtime = std::chrono::duration_cast<std::chrono::seconds>(sys_tp.time_since_epoch()).count();
     }
 
     root->dir_mtime_cache_[path] = mtime;
@@ -3182,20 +3128,37 @@ std::string Interpreter::cached_weakly_canonical(const std::filesystem::path& p)
 }
 
 bool Interpreter::is_project_path(const std::string& path) const {
-    std::filesystem::path abs_path = std::filesystem::absolute(path);
-    std::filesystem::path source_dir = std::filesystem::absolute(get_variable("CMAKE_SOURCE_DIR"));
-    std::filesystem::path binary_dir = std::filesystem::absolute(get_variable("CMAKE_BINARY_DIR"));
+    const auto* root = get_root();
 
-    // Check if path starts with source_dir or binary_dir
-    auto mismatch_src = std::mismatch(source_dir.begin(), source_dir.end(), abs_path.begin(), abs_path.end());
-    if (mismatch_src.first == source_dir.end()) {
-        return true;  // Under source dir
+    // Lazily populate cached absolute dir strings
+    if (root->cached_abs_source_dir_.empty()) {
+        root->cached_abs_source_dir_ = std::filesystem::absolute(get_variable("CMAKE_SOURCE_DIR")).string();
+        // Ensure trailing slash for prefix matching
+        if (!root->cached_abs_source_dir_.empty() && root->cached_abs_source_dir_.back() != '/')
+            root->cached_abs_source_dir_ += '/';
+    }
+    if (root->cached_abs_binary_dir_.empty()) {
+        root->cached_abs_binary_dir_ = std::filesystem::absolute(get_variable("CMAKE_BINARY_DIR")).string();
+        if (!root->cached_abs_binary_dir_.empty() && root->cached_abs_binary_dir_.back() != '/')
+            root->cached_abs_binary_dir_ += '/';
     }
 
-    auto mismatch_bin = std::mismatch(binary_dir.begin(), binary_dir.end(), abs_path.begin(), abs_path.end());
-    if (mismatch_bin.first == binary_dir.end()) {
-        return true;  // Under binary dir
-    }
+    // Only compute absolute() for the input path
+    std::string abs_path = std::filesystem::absolute(path).string();
+
+    // Use string prefix matching (cheaper than path iterator mismatch)
+    if (abs_path.starts_with(root->cached_abs_source_dir_)) return true;
+    if (abs_path.starts_with(root->cached_abs_binary_dir_)) return true;
+
+    // Also check exact match (path IS the source/binary dir itself)
+    // Compare without trailing slash
+    std::string_view src_view(root->cached_abs_source_dir_);
+    src_view.remove_suffix(1);  // remove trailing '/'
+    if (abs_path == src_view) return true;
+
+    std::string_view bin_view(root->cached_abs_binary_dir_);
+    bin_view.remove_suffix(1);
+    if (abs_path == bin_view) return true;
 
     return false;
 }

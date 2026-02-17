@@ -522,7 +522,7 @@ private:
         } else if (!condition_[pos_].quoted && token == "EXISTS" && pos_ + 1 < condition_.size()) {
             pos_++;
             std::string path = interp_.evaluate_argument(condition_[pos_++]);
-            return std::filesystem::exists(path);
+            return interp_.cached_file_exists(path);
         } else if (!condition_[pos_].quoted && token == "IS_DIRECTORY" && pos_ + 1 < condition_.size()) {
             pos_++;
             std::string path = interp_.evaluate_argument(condition_[pos_++]);
@@ -903,7 +903,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         case ConditionOp::Exists: {
             std::string path = interp.evaluate_argument(*left_arg);
-            result = std::filesystem::exists(path);
+            result = interp.cached_file_exists(path);
             break;
         }
 
@@ -1067,7 +1067,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
     case ConditionOp::Exists: {
         std::string path = interp.evaluate_argument(condition[pp.left_idx]);
-        result = std::filesystem::exists(path);
+        result = interp.cached_file_exists(path);
         break;
     }
 
