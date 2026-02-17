@@ -465,7 +465,7 @@ private:
             }
             std::string value = evaluate_token(condition_[start_pos]);
             std::string list_str = evaluate_token(condition_[pos_++]);
-            return CMakeArrayView(list_str).contains(value);
+            return cmake_list_contains(list_str, value);
         }
         else if (op == "IS_NEWER_THAN") {
             pos_++;
@@ -998,7 +998,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
             }
 
             case ConditionOp::BinaryInList:
-                result = CMakeArrayView(right_val).contains(left_val);
+                result = cmake_list_contains(right_val, left_val);
                 break;
 
             case ConditionOp::BinaryIsNewerThan: {
@@ -1162,7 +1162,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
 
         case ConditionOp::BinaryInList:
-            result = CMakeArrayView(right).contains(left);
+            result = cmake_list_contains(right, left);
             break;
 
         case ConditionOp::BinaryIsNewerThan: {

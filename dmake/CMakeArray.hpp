@@ -163,4 +163,12 @@ private:
     std::string_view source_;
 };
 
+// Zero-allocation contains check using forward iteration only.
+inline bool cmake_list_contains(std::string_view list, std::string_view item) {
+    for (auto it = CMakeArrayIterator::iterator(list); it != CMakeArrayIterator::sentinel{}; ++it) {
+        if (*it == item) return true;
+    }
+    return false;
+}
+
 }
