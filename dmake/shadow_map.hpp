@@ -130,6 +130,21 @@ public:
                 map_.modified_per_depth_[depth].insert(*key_);
             }
         }
+        void set(std::string&& value) {
+            int depth = map_.current_depth_;
+            if (!versions_->empty() && versions_->back().depth == depth) {
+                auto& opt = versions_->back().value;
+                if (opt.has_value())
+                    *opt = std::move(value);
+                else
+                    opt = std::move(value);
+                return;
+            }
+            versions_->push_back({std::optional<std::string>(std::move(value)), depth});
+            if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
+                map_.modified_per_depth_[depth].insert(*key_);
+            }
+        }
         void unset() {
             if (versions_->empty()) return;
             int depth = map_.current_depth_;

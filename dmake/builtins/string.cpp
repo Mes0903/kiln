@@ -537,12 +537,13 @@ void register_string_builtins(Interpreter& interp) {
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            std::string current = interp.get_variable(var_name);
+            auto entry = interp.get_variables().entry(var_name);
+            std::string current = entry.get();
             for (const auto& s : inputs) {
                 current += s;
             }
 
-            interp.set_variable(var_name, current);
+            entry.set(std::move(current));
 
         } else if (ci_equals(operation, "PREPEND")) {
             CommandParser parser("string", "PREPEND");
@@ -1003,7 +1004,8 @@ void register_string_builtins(Interpreter& interp) {
         // Check if this is the simple form (only one argument)
         if (args.size() == 1) {
             // Simple form: replace spaces with semicolons in the variable's value
-            std::string value = interp.get_variable(var_name);
+            auto entry = interp.get_variables().entry(var_name);
+            const std::string& value = entry.get();
             std::string result;
 
             for (char c : value) {
@@ -1014,7 +1016,7 @@ void register_string_builtins(Interpreter& interp) {
                 }
             }
 
-            interp.set_variable(var_name, result);
+            entry.set(std::move(result));
             return;
         }
 
