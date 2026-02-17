@@ -2277,12 +2277,25 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         return {};
     }
 
-    CMakeArray items;
+    // Build items as a single semicolon-separated string, then iterate with
+    // CMakeArrayIterator — avoids O(N) vector<string> + CMakeArray allocations.
+    std::string items_raw;
+    bool filter_empty = false;
+
     if (std::holds_alternative<ForeachSimple>(block.params)) {
-        // CMake filters out empty elements during unquoted expansion in simple foreach
-        auto expanded = expand_arguments(std::get<ForeachSimple>(block.params).items);
-        std::erase_if(expanded, [](const std::string& s) { return s.empty(); });
-        items = from_arguments(expanded);
+        const auto& simple = std::get<ForeachSimple>(block.params);
+        filter_empty = true;
+        if (simple.items.size() == 1) {
+            items_raw = evaluate_argument(simple.items[0]);
+        } else {
+            for (const auto& arg : simple.items) {
+                auto val = evaluate_argument(arg);
+                if (!val.empty()) {
+                    if (!items_raw.empty()) items_raw += ';';
+                    items_raw += val;
+                }
+            }
+        }
     } else if (std::holds_alternative<ForeachRange>(block.params)) {
         const auto& r = std::get<ForeachRange>(block.params);
         long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
@@ -2293,18 +2306,34 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         } else {
             step = (start <= stop) ? 1 : -1;
         }
-        for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) items.append(std::to_string(i));
+        for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) {
+            if (!items_raw.empty()) items_raw += ';';
+            items_raw += std::to_string(i);
+        }
     } else if (std::holds_alternative<ForeachIn>(block.params)) {
         const auto& in = std::get<ForeachIn>(block.params);
-        for (const auto& l : in.lists) items.append(CMakeArray(get_variable(evaluate_argument(l))));
-        items.append(from_arguments(expand_arguments(in.items)));
+        for (const auto& l : in.lists) {
+            auto val = get_variable(evaluate_argument(l));
+            if (!val.empty()) {
+                if (!items_raw.empty()) items_raw += ';';
+                items_raw += val;
+            }
+        }
+        for (const auto& arg : in.items) {
+            auto val = evaluate_argument(arg);
+            if (!val.empty()) {
+                if (!items_raw.empty()) items_raw += ';';
+                items_raw += val;
+            }
+        }
     }
 
     // Fast path: use Entry to avoid per-iteration hash lookups (watches almost always empty)
     if (variable_watches_.empty()) {
         auto loop_entry = variables_.entry(loop_var_name);
-        for (const auto& item : items) {
-            loop_entry.set(item);
+        for (auto item : CMakeArrayIterator(items_raw)) {
+            if (filter_empty && item.empty()) continue;
+            loop_entry.set(std::string(item));
             auto res = interpret(block.body);
             if (!res) {
                 set_fatal_error(res.error());
@@ -2326,8 +2355,9 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         else loop_entry.set("");
     } else {
         // Slow path: use set_variable() which fires watches
-        for (const auto& item : items) {
-            set_variable(loop_var_name, item);
+        for (auto item : CMakeArrayIterator(items_raw)) {
+            if (filter_empty && item.empty()) continue;
+            set_variable(loop_var_name, std::string(item));
             auto res = interpret(block.body);
             if (!res) {
                 set_fatal_error(res.error());
