@@ -1984,56 +1984,7 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_interned_, if_block.row, if_block.col, if_block.offset, if_block.length, "if"});
 
-    // CMake argument elision and list expansion: Remove arguments that evaluate
-    // to empty strings, and split semicolon-separated lists into separate arguments
-    // when they come from variable references (unquoted arguments with ${...})
-    auto filter_empty_args = [&](const std::vector<Argument>& args) -> std::vector<Argument> {
-        std::vector<Argument> filtered;
-        for (const auto& arg : args) {
-            // Check if argument contains variable references
-            bool has_var_ref = false;
-            for (const auto& part : arg.parts) {
-                if (std::holds_alternative<VariableReference>(part)) {
-                    has_var_ref = true;
-                    break;
-                }
-            }
-
-            // If it has variable references and is unquoted, expand and split lists
-            if (has_var_ref && !arg.quoted) {
-                std::string val = evaluate_argument(arg);
-                if (val.empty()) {
-                    continue;  // Skip this argument (elision)
-                }
-                // Split semicolon-separated lists into separate arguments
-                for (auto item : CMakeArrayIterator(val)) {
-                    if (item.empty()) continue;
-                    Argument new_arg;
-                    new_arg.quoted = false;
-                    new_arg.parts.push_back(std::string(item));
-                    filtered.push_back(std::move(new_arg));
-                }
-            } else {
-                filtered.push_back(arg);
-            }
-        }
-        return filtered;
-    };
-
-    // Fast path: skip filtering if no unquoted variable references exist
-    auto needs_filtering = [](const std::vector<Argument>& args) -> bool {
-        for (const auto& arg : args) {
-            if (arg.quoted) continue;
-            for (const auto& part : arg.parts) {
-                if (std::holds_alternative<VariableReference>(part)) return true;
-            }
-        }
-        return false;
-    };
-
-    const auto& condition_to_eval = needs_filtering(if_block.condition)
-        ? filter_empty_args(if_block.condition) : if_block.condition;
-    auto cond_result = evaluate_condition(condition_to_eval, if_block.row, if_block.col, if_block.offset, if_block.length);
+    auto cond_result = evaluate_condition(if_block.condition, if_block.pre_parsed, if_block.row, if_block.col, if_block.offset, if_block.length);
     if (!cond_result) {
         set_fatal_error(cond_result.error());
         pop_trace_stack();
@@ -2048,9 +1999,7 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
     }
 
     for (const auto& elseif : if_block.elseif_branches) {
-        const auto& elseif_cond_to_eval = needs_filtering(elseif.condition)
-            ? filter_empty_args(elseif.condition) : elseif.condition;
-        auto elseif_cond = evaluate_condition(elseif_cond_to_eval, elseif.row, elseif.col, elseif.offset, elseif.length);
+        auto elseif_cond = evaluate_condition(elseif.condition, elseif.pre_parsed, elseif.row, elseif.col, elseif.offset, elseif.length);
         if (!elseif_cond) {
             set_fatal_error(elseif_cond.error());
             pop_trace_stack();
@@ -2424,7 +2373,7 @@ std::expected<void, InterpreterError> Interpreter::execute_while_block(const Whi
 
     // Evaluate condition and loop
     while (true) {
-        auto cond_result = evaluate_condition(block.condition, block.row, block.col, block.offset, block.length);
+        auto cond_result = evaluate_condition(block.condition, block.pre_parsed, block.row, block.col, block.offset, block.length);
         if (!cond_result) {
             loop_depth_--;
             pop_trace_stack();
@@ -2756,6 +2705,10 @@ bool Interpreter::is_falsy(const std::string& val) {
 
 std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length) {
     return dmake::evaluate_condition(*this, condition, row, col, offset, length);
+}
+
+std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std::vector<Argument>& condition, const PreParsedCondition& pp, size_t row, size_t col, size_t offset, size_t length) {
+    return dmake::evaluate_condition(*this, condition, pp, row, col, offset, length);
 }
 
 bool Interpreter::has_user_function(const std::string& name) const {

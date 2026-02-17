@@ -464,6 +464,7 @@ private:
     std::expected<void, InterpreterError> invoke_user_function(const FunctionBlock& func, const std::vector<std::string>& args);
     std::expected<void, InterpreterError> invoke_user_macro(const MacroBlock& macro, const std::vector<std::string>& args);
     std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, size_t row, size_t col, size_t offset, size_t length);
+    std::expected<bool, InterpreterError> evaluate_condition(const std::vector<Argument>& condition, const PreParsedCondition& pp, size_t row, size_t col, size_t offset, size_t length);
     std::string evaluate_variable_reference(const VariableReference& ref);
 
     const std::string* intern_file(const std::string& path) {

@@ -1,4 +1,5 @@
 #include "cmake-language.hpp"
+#include "condition_evaluator.hpp"
 #include "printing.hpp"
 #include "utils.hpp"
 
@@ -113,6 +114,7 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::v
 std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocation& if_command) {
     IfBlock if_block;
     if_block.condition = if_command.arguments;
+    if_block.pre_parsed = classify_condition(if_block.condition);
     if_block.row = if_command.row;
     if_block.col = if_command.col;
     if_block.offset = if_command.offset;
@@ -133,6 +135,7 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
             
             ElseIfBlock elseif_branch;
             elseif_branch.condition = std::move(elseif_command_or_error.value().arguments);
+            elseif_branch.pre_parsed = classify_condition(elseif_branch.condition);
             elseif_branch.row = elseif_command_or_error.value().row;
             elseif_branch.col = elseif_command_or_error.value().col;
             elseif_branch.offset = elseif_command_or_error.value().offset;
@@ -489,6 +492,7 @@ std::expected<WhileBlock, ParseError> Parser::parse_while_block(const CommandInv
     while_block.col = while_command.col;
     while_block.offset = while_command.offset;
     while_block.condition = while_command.arguments;
+    while_block.pre_parsed = classify_condition(while_block.condition);
 
     // Parse the body
     auto body_or_error = parse_block({"endwhile"});

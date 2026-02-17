@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <string_view>
@@ -40,6 +41,32 @@ struct Argument {
     bool quoted;
 };
 
+enum class ConditionOp : uint8_t {
+    Fallback = 0,
+    BoolCheck,      // if(X)
+    Defined,        // if(DEFINED X)
+    Target,         // if(TARGET X)
+    Exists,         // if(EXISTS X)
+    IsDirectory, IsAbsolute, IsSymlink, Command,
+    // Binary — numeric
+    BinaryEqual, BinaryNotEqual, BinaryLess, BinaryGreater, BinaryLessEqual, BinaryGreaterEqual,
+    // Binary — string
+    BinaryStrEqual, BinaryStrLess, BinaryStrGreater, BinaryStrLessEqual, BinaryStrGreaterEqual,
+    // Binary — version
+    BinaryVersionEqual, BinaryVersionLess, BinaryVersionGreater, BinaryVersionLessEqual, BinaryVersionGreaterEqual,
+    // Binary — other
+    BinaryMatches, BinaryInList, BinaryIsNewerThan,
+};
+
+struct PreParsedCondition {
+    ConditionOp op = ConditionOp::Fallback;
+    uint8_t flags = 0;      // bit 0: negated, bit 1: has_dynamic_args
+    uint8_t left_idx = 0;
+    uint8_t right_idx = 0;
+    bool negated() const { return flags & 1; }
+    bool has_dynamic_args() const { return flags & 2; }
+};
+
 struct CommandInvocation;
 struct IfBlock;
 struct FunctionBlock;
@@ -53,6 +80,7 @@ using AstNode = std::variant<CommandInvocation, IfBlock, FunctionBlock, MacroBlo
 struct ElseIfBlock {
     std::vector<Argument> condition;
     std::vector<AstNode> body;
+    PreParsedCondition pre_parsed;
     size_t row = 0;
     size_t col = 0;
     size_t offset = 0;
@@ -64,6 +92,7 @@ struct IfBlock {
     std::vector<AstNode> then_branch;
     std::vector<ElseIfBlock> elseif_branches;
     std::vector<AstNode> else_branch;
+    PreParsedCondition pre_parsed;
     size_t row = 0;
     size_t col = 0;
     size_t offset = 0;
@@ -120,6 +149,7 @@ struct ForeachBlock {
 struct WhileBlock {
     std::vector<Argument> condition;
     std::vector<AstNode> body;
+    PreParsedCondition pre_parsed;
     size_t row = 0;
     size_t col = 0;
     size_t offset = 0;
