@@ -246,7 +246,7 @@ public:
     std::expected<void, std::string> unset_variable_parent_scope(const std::string& var_name);
     bool unset_variable(const std::string& var_name);
     bool is_variable_set(std::string_view var_name) const;
-    static bool is_falsy(const std::string& val);
+    static bool is_falsy(std::string_view val);
     static bool is_truthy(const std::string& val);
     void set_cache_variable(const std::string& var_name, const std::string& value);
 
@@ -375,7 +375,7 @@ public:
     const std::map<std::string, std::map<std::string, std::string>>& get_source_properties() const {
         return get_root()->source_properties_;
     }
-    std::map<std::string, std::string>& get_cache_variables() {
+    auto& get_cache_variables() {
         return get_root()->cache_variables_;
     }
 
@@ -505,7 +505,8 @@ private:
     AstCache ast_cache_;
     std::unique_ptr<Debugger> debugger_;
     std::set<std::string> global_guarded_files_;
-    std::map<std::string, std::string> cache_variables_;  // Fake cache namespace (not persistent)
+    std::unordered_map<std::string, std::string,
+                       TransparentStringHash, TransparentStringEqual> cache_variables_;
 
     // Session-wide directory mtime cache (for find_xxx performance)
     // Key: absolute path, Value: mtime (or nullopt if doesn't exist)

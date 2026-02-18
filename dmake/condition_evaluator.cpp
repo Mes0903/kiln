@@ -336,8 +336,8 @@ private:
             return token;
         }
 
-        auto opt = interp_.get_optional_variable(token);
-        return opt.has_value() ? *opt : std::string(token);
+        auto view = interp_.get_variable_view(token);
+        return view.has_value() ? std::string(*view) : std::string(token);
     }
 
     bool parse_or() {
@@ -898,7 +898,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         switch (pp.op) {
         case ConditionOp::BoolCheck: {
-            // BoolCheck uses get_variable (empty for undefined) — Rule 3
+            // BoolCheck uses get_variable_view (avoids string copy) — Rule 3
             std::string buffer;
             const std::string& token = get_token_string(interp, *left_arg, buffer);
 
@@ -909,8 +909,8 @@ std::expected<bool, InterpreterError> evaluate_condition(
             } else if (left_arg->quoted) {
                 result = false;
             } else {
-                std::string val = interp.get_variable(token);
-                result = !Interpreter::is_falsy(val);
+                auto view = interp.get_variable_view(token);
+                result = view.has_value() && !Interpreter::is_falsy(*view);
             }
             break;
         }

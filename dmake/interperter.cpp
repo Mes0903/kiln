@@ -2725,7 +2725,7 @@ bool Interpreter::is_truthy(const std::string& val) {
     }
 }
 
-bool Interpreter::is_falsy(const std::string& val) {
+bool Interpreter::is_falsy(std::string_view val) {
     if (val.empty()) return true;
     switch (val.size()) {
         case 1: return val[0] == '0' || val[0] == 'N' || val[0] == 'n';
@@ -2897,7 +2897,7 @@ bool Interpreter::is_variable_set(std::string_view name) const {
     }
 
     // Check cache variables
-    return cache_variables_.contains(std::string(name));
+    return cache_variables_.find(name) != cache_variables_.end();
 }
 
 std::optional<std::string> Interpreter::get_optional_variable(std::string_view name) const {
@@ -2941,8 +2941,7 @@ std::optional<std::string> Interpreter::get_optional_variable(std::string_view n
     }
 
     // Check cache variables (CACHE variables are globally accessible)
-    // Note: cache_variables_ is std::map<string,string>, need string for lookup
-    if (auto cache_it = cache_variables_.find(std::string(name)); cache_it != cache_variables_.end()) {
+    if (auto cache_it = cache_variables_.find(name); cache_it != cache_variables_.end()) {
         return cache_it->second;
     }
 
@@ -2975,7 +2974,7 @@ std::optional<std::string_view> Interpreter::get_variable_view(std::string_view 
         return std::string_view(*val);
 
     // Check cache variables
-    if (auto it = cache_variables_.find(std::string(name)); it != cache_variables_.end())
+    if (auto it = cache_variables_.find(name); it != cache_variables_.end())
         return std::string_view(it->second);
 
     return std::nullopt;
