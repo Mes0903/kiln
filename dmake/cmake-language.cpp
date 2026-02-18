@@ -3,107 +3,130 @@
 #include "printing.hpp"
 #include "utils.hpp"
 
-#include <cctype>
-#include <algorithm>
 #include <filesystem>
 #include <iostream>
+
+namespace {
+
+inline bool is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+inline bool is_alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+inline bool is_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+inline bool is_alnum(char c) {
+    return is_alpha(c) || is_digit(c);
+}
+
+inline bool is_ident_char(char c) {
+    return is_alnum(c) || c == '_';
+}
+
+// Case-insensitive ASCII comparison (both sides tolerated)
+bool ascii_ci_equal(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        char ca = a[i], cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return false;
+    }
+    return true;
+}
+
+// Check if content at [pos, pos+count) is all '=' characters
+bool match_equals(std::string_view content, size_t pos, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        if (content[pos + i] != '=') return false;
+    }
+    return true;
+}
+
+} // anonymous namespace
 
 namespace dmake {
 
 Parser::Parser(std::string_view content, std::string filename)
     : content_(content), filename_(std::move(filename)) {}
 
-// Helper to peek at the next identifier without consuming it
-std::string Parser::peek_identifier() {
-    auto original_pos = pos_;
-    auto original_row = row_;
-    auto original_col = col_;
-
-    consume_whitespace();
-    
-    size_t start_pos = pos_;
-    while (pos_ < content_.length() && (std::isalnum(content_[pos_]) || content_[pos_] == '_')) {
-        pos_++;
-    }
-    std::string identifier(content_.substr(start_pos, pos_ - start_pos));
-    
-    // Restore parser state
-    pos_ = original_pos;
-    row_ = original_row;
-    col_ = original_col;
-
-    return identifier;
-}
-
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse_block(const std::vector<std::string>& terminators) {
     std::vector<AstNode> ast;
     while (pos_ < content_.length()) {
         consume_whitespace();
-        if (pos_ >= content_.length()) {
-            break;
+        if (pos_ >= content_.length()) break;
+
+        // Save position, then scan identifier to check terminators without
+        // a separate peek + re-parse. On the common (non-terminator) path,
+        // the consumed identifier is passed directly to parse_command_body.
+        size_t saved_pos = pos_, saved_row = row_, saved_col = col_;
+        while (pos_ < content_.length() && is_ident_char(content_[pos_])) {
+            pos_++;
+            col_++;
         }
+        std::string_view id_view(content_.data() + saved_pos, pos_ - saved_pos);
 
-        auto next_command = peek_identifier();
-        std::string next_command_lower = dmake::to_lower(next_command);
-
+        // Check terminators (case-insensitive; terminators are always lowercase)
         bool terminated = false;
         for (const auto& term : terminators) {
-            std::string term_lower = dmake::to_lower(term);
-            if (next_command_lower == term_lower) {
+            if (ascii_ci_equal(id_view, term)) {
                 terminated = true;
                 break;
             }
         }
         if (terminated) {
-            break; 
+            // Restore so the caller can consume the terminator command
+            pos_ = saved_pos;
+            row_ = saved_row;
+            col_ = saved_col;
+            break;
         }
 
-        auto command_or_error = parse_command_invocation();
-        if (!command_or_error) {
-            return std::unexpected(command_or_error.error());
+        if (id_view.empty()) {
+            // Not an identifier - restore and let parse_command_invocation produce the error
+            pos_ = saved_pos;
+            row_ = saved_row;
+            col_ = saved_col;
+            auto command_or_error = parse_command_invocation();
+            if (!command_or_error) return std::unexpected(command_or_error.error());
         }
-        
-        std::string identifier_lower = command_or_error.value().identifier;
-        std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
-                       [](unsigned char c){ return std::tolower(c); });
 
-        if (identifier_lower == "if") {
-            auto if_block_or_error = parse_if_block(command_or_error.value());
-            if(!if_block_or_error) {
-                return std::unexpected(if_block_or_error.error());
-            }
-            ast.emplace_back(std::move(if_block_or_error.value()));
-        } else if (identifier_lower == "function") {
-            auto function_block_or_error = parse_function_block(command_or_error.value());
-            if(!function_block_or_error) {
-                return std::unexpected(function_block_or_error.error());
-            }
-            ast.emplace_back(std::move(function_block_or_error.value()));
-        } else if (identifier_lower == "macro") {
-            auto macro_block_or_error = parse_macro_block(command_or_error.value());
-            if(!macro_block_or_error) {
-                return std::unexpected(macro_block_or_error.error());
-            }
-            ast.emplace_back(std::move(macro_block_or_error.value()));
-        } else if (identifier_lower == "foreach") {
-            auto foreach_block_or_error = parse_foreach_block(command_or_error.value());
-            if(!foreach_block_or_error) {
-                return std::unexpected(foreach_block_or_error.error());
-            }
-            ast.emplace_back(std::move(foreach_block_or_error.value()));
-        } else if (identifier_lower == "while") {
-            auto while_block_or_error = parse_while_block(command_or_error.value());
-            if(!while_block_or_error) {
-                return std::unexpected(while_block_or_error.error());
-            }
-            ast.emplace_back(std::move(while_block_or_error.value()));
-        } else if (identifier_lower == "block") {
-            auto block_block_or_error = parse_block_block(command_or_error.value());
-            if(!block_block_or_error) {
-                return std::unexpected(block_block_or_error.error());
-            }
-            ast.emplace_back(std::move(block_block_or_error.value()));
+        // Pass pre-consumed identifier to parse the rest of the command
+        auto command_or_error = parse_command_body(
+            std::string(id_view), saved_row, saved_col, saved_pos);
+        if (!command_or_error) return std::unexpected(command_or_error.error());
+
+        // Dispatch block-structuring keywords (case-insensitive)
+        if (ascii_ci_equal(id_view, "if")) {
+            auto result = parse_if_block(command_or_error.value());
+            if (!result) return std::unexpected(result.error());
+            ast.emplace_back(std::move(*result));
+        } else if (ascii_ci_equal(id_view, "function")) {
+            auto result = parse_function_block(command_or_error.value());
+            if (!result) return std::unexpected(result.error());
+            ast.emplace_back(std::move(*result));
+        } else if (ascii_ci_equal(id_view, "macro")) {
+            auto result = parse_macro_block(command_or_error.value());
+            if (!result) return std::unexpected(result.error());
+            ast.emplace_back(std::move(*result));
+        } else if (ascii_ci_equal(id_view, "foreach")) {
+            auto result = parse_foreach_block(command_or_error.value());
+            if (!result) return std::unexpected(result.error());
+            ast.emplace_back(std::move(*result));
+        } else if (ascii_ci_equal(id_view, "while")) {
+            auto result = parse_while_block(command_or_error.value());
+            if (!result) return std::unexpected(result.error());
+            ast.emplace_back(std::move(*result));
+        } else if (ascii_ci_equal(id_view, "block")) {
+            auto result = parse_block_block(command_or_error.value());
+            if (!result) return std::unexpected(result.error());
+            ast.emplace_back(std::move(*result));
         } else {
             ast.emplace_back(std::move(command_or_error.value()));
         }
@@ -126,47 +149,51 @@ std::expected<IfBlock, ParseError> Parser::parse_if_block(const CommandInvocatio
     if_block.then_branch = std::move(then_branch_or_error.value());
     
     while (true) {
-        auto next_command = peek_identifier();
-        std::string next_command_lower = dmake::to_lower(next_command);
+        // Peek at next keyword without a full save/restore cycle
+        consume_whitespace();
+        size_t saved_pos = pos_, saved_row = row_, saved_col = col_;
+        while (pos_ < content_.length() && is_ident_char(content_[pos_])) { pos_++; col_++; }
+        std::string_view kw(content_.data() + saved_pos, pos_ - saved_pos);
+        // Restore - let parse_command_invocation re-consume for the full command
+        pos_ = saved_pos; row_ = saved_row; col_ = saved_col;
 
-        if (next_command_lower == "elseif") {
+        if (ascii_ci_equal(kw, "elseif")) {
             auto elseif_command_or_error = parse_command_invocation();
             if (!elseif_command_or_error) return std::unexpected(elseif_command_or_error.error());
-            
+
             ElseIfBlock elseif_branch;
             elseif_branch.condition = std::move(elseif_command_or_error.value().arguments);
             elseif_branch.pre_parsed = classify_condition(elseif_branch.condition);
             elseif_branch.row = elseif_command_or_error.value().row;
             elseif_branch.col = elseif_command_or_error.value().col;
             elseif_branch.offset = elseif_command_or_error.value().offset;
-            
+
             auto body_or_error = parse_block({"elseif", "else", "endif"});
             if (!body_or_error) return std::unexpected(body_or_error.error());
             elseif_branch.body = std::move(body_or_error.value());
             elseif_branch.length = pos_ - elseif_branch.offset;
-            
+
             if_block.elseif_branches.push_back(std::move(elseif_branch));
-        } else if (next_command_lower == "else") {
+        } else if (ascii_ci_equal(kw, "else")) {
             auto else_command_or_error = parse_command_invocation();
             if (!else_command_or_error) return std::unexpected(else_command_or_error.error());
 
             auto else_branch_or_error = parse_block({"endif"});
             if (!else_branch_or_error) return std::unexpected(else_branch_or_error.error());
             if_block.else_branch = std::move(else_branch_or_error.value());
-            break; 
-        } else if (next_command_lower == "endif") {
+            break;
+        } else if (ascii_ci_equal(kw, "endif")) {
             break;
         } else {
              break;
         }
     }
-    
+
     auto endif_command_or_error = parse_command_invocation(); // consume "endif"
     if (!endif_command_or_error) {
          return std::unexpected(endif_command_or_error.error());
     }
-    std::string endif_lower = dmake::to_lower(endif_command_or_error.value().identifier);
-    if (endif_lower != "endif") {
+    if (!ascii_ci_equal(endif_command_or_error.value().identifier, "endif")) {
         return std::unexpected(ParseError{endif_command_or_error.value().row, endif_command_or_error.value().col, endif_command_or_error.value().offset, endif_command_or_error.value().length, "Expected 'endif'"});
     }
 
@@ -212,10 +239,7 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
         return std::unexpected(endfunction_command_or_error.error());
     }
 
-    std::string identifier_lower = endfunction_command_or_error.value().identifier;
-    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    if (identifier_lower != "endfunction") {
+    if (!ascii_ci_equal(endfunction_command_or_error.value().identifier, "endfunction")) {
         return std::unexpected(ParseError{row_, col_, pos_, 11, "Expected 'endfunction'"});
     }
 
@@ -266,10 +290,7 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
         return std::unexpected(endmacro_command_or_error.error());
     }
 
-    std::string identifier_lower = endmacro_command_or_error.value().identifier;
-    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    if (identifier_lower != "endmacro") {
+    if (!ascii_ci_equal(endmacro_command_or_error.value().identifier, "endmacro")) {
         return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endmacro'"});
     }
 
@@ -475,10 +496,7 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
         return std::unexpected(endforeach_command_or_error.error());
     }
 
-    std::string identifier_lower = endforeach_command_or_error.value().identifier;
-    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    if (identifier_lower != "endforeach") {
+    if (!ascii_ci_equal(endforeach_command_or_error.value().identifier, "endforeach")) {
         return std::unexpected(ParseError{row_, col_, pos_, 10, "Expected 'endforeach'"});
     }
 
@@ -507,10 +525,7 @@ std::expected<WhileBlock, ParseError> Parser::parse_while_block(const CommandInv
         return std::unexpected(endwhile_command_or_error.error());
     }
 
-    std::string identifier_lower = endwhile_command_or_error.value().identifier;
-    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    if (identifier_lower != "endwhile") {
+    if (!ascii_ci_equal(endwhile_command_or_error.value().identifier, "endwhile")) {
         return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endwhile'"});
     }
 
@@ -528,15 +543,14 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
     // Parse optional arguments: [SCOPE_FOR VARIABLES] [PROPAGATE var1 var2...]
     size_t idx = 0;
     while (idx < block_command.arguments.size()) {
-        std::string keyword;
+        std::string_view keyword;
         if (!block_command.arguments[idx].quoted &&
             block_command.arguments[idx].parts.size() == 1 &&
             std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
             keyword = std::get<std::string>(block_command.arguments[idx].parts[0]);
-            std::transform(keyword.begin(), keyword.end(), keyword.begin(), ::toupper);
         }
 
-        if (keyword == "SCOPE_FOR") {
+        if (ascii_ci_equal(keyword, "SCOPE_FOR")) {
             // When SCOPE_FOR is explicitly specified, switch from default (both scopes)
             // to only what's explicitly requested
             block_block.scope_for_variables = false;  // Will be set true if VARIABLES is specified
@@ -544,18 +558,17 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
             idx++;
             // Next arguments should be VARIABLES and/or POLICIES
             while (idx < block_command.arguments.size()) {
-                std::string scope_keyword;
+                std::string_view scope_keyword;
                 if (!block_command.arguments[idx].quoted &&
                     block_command.arguments[idx].parts.size() == 1 &&
                     std::holds_alternative<std::string>(block_command.arguments[idx].parts[0])) {
                     scope_keyword = std::get<std::string>(block_command.arguments[idx].parts[0]);
-                    std::transform(scope_keyword.begin(), scope_keyword.end(), scope_keyword.begin(), ::toupper);
                 }
 
-                if (scope_keyword == "VARIABLES") {
+                if (ascii_ci_equal(scope_keyword, "VARIABLES")) {
                     block_block.scope_for_variables = true;
                     idx++;
-                } else if (scope_keyword == "POLICIES") {
+                } else if (ascii_ci_equal(scope_keyword, "POLICIES")) {
                     // Policies not supported, but we accept for compatibility
                     idx++;
                 } else {
@@ -565,7 +578,7 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
             }
             // Continue to check for PROPAGATE
             continue;
-        } else if (keyword == "PROPAGATE") {
+        } else if (ascii_ci_equal(keyword, "PROPAGATE")) {
             // PROPAGATE implies variable scoping
             block_block.scope_for_variables = true;
             // Collect all remaining arguments as variable names to propagate
@@ -598,10 +611,7 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
         return std::unexpected(endblock_command_or_error.error());
     }
 
-    std::string identifier_lower = endblock_command_or_error.value().identifier;
-    std::transform(identifier_lower.begin(), identifier_lower.end(), identifier_lower.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    if (identifier_lower != "endblock") {
+    if (!ascii_ci_equal(endblock_command_or_error.value().identifier, "endblock")) {
         return std::unexpected(ParseError{row_, col_, pos_, 8, "Expected 'endblock'"});
     }
 
@@ -622,7 +632,7 @@ std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
 
 void Parser::consume_whitespace() {
     while (pos_ < content_.length()) {
-        if (std::isspace(content_[pos_])) {
+        if (is_space(content_[pos_])) {
             if (content_[pos_] == '\n') {
                 row_++;
                 col_ = 1;
@@ -633,10 +643,8 @@ void Parser::consume_whitespace() {
         } else if (content_[pos_] == '#') {
             if (pos_ + 1 < content_.length() && content_[pos_ + 1] == '[') {
                 // Bracket comment
-                pos_++; // #
-                col_++;
-                pos_++; // [
-                col_++;
+                pos_ += 2; // #[
+                col_ += 2;
 
                 size_t equals_count = 0;
                 while (pos_ < content_.length() && content_[pos_] == '=') {
@@ -646,7 +654,7 @@ void Parser::consume_whitespace() {
                 }
 
                 if (pos_ >= content_.length() || content_[pos_] != '[') {
-                    // This is not a valid bracket comment, so we treat it as a line comment
+                    // Not a valid bracket comment, treat as line comment
                     while (pos_ < content_.length() && content_[pos_] != '\n') {
                         pos_++;
                         col_++;
@@ -656,7 +664,9 @@ void Parser::consume_whitespace() {
                     col_++;
 
                     while (pos_ + equals_count + 1 < content_.length()) {
-                        if (content_[pos_] == ']' && content_.substr(pos_ + 1, equals_count) == std::string(equals_count, '=') && content_[pos_ + equals_count + 1] == ']') {
+                        if (content_[pos_] == ']' &&
+                            match_equals(content_, pos_ + 1, equals_count) &&
+                            content_[pos_ + equals_count + 1] == ']') {
                             pos_ += equals_count + 2;
                             col_ += equals_count + 2;
                             break;
@@ -686,14 +696,13 @@ void Parser::consume_whitespace() {
 std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() {
     consume_whitespace();
 
-    // Save location at start of command
     size_t cmd_row = row_;
     size_t cmd_col = col_;
     size_t cmd_offset = pos_;
 
     // Parse identifier
     size_t start_pos = pos_;
-    while (pos_ < content_.length() && (std::isalnum(content_[pos_]) || content_[pos_] == '_')) {
+    while (pos_ < content_.length() && is_ident_char(content_[pos_])) {
         pos_++;
         col_++;
     }
@@ -702,6 +711,12 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
     if (identifier.empty()) {
         return std::unexpected(ParseError{row_, col_, pos_, 0, "Expected an identifier"});
     }
+
+    return parse_command_body(std::move(identifier), cmd_row, cmd_col, cmd_offset);
+}
+
+std::expected<CommandInvocation, ParseError> Parser::parse_command_body(
+    std::string identifier, size_t cmd_row, size_t cmd_col, size_t cmd_offset) {
 
     consume_whitespace();
 
@@ -740,7 +755,7 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_invocation() 
         if (arg_or_error) {
             const auto& arg = arg_or_error.value();
             if (!arg.quoted && arg.parts.size() == 1 && std::holds_alternative<std::string>(arg.parts[0])) {
-                std::string s = std::get<std::string>(arg.parts[0]);
+                const auto& s = std::get<std::string>(arg.parts[0]);
                 if (s == "(") nesting++;
                 else if (s == ")") nesting--;
             }
@@ -867,7 +882,7 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
         // Stop at whitespace, parens, or comments.
         // CMake ALWAYS splits on whitespace, even inside generator expressions.
         // Multi-line genex become separate arguments joined with semicolons by commands.
-        if (std::isspace(current) || current == '(' || current == ')' || current == '#') {
+        if (is_space(current) || current == '(' || current == ')' || current == '#') {
             break;
         }
 
@@ -978,22 +993,17 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_unquoted_argu
                 is_var_ref = true;
             }
             // Check for $ENV{ or $CACHE{
-            else if (std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_') {
+            else if (is_alpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_') {
                 // Peek ahead to see if this is ENV{ or CACHE{
                 size_t peek_pos = pos_ + 1;
-                while (peek_pos < content_.length() &&
-                       (std::isalnum(content_[peek_pos]) || content_[peek_pos] == '_')) {
+                while (peek_pos < content_.length() && is_ident_char(content_[peek_pos])) {
                     peek_pos++;
                 }
 
                 // Check if the identifier is followed by '{'
                 if (peek_pos < content_.length() && content_[peek_pos] == '{') {
-                    // Extract the identifier and check if it's ENV or CACHE
-                    std::string prefix(content_.substr(pos_ + 1, peek_pos - pos_ - 1));
-                    std::transform(prefix.begin(), prefix.end(), prefix.begin(),
-                                  [](unsigned char c){ return std::toupper(c); });
-
-                    if (prefix == "ENV" || prefix == "CACHE") {
+                    std::string_view prefix(content_.data() + pos_ + 1, peek_pos - pos_ - 1);
+                    if (ascii_ci_equal(prefix, "ENV") || ascii_ci_equal(prefix, "CACHE")) {
                         is_var_ref = true;
                     }
                 }
@@ -1111,22 +1121,17 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
                 is_var_ref = true;
             }
             // Check for $ENV{ or $CACHE{
-            else if (std::isalpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_') {
+            else if (is_alpha(content_[pos_ + 1]) || content_[pos_ + 1] == '_') {
                 // Peek ahead to see if this is ENV{ or CACHE{
                 size_t peek_pos = pos_ + 1;
-                while (peek_pos < content_.length() &&
-                       (std::isalnum(content_[peek_pos]) || content_[peek_pos] == '_')) {
+                while (peek_pos < content_.length() && is_ident_char(content_[peek_pos])) {
                     peek_pos++;
                 }
 
                 // Check if the identifier is followed by '{'
                 if (peek_pos < content_.length() && content_[peek_pos] == '{') {
-                    // Extract the identifier and check if it's ENV or CACHE
-                    std::string prefix(content_.substr(pos_ + 1, peek_pos - pos_ - 1));
-                    std::transform(prefix.begin(), prefix.end(), prefix.begin(),
-                                  [](unsigned char c){ return std::toupper(c); });
-
-                    if (prefix == "ENV" || prefix == "CACHE") {
+                    std::string_view prefix(content_.data() + pos_ + 1, peek_pos - pos_ - 1);
+                    if (ascii_ci_equal(prefix, "ENV") || ascii_ci_equal(prefix, "CACHE")) {
                         is_var_ref = true;
                     }
                 }
@@ -1183,7 +1188,7 @@ std::expected<std::string, ParseError> Parser::parse_bracket_argument() {
 
     size_t start_pos = pos_;
     while (pos_ + equals_count + 1 < content_.length()) {
-        if (content_[pos_] == ']' && content_.substr(pos_ + 1, equals_count) == std::string(equals_count, '=') && content_[pos_ + equals_count + 1] == ']') {
+        if (content_[pos_] == ']' && match_equals(content_, pos_ + 1, equals_count) && content_[pos_ + equals_count + 1] == ']') {
             std::string value(content_.substr(start_pos, pos_ - start_pos));
             pos_ += equals_count + 2;
             col_ += equals_count + 2;
@@ -1217,20 +1222,15 @@ std::expected<VariableReference, ParseError> Parser::parse_variable_reference(bo
     if (content_[pos_] == '{') {
         // Regular variable: ${...}
         namespace_prefix = "";
-    } else if (std::isalpha(content_[pos_]) || content_[pos_] == '_') {
+    } else if (is_alpha(content_[pos_]) || content_[pos_] == '_') {
         // Parse identifier (namespace prefix)
         size_t prefix_start = pos_;
-        while (pos_ < content_.length() &&
-               (std::isalnum(content_[pos_]) || content_[pos_] == '_')) {
+        while (pos_ < content_.length() && is_ident_char(content_[pos_])) {
             pos_++;
             col_++;
         }
 
-        std::string prefix(content_.substr(prefix_start, pos_ - prefix_start));
-
-        // Normalize to uppercase (CMake is case-insensitive)
-        std::transform(prefix.begin(), prefix.end(), prefix.begin(),
-                      [](unsigned char c){ return std::toupper(c); });
+        std::string prefix = dmake::to_upper(content_.substr(prefix_start, pos_ - prefix_start));
 
         // Expect '{'
         if (pos_ >= content_.length() || content_[pos_] != '{') {
@@ -1238,7 +1238,7 @@ std::expected<VariableReference, ParseError> Parser::parse_variable_reference(bo
                 "Expected '{' after '$" + prefix + "'"});
         }
 
-        namespace_prefix = prefix;
+        namespace_prefix = std::move(prefix);
     } else {
         return std::unexpected(ParseError{row_, col_, pos_, 1,
             "Expected '{' or identifier after '$'"});

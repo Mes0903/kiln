@@ -203,7 +203,6 @@ private:
     size_t row_ = 1;
     size_t col_ = 1;
 
-    std::string peek_identifier();
     std::expected<std::vector<AstNode>, ParseError> parse_block(const std::vector<std::string>& terminators);
     std::expected<IfBlock, ParseError> parse_if_block(const CommandInvocation& if_command);
     std::expected<FunctionBlock, ParseError> parse_function_block(const CommandInvocation& function_command);
@@ -213,6 +212,8 @@ private:
     std::expected<BlockBlock, ParseError> parse_block_block(const CommandInvocation& block_command);
     void consume_whitespace();
     std::expected<CommandInvocation, ParseError> parse_command_invocation();
+    std::expected<CommandInvocation, ParseError> parse_command_body(
+        std::string identifier, size_t cmd_row, size_t cmd_col, size_t cmd_offset);
     std::expected<Argument, ParseError> parse_argument();
     std::expected<std::vector<ArgumentPart>, ParseError> parse_unquoted_argument_value();
     std::expected<std::vector<ArgumentPart>, ParseError> parse_quoted_argument_value();
