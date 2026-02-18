@@ -66,21 +66,24 @@ constexpr std::array boolean_constants = {
     "FALSE", "IGNORE", "N", "NO", "NOTFOUND", "OFF", "ON", "TRUE", "Y", "YES"
 };
 
-// Case-insensitive check against boolean_constants without allocating a to_upper copy.
+// Case-insensitive check against boolean_constants using length-based dispatch.
+// All constants are pure ASCII letters so (c | 0x20) gives case-insensitive comparison.
 bool is_boolean_constant_ci(std::string_view token) {
-    for (const auto& bc : boolean_constants) {
-        std::string_view b(bc);
-        if (token.size() != b.size()) continue;
-        bool match = true;
-        for (size_t i = 0; i < token.size(); ++i) {
-            if (static_cast<char>(std::toupper(static_cast<unsigned char>(token[i]))) != b[i]) {
-                match = false;
-                break;
-            }
-        }
-        if (match) return true;
+    auto ci_eq = [](std::string_view a, const char* b) {
+        for (size_t i = 0; i < a.size(); ++i)
+            if ((a[i] | 0x20) != (b[i] | 0x20)) return false;
+        return true;
+    };
+    switch (token.size()) {
+    case 1: return (token[0] | 0x20) == 'n' || (token[0] | 0x20) == 'y';
+    case 2: return ci_eq(token, "NO") || ci_eq(token, "ON");
+    case 3: return ci_eq(token, "OFF") || ci_eq(token, "YES");
+    case 4: return ci_eq(token, "TRUE");
+    case 5: return ci_eq(token, "FALSE");
+    case 6: return ci_eq(token, "IGNORE");
+    case 8: return ci_eq(token, "NOTFOUND");
+    default: return false;
     }
-    return false;
 }
 
 // Set of binary operator keywords
@@ -123,15 +126,40 @@ const std::string& get_token_string(Interpreter& interp, const Argument& arg, st
 }
 
 bool is_keyword(std::string_view token) {
-    return std::find(keywords.begin(), keywords.end(), token) != keywords.end();
+    // Arrays are sorted — use binary search instead of linear scan.
+    return std::binary_search(keywords.begin(), keywords.end(), token,
+        [](std::string_view a, std::string_view b) { return a < b; });
 }
 
 bool is_binary_operator(std::string_view token) {
-    return std::find(binary_operators.begin(), binary_operators.end(), token) != binary_operators.end();
+    // Length-based dispatch eliminates most comparisons for non-operator tokens.
+    switch (token.size()) {
+    case 4: return token == "LESS";
+    case 5: return token == "EQUAL";
+    case 7: return token == "GREATER" || token == "IN_LIST" || token == "MATCHES" || token == "STRLESS";
+    case 8: return token == "STREQUAL";
+    case 9: return token == "NOT_EQUAL";
+    case 10: return token == "LESS_EQUAL" || token == "STRGREATER";
+    case 12: return token == "VERSION_LESS";
+    case 13: return token == "GREATER_EQUAL" || token == "IS_NEWER_THAN" || token == "STRLESS_EQUAL" || token == "VERSION_EQUAL";
+    case 15: return token == "VERSION_GREATER";
+    case 16: return token == "STRGREATER_EQUAL";
+    case 18: return token == "VERSION_LESS_EQUAL";
+    case 21: return token == "VERSION_GREATER_EQUAL";
+    default: return false;
+    }
 }
 
 bool is_unary_keyword(std::string_view token) {
-    return std::find(unary_keywords.begin(), unary_keywords.end(), token) != unary_keywords.end();
+    switch (token.size()) {
+    case 4: return token == "TEST";
+    case 6: return token == "EXISTS" || token == "POLICY" || token == "TARGET";
+    case 7: return token == "COMMAND" || token == "DEFINED";
+    case 10: return token == "IS_SYMLINK";
+    case 11: return token == "IS_ABSOLUTE";
+    case 12: return token == "IS_DIRECTORY";
+    default: return false;
+    }
 }
 
 // Evaluate MATCHES with CMAKE_MATCH_* side effects. Returns error string on failure.
@@ -1062,9 +1090,9 @@ std::expected<bool, InterpreterError> evaluate_condition(
         } else if (arg.quoted) {
             result = false;
         } else {
-            // BoolCheck: get_variable returns "" for undefined → is_falsy("") → true → result false
-            std::string val = interp.get_variable(token);
-            result = !Interpreter::is_falsy(val);
+            // BoolCheck: undefined → falsy. Use get_variable_view to avoid string copy.
+            auto view = interp.get_variable_view(token);
+            result = view.has_value() && !Interpreter::is_falsy(*view);
         }
         break;
     }
