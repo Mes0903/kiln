@@ -56,6 +56,8 @@ enum class ConditionOp : uint8_t {
     BinaryVersionEqual, BinaryVersionLess, BinaryVersionGreater, BinaryVersionLessEqual, BinaryVersionGreaterEqual,
     // Binary — other
     BinaryMatches, BinaryInList, BinaryIsNewerThan,
+    // Compound — homogeneous AND/OR chains of simple sub-conditions
+    CompoundAnd, CompoundOr,
 };
 
 struct PreParsedCondition {
@@ -65,6 +67,19 @@ struct PreParsedCondition {
     uint8_t right_idx = 0;
     bool negated() const { return flags & 1; }
     bool has_dynamic_args() const { return flags & 2; }
+
+    // Compound AND/OR support: inline array of simple sub-conditions.
+    struct SubCondition {
+        ConditionOp op;
+        uint8_t flags;       // bit 0: negated, bit 1: has_dynamic_args
+        uint8_t left_idx;    // index into the ORIGINAL condition argument vector
+        uint8_t right_idx;
+        bool negated() const { return flags & 1; }
+        bool has_dynamic_args() const { return flags & 2; }
+    };
+    static constexpr uint8_t MAX_SUB = 8;
+    uint8_t num_sub = 0;
+    SubCondition subs[MAX_SUB] = {};
 };
 
 struct CommandInvocation;

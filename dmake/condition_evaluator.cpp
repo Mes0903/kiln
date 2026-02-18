@@ -626,6 +626,178 @@ private:
     }
 };
 
+// Evaluate a single sub-condition from a compound AND/OR chain.
+// Returns the boolean result. For dynamic sub-conditions that expand to
+// empty or contain semicolons, returns std::nullopt to signal fallback.
+std::optional<bool> evaluate_sub_condition(
+    Interpreter& interp,
+    const std::vector<Argument>& condition,
+    const PreParsedCondition::SubCondition& sub)
+{
+    // If sub has dynamic args, check for empty/semicolons
+    if (sub.has_dynamic_args()) {
+        auto check = [&](uint8_t idx) -> bool {
+            const auto& arg = condition[idx];
+            if (arg.quoted || !arg_has_varref(arg)) return true;
+            std::string val = interp.evaluate_argument(arg);
+            return !val.empty() && val.find(';') == std::string::npos;
+        };
+
+        bool is_binary = (static_cast<uint8_t>(sub.op) >= static_cast<uint8_t>(ConditionOp::BinaryEqual) &&
+                          sub.op != ConditionOp::CompoundAnd && sub.op != ConditionOp::CompoundOr);
+
+        if (!check(sub.left_idx)) return std::nullopt;
+        if (is_binary && !check(sub.right_idx)) return std::nullopt;
+    }
+
+    bool result = false;
+
+    switch (sub.op) {
+    case ConditionOp::BoolCheck: {
+        const Argument& arg = condition[sub.left_idx];
+        std::string buffer;
+        const std::string& token = get_token_string(interp, arg, buffer);
+        if (is_boolean_constant_ci(token)) {
+            result = !Interpreter::is_falsy(token);
+        } else if (is_numeric_constant(token)) {
+            result = !Interpreter::is_falsy(token);
+        } else if (arg.quoted) {
+            result = false;
+        } else {
+            auto view = interp.get_variable_view(token);
+            result = view.has_value() && !Interpreter::is_falsy(*view);
+        }
+        break;
+    }
+
+    case ConditionOp::Defined: {
+        std::string buffer;
+        const std::string& var_name = get_token_string(interp, condition[sub.left_idx], buffer);
+        if (var_name.size() > 6 && var_name.compare(0, 6, "CACHE{") == 0 && var_name.back() == '}') {
+            std::string cache_var = var_name.substr(6, var_name.size() - 7);
+            result = interp.get_cache_variables().contains(cache_var);
+        } else {
+            result = interp.is_variable_set(var_name);
+        }
+        break;
+    }
+
+    case ConditionOp::Target: {
+        std::string buffer;
+        const std::string& name = get_token_string(interp, condition[sub.left_idx], buffer);
+        result = interp.find_target(name) != nullptr;
+        break;
+    }
+
+    case ConditionOp::Exists: {
+        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
+        result = interp.cached_file_exists(path);
+        break;
+    }
+
+    case ConditionOp::IsDirectory: {
+        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
+        result = interp.cached_is_directory(path);
+        break;
+    }
+
+    case ConditionOp::IsAbsolute: {
+        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
+        result = std::filesystem::path(path).is_absolute();
+        break;
+    }
+
+    case ConditionOp::IsSymlink: {
+        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
+        result = std::filesystem::is_symlink(path);
+        break;
+    }
+
+    case ConditionOp::Command: {
+        std::string buffer;
+        auto name = eval_operand_sv(interp, condition[sub.left_idx], buffer);
+        result = interp.has_user_function(std::string(name));
+        break;
+    }
+
+    default: {
+        // Binary ops
+        std::string buf_l, buf_r;
+        auto left = eval_operand_sv(interp, condition[sub.left_idx], buf_l);
+        auto right = eval_operand_sv(interp, condition[sub.right_idx], buf_r);
+
+        switch (sub.op) {
+        case ConditionOp::BinaryEqual:
+        case ConditionOp::BinaryNotEqual:
+        case ConditionOp::BinaryLess:
+        case ConditionOp::BinaryGreater:
+        case ConditionOp::BinaryLessEqual:
+        case ConditionOp::BinaryGreaterEqual: {
+            int cmp;
+            if (try_numeric_compare(left, right, cmp)) {
+                result = apply_numeric_op(sub.op, cmp);
+            } else {
+                if (sub.op == ConditionOp::BinaryEqual) result = left == right;
+                else if (sub.op == ConditionOp::BinaryNotEqual) result = left != right;
+                else result = false;
+            }
+            break;
+        }
+        case ConditionOp::BinaryStrEqual: result = left == right; break;
+        case ConditionOp::BinaryStrLess: result = left < right; break;
+        case ConditionOp::BinaryStrGreater: result = left > right; break;
+        case ConditionOp::BinaryStrLessEqual: result = left <= right; break;
+        case ConditionOp::BinaryStrGreaterEqual: result = left >= right; break;
+
+        case ConditionOp::BinaryVersionEqual:
+        case ConditionOp::BinaryVersionLess:
+        case ConditionOp::BinaryVersionGreater:
+        case ConditionOp::BinaryVersionLessEqual:
+        case ConditionOp::BinaryVersionGreaterEqual: {
+            int cmp = compare_versions(std::string(left), std::string(right));
+            switch (sub.op) {
+            case ConditionOp::BinaryVersionEqual: result = cmp == 0; break;
+            case ConditionOp::BinaryVersionLess: result = cmp < 0; break;
+            case ConditionOp::BinaryVersionGreater: result = cmp > 0; break;
+            case ConditionOp::BinaryVersionLessEqual: result = cmp <= 0; break;
+            case ConditionOp::BinaryVersionGreaterEqual: result = cmp >= 0; break;
+            default: break;
+            }
+            break;
+        }
+
+        case ConditionOp::BinaryMatches: {
+            auto mr = evaluate_matches(interp, std::string(left), std::string(right));
+            if (!mr.error.empty()) return std::nullopt;  // fallback on regex error
+            result = mr.matched;
+            break;
+        }
+
+        case ConditionOp::BinaryInList:
+            result = cmake_list_contains(std::string(right), std::string(left));
+            break;
+
+        case ConditionOp::BinaryIsNewerThan: {
+            std::string lpath = interp.evaluate_argument(condition[sub.left_idx]);
+            std::string rpath = interp.evaluate_argument(condition[sub.right_idx]);
+            std::error_code ec1, ec2;
+            auto time1 = std::filesystem::last_write_time(lpath, ec1);
+            auto time2 = std::filesystem::last_write_time(rpath, ec2);
+            if (ec1 || ec2) result = true;
+            else result = time1 >= time2;
+            break;
+        }
+
+        default: return std::nullopt;
+        }
+        break;
+    }
+    }
+
+    if (sub.negated()) result = !result;
+    return result;
+}
+
 } // anonymous namespace
 
 // --- classify_condition (parse-time) ---
@@ -634,9 +806,9 @@ PreParsedCondition classify_condition(const std::vector<Argument>& condition) {
     PreParsedCondition pp;
     const size_t n = condition.size();
 
-    // Indices are uint8_t (max 255). We only handle n <= 4, so max index is 3.
-    static_assert(4 <= std::numeric_limits<uint8_t>::max());
-    if (n == 0 || n > 4) return pp;  // Fallback for empty or 5+ tokens
+    if (n == 0) return pp;
+    // Indices are uint8_t (max 255).
+    if (n > std::numeric_limits<uint8_t>::max()) return pp;
 
     // Helper: check if an operand-position argument is a bare keyword literal.
     // If so, we can't fast-path because the full parser has special keyword handling.
@@ -793,6 +965,139 @@ PreParsedCondition classify_condition(const std::vector<Argument>& condition) {
         return pp;
     }
 
+    // --- Compound AND/OR chains (n >= 5) ---
+    // Scan for AND/OR at top level. Bail on parentheses or mixed AND+OR.
+    {
+        bool has_and = false, has_or = false, has_parens = false;
+        for (size_t i = 0; i < n; ++i) {
+            if (!is_bare_literal(condition[i])) continue;
+            auto lit = get_bare_literal(condition[i]);
+            if (lit == "AND") has_and = true;
+            else if (lit == "OR") has_or = true;
+            else if (lit == "(" || lit == ")") has_parens = true;
+        }
+
+        if (has_parens) return pp;          // Parenthesized → fallback
+        if (has_and && has_or) return pp;    // Mixed AND+OR → fallback
+        if (!has_and && !has_or) return pp;  // No connectives → fallback
+
+        ConditionOp compound_op = has_and ? ConditionOp::CompoundAnd : ConditionOp::CompoundOr;
+        std::string_view connective = has_and ? "AND" : "OR";
+
+        // Split into sub-expressions at connective boundaries.
+        // Each sub-expression must be 1-3 tokens (handled by existing classify logic).
+        uint8_t num_sub = 0;
+        size_t sub_start = 0;
+
+        auto classify_sub = [&](size_t start, size_t end) -> bool {
+            size_t sub_n = end - start;
+            if (sub_n == 0 || sub_n > 3) return false;
+            if (num_sub >= PreParsedCondition::MAX_SUB) return false;
+
+            auto& sub = pp.subs[num_sub];
+            sub.flags = 0;
+
+            if (sub_n == 1) {
+                // BoolCheck
+                sub.op = ConditionOp::BoolCheck;
+                sub.left_idx = static_cast<uint8_t>(start);
+                sub.right_idx = 0;
+                // Dynamic flag
+                if (!condition[start].quoted && arg_has_varref(condition[start]))
+                    sub.flags |= 2;
+            } else if (sub_n == 2) {
+                // NOT X or UNARY X
+                if (!is_bare_literal(condition[start])) return false;
+                auto kw = get_bare_literal(condition[start]);
+                if (kw == "NOT") {
+                    sub.op = ConditionOp::BoolCheck;
+                    sub.flags |= 1;  // negated
+                    sub.left_idx = static_cast<uint8_t>(start + 1);
+                    if (!condition[start + 1].quoted && arg_has_varref(condition[start + 1]))
+                        sub.flags |= 2;
+                } else {
+                    ConditionOp uop = unary_op_from_string(kw);
+                    if (uop == ConditionOp::Fallback) return false;
+                    sub.op = uop;
+                    sub.left_idx = static_cast<uint8_t>(start + 1);
+                    if (!condition[start + 1].quoted && arg_has_varref(condition[start + 1]))
+                        sub.flags |= 2;
+                }
+                sub.right_idx = 0;
+            } else {
+                // sub_n == 3: X binary-op Y  or  NOT UNARY X  or  NOT X (bool)
+                // Check for NOT + unary: NOT DEFINED x, NOT EXISTS x, etc.
+                if (is_bare_literal(condition[start]) && get_bare_literal(condition[start]) == "NOT" &&
+                    is_bare_literal(condition[start + 1])) {
+                    auto kw = get_bare_literal(condition[start + 1]);
+                    ConditionOp uop = unary_op_from_string(kw);
+                    if (uop != ConditionOp::Fallback) {
+                        sub.op = uop;
+                        sub.flags |= 1;  // negated
+                        sub.left_idx = static_cast<uint8_t>(start + 2);
+                        sub.right_idx = 0;
+                        if (!condition[start + 2].quoted && arg_has_varref(condition[start + 2]))
+                            sub.flags |= 2;
+                        num_sub++;
+                        return true;
+                    }
+                }
+
+                // X binary-op Y
+                if (!is_bare_literal(condition[start + 1])) return false;
+                auto op_str = get_bare_literal(condition[start + 1]);
+                ConditionOp bop = binary_op_from_string(op_str);
+                if (bop == ConditionOp::Fallback) return false;
+                // MATCHES has side effects (sets CMAKE_MATCH_0..9 and
+                // CMAKE_MATCH_COUNT). CMake always evaluates all sub-expressions
+                // (no short-circuit), so MATCHES side effects are always visible.
+                // Our compound path short-circuits, so we must exclude MATCHES
+                // to avoid silently skipping those writes.
+                if (bop == ConditionOp::BinaryMatches) return false;
+                // Guard: operands must not be bare keywords
+                if (operand_is_keyword(start)) return false;
+                if (is_bare_literal(condition[start]) && is_unary_keyword(get_bare_literal(condition[start]))) return false;
+                if (operand_is_keyword(start + 2)) return false;
+                sub.op = bop;
+                sub.left_idx = static_cast<uint8_t>(start);
+                sub.right_idx = static_cast<uint8_t>(start + 2);
+                // Dynamic flags
+                if (!condition[start].quoted && arg_has_varref(condition[start]))
+                    sub.flags |= 2;
+                if (!condition[start + 2].quoted && arg_has_varref(condition[start + 2]))
+                    sub.flags |= 2;
+            }
+
+            num_sub++;
+            return true;
+        };
+
+        bool ok = true;
+        for (size_t i = 0; i <= n; ++i) {
+            bool is_connective = (i < n && is_bare_literal(condition[i]) &&
+                                  get_bare_literal(condition[i]) == connective);
+            bool is_end = (i == n);
+
+            if (is_connective || is_end) {
+                if (!classify_sub(sub_start, i)) { ok = false; break; }
+                sub_start = i + 1;  // skip the connective token
+            }
+        }
+
+        if (ok && num_sub >= 2) {
+            pp.op = compound_op;
+            pp.num_sub = num_sub;
+            // Aggregate dynamic flags from all sub-conditions
+            for (uint8_t i = 0; i < num_sub; ++i) {
+                if (pp.subs[i].has_dynamic_args()) {
+                    pp.flags |= 2;
+                    break;
+                }
+            }
+            return pp;
+        }
+    }
+
     return pp;  // Fallback
 }
 
@@ -860,10 +1165,46 @@ std::expected<bool, InterpreterError> evaluate_condition(
         return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
     }
 
+    // Compound AND/OR: iterate sub-conditions with short-circuit.
+    //
+    // NOTE: CMake does NOT short-circuit AND/OR — it always evaluates all
+    // sub-expressions left-to-right. We short-circuit here for performance,
+    // which is safe ONLY because:
+    //   1. MATCHES (the only side-effecting operator — sets CMAKE_MATCH_*)
+    //      is excluded at classify time (classify_sub rejects BinaryMatches).
+    //   2. All remaining operators are pure (no observable state mutation).
+    //
+    // Known divergence from CMake: if a skipped sub-expression would have
+    // produced an error (e.g. via the full parser fallback path), we silently
+    // succeed instead. This is acceptable for now since classify_sub only
+    // accepts well-formed 1-3 token sub-expressions, but should be revisited
+    // if we ever loosen the classifier.
+    if (pp.op == ConditionOp::CompoundAnd || pp.op == ConditionOp::CompoundOr) {
+        bool is_and = (pp.op == ConditionOp::CompoundAnd);
+        bool result = is_and;  // AND starts true, OR starts false
+
+        for (uint8_t i = 0; i < pp.num_sub; ++i) {
+            auto sub_result = evaluate_sub_condition(interp, condition, pp.subs[i]);
+            if (!sub_result.has_value()) {
+                // Dynamic arg expanded to empty/semicolons or error → full fallback
+                return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
+            }
+            if (is_and) {
+                if (!*sub_result) { result = false; break; }
+            } else {
+                if (*sub_result) { result = true; break; }
+            }
+        }
+
+        if (pp.negated()) result = !result;
+        return result;
+    }
+
     // Safety: indices are set to literal 0-3 by classify_condition (which only
     // accepts n <= 4), so uint8_t overflow is impossible. But verify bounds at
     // runtime in case the condition vector was modified after classification.
-    bool has_binary = (static_cast<uint8_t>(pp.op) >= static_cast<uint8_t>(ConditionOp::BinaryEqual));
+    bool has_binary = (static_cast<uint8_t>(pp.op) >= static_cast<uint8_t>(ConditionOp::BinaryEqual) &&
+                       pp.op != ConditionOp::CompoundAnd && pp.op != ConditionOp::CompoundOr);
     if (pp.left_idx >= condition.size() ||
         (has_binary && pp.right_idx >= condition.size())) {
         return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);

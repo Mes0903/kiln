@@ -7037,6 +7037,126 @@ TEST_CASE("if condition: lowercase keyword names are dereferenced as variables",
     }
 }
 
+TEST_CASE("if condition: MATCHES side effects in compound AND/OR", "[interpreter][if]") {
+    // CMake does NOT short-circuit AND/OR. MATCHES always sets CMAKE_MATCH_*
+    // even when the overall condition could be determined early.
+    // Our compound fast path short-circuits pure operators but must fall back
+    // for MATCHES to preserve these side effects.
+
+    SECTION("FALSE AND ... MATCHES — MATCHES must still run") {
+        auto output = run_script(R"cmake(
+            set(CMAKE_MATCH_0 "UNSET")
+            if(FALSE AND "hello" MATCHES "(hello)")
+                message("taken")
+            else()
+                message("not taken")
+            endif()
+            message("match=${CMAKE_MATCH_0}")
+        )cmake");
+        REQUIRE(output == "not taken\nmatch=hello\n");
+    }
+
+    SECTION("TRUE OR ... MATCHES — MATCHES must still run") {
+        auto output = run_script(R"cmake(
+            set(CMAKE_MATCH_0 "UNSET")
+            if(TRUE OR "hello" MATCHES "(hello)")
+                message("taken")
+            else()
+                message("not taken")
+            endif()
+            message("match=${CMAKE_MATCH_0}")
+        )cmake");
+        REQUIRE(output == "taken\nmatch=hello\n");
+    }
+
+    SECTION("TRUE AND FALSE AND ... MATCHES — MATCHES must still run") {
+        auto output = run_script(R"cmake(
+            set(CMAKE_MATCH_0 "UNSET")
+            if(TRUE AND FALSE AND "xyz" MATCHES "(xyz)")
+                message("taken")
+            else()
+                message("not taken")
+            endif()
+            message("match=${CMAKE_MATCH_0}")
+        )cmake");
+        REQUIRE(output == "not taken\nmatch=xyz\n");
+    }
+
+    SECTION("FALSE OR TRUE OR ... MATCHES — MATCHES must still run") {
+        auto output = run_script(R"cmake(
+            set(CMAKE_MATCH_0 "UNSET")
+            if(FALSE OR TRUE OR "xyz" MATCHES "(xyz)")
+                message("taken")
+            else()
+                message("not taken")
+            endif()
+            message("match=${CMAKE_MATCH_0}")
+        )cmake");
+        REQUIRE(output == "taken\nmatch=xyz\n");
+    }
+
+    SECTION("MATCHES at start with AND — captures must be set") {
+        auto output = run_script(R"cmake(
+            set(CMAKE_MATCH_1 "UNSET")
+            if("abc123" MATCHES "([a-z]+)([0-9]+)" AND TRUE)
+                message("taken")
+            else()
+                message("not taken")
+            endif()
+            message("m1=${CMAKE_MATCH_1} m2=${CMAKE_MATCH_2}")
+        )cmake");
+        REQUIRE(output == "taken\nm1=abc m2=123\n");
+    }
+
+    SECTION("compound AND without MATCHES — fast path works correctly") {
+        auto output = run_script(R"(
+            set(x 5)
+            if(x GREATER_EQUAL 0 AND x LESS 10)
+                message("in range")
+            else()
+                message("out of range")
+            endif()
+        )");
+        REQUIRE(output == "in range\n");
+    }
+
+    SECTION("compound AND short-circuits correctly for pure operators") {
+        auto output = run_script(R"(
+            set(x -1)
+            if(x GREATER_EQUAL 0 AND x LESS 10)
+                message("in range")
+            else()
+                message("out of range")
+            endif()
+        )");
+        REQUIRE(output == "out of range\n");
+    }
+
+    SECTION("compound OR with all false") {
+        auto output = run_script(R"(
+            set(x 5)
+            if(x LESS 0 OR x GREATER 10 OR x EQUAL 3)
+                message("matched")
+            else()
+                message("none")
+            endif()
+        )");
+        REQUIRE(output == "none\n");
+    }
+
+    SECTION("compound OR with one true") {
+        auto output = run_script(R"(
+            set(x 5)
+            if(x LESS 0 OR x GREATER 10 OR x EQUAL 5)
+                message("matched")
+            else()
+                message("none")
+            endif()
+        )");
+        REQUIRE(output == "matched\n");
+    }
+}
+
 TEST_CASE("Embedded quotes in unquoted arguments are preserved", "[interpreter]") {
     // CMake preserves literal quote characters in unquoted arguments.
     // e.g. BENCHMARK_VERSION="${VERSION}" -> BENCHMARK_VERSION="v1.0"
