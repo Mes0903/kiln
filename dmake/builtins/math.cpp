@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <charconv>
 #include <sstream>
 #include <iomanip>
 #include <cstdint>
@@ -153,7 +154,7 @@ private:
     }
 
     int64_t parse_number() {
-        size_t start = pos_;
+        const char* start = expr_.data() + pos_;
 
         // Check for hex prefix
         if (pos_ + 1 < expr_.size() && expr_[pos_] == '0' &&
@@ -162,24 +163,27 @@ private:
             while (pos_ < expr_.size() && std::isxdigit(static_cast<unsigned char>(expr_[pos_]))) {
                 ++pos_;
             }
-            std::string num_str(expr_.substr(start, pos_ - start));
-            try {
-                return std::stoll(num_str, nullptr, 16);
-            } catch (...) {
-                throw std::runtime_error("Invalid hex number: " + num_str);
+            const char* end = expr_.data() + pos_;
+            // from_chars for hex doesn't expect "0x" prefix — skip it
+            int64_t val;
+            auto r = std::from_chars(start + 2, end, val, 16);
+            if (r.ec != std::errc{} || r.ptr != end) {
+                throw std::runtime_error(std::string("Invalid hex number: ") + std::string(start, end));
             }
+            return val;
         }
 
         // Decimal
         while (pos_ < expr_.size() && std::isdigit(static_cast<unsigned char>(expr_[pos_]))) {
             ++pos_;
         }
-        std::string num_str(expr_.substr(start, pos_ - start));
-        try {
-            return std::stoll(num_str, nullptr, 10);
-        } catch (...) {
-            throw std::runtime_error("Invalid number: " + num_str);
+        const char* end = expr_.data() + pos_;
+        int64_t val;
+        auto r = std::from_chars(start, end, val, 10);
+        if (r.ec != std::errc{} || r.ptr != end) {
+            throw std::runtime_error(std::string("Invalid number: ") + std::string(start, end));
         }
+        return val;
     }
 };
 

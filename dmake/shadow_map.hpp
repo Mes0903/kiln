@@ -3,7 +3,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <expected>
 #include <optional>
@@ -127,7 +126,7 @@ public:
             }
             versions_->push_back({std::optional<std::string>(value), depth});
             if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
-                map_.modified_per_depth_[depth].insert(*key_);
+                map_.modified_per_depth_[depth].push_back(key_);
             }
         }
         void set(std::string&& value) {
@@ -142,7 +141,7 @@ public:
             }
             versions_->push_back({std::optional<std::string>(std::move(value)), depth});
             if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
-                map_.modified_per_depth_[depth].insert(*key_);
+                map_.modified_per_depth_[depth].push_back(key_);
             }
         }
         void unset() {
@@ -153,13 +152,13 @@ public:
                 if (!versions_->empty() && versions_->back().value.has_value()) {
                     versions_->push_back({std::nullopt, depth});
                     if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
-                        map_.modified_per_depth_[depth].insert(*key_);
+                        map_.modified_per_depth_[depth].push_back(key_);
                     }
                 }
             } else if (versions_->back().depth < depth && versions_->back().value.has_value()) {
                 versions_->push_back({std::nullopt, depth});
                 if (depth > 0 && depth < static_cast<int>(map_.modified_per_depth_.size())) {
-                    map_.modified_per_depth_[depth].insert(*key_);
+                    map_.modified_per_depth_[depth].push_back(key_);
                 }
             }
         }
@@ -200,7 +199,8 @@ public:
      * O(1) amortized complexity.
      */
     void set(const std::string& name, const std::string& value) {
-        auto& versions = variables_[name];
+        auto [it, _] = variables_.try_emplace(name);
+        auto& versions = it->second;
 
         // If already set at current depth, modify in place (no tracking needed)
         if (!versions.empty() && versions.back().depth == current_depth_) {
@@ -211,7 +211,7 @@ public:
         // Push new version at current depth - track for cleanup
         versions.push_back({std::optional<std::string>(value), current_depth_});
         if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-            modified_per_depth_[current_depth_].insert(name);
+            modified_per_depth_[current_depth_].push_back(&it->first);
         }
     }
 
@@ -237,7 +237,9 @@ public:
         }
 
         int target_depth = current_depth_ - 1;
-        auto& versions = variables_[name];
+        auto [it, _] = variables_.try_emplace(name);
+        auto& versions = it->second;
+        const std::string* key_ptr = &it->first;
 
         // CMake semantics: PARENT_SCOPE should NOT affect current scope's view.
         // If the variable is visible from a parent depth but has no local entry,
@@ -248,7 +250,7 @@ public:
             std::string current_value = *versions.back().value;
             versions.push_back({std::optional<std::string>(current_value), current_depth_});
             if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].insert(name);
+                modified_per_depth_[current_depth_].push_back(key_ptr);
             }
         }
 
@@ -270,7 +272,7 @@ public:
             // Insert tombstone at current depth to hide the new parent variable
             versions.push_back({std::nullopt, current_depth_});
             if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].insert(name);
+                modified_per_depth_[current_depth_].push_back(key_ptr);
             }
         }
 
@@ -285,7 +287,7 @@ public:
 
         // Track modification at parent depth
         if (target_depth < static_cast<int>(modified_per_depth_.size())) {
-            modified_per_depth_[target_depth].insert(name);
+            modified_per_depth_[target_depth].push_back(key_ptr);
         }
 
         return false;  // Created new
@@ -304,6 +306,7 @@ public:
         }
 
         auto& versions = it->second;
+        const std::string* key_ptr = &it->first;
         if (versions.back().depth == current_depth_) {
             // Variable is at current depth - remove it
             versions.pop_back();
@@ -311,14 +314,14 @@ public:
             if (!versions.empty() && versions.back().value.has_value()) {
                 versions.push_back({std::nullopt, current_depth_});
                 if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                    modified_per_depth_[current_depth_].insert(name);
+                    modified_per_depth_[current_depth_].push_back(key_ptr);
                 }
             }
         } else if (versions.back().depth < current_depth_ && versions.back().value.has_value()) {
             // Variable exists at parent depth and is visible - insert tombstone to mask it
             versions.push_back({std::nullopt, current_depth_});
             if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].insert(name);
+                modified_per_depth_[current_depth_].push_back(key_ptr);
             }
         }
         // If variable is already a tombstone at parent depth, do nothing
@@ -352,6 +355,7 @@ public:
         }
 
         auto& versions = it->second;
+        const std::string* key_ptr = &it->first;
 
         // CMake semantics: unset PARENT_SCOPE should NOT affect current scope's view.
         // If the variable is visible from a parent depth but has no local entry,
@@ -362,7 +366,7 @@ public:
             std::string current_value = *versions.back().value;
             versions.push_back({std::optional<std::string>(current_value), current_depth_});
             if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].insert(name);
+                modified_per_depth_[current_depth_].push_back(key_ptr);
             }
         }
 
@@ -414,11 +418,12 @@ public:
 
         // Remove all modifications at current depth
         if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-            for (const auto& name : modified_per_depth_[current_depth_]) {
-                auto it = variables_.find(name);
+            for (const auto* key_ptr : modified_per_depth_[current_depth_]) {
+                auto it = variables_.find(*key_ptr);
                 if (it != variables_.end() && !it->second.empty()) {
                     auto& versions = it->second;
-                    // Remove all versions at current depth (should be at most one)
+                    // Remove all versions at current depth (should be at most one,
+                    // but duplicates in the tracking vector are handled gracefully)
                     while (!versions.empty() && versions.back().depth == current_depth_) {
                         versions.pop_back();
                     }
@@ -485,7 +490,9 @@ private:
     int current_depth_ = 0;
 
     // Track which variables were modified at each depth (for cleanup)
-    std::vector<std::unordered_set<std::string>> modified_per_depth_;
+    // Uses pointers to keys in variables_ (stable due to unordered_map guarantees).
+    // Duplicates are tolerated — pop_scope handles them gracefully.
+    std::vector<std::vector<const std::string*>> modified_per_depth_;
 };
 
 }  // namespace dmake

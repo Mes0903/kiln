@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <filesystem>
 #include <limits>
 #include <sstream>
@@ -194,10 +195,13 @@ bool arg_has_varref(const Argument& arg) {
     return false;
 }
 
-// --- eval_operand for fast-path: returns std::string BY VALUE (Lifetime Rule 1) ---
+// --- eval_operand for fast-path ---
 // Simplified evaluate_token that skips keyword linear scan (safe because classify_condition
 // guards ensure operands aren't keywords).
-std::string eval_operand(Interpreter& interp, const Argument& arg, std::string& buffer) {
+// Returns a string_view valid until the next variable mutation or scope change.
+// When dereference produces a result, it points into the variable store; otherwise
+// it points into the AST or the caller-provided buffer.
+std::string_view eval_operand_sv(Interpreter& interp, const Argument& arg, std::string& buffer) {
     const std::string& token = get_token_string(interp, arg, buffer);
 
     // Quoted strings returned as-is
@@ -215,8 +219,45 @@ std::string eval_operand(Interpreter& interp, const Argument& arg, std::string& 
     if (is_numeric_constant(token)) return token;
 
     // Dereference as variable. Undefined → keep literal.
-    auto opt = interp.get_optional_variable(token);
-    return opt.has_value() ? *opt : std::string(token);
+    auto view = interp.get_variable_view(token);
+    return view.has_value() ? *view : std::string_view(token);
+}
+
+// Fast numeric comparison: try integer first (most common in CMake), then double.
+// Returns true if both strings were successfully parsed as numbers, with result in cmp.
+// cmp is <0, 0, or >0 like strcmp.
+bool try_numeric_compare(std::string_view left, std::string_view right, int& cmp) {
+    int64_t li, ri;
+    auto lr = std::from_chars(left.data(), left.data() + left.size(), li);
+    auto rr = std::from_chars(right.data(), right.data() + right.size(), ri);
+    if (lr.ec == std::errc{} && lr.ptr == left.data() + left.size() &&
+        rr.ec == std::errc{} && rr.ptr == right.data() + right.size()) {
+        cmp = (li > ri) - (li < ri);
+        return true;
+    }
+    // Fall back to double
+    double ld, rd;
+    auto lrd = std::from_chars(left.data(), left.data() + left.size(), ld);
+    auto rrd = std::from_chars(right.data(), right.data() + right.size(), rd);
+    if (lrd.ec == std::errc{} && lrd.ptr == left.data() + left.size() &&
+        rrd.ec == std::errc{} && rrd.ptr == right.data() + right.size()) {
+        cmp = (ld > rd) - (ld < rd);
+        return true;
+    }
+    return false;
+}
+
+// Apply a numeric comparison operator given a three-way cmp result.
+bool apply_numeric_op(ConditionOp op, int cmp) {
+    switch (op) {
+    case ConditionOp::BinaryEqual: return cmp == 0;
+    case ConditionOp::BinaryNotEqual: return cmp != 0;
+    case ConditionOp::BinaryLess: return cmp < 0;
+    case ConditionOp::BinaryGreater: return cmp > 0;
+    case ConditionOp::BinaryLessEqual: return cmp <= 0;
+    case ConditionOp::BinaryGreaterEqual: return cmp >= 0;
+    default: return false;
+    }
 }
 
 // --- Filter + fallback for dynamic args that expanded to empty/semicolons ---
@@ -397,16 +438,15 @@ private:
             }
             std::string left = evaluate_token(condition_[start_pos]);
             std::string right = evaluate_token(condition_[pos_++]);
-            try {
-                double left_num = std::stod(left);
-                double right_num = std::stod(right);
-                if (op == "EQUAL") return left_num == right_num;
-                if (op == "NOT_EQUAL") return left_num != right_num;
-                if (op == "LESS") return left_num < right_num;
-                if (op == "GREATER") return left_num > right_num;
-                if (op == "LESS_EQUAL") return left_num <= right_num;
-                if (op == "GREATER_EQUAL") return left_num >= right_num;
-            } catch (...) {
+            int cmp;
+            if (try_numeric_compare(left, right, cmp)) {
+                if (op == "EQUAL") return cmp == 0;
+                if (op == "NOT_EQUAL") return cmp != 0;
+                if (op == "LESS") return cmp < 0;
+                if (op == "GREATER") return cmp > 0;
+                if (op == "LESS_EQUAL") return cmp <= 0;
+                if (op == "GREATER_EQUAL") return cmp >= 0;
+            } else {
                 if (op == "EQUAL") return left == right;
                 if (op == "NOT_EQUAL") return left != right;
                 return false;
@@ -927,16 +967,16 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
         case ConditionOp::Command: {
             std::string buffer;
-            std::string name = eval_operand(interp, *left_arg, buffer);
-            result = interp.has_user_function(name);
+            auto name = eval_operand_sv(interp, *left_arg, buffer);
+            result = interp.has_user_function(std::string(name));
             break;
         }
 
         default: {
             // Binary ops
             std::string buf_l, buf_r;
-            std::string left_val = eval_operand(interp, *left_arg, buf_l);
-            std::string right_val = eval_operand(interp, *right_arg, buf_r);
+            auto left_val = eval_operand_sv(interp, *left_arg, buf_l);
+            auto right_val = eval_operand_sv(interp, *right_arg, buf_r);
 
             switch (pp.op) {
             case ConditionOp::BinaryEqual:
@@ -945,19 +985,10 @@ std::expected<bool, InterpreterError> evaluate_condition(
             case ConditionOp::BinaryGreater:
             case ConditionOp::BinaryLessEqual:
             case ConditionOp::BinaryGreaterEqual: {
-                try {
-                    double ln = std::stod(left_val);
-                    double rn = std::stod(right_val);
-                    switch (pp.op) {
-                    case ConditionOp::BinaryEqual: result = ln == rn; break;
-                    case ConditionOp::BinaryNotEqual: result = ln != rn; break;
-                    case ConditionOp::BinaryLess: result = ln < rn; break;
-                    case ConditionOp::BinaryGreater: result = ln > rn; break;
-                    case ConditionOp::BinaryLessEqual: result = ln <= rn; break;
-                    case ConditionOp::BinaryGreaterEqual: result = ln >= rn; break;
-                    default: break;
-                    }
-                } catch (...) {
+                int cmp;
+                if (try_numeric_compare(left_val, right_val, cmp)) {
+                    result = apply_numeric_op(pp.op, cmp);
+                } else {
                     if (pp.op == ConditionOp::BinaryEqual) result = left_val == right_val;
                     else if (pp.op == ConditionOp::BinaryNotEqual) result = left_val != right_val;
                     else result = false;
@@ -975,7 +1006,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
             case ConditionOp::BinaryVersionGreater:
             case ConditionOp::BinaryVersionLessEqual:
             case ConditionOp::BinaryVersionGreaterEqual: {
-                int cmp = compare_versions(left_val, right_val);
+                int cmp = compare_versions(std::string(left_val), std::string(right_val));
                 switch (pp.op) {
                 case ConditionOp::BinaryVersionEqual: result = cmp == 0; break;
                 case ConditionOp::BinaryVersionLess: result = cmp < 0; break;
@@ -988,7 +1019,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
             }
 
             case ConditionOp::BinaryMatches: {
-                auto mr = evaluate_matches(interp, left_val, right_val);
+                auto mr = evaluate_matches(interp, std::string(left_val), std::string(right_val));
                 if (!mr.error.empty()) {
                     interp.set_fatal_error(mr.error);
                     return std::unexpected(*interp.get_fatal_error());
@@ -998,11 +1029,10 @@ std::expected<bool, InterpreterError> evaluate_condition(
             }
 
             case ConditionOp::BinaryInList:
-                result = cmake_list_contains(right_val, left_val);
+                result = cmake_list_contains(std::string(right_val), std::string(left_val));
                 break;
 
             case ConditionOp::BinaryIsNewerThan: {
-                // For IS_NEWER_THAN, use raw paths (evaluate_argument), not eval_operand
                 std::string lpath = interp.evaluate_argument(*left_arg);
                 std::string rpath = interp.evaluate_argument(*right_arg);
                 std::error_code ec1, ec2;
@@ -1091,16 +1121,16 @@ std::expected<bool, InterpreterError> evaluate_condition(
 
     case ConditionOp::Command: {
         std::string buffer;
-        std::string name = eval_operand(interp, condition[pp.left_idx], buffer);
-        result = interp.has_user_function(name);
+        auto name = eval_operand_sv(interp, condition[pp.left_idx], buffer);
+        result = interp.has_user_function(std::string(name));
         break;
     }
 
     default: {
         // Binary ops — use separate buffers (Rule 2)
         std::string buf_l, buf_r;
-        std::string left = eval_operand(interp, condition[pp.left_idx], buf_l);
-        std::string right = eval_operand(interp, condition[pp.right_idx], buf_r);
+        auto left = eval_operand_sv(interp, condition[pp.left_idx], buf_l);
+        auto right = eval_operand_sv(interp, condition[pp.right_idx], buf_r);
 
         switch (pp.op) {
         case ConditionOp::BinaryEqual:
@@ -1109,19 +1139,10 @@ std::expected<bool, InterpreterError> evaluate_condition(
         case ConditionOp::BinaryGreater:
         case ConditionOp::BinaryLessEqual:
         case ConditionOp::BinaryGreaterEqual: {
-            try {
-                double ln = std::stod(left);
-                double rn = std::stod(right);
-                switch (pp.op) {
-                case ConditionOp::BinaryEqual: result = ln == rn; break;
-                case ConditionOp::BinaryNotEqual: result = ln != rn; break;
-                case ConditionOp::BinaryLess: result = ln < rn; break;
-                case ConditionOp::BinaryGreater: result = ln > rn; break;
-                case ConditionOp::BinaryLessEqual: result = ln <= rn; break;
-                case ConditionOp::BinaryGreaterEqual: result = ln >= rn; break;
-                default: break;
-                }
-            } catch (...) {
+            int cmp;
+            if (try_numeric_compare(left, right, cmp)) {
+                result = apply_numeric_op(pp.op, cmp);
+            } else {
                 if (pp.op == ConditionOp::BinaryEqual) result = left == right;
                 else if (pp.op == ConditionOp::BinaryNotEqual) result = left != right;
                 else result = false;
@@ -1139,7 +1160,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         case ConditionOp::BinaryVersionGreater:
         case ConditionOp::BinaryVersionLessEqual:
         case ConditionOp::BinaryVersionGreaterEqual: {
-            int cmp = compare_versions(left, right);
+            int cmp = compare_versions(std::string(left), std::string(right));
             switch (pp.op) {
             case ConditionOp::BinaryVersionEqual: result = cmp == 0; break;
             case ConditionOp::BinaryVersionLess: result = cmp < 0; break;
@@ -1152,7 +1173,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
 
         case ConditionOp::BinaryMatches: {
-            auto mr = evaluate_matches(interp, left, right);
+            auto mr = evaluate_matches(interp, std::string(left), std::string(right));
             if (!mr.error.empty()) {
                 interp.set_fatal_error(mr.error);
                 return std::unexpected(*interp.get_fatal_error());
@@ -1162,7 +1183,7 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
 
         case ConditionOp::BinaryInList:
-            result = cmake_list_contains(right, left);
+            result = cmake_list_contains(std::string(right), std::string(left));
             break;
 
         case ConditionOp::BinaryIsNewerThan: {

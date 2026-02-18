@@ -207,7 +207,7 @@ public:
     using BuiltinFunction = std::function<void(Interpreter&, const std::vector<std::string>&)>;
     enum class LoopControl { NONE, BREAK, CONTINUE };
 
-    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, std::optional<std::string> build_dir = std::nullopt);
+    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, std::optional<std::string> build_dir = std::nullopt, bool skip_sys_init = false);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
     std::expected<Interpreter*, BuildError> run_build(int jobs = 0, const std::vector<std::string>& targets = {});
@@ -220,6 +220,7 @@ public:
     void add_builtin(const std::string& name, BuiltinFunction func);
     std::string evaluate_argument(const Argument& arg);
     std::vector<std::string> expand_arguments(const std::vector<Argument>& args);
+    void expand_arguments_into(const std::vector<Argument>& args, std::vector<std::string>& result);
 
     void set_current_file(const std::string& file) {
         current_file_ = file;

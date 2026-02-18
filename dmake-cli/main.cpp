@@ -44,6 +44,7 @@ struct GlobalOptions {
     bool trace_expand = false;
     bool debugger = false;
     bool config_only = false;  // Debug: interpret + save cache, then exit (no build)
+    bool no_sys_init = false;   // Skip compiler detection (for benchmarking)
     std::string break_on_message;
 };
 
@@ -444,6 +445,7 @@ int main(int argc, char* argv[]) {
         target->add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
         target->add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
         target->add_flag("--config-only", opt.config_only, "[debug] Interpret CMakeLists.txt and save cache, then exit without building");
+        target->add_flag("--no-sys-init", opt.no_sys_init, "[benchmark] Skip compiler detection and system init");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
            ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {
@@ -580,7 +582,7 @@ Examples:
                 return 1;
             }
 
-            dmake::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr);
+            dmake::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr, std::nullopt, opt.no_sys_init);
             interpreter.set_current_file(script_abs.string());
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);

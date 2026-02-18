@@ -727,7 +727,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     return std::move(graph);
 }
 
-Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir)
+Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir, bool skip_sys_init)
     : out_(out), err_(err) {
 
     std::filesystem::path abs_script_dir = script_dir.empty() ?
@@ -815,7 +815,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     // Initialize toolchain with compiler detection
     // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
     // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
-    fake_cmake_compiler_checks_and_init(*this);
+    if (!skip_sys_init) {
+        fake_cmake_compiler_checks_and_init(*this);
+    }
 
     // Initialize built-in global properties
     // ENABLED_LANGUAGES starts empty; project()/enable_language() populates it
@@ -1847,8 +1849,7 @@ void Interpreter::add_builtin(const std::string& name, BuiltinFunction func) {
     get_root()->builtins_[name] = func;
 }
 
-std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argument>& args) {
-    std::vector<std::string> result;
+void Interpreter::expand_arguments_into(const std::vector<Argument>& args, std::vector<std::string>& result) {
     for (const auto& arg : args) {
         // Fast path: single literal part, unquoted — skip evaluate_argument entirely
         if (arg.parts.size() == 1 && !arg.quoted &&
@@ -1912,6 +1913,11 @@ std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argumen
             }
         }
     }
+}
+
+std::vector<std::string> Interpreter::expand_arguments(const std::vector<Argument>& args) {
+    std::vector<std::string> result;
+    expand_arguments_into(args, result);
     return result;
 }
 
@@ -1923,8 +1929,10 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_interned_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
 
-    // Expand arguments once
-    std::vector<std::string> expanded_args = expand_arguments(cmd.arguments);
+    // Expand arguments once (reuse buffer to avoid per-call allocation)
+    thread_local std::vector<std::string> expanded_args;
+    expanded_args.clear();
+    expand_arguments_into(cmd.arguments, expanded_args);
 
     // Debugger/trace hook - must happen after argument expansion
     if (debugger_) {
