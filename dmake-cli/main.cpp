@@ -159,7 +159,7 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             return std::unexpected("Parse error");
         }
 
-        dmake::ProfileScope configure_profile("configure", "configure");
+        dmake::ProfileScope init_profile("init", "init");
         auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string());
         interpreter->set_current_file(cmake_lists.string());
         debug_controller.attach(*interpreter);
@@ -183,7 +183,7 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_RELWITHDEBINFO", "-g -O2 -DNDEBUG");
         set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_MINSIZEREL", "-Os -DNDEBUG");
-        configure_profile.stop();
+        init_profile.stop();
 
         // Save subsystem cache on all exit paths where the interpreter exists.
         // Cache entries (try_compile, find_*, globs) are valid regardless of

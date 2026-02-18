@@ -5,6 +5,7 @@
 #include <sstream>
 #include <array>
 #include <cstdio>
+#include <future>
 #include "regex.hpp"
 
 #ifdef __unix__
@@ -289,21 +290,12 @@ public:
         return cmd;
     }
 
-    // Platform detection for GCC
+    // Platform detection for GCC — runs subprocess calls in parallel
     PlatformInfo detect_platform() const override {
         PlatformInfo info;
         info.compiler_id = "GNU";
 
-        // Get compiler version from g++ --version
-        std::string version_output = detail::run_command(binary_ + " --version 2>&1");
-        // Extract version number (pattern: X.Y.Z)
-        static auto version_re = Regex::compile(R"((\d+\.\d+\.\d+))").value();
-        std::vector<std::string> captures;
-        if (version_re.search(version_output, captures)) {
-            info.compiler_version = captures[1];
-        }
-
-        // System info from uname
+        // System info from uname (no subprocess needed)
 #ifdef __unix__
         struct utsname uname_info;
         if (uname(&uname_info) == 0) {
@@ -311,70 +303,30 @@ public:
             info.system_processor = uname_info.machine;
         }
 #endif
-
-        // Pointer size (compile-time for native builds)
         info.sizeof_void_p = std::to_string(sizeof(void*));
 
-        // Get implicit include directories from g++ -E -v
-        std::string lang_flag = (lang_ == Language::C || lang_ == Language::ASM) ? "c" : "c++";
-        std::string verbose_output = detail::run_command(
-            "echo | " + binary_ + " -E -v -x " + lang_flag + " - 2>&1");
-
-        // Parse "#include <...> search starts here:" section
-        bool in_include_section = false;
-        std::istringstream iss(verbose_output);
-        std::string line;
-        while (std::getline(iss, line)) {
-            if (line.find("#include <...> search starts here:") != std::string::npos) {
-                in_include_section = true;
-                continue;
-            }
-            if (line.find("End of search list.") != std::string::npos) {
-                in_include_section = false;
-                continue;
-            }
-            if (in_include_section && !line.empty() && line[0] == ' ') {
-                // Trim leading space
-                std::string dir = line.substr(1);
-                // Remove any trailing " (framework directory)" annotation
-                auto paren = dir.find(" (");
-                if (paren != std::string::npos) {
-                    dir = dir.substr(0, paren);
-                }
-                if (!dir.empty()) {
-                    info.implicit_includes.push_back(dir);
-                }
-            }
-        }
-
-        // Get implicit link directories from g++ -print-search-dirs
-        std::string search_dirs = detail::run_command(binary_ + " -print-search-dirs 2>&1");
-        std::istringstream search_iss(search_dirs);
-        while (std::getline(search_iss, line)) {
-            if (line.rfind("libraries: =", 0) == 0) {
-                std::string paths = line.substr(12);  // Skip "libraries: ="
-                std::istringstream path_stream(paths);
-                std::string path;
-                while (std::getline(path_stream, path, ':')) {
-                    if (!path.empty()) {
-                        info.implicit_link_dirs.push_back(path);
-                    }
-                }
-                break;
-            }
-        }
-
-        // Implicit link libraries - common for GCC
+        // Implicit link libraries - common for GCC (no subprocess needed)
         info.implicit_link_libs = {"stdc++", "m", "gcc_s", "c"};
 
-        // Detect compiler default language standard from predefined macros.
-        // For C++ we check __cplusplus, for C we check __STDC_VERSION__.
-        // The binary_ could be g++ or gcc; we use -x to force the language.
-        auto detect_default_standard = [&](const std::string& x_lang, const std::string& macro_name) -> int {
+        // Launch all subprocess calls in parallel
+        std::string lang_flag = (lang_ == Language::C || lang_ == Language::ASM) ? "c" : "c++";
+
+        auto version_future = std::async(std::launch::async, [&] {
+            return detail::run_command(binary_ + " --version 2>&1");
+        });
+        auto verbose_future = std::async(std::launch::async, [&] {
+            return detail::run_command("echo | " + binary_ + " -E -v -x " + lang_flag + " - 2>&1");
+        });
+        auto search_dirs_future = std::async(std::launch::async, [&] {
+            return detail::run_command(binary_ + " -print-search-dirs 2>&1");
+        });
+        auto default_std_future = std::async(std::launch::async, [&]() -> int {
+            std::string x_lang = (lang_ == Language::CXX) ? "c++" : "c";
+            std::string macro_name = (lang_ == Language::CXX) ? "__cplusplus" : "__STDC_VERSION__";
             std::string output = detail::run_command(binary_ + " -dM -E -x " + x_lang + " /dev/null 2>/dev/null");
-            std::istringstream iss2(output);
+            std::istringstream iss(output);
             std::string macro_line;
-            while (std::getline(iss2, macro_line)) {
+            while (std::getline(iss, macro_line)) {
                 if (macro_line.find(macro_name + " ") != std::string::npos) {
                     auto pos = macro_line.rfind(' ');
                     if (pos == std::string::npos) break;
@@ -383,7 +335,7 @@ public:
                     auto v_opt = parse_number<long>(val);
                     if (!v_opt) break;
                     long v = *v_opt;
-                    if (x_lang == "c++") {
+                    if (lang_ == Language::CXX) {
                         if (v >= 202602L)      return 26;
                         if (v >= 202302L)      return 23;
                         if (v >= 202002L)      return 20;
@@ -401,10 +353,66 @@ public:
                 }
             }
             return 0;
-        };
+        });
 
-        info.default_cxx_standard = detect_default_standard("c++", "__cplusplus");
-        info.default_c_standard = detect_default_standard("c", "__STDC_VERSION__");
+        // Collect results
+        std::string version_output = version_future.get();
+        static auto version_re = Regex::compile(R"((\d+\.\d+\.\d+))").value();
+        std::vector<std::string> captures;
+        if (version_re.search(version_output, captures)) {
+            info.compiler_version = captures[1];
+        }
+
+        // Parse implicit includes from -E -v output
+        std::string verbose_output = verbose_future.get();
+        bool in_include_section = false;
+        std::istringstream iss(verbose_output);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (line.find("#include <...> search starts here:") != std::string::npos) {
+                in_include_section = true;
+                continue;
+            }
+            if (line.find("End of search list.") != std::string::npos) {
+                in_include_section = false;
+                continue;
+            }
+            if (in_include_section && !line.empty() && line[0] == ' ') {
+                std::string dir = line.substr(1);
+                auto paren = dir.find(" (");
+                if (paren != std::string::npos) {
+                    dir = dir.substr(0, paren);
+                }
+                if (!dir.empty()) {
+                    info.implicit_includes.push_back(dir);
+                }
+            }
+        }
+
+        // Parse implicit link dirs from -print-search-dirs
+        std::string search_dirs = search_dirs_future.get();
+        std::istringstream search_iss(search_dirs);
+        while (std::getline(search_iss, line)) {
+            if (line.rfind("libraries: =", 0) == 0) {
+                std::string paths = line.substr(12);
+                std::istringstream path_stream(paths);
+                std::string path;
+                while (std::getline(path_stream, path, ':')) {
+                    if (!path.empty()) {
+                        info.implicit_link_dirs.push_back(path);
+                    }
+                }
+                break;
+            }
+        }
+
+        // Collect default standard
+        int default_std = default_std_future.get();
+        if (lang_ == Language::CXX) {
+            info.default_cxx_standard = default_std;
+        } else {
+            info.default_c_standard = default_std;
+        }
 
         return info;
     }

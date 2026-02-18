@@ -20,6 +20,7 @@
 #include "condition_evaluator.hpp"
 #include "CMakeArray.hpp"
 #include <cassert>
+#include <future>
 
 namespace dmake {
 
@@ -67,7 +68,42 @@ static constexpr std::array asm_lang_vars = {
     "CMAKE_ASM_FLAGS_RELWITHDEBINFO", "CMAKE_ASM_FLAGS_MINSIZEREL",
 };
 
-void fake_cmake_compiler_checks_and_init(Interpreter& interp)
+// Build a cache key for a compiler binary: "<binary>:<realpath>:<mtime>"
+// Cheap to compute (no subprocesses), changes when binary is updated or swapped via symlink.
+std::string make_compiler_cache_key(const std::string& binary) {
+    // Resolve to absolute path via which(1)-style lookup
+    std::error_code ec;
+    auto resolved = std::filesystem::canonical(
+        // If binary is just a name (e.g. "g++"), we need the full path.
+        // /usr/bin/<binary> is the common case on Linux.
+        binary.find('/') != std::string::npos ? binary : "/usr/bin/" + binary, ec);
+    if (ec) return binary + ":unresolved:0";
+
+    auto mtime = std::filesystem::last_write_time(resolved, ec);
+    if (ec) return binary + ":" + resolved.string() + ":0";
+
+    auto mtime_val = mtime.time_since_epoch().count();
+    return binary + ":" + resolved.string() + ":" + std::to_string(mtime_val);
+}
+
+// Try to load compiler detection from disk cache. Returns nullopt on miss.
+// On hit, validates by running --version and comparing output.
+std::optional<PlatformInfo> try_cached_compiler_detection(
+    CacheStore& cache, const std::string& binary, const std::string& cache_key)
+{
+    auto cached = cache.lookup<CacheSubsystem::CompilerDetection>(cache_key);
+    if (!cached) return std::nullopt;
+
+    // Validate: run --version and compare (1 subprocess)
+    std::string version_output = detail::run_command(binary + " --version 2>&1");
+    if (version_output != cached->version_output) {
+        return std::nullopt;  // Compiler changed (e.g. shim switched target)
+    }
+
+    return cached->info;
+}
+
+void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
 {
     auto apply_system_vars = [&] {
         for (const char* name : {"CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR",
@@ -86,13 +122,43 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp)
         return;
     }
 
-    // First-run: detect both C and CXX compilers and cache all data
-    auto cxx_compiler = std::make_unique<GnuCompiler>("g++", Language::CXX);
-    auto c_compiler = std::make_unique<GnuCompiler>("gcc", Language::C);
-    auto cxx_info = cxx_compiler->detect_platform();
-    auto c_info = c_compiler->detect_platform();
+    // Try disk cache first, fall back to full detection
+    std::string cxx_cache_key = make_compiler_cache_key("g++");
+    std::string c_cache_key = make_compiler_cache_key("gcc");
 
-    // Cache CXX data
+    auto cxx_cached = try_cached_compiler_detection(cache, "g++", cxx_cache_key);
+    auto c_cached = try_cached_compiler_detection(cache, "gcc", c_cache_key);
+
+    PlatformInfo cxx_info, c_info;
+
+    if (cxx_cached && c_cached) {
+        // Full cache hit — no additional subprocesses needed
+        cxx_info = std::move(*cxx_cached);
+        c_info = std::move(*c_cached);
+    } else {
+        // Cache miss on at least one compiler — detect in parallel
+        auto detect_and_cache = [&cache](const std::string& binary, Language lang,
+                                         const std::string& cache_key,
+                                         std::optional<PlatformInfo> cached) -> PlatformInfo {
+            if (cached) return std::move(*cached);
+            GnuCompiler compiler(binary, lang);
+            auto info = compiler.detect_platform();
+            CompilerDetectionCacheEntry entry;
+            entry.info = info;
+            entry.version_output = detail::run_command(binary + " --version 2>&1");
+            cache.insert<CacheSubsystem::CompilerDetection>(cache_key, entry);
+            return info;
+        };
+
+        auto cxx_future = std::async(std::launch::async, detect_and_cache,
+            "g++", Language::CXX, cxx_cache_key, std::move(cxx_cached));
+        auto c_future = std::async(std::launch::async, detect_and_cache,
+            "gcc", Language::C, c_cache_key, std::move(c_cached));
+        cxx_info = cxx_future.get();
+        c_info = c_future.get();
+    }
+
+    // Cache CXX data in-process
     backup_vars["CMAKE_CXX_COMPILER"] = "g++";
     backup_vars["CMAKE_CXX_COMPILER_ID"] = cxx_info.compiler_id;
     backup_vars["CMAKE_CXX_COMPILER_VERSION"] = cxx_info.compiler_version;
@@ -108,7 +174,7 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp)
     backup_vars["CMAKE_CXX20_STANDARD_COMPILE_OPTION"] = "-std=c++20";
     backup_vars["CMAKE_CXX23_STANDARD_COMPILE_OPTION"] = "-std=c++23";
 
-    // Cache C data
+    // Cache C data in-process
     backup_vars["CMAKE_C_COMPILER"] = "gcc";
     backup_vars["CMAKE_C_COMPILER_ID"] = c_info.compiler_id;
     backup_vars["CMAKE_C_COMPILER_VERSION"] = c_info.compiler_version;
@@ -813,11 +879,18 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_MAKE_PROGRAM", get_executable_path());
     variables_.set("CMAKE_ROOT", "/usr/share/cmake");
 
+    // Initialize cache store early so compiler detection can use it
+    std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
+    cache_store_ = std::make_unique<CacheStore>(cache_path);
+    auto cache_load_res = cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
+    (void)cache_load_res;
+
     // Initialize toolchain with compiler detection
     // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
     // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
     if (!skip_sys_init) {
-        fake_cmake_compiler_checks_and_init(*this);
+        ProfileScope compiler_profile("compiler detection", "init");
+        fake_cmake_compiler_checks_and_init(*this, *cache_store_);
     }
 
     // Initialize built-in global properties
@@ -883,12 +956,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
     // Initialize root directory context
     push_directory(abs_script_dir.string(), abs_binary_dir.string());
-
-        // Initialize cache store
-        std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
-        cache_store_ = std::make_unique<CacheStore>(cache_path);
-        auto res = cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
-        (void)res;
 
         // Register non-internal builtins
         register_message_builtins(*this);

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <expected>
+#include "compiler.hpp"
 
 namespace dmake {
 
@@ -18,7 +19,7 @@ enum class CacheSubsystem {
     FindResult,
     ExternalCommand,  // Generic external command caching (pkg-config, etc.)
     Glob,             // file(GLOB) / file(GLOB_RECURSE) results
-    // Future: ModuleScanning, etc.
+    CompilerDetection, // Cached compiler detection results
 };
 
 // Tracked header dependency: mtime for fast validation, hash for content-based fallback
@@ -76,6 +77,12 @@ struct GlobCacheEntry {
     std::map<std::string, int64_t> dir_mtimes;          // All scanned dirs with mtimes
 };
 
+// Cache entry for compiler detection results
+struct CompilerDetectionCacheEntry {
+    PlatformInfo info;
+    std::string version_output;  // for cache key validation
+};
+
 // Root structure for JSON serialization
 struct CacheRoot {
     std::map<std::string, TryCompileCacheEntry> try_compile_cache;
@@ -84,6 +91,7 @@ struct CacheRoot {
     std::map<std::string, FindResultCacheEntry> find_result_cache;
     std::map<std::string, ExternalCommandCacheEntry> external_command_cache;
     std::map<std::string, GlobCacheEntry> glob_cache;
+    std::map<std::string, CompilerDetectionCacheEntry> compiler_detection_cache;
 };
 
 // Centralized cache store with subsystem namespacing
@@ -106,7 +114,8 @@ public:
         typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
         typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
         typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry,
-        typename std::conditional<S == CacheSubsystem::Glob, GlobCacheEntry, void>::type>::type>::type>::type>::type
+        typename std::conditional<S == CacheSubsystem::Glob, GlobCacheEntry,
+        typename std::conditional<S == CacheSubsystem::CompilerDetection, CompilerDetectionCacheEntry, void>::type>::type>::type>::type>::type>::type
     >::type> lookup(const std::string& signature);
 
     // Insert/update entry
@@ -117,7 +126,8 @@ public:
         typename std::conditional<S == CacheSubsystem::FileListing, FileListingCacheEntry,
         typename std::conditional<S == CacheSubsystem::FindResult, FindResultCacheEntry,
         typename std::conditional<S == CacheSubsystem::ExternalCommand, ExternalCommandCacheEntry,
-        typename std::conditional<S == CacheSubsystem::Glob, GlobCacheEntry, void>::type>::type>::type>::type>::type
+        typename std::conditional<S == CacheSubsystem::Glob, GlobCacheEntry,
+        typename std::conditional<S == CacheSubsystem::CompilerDetection, CompilerDetectionCacheEntry, void>::type>::type>::type>::type>::type>::type
     >::type& entry);
 
     // Clear all entries for a subsystem
@@ -263,6 +273,28 @@ template<>
 inline void CacheStore::clear_subsystem<CacheSubsystem::Glob>() {
     std::lock_guard lock(mutex_);
     cache_data_.glob_cache.clear();
+}
+
+template<>
+inline std::optional<CompilerDetectionCacheEntry> CacheStore::lookup<CacheSubsystem::CompilerDetection>(const std::string& signature) {
+    std::lock_guard lock(mutex_);
+    auto it = cache_data_.compiler_detection_cache.find(signature);
+    if (it != cache_data_.compiler_detection_cache.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+template<>
+inline void CacheStore::insert<CacheSubsystem::CompilerDetection>(const std::string& signature, const CompilerDetectionCacheEntry& entry) {
+    std::lock_guard lock(mutex_);
+    cache_data_.compiler_detection_cache[signature] = entry;
+}
+
+template<>
+inline void CacheStore::clear_subsystem<CacheSubsystem::CompilerDetection>() {
+    std::lock_guard lock(mutex_);
+    cache_data_.compiler_detection_cache.clear();
 }
 
 } // namespace dmake
