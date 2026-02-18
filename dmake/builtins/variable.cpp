@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
+#include "../parse_number.hpp"
 #include <algorithm>
 #include <unistd.h>
 
@@ -223,13 +224,12 @@ void register_variable_builtins(Interpreter& interp) {
             }
 
             // Parse N (starting index)
-            int start_idx = 0;
-            try {
-                start_idx = std::stoi(args[1]);
-            } catch (...) {
+            auto start_idx_opt = parse_number<int>(args[1]);
+            if (!start_idx_opt) {
                 interp.set_fatal_error("cmake_parse_arguments(PARSE_ARGV): index must be a number");
                 return;
             }
+            int start_idx = *start_idx_opt;
 
             if (start_idx < 0) {
                 interp.set_fatal_error("cmake_parse_arguments(PARSE_ARGV): index cannot be negative");
@@ -245,12 +245,7 @@ void register_variable_builtins(Interpreter& interp) {
             std::string argc_str = interp.get_variable("ARGC");
             int argc = 0;
             if (!argc_str.empty()) {
-                try {
-                    argc = std::stoi(argc_str);
-                } catch (...) {
-                    // If ARGC is not a number, treat as 0
-                    argc = 0;
-                }
+                argc = parse_number<int>(argc_str).value_or(0);
             }
 
             // Collect arguments from ARGV{start_idx} to ARGV{argc-1}

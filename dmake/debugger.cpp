@@ -1,5 +1,6 @@
 #include "debugger.hpp"
 #include "interperter.hpp"
+#include "parse_number.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -281,15 +282,7 @@ bool Debugger::execute_debugger_command(const std::string& input) {
 
     // Parse an integer argument strictly (rejects "3abc", trailing garbage, etc.)
     auto parse_int = [](const std::string& s) -> std::optional<int> {
-        if (s.empty()) return std::nullopt;
-        try {
-            size_t pos = 0;
-            int val = std::stoi(s, &pos);
-            if (pos != s.size()) return std::nullopt;
-            return val;
-        } catch (...) {
-            return std::nullopt;
-        }
+        return parse_number<int>(s);
     };
 
     if (cmd == "continue" || cmd == "c") {
@@ -438,7 +431,7 @@ bool Debugger::execute_debugger_command(const std::string& input) {
         // Check if it's a plain line number (break on current file)
         bool is_plain_number = std::all_of(arg.begin(), arg.end(), ::isdigit);
         if (is_plain_number) {
-            size_t line = std::stoul(arg);
+            size_t line = parse_number<size_t>(arg).value_or(0);
             warn_if_non_executable(current_file_, line);
             int id = add_location_breakpoint(current_file_, line);
             std::cerr << "Breakpoint " << id << " at "

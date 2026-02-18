@@ -1,6 +1,7 @@
 #pragma once
 #include "compiler.hpp"
 #include "language.hpp"
+#include "parse_number.hpp"
 #include <sstream>
 #include <array>
 #include <cstdio>
@@ -379,8 +380,9 @@ public:
                     if (pos == std::string::npos) break;
                     std::string val = macro_line.substr(pos + 1);
                     if (!val.empty() && val.back() == 'L') val.pop_back();
-                    long v = 0;
-                    try { v = std::stol(val); } catch (...) { break; }
+                    auto v_opt = parse_number<long>(val);
+                    if (!v_opt) break;
+                    long v = *v_opt;
                     if (x_lang == "c++") {
                         if (v >= 202602L)      return 26;
                         if (v >= 202302L)      return 23;

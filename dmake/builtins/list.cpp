@@ -3,6 +3,7 @@
 #include "../command_parser.hpp"
 #include "../utils.hpp"
 #include "../container_utils.hpp"
+#include "../parse_number.hpp"
 #include <algorithm>
 #include <set>
 #include "../regex.hpp"
@@ -67,20 +68,20 @@ void register_list_builtins(Interpreter& interp) {
 
             std::string result_str;
             for (size_t i = 1; i + 1 < sub_args.size(); ++i) {
-                try {
-                    long idx = std::stol(sub_args[i]);
-                    if (idx < 0) {
-                        idx = static_cast<long>(list.size()) + idx;
-                    }
-                    if (!result_str.empty()) result_str += ';';
-                    if (idx >= 0 && static_cast<size_t>(idx) < list.size()) {
-                        result_str += list[static_cast<size_t>(idx)];
-                    } else {
-                        result_str += "NOTFOUND";
-                    }
-                } catch (...) {
+                auto idx_opt = parse_number<long>(sub_args[i]);
+                if (!idx_opt) {
                     interp.set_fatal_error("list(GET) invalid index: " + sub_args[i]);
                     return;
+                }
+                long idx = *idx_opt;
+                if (idx < 0) {
+                    idx = static_cast<long>(list.size()) + idx;
+                }
+                if (!result_str.empty()) result_str += ';';
+                if (idx >= 0 && static_cast<size_t>(idx) < list.size()) {
+                    result_str += list[static_cast<size_t>(idx)];
+                } else {
+                    result_str += "NOTFOUND";
                 }
             }
             interp.set_variable(out_var, result_str);
@@ -211,8 +212,13 @@ void register_list_builtins(Interpreter& interp) {
 
             auto entry = interp.get_variables().entry(list_var);
             CMakeArray list(entry.get());
-            try {
-                long idx = std::stol(index_str);
+            {
+                auto idx_opt = parse_number<long>(index_str);
+                if (!idx_opt) {
+                    interp.set_fatal_error("list(INSERT) invalid index: " + index_str);
+                    return;
+                }
+                long idx = *idx_opt;
                 if (idx < 0) {
                     idx = static_cast<long>(list.size()) + idx;
                 }
@@ -221,9 +227,6 @@ void register_list_builtins(Interpreter& interp) {
                     return;
                 }
                 list.insert(static_cast<size_t>(idx), items);
-            } catch (...) {
-                interp.set_fatal_error("list(INSERT) invalid index: " + index_str);
-                return;
             }
             entry.set(list.to_string());
         } else if (operation == "REVERSE") {
@@ -317,9 +320,15 @@ void register_list_builtins(Interpreter& interp) {
 
             std::string list_str = interp.get_variable(list_var);
             CMakeArrayView list(list_str);
-            try {
-                long start = std::stol(start_str);
-                long length = std::stol(length_str);
+            {
+                auto start_opt = parse_number<long>(start_str);
+                auto length_opt = parse_number<long>(length_str);
+                if (!start_opt || !length_opt) {
+                    interp.set_fatal_error("list(SUBLIST) invalid index");
+                    return;
+                }
+                long start = *start_opt;
+                long length = *length_opt;
 
                 // Handle negative start index
                 if (start < 0) {
@@ -341,8 +350,6 @@ void register_list_builtins(Interpreter& interp) {
                     result_str += list[i];
                 }
                 interp.set_variable(out_var, result_str);
-            } catch (...) {
-                interp.set_fatal_error("list(SUBLIST) invalid indices");
             }
         } else if (operation == "FIND") {
             CommandParser parser("list", "FIND");
@@ -394,20 +401,20 @@ void register_list_builtins(Interpreter& interp) {
 
             std::vector<size_t> positive_indices;
             for (const auto& idx_str : indices) {
-                try {
-                    long idx = std::stol(idx_str);
-                    if (idx < 0) {
-                        idx = static_cast<long>(list.size()) + idx;
-                    }
-                    if (idx < 0 || static_cast<size_t>(idx) >= list.size()) {
-                        interp.set_fatal_error("list(REMOVE_AT) index out of range: " + idx_str);
-                        return;
-                    }
-                    positive_indices.push_back(static_cast<size_t>(idx));
-                } catch (...) {
+                auto idx_opt = parse_number<long>(idx_str);
+                if (!idx_opt) {
                     interp.set_fatal_error("list(REMOVE_AT) invalid index: " + idx_str);
                     return;
                 }
+                long idx = *idx_opt;
+                if (idx < 0) {
+                    idx = static_cast<long>(list.size()) + idx;
+                }
+                if (idx < 0 || static_cast<size_t>(idx) >= list.size()) {
+                    interp.set_fatal_error("list(REMOVE_AT) index out of range: " + idx_str);
+                    return;
+                }
+                positive_indices.push_back(static_cast<size_t>(idx));
             }
 
             std::sort(positive_indices.begin(), positive_indices.end(), std::greater<size_t>());
@@ -601,17 +608,17 @@ void register_list_builtins(Interpreter& interp) {
                 // Transform at specific indices
                 auto vec = result.to_vector();
                 for (const auto& idx_str : selector_params) {
-                    try {
-                        long idx = std::stol(idx_str);
-                        if (idx < 0) {
-                            idx = static_cast<long>(result.size()) + idx;
-                        }
-                        if (idx >= 0 && static_cast<size_t>(idx) < vec.size()) {
-                            if (!transform_element(vec[idx])) return;
-                        }
-                    } catch (...) {
+                    auto idx_opt = parse_number<long>(idx_str);
+                    if (!idx_opt) {
                         interp.set_fatal_error("list(TRANSFORM) invalid index in AT selector");
                         return;
+                    }
+                    long idx = *idx_opt;
+                    if (idx < 0) {
+                        idx = static_cast<long>(result.size()) + idx;
+                    }
+                    if (idx >= 0 && static_cast<size_t>(idx) < vec.size()) {
+                        if (!transform_element(vec[idx])) return;
                     }
                 }
                 result = CMakeArray(vec);
@@ -644,12 +651,23 @@ void register_list_builtins(Interpreter& interp) {
                     return;
                 }
 
-                try {
-                    long start = std::stol(selector_params[0]);
-                    long stop = std::stol(selector_params[1]);
+                {
+                    auto start_opt = parse_number<long>(selector_params[0]);
+                    auto stop_opt = parse_number<long>(selector_params[1]);
+                    if (!start_opt || !stop_opt) {
+                        interp.set_fatal_error("list(TRANSFORM) FOR invalid range parameters");
+                        return;
+                    }
+                    long start = *start_opt;
+                    long stop = *stop_opt;
                     long step = 1;
                     if (selector_params.size() >= 3) {
-                        step = std::stol(selector_params[2]);
+                        auto step_opt = parse_number<long>(selector_params[2]);
+                        if (!step_opt) {
+                            interp.set_fatal_error("list(TRANSFORM) FOR invalid step");
+                            return;
+                        }
+                        step = *step_opt;
                         if (step == 0) {
                             interp.set_fatal_error("list(TRANSFORM) FOR step cannot be zero");
                             return;
@@ -682,9 +700,6 @@ void register_list_builtins(Interpreter& interp) {
                     }
 
                     result = CMakeArray(vec);
-                } catch (...) {
-                    interp.set_fatal_error("list(TRANSFORM) invalid FOR parameters");
-                    return;
                 }
             }
 

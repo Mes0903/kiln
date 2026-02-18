@@ -3,6 +3,7 @@
 #include "../command_parser.hpp"
 #include "../utils.hpp"
 #include "../container_utils.hpp"
+#include "../parse_number.hpp"
 #include <algorithm>
 #include <cctype>
 #include "../regex.hpp"
@@ -637,9 +638,15 @@ void register_string_builtins(Interpreter& interp) {
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            try {
-                int begin = std::stoi(begin_str);
-                int length = std::stoi(length_str);
+            {
+                auto begin_opt = parse_number<int>(begin_str);
+                auto length_opt = parse_number<int>(length_str);
+                if (!begin_opt || !length_opt) {
+                    interp.set_fatal_error("string(SUBSTRING) invalid indices");
+                    return;
+                }
+                int begin = *begin_opt;
+                int length = *length_opt;
 
                 if (begin < 0 || static_cast<size_t>(begin) > input.size()) {
                     interp.set_fatal_error("string(SUBSTRING) begin index out of range: " + begin_str);
@@ -655,8 +662,6 @@ void register_string_builtins(Interpreter& interp) {
                 }
 
                 interp.set_variable(out_var, result);
-            } catch (const std::exception& e) {
-                interp.set_fatal_error("string(SUBSTRING) invalid indices: " + std::string(e.what()));
                 return;
             }
 
@@ -692,8 +697,13 @@ void register_string_builtins(Interpreter& interp) {
 
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            try {
-                int count = std::stoi(count_str);
+            {
+                auto count_opt = parse_number<int>(count_str);
+                if (!count_opt) {
+                    interp.set_fatal_error("string(REPEAT) invalid count: " + count_str);
+                    return;
+                }
+                int count = *count_opt;
                 if (count < 0) {
                     interp.set_fatal_error("string(REPEAT) count must be non-negative");
                     return;
@@ -705,8 +715,6 @@ void register_string_builtins(Interpreter& interp) {
                 }
 
                 interp.set_variable(out_var, result);
-            } catch (const std::exception& e) {
-                interp.set_fatal_error("string(REPEAT) invalid count: " + std::string(e.what()));
                 return;
             }
 
@@ -773,18 +781,18 @@ void register_string_builtins(Interpreter& interp) {
 
             std::string result;
             for (const auto& code_str : codes) {
-                try {
-                    int code = std::stoi(code_str);
-                    // XXX: apparently CMake allows ASCII codes outside the range [0, 127]
-                    // if (code < 0 || code > 127) {
-                    //     interp.set_fatal_error("string(ASCII) code out of range [0, 127]: " + code_str);
-                    //     return;
-                    // }
-                    result += static_cast<char>(code);
-                } catch (const std::exception& e) {
+                auto code_opt = parse_number<int>(code_str);
+                if (!code_opt) {
                     interp.set_fatal_error("string(ASCII) invalid code: " + code_str);
                     return;
                 }
+                int code = *code_opt;
+                // XXX: apparently CMake allows ASCII codes outside the range [0, 127]
+                // if (code < 0 || code > 127) {
+                //     interp.set_fatal_error("string(ASCII) code out of range [0, 127]: " + code_str);
+                //     return;
+                // }
+                result += static_cast<char>(code);
             }
 
             interp.set_variable(out_var, result);
@@ -867,12 +875,12 @@ void register_string_builtins(Interpreter& interp) {
 
             size_t length = 5; // Default length
             if (!length_str.empty()) {
-                try {
-                    length = std::stoul(length_str);
-                } catch (...) {
+                auto len_opt = parse_number<size_t>(length_str);
+                if (!len_opt) {
                     interp.set_fatal_error("string(RANDOM) invalid LENGTH: " + length_str);
                     return;
                 }
+                length = *len_opt;
             }
 
             if (alphabet.empty()) {
@@ -888,13 +896,12 @@ void register_string_builtins(Interpreter& interp) {
             std::mt19937 gen(rd());
 
             if (!seed_str.empty()) {
-                try {
-                    unsigned int seed = std::stoul(seed_str);
-                    gen.seed(seed);
-                } catch (...) {
+                auto seed_opt = parse_number<unsigned int>(seed_str);
+                if (!seed_opt) {
                     interp.set_fatal_error("string(RANDOM) invalid RANDOM_SEED: " + seed_str);
                     return;
                 }
+                gen.seed(*seed_opt);
             }
 
             std::uniform_int_distribution<size_t> dis(0, alphabet.size() - 1);

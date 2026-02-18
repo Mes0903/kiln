@@ -1,4 +1,5 @@
 #include "CMakeArray.hpp"
+#include "parse_number.hpp"
 #include <sstream>
 #include <algorithm>
 #include <set>
@@ -124,18 +125,18 @@ static bool natural_compare(const std::string& a, const std::string& b) {
             std::string num_b = b.substr(num_start_b, j - num_start_b);
 
             // Compare numerically
-            try {
-                unsigned long long val_a = std::stoull(num_a);
-                unsigned long long val_b = std::stoull(num_b);
-                if (val_a != val_b) {
-                    return val_a < val_b;
+            auto opt_a = parse_number<unsigned long long>(num_a);
+            auto opt_b = parse_number<unsigned long long>(num_b);
+            if (opt_a && opt_b) {
+                if (*opt_a != *opt_b) {
+                    return *opt_a < *opt_b;
                 }
                 // If numerically equal, longer strings (more leading zeros) come first
                 // This handles "00" vs "0" - "00" (length 2) comes before "0" (length 1)
                 if (num_a.size() != num_b.size()) {
                     return num_a.size() > num_b.size();  // Longer first!
                 }
-            } catch (...) {
+            } else {
                 // If numeric conversion fails, fall back to string comparison
                 if (num_a != num_b) {
                     return num_a < num_b;

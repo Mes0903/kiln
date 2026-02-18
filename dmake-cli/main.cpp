@@ -6,6 +6,7 @@
 #include "dmake/profiler.hpp"
 #include "dmake/tool_mode.hpp"
 #include "dmake/debugger.hpp"
+#include "dmake/parse_number.hpp"
 #include <linenoise.h>
 #include <algorithm>
 #include <iostream>
@@ -318,26 +319,26 @@ int run_test_action(const GlobalOptions& opt, dmake::Interpreter* interpreter, c
             double timeout = 0.0;
             auto timeout_it = test->properties.find("TIMEOUT");
             if (timeout_it != test->properties.end()) {
-                try {
-                    timeout = std::stod(timeout_it->second);
-                } catch (...) {
+                auto v = dmake::parse_double(timeout_it->second);
+                if (!v) {
                     res.output = "Error: Invalid TIMEOUT value '" + timeout_it->second + "'\n";
                     res.duration = 0.0;
                     return res;
                 }
+                timeout = *v;
             }
 
             // Check for SKIP_RETURN_CODE property
             std::optional<int> skip_code;
             auto skip_it = test->properties.find("SKIP_RETURN_CODE");
             if (skip_it != test->properties.end()) {
-                try {
-                    skip_code = std::stoi(skip_it->second);
-                } catch (...) {
+                auto v = dmake::parse_number<int>(skip_it->second);
+                if (!v) {
                     res.output = "Error: Invalid SKIP_RETURN_CODE value '" + skip_it->second + "'\n";
                     res.duration = 0.0;
                     return res;
                 }
+                skip_code = *v;
             }
 
             // Execute the command with timeout handling

@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../container_utils.hpp"
+#include "../parse_number.hpp"
 #include <string>
 #include <vector>
 #include <fstream>
@@ -56,9 +57,8 @@ std::unordered_map<std::string, long long> parse_meminfo() {
         std::string val = line.substr(colon + 1);
         // trim and parse number
         while (!val.empty() && (val.front() == ' ' || val.front() == '\t')) val.erase(val.begin());
-        try {
-            info[key] = std::stoll(val); // value is in kB
-        } catch (...) {}
+        auto v = parse_number<long long>(val);
+        if (v) info[key] = *v; // value is in kB
     }
     return info;
 }

@@ -1,4 +1,5 @@
 #include "dmake/tool_mode.hpp"
+#include "dmake/parse_number.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -408,12 +409,12 @@ int cmd_sleep(Args args) {
     }
     double total = 0;
     for (auto& a : args) {
-        try {
-            total += std::stod(a);
-        } catch (...) {
+        auto v = dmake::parse_double(a);
+        if (!v) {
             std::cerr << "Error: Invalid sleep duration: " << a << std::endl;
             return 1;
         }
+        total += *v;
     }
     if (total > 0) {
         std::this_thread::sleep_for(std::chrono::duration<double>(total));

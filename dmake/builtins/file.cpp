@@ -4,6 +4,7 @@
 #include "../command_parser.hpp"
 #include "../cache_store.hpp"
 #include "../utils.hpp"
+#include "../parse_number.hpp"
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -448,44 +449,29 @@ void register_file_builtins(Interpreter& interp) {
             size_t limit_output = std::numeric_limits<size_t>::max();
 
             if (!length_min_str.empty()) {
-                try {
-                    length_min = std::stoull(length_min_str);
-                } catch (...) {
-                    interp.set_fatal_error("file(STRINGS) LENGTH_MINIMUM must be a number");
-                    return;
-                }
+                auto v = parse_number<unsigned long long>(length_min_str);
+                if (!v) { interp.set_fatal_error("file(STRINGS) LENGTH_MINIMUM must be a number"); return; }
+                length_min = *v;
             }
             if (!length_max_str.empty()) {
-                try {
-                    length_max = std::stoull(length_max_str);
-                } catch (...) {
-                    interp.set_fatal_error("file(STRINGS) LENGTH_MAXIMUM must be a number");
-                    return;
-                }
+                auto v = parse_number<unsigned long long>(length_max_str);
+                if (!v) { interp.set_fatal_error("file(STRINGS) LENGTH_MAXIMUM must be a number"); return; }
+                length_max = *v;
             }
             if (!limit_count_str.empty()) {
-                try {
-                    limit_count = std::stoull(limit_count_str);
-                } catch (...) {
-                    interp.set_fatal_error("file(STRINGS) LIMIT_COUNT must be a number");
-                    return;
-                }
+                auto v = parse_number<unsigned long long>(limit_count_str);
+                if (!v) { interp.set_fatal_error("file(STRINGS) LIMIT_COUNT must be a number"); return; }
+                limit_count = *v;
             }
             if (!limit_input_str.empty()) {
-                try {
-                    limit_input = std::stoull(limit_input_str);
-                } catch (...) {
-                    interp.set_fatal_error("file(STRINGS) LIMIT_INPUT must be a number");
-                    return;
-                }
+                auto v = parse_number<unsigned long long>(limit_input_str);
+                if (!v) { interp.set_fatal_error("file(STRINGS) LIMIT_INPUT must be a number"); return; }
+                limit_input = *v;
             }
             if (!limit_output_str.empty()) {
-                try {
-                    limit_output = std::stoull(limit_output_str);
-                } catch (...) {
-                    interp.set_fatal_error("file(STRINGS) LIMIT_OUTPUT must be a number");
-                    return;
-                }
+                auto v = parse_number<unsigned long long>(limit_output_str);
+                if (!v) { interp.set_fatal_error("file(STRINGS) LIMIT_OUTPUT must be a number"); return; }
+                limit_output = *v;
             }
 
             // Resolve file path
@@ -1558,12 +1544,12 @@ void register_file_builtins(Interpreter& interp) {
             }
 
             if (!timeout_str.empty()) {
-                long timeout_sec = std::stol(timeout_str);
+                long timeout_sec = parse_number<long>(timeout_str).value_or(0);
                 curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_sec);
             }
 
             if (!inactivity_timeout_str.empty()) {
-                long inact_sec = std::stol(inactivity_timeout_str);
+                long inact_sec = parse_number<long>(inactivity_timeout_str).value_or(0);
                 curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
                 curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, inact_sec);
             }

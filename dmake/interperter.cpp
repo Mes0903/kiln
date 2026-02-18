@@ -6,6 +6,7 @@
 #include "gnu_compiler.hpp"
 #include "genex_evaluator.hpp"
 #include "profiler.hpp"
+#include "parse_number.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -2255,7 +2256,7 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     if (std::holds_alternative<ForeachRange>(block.params)) {
         const auto& r = std::get<ForeachRange>(block.params);
         if (r.step) {
-            long step = std::stol(evaluate_argument(*r.step));
+            long step = parse_number<long>(evaluate_argument(*r.step)).value_or(0);
             if (step == 0) {
                 if (loop_depth_ <= 0) {
                     std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling step=0 error\n";
@@ -2306,11 +2307,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         }
     } else if (std::holds_alternative<ForeachRange>(block.params)) {
         const auto& r = std::get<ForeachRange>(block.params);
-        long start = r.start ? std::stol(evaluate_argument(*r.start)) : 0;
-        long stop = std::stol(evaluate_argument(r.stop));
+        long start = r.start ? parse_number<long>(evaluate_argument(*r.start)).value_or(0) : 0;
+        long stop = parse_number<long>(evaluate_argument(r.stop)).value_or(0);
         long step;
         if (r.step) {
-            step = std::stol(evaluate_argument(*r.step));
+            step = parse_number<long>(evaluate_argument(*r.step)).value_or(0);
         } else {
             step = (start <= stop) ? 1 : -1;
         }

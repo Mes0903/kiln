@@ -9,6 +9,7 @@
 #include "compile_features.hpp"
 #include "printing.hpp"
 #include "CMakeArray.hpp"
+#include "parse_number.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -40,7 +41,7 @@ static std::string compute_effective_standard(
     int features_required,
     int compiler_default)
 {
-    int explicit_val = explicit_standard.empty() ? 0 : std::stoi(explicit_standard);
+    int explicit_val = explicit_standard.empty() ? 0 : parse_number<int>(explicit_standard).value_or(0);
     int effective = std::max(explicit_val, features_required);
 
     if (effective <= 0) return explicit_standard;  // nothing required
@@ -892,9 +893,9 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     int c_default_std = 0;
     {
         const std::string& cxx_def = interp.get_variable("CMAKE_CXX_STANDARD_DEFAULT");
-        if (!cxx_def.empty()) cxx_default_std = std::stoi(cxx_def);
+        if (!cxx_def.empty()) cxx_default_std = parse_number<int>(cxx_def).value_or(0);
         const std::string& c_def = interp.get_variable("CMAKE_C_STANDARD_DEFAULT");
-        if (!c_def.empty()) c_default_std = std::stoi(c_def);
+        if (!c_def.empty()) c_default_std = parse_number<int>(c_def).value_or(0);
     }
 
     // Compute effective standard per language (hoisted out of per-source loop)
@@ -1482,9 +1483,9 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     int c_default_std = 0;
     {
         const std::string& cxx_def = interp.get_variable("CMAKE_CXX_STANDARD_DEFAULT");
-        if (!cxx_def.empty()) cxx_default_std = std::stoi(cxx_def);
+        if (!cxx_def.empty()) cxx_default_std = parse_number<int>(cxx_def).value_or(0);
         const std::string& c_def = interp.get_variable("CMAKE_C_STANDARD_DEFAULT");
-        if (!c_def.empty()) c_default_std = std::stoi(c_def);
+        if (!c_def.empty()) c_default_std = parse_number<int>(c_def).value_or(0);
     }
 
     // C++20 modules: generate scanner tasks first (they have no dependencies)

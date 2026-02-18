@@ -3,6 +3,7 @@
 #include "../command_parser.hpp"
 #include "../profiler.hpp"
 #include "../utils.hpp"
+#include "../parse_number.hpp"
 #include <iostream>
 #include <sstream>
 #include <sys/stat.h>
@@ -228,12 +229,12 @@ void register_process_builtins(Interpreter& interp) {
         options.error_quiet = error_quiet;
 
         if (!timeout.empty()) {
-            try {
-                options.timeout = std::stod(timeout);
-            } catch (...) {
+            auto v = parse_double(timeout);
+            if (!v) {
                 interp.set_fatal_error("execute_process invalid TIMEOUT: " + timeout);
                 return;
             }
+            options.timeout = *v;
         }
 
         if (!output_variable.empty()) options.output_variable = &output_variable;

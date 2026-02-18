@@ -3,6 +3,7 @@
 #include "regex.hpp"
 #include "clock_cache.hpp"
 #include "CMakeArray.hpp"
+#include "parse_number.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -27,21 +28,13 @@ int compare_versions(const std::string& a, const std::string& b) {
     std::string component;
     while (std::getline(iss_a, component, '.')) {
         // CMake strips non-numeric suffixes: "1a" -> 1, "1-suffix" -> 1
-        try {
-            parts_a.push_back(std::stoi(component));
-        } catch (...) {
-            parts_a.push_back(0);
-        }
+        parts_a.push_back(parse_number_partial<int>(component, 0));
     }
 
     // Parse version b
     std::istringstream iss_b(b);
     while (std::getline(iss_b, component, '.')) {
-        try {
-            parts_b.push_back(std::stoi(component));
-        } catch (...) {
-            parts_b.push_back(0);
-        }
+        parts_b.push_back(parse_number_partial<int>(component, 0));
     }
 
     // Pad shorter vector with zeros (missing components = 0)
