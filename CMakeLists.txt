@@ -52,6 +52,7 @@ add_library(dmake SHARED
     dmake/tool_mode.cpp
     dmake/condition_evaluator.cpp
     dmake/ast_cache.cpp
+    dmake/cmake_path_utils.cpp
     dmake/debugger.cpp
     dmake/autogen.cpp
 )
@@ -105,7 +106,8 @@ if(BUILD_TESTING)
         tests/compile_features_tests.cpp
         tests/source_properties_tests.cpp
         tests/cmake_array_tests.cpp
-        tests/resolve_tests.cpp)
+        tests/resolve_tests.cpp
+        tests/cmake_path_utils_tests.cpp)
     target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
 
     add_test(NAME interpreter_tests COMMAND dmake_tests)

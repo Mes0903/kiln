@@ -5,9 +5,9 @@
 #include "../genex_parser.hpp"
 #include "../compile_features.hpp"
 #include "../CMakeArray.hpp"
+#include "../cmake_path_utils.hpp"
 #include <sstream>
 #include <algorithm>
-#include <filesystem>
 #include <set>
 
 namespace dmake {
@@ -400,27 +400,19 @@ void register_target_builtins(Interpreter& interp) {
             // Normalize output paths (relative to binary dir)
             std::vector<std::string> normalized_outputs;
             for (const auto& out : outputs) {
-                std::filesystem::path p(out);
-                if (!p.is_absolute()) {
-                    p = std::filesystem::path(bin_dir) / p;
-                }
-                normalized_outputs.push_back(p.lexically_normal().string());
+                normalized_outputs.push_back(path_utils::make_absolute_and_normal(bin_dir, out));
             }
 
             // Also treat BYPRODUCTS as outputs
             for (const auto& out : byproducts) {
-                std::filesystem::path p(out);
-                if (!p.is_absolute()) {
-                    p = std::filesystem::path(bin_dir) / p;
-                }
-                normalized_outputs.push_back(p.lexically_normal().string());
+                normalized_outputs.push_back(path_utils::make_absolute_and_normal(bin_dir, out));
             }
 
             // Default working directory to binary dir
             if (working_dir.empty()) {
                 working_dir = bin_dir;
-            } else if (!std::filesystem::path(working_dir).is_absolute()) {
-                working_dir = (std::filesystem::path(bin_dir) / working_dir).lexically_normal().string();
+            } else if (!path_utils::is_absolute(working_dir)) {
+                working_dir = path_utils::lexically_normal(path_utils::join(bin_dir, working_dir));
             }
 
             auto& rules = interp.get_custom_command_rules();
@@ -550,8 +542,8 @@ void register_target_builtins(Interpreter& interp) {
             // Default working directory
             if (working_dir.empty()) {
                 working_dir = bin_dir;
-            } else if (!std::filesystem::path(working_dir).is_absolute()) {
-                working_dir = (std::filesystem::path(bin_dir) / working_dir).lexically_normal().string();
+            } else if (!path_utils::is_absolute(working_dir)) {
+                working_dir = path_utils::lexically_normal(path_utils::join(bin_dir, working_dir));
             }
 
             // Join comment parts with spaces (CMake collects all args after COMMENT until next keyword)
@@ -1292,10 +1284,7 @@ void register_target_builtins(Interpreter& interp) {
             if (arg.find("$<") != std::string::npos) {
                 resolved_dirs.push_back(arg);
             } else {
-                std::filesystem::path resolved = std::filesystem::path(arg).is_absolute() ?
-                    std::filesystem::path(arg) :
-                    std::filesystem::path(src_dir) / arg;
-                resolved_dirs.push_back(resolved.string());
+                resolved_dirs.push_back(path_utils::is_absolute(arg) ? arg : path_utils::join(src_dir, arg));
             }
         }
 
@@ -1328,10 +1317,9 @@ void register_target_builtins(Interpreter& interp) {
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         auto resolve_dirs = [&](std::vector<std::string>& dirs) {
             for (auto& dir : dirs) {
-                std::filesystem::path resolved = std::filesystem::path(dir).is_absolute() ?
-                    std::filesystem::path(dir) :
-                    std::filesystem::path(src_dir) / dir;
-                dir = resolved.string();
+                if (!path_utils::is_absolute(dir)) {
+                    dir = path_utils::join(src_dir, dir);
+                }
             }
         };
 
@@ -1363,10 +1351,7 @@ void register_target_builtins(Interpreter& interp) {
             // Split semicolons - CMake treats all args as lists
             for (const auto& item : CMakeArrayIterator(arg)) {
                 if (item.empty()) continue;
-                std::filesystem::path resolved = std::filesystem::path(item).is_absolute() ?
-                    std::filesystem::path(item) :
-                    std::filesystem::path(src_dir) / item;
-                dirs.push_back(resolved.string());
+                dirs.push_back(path_utils::is_absolute(item) ? std::string(item) : path_utils::join(src_dir, item));
             }
         }
     });

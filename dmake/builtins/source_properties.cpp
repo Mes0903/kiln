@@ -2,8 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../CMakeArray.hpp"
-#include <filesystem>
-#include <algorithm>
+#include "../cmake_path_utils.hpp"
 
 namespace dmake {
 
@@ -111,12 +110,7 @@ void register_source_properties_builtins(Interpreter& interp) {
             // Use specified directories
             std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
             for (const auto& dir : directories) {
-                std::filesystem::path dir_path(dir);
-                if (dir_path.is_absolute()) {
-                    base_dirs.push_back(dir_path.lexically_normal().string());
-                } else {
-                    base_dirs.push_back((std::filesystem::path(current_source_dir) / dir_path).lexically_normal().string());
-                }
+                base_dirs.push_back(path_utils::make_absolute_and_normal(current_source_dir, dir));
             }
         } else {
             // Default to current source directory
@@ -128,14 +122,7 @@ void register_source_properties_builtins(Interpreter& interp) {
 
         for (const auto& base_dir : base_dirs) {
             for (const auto& file : files) {
-                std::filesystem::path file_path(file);
-                std::string abs_path;
-
-                if (file_path.is_absolute()) {
-                    abs_path = file_path.lexically_normal().string();
-                } else {
-                    abs_path = (std::filesystem::path(base_dir) / file_path).lexically_normal().string();
-                }
+                std::string abs_path = path_utils::make_absolute_and_normal(base_dir, file);
 
                 // Set each property
                 for (const auto& [prop_name, prop_value] : properties) {
@@ -193,24 +180,13 @@ void register_source_properties_builtins(Interpreter& interp) {
             }
             base_dir = target->get_source_dir();
         } else if (!opt_directory.empty()) {
-            std::filesystem::path dir_path(opt_directory);
-            if (dir_path.is_absolute()) {
-                base_dir = dir_path.lexically_normal().string();
-            } else {
-                base_dir = (std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / dir_path).lexically_normal().string();
-            }
+            base_dir = path_utils::make_absolute_and_normal(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"), opt_directory);
         } else {
             base_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         }
 
         // Resolve file path
-        std::filesystem::path file_path(file);
-        std::string abs_path;
-        if (file_path.is_absolute()) {
-            abs_path = file_path.lexically_normal().string();
-        } else {
-            abs_path = (std::filesystem::path(base_dir) / file_path).lexically_normal().string();
-        }
+        std::string abs_path = path_utils::make_absolute_and_normal(base_dir, file);
 
         // Look up the property
         const auto& source_properties = interp.get_source_properties();

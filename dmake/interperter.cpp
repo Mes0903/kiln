@@ -19,6 +19,7 @@
 #include "intercept/fetch_content.hpp"
 #include "condition_evaluator.hpp"
 #include "CMakeArray.hpp"
+#include "cmake_path_utils.hpp"
 #include <cassert>
 #include <future>
 
@@ -298,14 +299,9 @@ DirectoryContext& Interpreter::get_current_directory_context() {
 }
 
 DirectoryContext* Interpreter::get_directory_context(const std::string& dir) {
-    std::filesystem::path abs_dir;
-    if (std::filesystem::path(dir).is_absolute()) {
-        abs_dir = std::filesystem::path(dir).lexically_normal();
-    } else {
-        abs_dir = (std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / dir).lexically_normal();
-    }
+    std::string abs_dir = path_utils::make_absolute_and_normal(get_variable("CMAKE_CURRENT_SOURCE_DIR"), dir);
 
-    auto it = directory_contexts_.find(abs_dir.string());
+    auto it = directory_contexts_.find(abs_dir);
     if (it != directory_contexts_.end()) {
         return &it->second;
     }
@@ -1193,42 +1189,43 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             std::string subdir = args[0];
             std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
             std::string current_binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
-            std::filesystem::path source_path = std::filesystem::path(current_source_dir) / subdir;
-            std::filesystem::path abs_source_path = std::filesystem::absolute(source_path).lexically_normal();
-            std::filesystem::path cmake_file = abs_source_path / "CMakeLists.txt";
+            std::string source_path_str = path_utils::join(current_source_dir, subdir);
+            std::string abs_source_str = std::filesystem::absolute(std::filesystem::path(source_path_str)).string();
+            abs_source_str = path_utils::lexically_normal(abs_source_str);
+            std::string cmake_file_str = path_utils::join(abs_source_str, "CMakeLists.txt");
 
             // Compute binary directory for the subdirectory
             // Check for explicit binary_dir argument (args[1]), skipping EXCLUDE_FROM_ALL
-            std::filesystem::path binary_path;
+            std::string binary_path_str;
             bool has_explicit_binary_dir = false;
             for (size_t i = 1; i < args.size(); ++i) {
                 if (args[i] != "EXCLUDE_FROM_ALL") {
-                    binary_path = std::filesystem::path(current_binary_dir) / args[i];
+                    binary_path_str = path_utils::join(current_binary_dir, args[i]);
                     has_explicit_binary_dir = true;
                     break;
                 }
             }
             if (!has_explicit_binary_dir) {
-                if (std::filesystem::path(subdir).is_absolute()) {
+                if (path_utils::is_absolute(subdir)) {
                     // For absolute source paths without explicit binary dir,
                     // use the last component as subdirectory name under current binary dir
-                    binary_path = std::filesystem::path(current_binary_dir) / std::filesystem::path(subdir).filename();
+                    binary_path_str = path_utils::join(current_binary_dir, path_utils::filename(subdir));
                 } else {
-                    binary_path = std::filesystem::path(current_binary_dir) / subdir;
+                    binary_path_str = path_utils::join(current_binary_dir, subdir);
                 }
             }
 
             // Create binary directory (CMake does this implicitly)
             std::error_code ec;
-            std::filesystem::create_directories(binary_path, ec);
+            std::filesystem::create_directories(binary_path_str, ec);
 
-            if (!std::filesystem::exists(cmake_file)) {
-                interp.set_fatal_error("CMakeLists.txt not found in " + abs_source_path.string());
+            if (!std::filesystem::exists(cmake_file_str)) {
+                interp.set_fatal_error("CMakeLists.txt not found in " + abs_source_str);
                 return;
             }
 
-            std::ifstream file(cmake_file);
-            if(!file) { interp.set_fatal_error("Could not read " + cmake_file.string()); return; }
+            std::ifstream file(cmake_file_str);
+            if(!file) { interp.set_fatal_error("Could not read " + cmake_file_str); return; }
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
             // Save current file for restoration
@@ -1236,20 +1233,20 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
             // Push variable scope and directory context
             interp.get_variables().push_scope();
-            interp.push_directory(abs_source_path.string(), binary_path.string());
+            interp.push_directory(abs_source_str, binary_path_str);
 
             // Set CMAKE_CURRENT_* variables for the subdirectory
-            interp.set_variable("CMAKE_CURRENT_SOURCE_DIR", abs_source_path.string());
-            interp.set_variable("CMAKE_CURRENT_BINARY_DIR", binary_path.string());
-            interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file.string());
-            interp.set_variable("CMAKE_CURRENT_LIST_DIR", abs_source_path.string());
-            interp.set_current_file(cmake_file.string());
+            interp.set_variable("CMAKE_CURRENT_SOURCE_DIR", abs_source_str);
+            interp.set_variable("CMAKE_CURRENT_BINARY_DIR", binary_path_str);
+            interp.set_variable("CMAKE_CURRENT_LIST_FILE", cmake_file_str);
+            interp.set_variable("CMAKE_CURRENT_LIST_DIR", abs_source_str);
+            interp.set_current_file(cmake_file_str);
 
             // Parse and interpret the subdirectory CMakeLists.txt
-            std::string subdir_filename = cmake_file.filename().string();
+            std::string subdir_filename = std::string(path_utils::filename(cmake_file_str));
 
             ProfileScope parse_profile("parse " + subdir + "/" + subdir_filename, "parse");
-            Parser parser(content, cmake_file.string());
+            Parser parser(content, cmake_file_str);
             auto ast = parser.parse();
             parse_profile.stop();
 
@@ -1270,7 +1267,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                         interp.finalize_directory_targets();  // Apply retroactive properties
                     }
                 } else {
-                    interp.set_fatal_error(InterpreterError{cmake_file.string(), ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
+                    interp.set_fatal_error(InterpreterError{cmake_file_str, ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
                 }
             }
 
@@ -1686,7 +1683,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     }
 
     std::string old_file = get_current_file();
-    std::string abs_dir = std::filesystem::path(abs_path).parent_path().string();
+    std::string abs_dir = std::string(path_utils::parent_path(abs_path));
 
     std::string old_list_file = get_variable("CMAKE_CURRENT_LIST_FILE");
     std::string old_list_dir = get_variable("CMAKE_CURRENT_LIST_DIR");
@@ -3212,8 +3209,9 @@ std::optional<int64_t> Interpreter::get_dir_mtime_cached(const std::string& path
 }
 
 std::string Interpreter::cached_weakly_canonical(const std::filesystem::path& p) {
-    auto parent = p.parent_path().string();
-    auto filename = p.filename().string();
+    auto path_str = p.string();
+    auto parent = std::string(path_utils::parent_path(path_str));
+    auto fname = std::string(path_utils::filename(path_str));
 
     // Look up resolved parent directory in cache
     std::string resolved_parent;
@@ -3224,22 +3222,23 @@ std::string Interpreter::cached_weakly_canonical(const std::filesystem::path& p)
         try {
             resolved_parent = std::filesystem::weakly_canonical(parent).string();
         } catch (...) {
-            resolved_parent = std::filesystem::path(parent).lexically_normal().string();
+            resolved_parent = path_utils::lexically_normal(parent);
         }
         canonical_dir_cache_[parent] = resolved_parent;
     }
 
     // For the leaf: check if it's a symlink (single lstat syscall)
-    auto full = std::filesystem::path(resolved_parent) / filename;
+    std::string full_str = path_utils::join(resolved_parent, fname);
+    std::filesystem::path full(full_str);
     std::error_code ec;
     if (std::filesystem::is_symlink(full, ec)) {
         try {
             return std::filesystem::weakly_canonical(full).string();
         } catch (...) {
-            return full.lexically_normal().string();
+            return path_utils::lexically_normal(full_str);
         }
     }
-    return full.lexically_normal().string();
+    return path_utils::lexically_normal(full_str);
 }
 
 bool Interpreter::is_project_path(const std::string& path) const {

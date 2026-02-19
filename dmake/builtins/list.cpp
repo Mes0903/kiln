@@ -59,30 +59,87 @@ void register_list_builtins(Interpreter& interp) {
             const std::string& out_var = sub_args.back();
 
             auto list_view = interp.get_variable_view(list_var);
-            CMakeArrayView list(list_view.value_or(""));
+            std::string_view list_str = list_view.value_or("");
 
-            if (list.empty()) {
+            if (list_str.empty()) {
                 interp.set_variable(out_var, "NOTFOUND");
                 return;
             }
 
-            std::string result_str;
-            for (size_t i = 1; i + 1 < sub_args.size(); ++i) {
-                auto idx_opt = parse_number<long>(sub_args[i]);
+            size_t total = CMakeArray::count_elements(list_str);
+
+            // Parse and resolve indices, keeping original request order
+            size_t num_indices = sub_args.size() - 2; // exclude list_var and out_var
+            struct IndexRequest { size_t orig_pos; long resolved; };
+            // Use small buffer for typical case (1-3 indices)
+            IndexRequest buf[8];
+            std::vector<IndexRequest> heap_buf;
+            IndexRequest* requests = buf;
+            if (num_indices > 8) {
+                heap_buf.resize(num_indices);
+                requests = heap_buf.data();
+            }
+
+            for (size_t i = 0; i < num_indices; ++i) {
+                auto idx_opt = parse_number<long>(sub_args[i + 1]);
                 if (!idx_opt) {
-                    interp.set_fatal_error("list(GET) invalid index: " + sub_args[i]);
+                    interp.set_fatal_error("list(GET) invalid index: " + sub_args[i + 1]);
                     return;
                 }
                 long idx = *idx_opt;
-                if (idx < 0) {
-                    idx = static_cast<long>(list.size()) + idx;
+                if (idx < 0) idx = static_cast<long>(total) + idx;
+                requests[i] = {i, idx};
+            }
+
+            // Sort by resolved index for single-pass iteration
+            std::sort(requests, requests + num_indices,
+                [](const IndexRequest& a, const IndexRequest& b) { return a.resolved < b.resolved; });
+
+            // Single-pass collection
+            std::string results[8];
+            std::vector<std::string> heap_results;
+            std::string* result_arr = results;
+            if (num_indices > 8) {
+                heap_results.resize(num_indices);
+                result_arr = heap_results.data();
+            }
+
+            size_t req_i = 0;
+            // Skip requests with out-of-bounds negative indices
+            while (req_i < num_indices && requests[req_i].resolved < 0) {
+                result_arr[requests[req_i].orig_pos] = "NOTFOUND";
+                ++req_i;
+            }
+
+            size_t elem_idx = 0;
+            auto it = CMakeArrayIterator::iterator(list_str);
+            auto end = CMakeArrayIterator::sentinel{};
+            while (req_i < num_indices && it != end) {
+                long target_idx = requests[req_i].resolved;
+                if (static_cast<long>(elem_idx) == target_idx) {
+                    auto val = *it;
+                    // Handle all requests for this same index
+                    while (req_i < num_indices && requests[req_i].resolved == target_idx) {
+                        result_arr[requests[req_i].orig_pos] = std::string(val);
+                        ++req_i;
+                    }
                 }
+                if (req_i < num_indices && static_cast<long>(elem_idx) < requests[req_i].resolved) {
+                    ++it;
+                    ++elem_idx;
+                }
+            }
+            // Any remaining requests are out of bounds
+            while (req_i < num_indices) {
+                result_arr[requests[req_i].orig_pos] = "NOTFOUND";
+                ++req_i;
+            }
+
+            // Build result in original order
+            std::string result_str;
+            for (size_t i = 0; i < num_indices; ++i) {
                 if (!result_str.empty()) result_str += ';';
-                if (idx >= 0 && static_cast<size_t>(idx) < list.size()) {
-                    result_str += list[static_cast<size_t>(idx)];
-                } else {
-                    result_str += "NOTFOUND";
-                }
+                result_str += result_arr[i];
             }
             interp.set_variable(out_var, result_str);
         } else if (operation == "JOIN") {
@@ -319,7 +376,7 @@ void register_list_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             auto list_sv = interp.get_variable_view(list_var);
-            CMakeArrayView list(list_sv.value_or(""));
+            std::string_view list_str = list_sv.value_or("");
             {
                 auto start_opt = parse_number<long>(start_str);
                 auto length_opt = parse_number<long>(length_str);
@@ -330,24 +387,29 @@ void register_list_builtins(Interpreter& interp) {
                 long start = *start_opt;
                 long length = *length_opt;
 
+                size_t total = CMakeArray::count_elements(list_str);
+
                 // Handle negative start index
                 if (start < 0) {
-                    start = static_cast<long>(list.size()) + start;
+                    start = static_cast<long>(total) + start;
                 }
 
-                if (start < 0 || static_cast<size_t>(start) > list.size()) {
+                if (start < 0 || static_cast<size_t>(start) > total) {
                     interp.set_fatal_error("list(SUBLIST) start index out of range");
                     return;
                 }
 
-                // Build sublist string directly from views
+                // Build sublist by iterating and skipping/collecting
                 size_t s = static_cast<size_t>(start);
-                size_t count = (length < 0) ? list.size() - s
-                             : std::min(static_cast<size_t>(length), list.size() - s);
+                size_t count = (length < 0) ? total - s
+                             : std::min(static_cast<size_t>(length), total - s);
                 std::string result_str;
-                for (size_t i = s; i < s + count; ++i) {
+                size_t idx = 0;
+                for (auto it = CMakeArrayIterator::iterator(list_str); it != CMakeArrayIterator::sentinel{}; ++it, ++idx) {
+                    if (idx < s) continue;
+                    if (idx >= s + count) break;
                     if (!result_str.empty()) result_str += ';';
-                    result_str += list[i];
+                    result_str += *it;
                 }
                 interp.set_variable(out_var, result_str);
             }
