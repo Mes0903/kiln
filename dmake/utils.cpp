@@ -523,7 +523,7 @@ std::string dmake::to_upper(std::string_view str) {
     std::string result;
     result.reserve(str.size());
     for (char c : str) {
-        result += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        result += (c >= 'a' && c <= 'z') ? static_cast<char>(c - 32) : c;
     }
     return result;
 }
@@ -532,7 +532,7 @@ std::string dmake::to_lower(std::string_view str) {
     std::string result;
     result.reserve(str.size());
     for (char c : str) {
-        result += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        result += (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
     }
     return result;
 }

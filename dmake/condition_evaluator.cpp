@@ -621,8 +621,8 @@ private:
             return false;
         }
 
-        std::string val = interp_.get_variable(token_str);
-        return !Interpreter::is_falsy(val);
+        auto val_view = interp_.get_variable_view(token_str);
+        return val_view.has_value() && !Interpreter::is_falsy(*val_view);
     }
 };
 

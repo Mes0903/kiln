@@ -800,7 +800,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     std::filesystem::path abs_script_dir = script_dir.empty() ?
         std::filesystem::current_path() :
         std::filesystem::absolute(script_dir).lexically_normal();
-    frame_stack_.push_back({abs_script_dir.string(), nullptr});
+    frame_stack_.push_back({intern_file(abs_script_dir.string()), nullptr});
 
     std::filesystem::path abs_binary_dir;
     if (build_dir.has_value()) {
@@ -1998,17 +1998,16 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     root->trace_stack_.push_back({current_file_interned_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
 
     // Expand arguments once (reuse buffer to avoid per-call allocation)
-    thread_local std::vector<std::string> expanded_args;
-    expanded_args.clear();
-    expand_arguments_into(cmd.arguments, expanded_args);
+    expanded_args_buf_.clear();
+    expand_arguments_into(cmd.arguments, expanded_args_buf_);
 
     // Debugger/trace hook - must happen after argument expansion
     if (debugger_) {
         debugger_->on_command(current_file_, cmd.row, cmd.col,
-                              cmd.identifier, expanded_args, cmd.arguments);
+                              cmd.identifier, expanded_args_buf_, cmd.arguments);
     }
 
-    auto res = execute_command_with_args(cmd.identifier, expanded_args);
+    auto res = execute_command_with_args(cmd.identifier, expanded_args_buf_);
 
     if (!res) {
         if (auto err = get_fatal_error()) {
@@ -2030,8 +2029,7 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
     for (char c : identifier) {
         if (c >= 'A' && c <= 'Z') { is_lower = false; break; }
     }
-    thread_local std::string lower_buf;
-    const std::string& lower_identifier = is_lower ? identifier : (lower_buf = to_lower(identifier), lower_buf);
+    const std::string& lower_identifier = is_lower ? identifier : (lower_buf_ = to_lower(identifier), lower_buf_);
 
     auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
@@ -2562,7 +2560,7 @@ std::expected<void, InterpreterError> Interpreter::execute_block_block(const Blo
 
 std::expected<void, InterpreterError> Interpreter::invoke_user_function(const FunctionBlock& func, const std::vector<std::string>& args) {
     // Push metadata frame (for script_dir and function_block tracking)
-    frame_stack_.push_back({func.definition_dir, &func});
+    frame_stack_.push_back({&func.definition_dir, &func});
 
     // Push variable scope
     variables_.push_scope();
@@ -2597,9 +2595,20 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_function(const Fu
         variables_.set("ARGN", std::move(argn_str));
     }
 
-    // ARGVn and named parameters
+    // ARGVn and named parameters — use pre-computed keys for common cases
+    static const std::string argv_keys[] = {
+        "ARGV0", "ARGV1", "ARGV2", "ARGV3", "ARGV4", "ARGV5", "ARGV6", "ARGV7",
+        "ARGV8", "ARGV9", "ARGV10", "ARGV11", "ARGV12", "ARGV13", "ARGV14", "ARGV15",
+        "ARGV16", "ARGV17", "ARGV18", "ARGV19", "ARGV20", "ARGV21", "ARGV22", "ARGV23",
+        "ARGV24", "ARGV25", "ARGV26", "ARGV27", "ARGV28", "ARGV29", "ARGV30", "ARGV31",
+    };
+    static constexpr size_t num_precomputed = sizeof(argv_keys) / sizeof(argv_keys[0]);
     for (size_t i = 0; i < args.size(); ++i) {
-        variables_.set("ARGV" + std::to_string(i), args[i]);
+        if (i < num_precomputed) {
+            variables_.set(argv_keys[i], args[i]);
+        } else {
+            variables_.set("ARGV" + std::to_string(i), args[i]);
+        }
     }
     for (size_t i = 0; i < func.parameters.size() && i < args.size(); ++i) {
         variables_.set(func.parameters[i], args[i]);
@@ -2773,11 +2782,11 @@ std::expected<void, InterpreterError> Interpreter::invoke_user_macro(const Macro
 // Only 1/Y/ON/YES/TRUE (case-insensitive) are truthy.
 // This is NOT the inverse of is_falsy() — values like "/usr/local/bin"
 // are neither is_truthy() nor is_falsy().
-// Case-insensitive equality without allocation
+// Case-insensitive equality without allocation (ASCII only — CMake booleans are always ASCII)
 static bool ci_equal(const char* a, const char* b, size_t len) {
     for (size_t i = 0; i < len; ++i) {
-        if (std::toupper(static_cast<unsigned char>(a[i])) !=
-            std::toupper(static_cast<unsigned char>(b[i]))) return false;
+        auto upper = [](char c) -> char { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 32) : c; };
+        if (upper(a[i]) != upper(b[i])) return false;
     }
     return true;
 }
@@ -2881,7 +2890,8 @@ std::string Interpreter::evaluate_argument(const Argument& arg) {
 }
 
 std::string Interpreter::get_variable(std::string_view name) const {
-    return get_optional_variable(name).value_or("");
+    auto view = get_variable_view(name);
+    return view ? std::string(*view) : std::string();
 }
 
 void Interpreter::add_variable_watch(const std::string& var_name, std::optional<std::string> callback) {

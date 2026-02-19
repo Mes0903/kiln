@@ -166,7 +166,7 @@ struct PropertyDefinition {
 };
 
 struct FrameMetadata {
-    std::string script_dir;
+    const std::string* script_dir;                  // Non-owning pointer (outlives the frame)
     const FunctionBlock* function_block = nullptr;  // Pointer to FunctionBlock if this is a function frame
 };
 
@@ -483,7 +483,7 @@ private:
     bool force_colors_ = false;  // Force color output even when not writing to TTY
 
     // Global state (managed by root)
-    std::unordered_map<std::string, BuiltinFunction> builtins_;
+    std::unordered_map<std::string, BuiltinFunction, TransparentStringHash, TransparentStringEqual> builtins_;
     TargetMap targets_;
     std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
@@ -599,6 +599,10 @@ private:
 
     // Variable watches (for variable_watch() CMake command)
     std::map<std::string, VariableWatch> variable_watches_;
+
+    // Reusable buffers (avoid per-call allocation — one per Interpreter instance)
+    std::vector<std::string> expanded_args_buf_;
+    std::string lower_buf_;
 };
 
 // RAII guard that saves/clears return_requested_ on construction and restores it

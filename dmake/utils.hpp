@@ -124,9 +124,8 @@ PipelineResult execute_pipeline(const std::vector<std::vector<std::string>>& com
 inline bool ci_equals(std::string_view a, std::string_view b) noexcept {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {
-        if (static_cast<unsigned char>(std::toupper(static_cast<unsigned char>(a[i]))) !=
-            static_cast<unsigned char>(std::toupper(static_cast<unsigned char>(b[i]))))
-            return false;
+        auto upper = [](unsigned char c) -> unsigned char { return (c >= 'a' && c <= 'z') ? static_cast<unsigned char>(c - 32) : c; };
+        if (upper(a[i]) != upper(b[i])) return false;
     }
     return true;
 }

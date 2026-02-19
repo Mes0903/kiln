@@ -35,7 +35,7 @@ void register_list_builtins(Interpreter& interp) {
         }
 
         std::string operation = args[0];
-        std::transform(operation.begin(), operation.end(), operation.begin(), [](unsigned char c){ return std::toupper(c); });
+        std::transform(operation.begin(), operation.end(), operation.begin(), [](unsigned char c){ return (c >= 'a' && c <= 'z') ? static_cast<unsigned char>(c - 32) : c; });
 
         std::vector<std::string> sub_args(args.begin() + 1, args.end());
 
@@ -58,8 +58,8 @@ void register_list_builtins(Interpreter& interp) {
             const std::string& list_var = sub_args[0];
             const std::string& out_var = sub_args.back();
 
-            std::string list_str = interp.get_variable(list_var);
-            CMakeArrayView list(list_str);
+            auto list_view = interp.get_variable_view(list_var);
+            CMakeArrayView list(list_view.value_or(""));
 
             if (list.empty()) {
                 interp.set_variable(out_var, "NOTFOUND");
@@ -318,8 +318,8 @@ void register_list_builtins(Interpreter& interp) {
             parser.positional(out_var, "output variable");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            std::string list_str = interp.get_variable(list_var);
-            CMakeArrayView list(list_str);
+            auto list_sv = interp.get_variable_view(list_var);
+            CMakeArrayView list(list_sv.value_or(""));
             {
                 auto start_opt = parse_number<long>(start_str);
                 auto length_opt = parse_number<long>(length_str);
