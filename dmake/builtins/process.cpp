@@ -16,6 +16,9 @@ namespace dmake {
 // Per-session validated Python binaries: maps "invoked_path:canonical_path" → validated -V output
 static std::unordered_map<std::string, std::string> s_python_validated;
 
+// Per-session Python sys.path cache: maps binary_key → list of search directories
+static std::unordered_map<std::string, std::vector<std::string>> s_python_import_dirs;
+
 // Helper: Get file mtime or nullopt if doesn't exist
 static std::optional<int64_t> get_file_mtime(const std::string& path) {
     struct stat st;
@@ -127,6 +130,141 @@ static bool is_python_interpreter(const std::string& cmd) {
     if (filename.size() == 6) return true;
     // After "python" must be a digit (python3, python3.14, etc.)
     return std::isdigit(static_cast<unsigned char>(filename[6]));
+}
+
+// Helper: Check if a Python -c script consists entirely of import statements.
+// These are pure availability checks (exit code 0 = installed, non-zero = not).
+// Safe to cache because they have no output side effects.
+static bool is_import_only_script(const std::vector<std::string>& cmd) {
+    if (cmd.size() < 3) return false;
+
+    // Find -c <script>
+    std::string script;
+    for (size_t i = 1; i < cmd.size(); ++i) {
+        if (cmd[i] == "-c" && i + 1 < cmd.size()) {
+            script = cmd[i + 1];
+            break;
+        }
+    }
+    if (script.empty()) return false;
+
+    // Tokenize by ';' and '\n', verify each non-empty statement is an import
+    size_t pos = 0;
+    bool found_any = false;
+    while (pos < script.size()) {
+        // Find end of statement
+        size_t end = script.find_first_of(";\n", pos);
+        if (end == std::string::npos) end = script.size();
+
+        // Extract and strip whitespace
+        size_t start = pos;
+        while (start < end && (script[start] == ' ' || script[start] == '\t' || script[start] == '\r')) ++start;
+        size_t back = end;
+        while (back > start && (script[back - 1] == ' ' || script[back - 1] == '\t' || script[back - 1] == '\r')) --back;
+
+        std::string_view stmt(script.data() + start, back - start);
+        pos = end + 1;
+
+        // Skip empty statements and comments
+        if (stmt.empty() || stmt[0] == '#') continue;
+
+        // Must start with "import " or "from "
+        if (stmt.starts_with("import ")) {
+            // Validate: "import X" / "import X, Y" / "import X.Y.Z"
+            // After "import ", only allow identifiers, dots, commas, whitespace
+            std::string_view rest = stmt.substr(7);
+            for (char c : rest) {
+                if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '.' && c != ',' && c != ' ' && c != '\t') {
+                    return false;
+                }
+            }
+            // Must have at least one identifier character
+            bool has_ident = false;
+            for (char c : rest) {
+                if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') { has_ident = true; break; }
+            }
+            if (!has_ident) return false;
+        } else if (stmt.starts_with("from ")) {
+            // Validate: "from X import Y" / "from X import *" / "from X import (Y, Z)"
+            // After "from ", allow identifiers, dots, commas, whitespace, *, (, ), and "import" keyword
+            std::string_view rest = stmt.substr(5);
+            // Must contain " import "
+            auto imp_pos = rest.find(" import ");
+            if (imp_pos == std::string_view::npos && !rest.ends_with(" import")) {
+                // Also check for "import\t" etc
+                imp_pos = rest.find(" import\t");
+                if (imp_pos == std::string_view::npos) return false;
+            }
+            for (char c : rest) {
+                if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '.' && c != ',' &&
+                    c != ' ' && c != '\t' && c != '*' && c != '(' && c != ')') {
+                    return false;
+                }
+            }
+        } else {
+            return false;  // Not an import statement
+        }
+        found_any = true;
+    }
+
+    return found_any;
+}
+
+// Helper: Get Python sys.path directories for a given binary (cached per session)
+static const std::vector<std::string>& get_python_import_dirs(
+    const std::string& binary_key, const std::string& invoked_path) {
+    auto it = s_python_import_dirs.find(binary_key);
+    if (it != s_python_import_dirs.end()) return it->second;
+
+    std::vector<std::string> dirs;
+    ProcessOptions opts;
+    opts.output_quiet = true;
+    opts.error_quiet = true;
+    std::string out;
+    opts.output_variable = &out;
+    std::string dummy;
+    opts.error_variable = &dummy;
+    std::vector<std::vector<std::string>> cmd = {{invoked_path, "-c", "import sys; print('\\n'.join(sys.path))"}};
+    auto res = execute_pipeline(cmd, opts);
+    if (!res.exit_codes.empty() && res.exit_codes[0] == 0) {
+        std::istringstream iss(res.captured_stdout);
+        std::string line;
+        while (std::getline(iss, line)) {
+            // Strip trailing whitespace
+            while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+            if (!line.empty()) {  // Skip empty string (cwd placeholder)
+                dirs.push_back(std::move(line));
+            }
+        }
+    }
+
+    auto [inserted, _] = s_python_import_dirs.emplace(binary_key, std::move(dirs));
+    return inserted->second;
+}
+
+// Helper: Compute cache signature for a Python import-only script
+// Includes env vars that affect Python's import resolution
+static std::string compute_python_import_signature(
+    const std::string& binary_key,
+    const std::string& script,
+    const std::string& working_dir) {
+    std::string sig = "python_import:" + binary_key + "|" + script + "|cwd:";
+    if (!working_dir.empty()) {
+        sig += working_dir;
+    } else {
+        sig += std::filesystem::current_path().string();
+    }
+    // Include env vars that affect import resolution
+    static const char* env_vars[] = {"PYTHONPATH", "VIRTUAL_ENV", "PYTHONHOME", "PYTHONUSERBASE"};
+    for (const char* var : env_vars) {
+        sig += '|';
+        sig += var;
+        sig += ':';
+        if (const char* val = std::getenv(var)) {
+            sig += val;
+        }
+    }
+    return sig;
 }
 
 // Helper: Check if a Python -c script only imports safe stdlib modules
@@ -480,14 +618,56 @@ void register_process_builtins(Interpreter& interp) {
         bool no_file_redirect = output_file.empty() && error_file.empty() && input_file.empty();
         bool captures_output = !output_variable.empty() || !result_variable.empty();
         bool is_pkgconfig = !commands.empty() && !commands[0].empty() && is_pkgconfig_command(commands[0][0]);
-        bool is_python = !commands.empty() && !commands[0].empty() &&
-                         commands.size() == 1 &&  // Single command, no pipes
-                         is_python_interpreter(commands[0][0]) && is_safe_python_script(commands[0]);
-        bool can_cache = (is_pkgconfig || is_python) && no_file_redirect && captures_output;
+        bool is_single_python = !commands.empty() && !commands[0].empty() &&
+                                commands.size() == 1 &&  // Single command, no pipes
+                                is_python_interpreter(commands[0][0]);
+        bool is_python_import = is_single_python && is_import_only_script(commands[0]);
+        bool is_python = is_single_python && !is_python_import && is_safe_python_script(commands[0]);
+        bool can_cache = (is_pkgconfig || is_python || is_python_import) && no_file_redirect && captures_output;
 
         PipelineResult res;
 
-        if (can_cache && is_python) {
+        if (can_cache && is_python_import) {
+            // Import-only script: cache with sys.path dir mtime validation
+            auto& cache = interp.get_cache_store();
+            const auto& cmd = commands[0];
+            std::string binary_key = make_python_binary_key(cmd[0]);
+
+            std::string version = validate_python_binary(cmd[0], cache);
+            if (version.empty()) {
+                res = execute_pipeline(commands, options);
+            } else {
+                // Find the script text
+                std::string script;
+                for (size_t i = 1; i < cmd.size(); ++i) {
+                    if (cmd[i] == "-c" && i + 1 < cmd.size()) { script = cmd[i + 1]; break; }
+                }
+
+                std::string signature = compute_python_import_signature(binary_key, script, working_dir);
+                auto cached = cache.lookup<CacheSubsystem::ExternalCommand>(signature);
+                if (cached && validate_command_cache(*cached)) {
+                    // Cache hit with valid dir mtimes
+                    res.captured_stdout = cached->stdout_output;
+                    res.captured_stderr = cached->stderr_output;
+                    res.exit_codes.push_back(cached->exit_code);
+                } else {
+                    // Cache miss or stale — execute, then store with sys.path dir mtimes
+                    res = execute_pipeline(commands, options);
+
+                    // Lazily get sys.path dirs (once per binary per session)
+                    const auto& import_dirs = get_python_import_dirs(binary_key, cmd[0]);
+
+                    ExternalCommandCacheEntry entry;
+                    entry.stdout_output = res.captured_stdout;
+                    entry.stderr_output = res.captured_stderr;
+                    entry.exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
+                    for (const auto& dir : import_dirs) {
+                        entry.tracked_dir_mtimes[dir] = get_dir_mtime(dir);
+                    }
+                    cache.insert<CacheSubsystem::ExternalCommand>(signature, entry);
+                }
+            }
+        } else if (can_cache && is_python) {
             auto& cache = interp.get_cache_store();
             const auto& cmd = commands[0];
             std::string binary_key = make_python_binary_key(cmd[0]);
