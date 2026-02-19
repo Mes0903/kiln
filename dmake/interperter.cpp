@@ -790,7 +790,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     return std::move(graph);
 }
 
-Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir, bool skip_sys_init)
+Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir, bool skip_sys_init, bool skip_cache_load)
     : out_(out), err_(err) {
 
     std::filesystem::path abs_script_dir = script_dir.empty() ?
@@ -878,8 +878,11 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     // Initialize cache store early so compiler detection can use it
     std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".dmake_subsystem_cache.json";
     cache_store_ = std::make_unique<CacheStore>(cache_path);
-    auto cache_load_res = cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
-    (void)cache_load_res;
+    if (!skip_cache_load) {
+        ProfileScope cache_profile("loading persistent cache", "init");
+        auto cache_load_res = cache_store_->load();  // Graceful - starts with empty cache if file doesn't exist
+        (void)cache_load_res;
+    }
 
     // Initialize toolchain with compiler detection
     // See fake_cmake_compiler_checks_and_init() for what this does and its limitations

@@ -46,6 +46,7 @@ struct GlobalOptions {
     bool debugger = false;
     bool config_only = false;  // Debug: interpret + save cache, then exit (no build)
     bool no_sys_init = false;   // Skip compiler detection (for benchmarking)
+    bool fresh = false;         // Skip loading persistent cache (fresh configure)
     std::string break_on_message;
 };
 
@@ -159,8 +160,8 @@ std::expected<std::unique_ptr<dmake::Interpreter>, std::string> run_build_action
             return std::unexpected("Parse error");
         }
 
-        dmake::ProfileScope init_profile("init", "init");
-        auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string());
+        dmake::ProfileScope init_profile("setup for execution", "init");
+        auto interpreter = std::make_unique<dmake::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string(), opt.no_sys_init, opt.fresh);
         interpreter->set_current_file(cmake_lists.string());
         debug_controller.attach(*interpreter);
 
@@ -447,6 +448,7 @@ int main(int argc, char* argv[]) {
         target->add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
         target->add_flag("--config-only", opt.config_only, "[debug] Interpret CMakeLists.txt and save cache, then exit without building");
         target->add_flag("--no-sys-init", opt.no_sys_init, "[benchmark] Skip compiler detection and system init");
+        target->add_flag("--fresh", opt.fresh, "Skip loading persistent cache (fresh configure)");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
            ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {
@@ -583,7 +585,7 @@ Examples:
                 return 1;
             }
 
-            dmake::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr, std::nullopt, opt.no_sys_init);
+            dmake::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr, std::nullopt, opt.no_sys_init, /*skip_cache_load=*/true);
             interpreter.set_current_file(script_abs.string());
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
