@@ -407,7 +407,7 @@ void register_file_builtins(Interpreter& interp) {
                 p = base / p;
             }
 
-            interp.set_variable(out_var, interp.cached_weakly_canonical(p));
+            interp.set_variable(out_var, interp.cached_weakly_canonical(p.string()));
         } else if(ci_equals(operation, "REMOVE")) {
             if (sub_args.empty()) {
                 interp.set_fatal_error("file(REMOVE) requires at least one file path");

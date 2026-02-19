@@ -351,7 +351,7 @@ void register_find_package_builtins(Interpreter& interp) {
             std::string module_filename = "Find" + package_name + ".cmake";
             for (auto path_sv : CMakeArrayIterator(module_path_var)) {
                 std::filesystem::path path(path_sv);
-                if (interp.cached_file_exists(path, module_filename)) {
+                if (interp.cached_file_exists(path.string(), module_filename)) {
                     if (try_find_module(path / module_filename)) return true;
                 }
             }
@@ -643,14 +643,14 @@ void register_find_package_builtins(Interpreter& interp) {
             // --- Search all collected paths for config files ---
             auto check_directory_for_config = [&](const std::filesystem::path& path) -> bool {
                 for (const auto& cand : candidates) {
-                    if (!interp.cached_file_exists(path, cand.config)) continue;
+                    if (!interp.cached_file_exists(path.string(), cand.config)) continue;
                     std::filesystem::path config_path = path / cand.config;
 
                     // Track considered configs
                     considered_configs.push_back(config_path.string());
 
                     // Run version file if it exists
-                    if (interp.cached_file_exists(path, cand.version)) {
+                    if (interp.cached_file_exists(path.string(), cand.version)) {
                         std::filesystem::path version_path = path / cand.version;
                         considered_versions.push_back(interp.get_variable("PACKAGE_VERSION"));
 
@@ -721,9 +721,9 @@ void register_find_package_builtins(Interpreter& interp) {
                 auto path_parent = path.parent_path();
                 auto path_name = path.filename().string();
                 if (!path_parent.empty() && !path_name.empty()) {
-                    if (!interp.cached_file_exists(path_parent, path_name)) continue;
+                    if (!interp.cached_file_exists(path_parent.string(), path_name)) continue;
                 }
-                if (!interp.cached_is_directory(path)) continue;
+                if (!interp.cached_is_directory(path.string())) continue;
 
                 if (check_directory_for_config(path)) break;
             }
@@ -741,7 +741,7 @@ void register_find_package_builtins(Interpreter& interp) {
                             if (!directory_matches_package(entry_name, name)) continue;
 
                             std::filesystem::path subdir = std::filesystem::path(root) / entry_name;
-                            if (!interp.cached_is_directory(subdir)) continue;
+                            if (!interp.cached_is_directory(subdir.string())) continue;
 
                             if (check_directory_for_config(subdir)) return true;
                         }

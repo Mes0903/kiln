@@ -12,6 +12,7 @@
 #include "interperter.hpp"
 #include "toolchain.hpp"
 #include "install_executor.hpp"
+#include "path.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -73,12 +74,11 @@ static std::vector<std::string> compute_install_inputs(
 
                 if (dest && !dest->destination.empty() && ep_target) {
                     // Compute full destination path
-                    std::filesystem::path dest_path = std::filesystem::path(install_prefix) / dest->destination;
-                    dest_path /= std::filesystem::path(artifact_path).filename();
+                    std::string dest_str = Path::join(Path::join(install_prefix, dest->destination), Path(artifact_path).filename());
 
                     PendingTargetInstall install;
                     install.artifact_path = artifact_path;
-                    install.dest_path = dest_path.string();
+                    install.dest_path = dest_str;
                     ep_target->add_pending_target_install(std::move(install));
                 }
             }
@@ -165,7 +165,7 @@ std::expected<void, std::string> BuildGraph::generate_compile_commands(const std
         return std::unexpected<std::string>(glz::format_error(ec));
     }
 
-    std::filesystem::path path = std::filesystem::path(build_dir) / "compile_commands.json";
+    std::string path = Path::join(build_dir, "compile_commands.json");
     std::ofstream file(path);
     if (file) {
         file << json;
@@ -745,14 +745,14 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         std::string artifact = task.parent_target ? task.parent_target->get_name() : "";
                         profile_name = std::visit(overloaded{
                             [&](const ModuleCollatorTask&) { return "collate " + artifact; },
-                            [&](const ModuleScannerTask& t) { return "scan " + std::filesystem::path(t.source_file).filename().string(); },
-                            [&](const CompileTask& t) { return "compile " + std::filesystem::path(t.source_file).filename().string(); },
-                            [&](const PCHTask& t) { return "compile " + std::filesystem::path(t.source_file).filename().string(); },
+                            [&](const ModuleScannerTask& t) { return "scan " + std::string(Path(t.source_file).filename()); },
+                            [&](const CompileTask& t) { return "compile " + std::string(Path(t.source_file).filename()); },
+                            [&](const PCHTask& t) { return "compile " + std::string(Path(t.source_file).filename()); },
                             [&](const LinkTask&) { return "link " + artifact; },
-                            [&](const MocTask& t) { return "moc " + std::filesystem::path(t.source_file).filename().string(); },
-                            [&](const UicTask& t) { return "uic " + std::filesystem::path(t.source_file).filename().string(); },
-                            [&](const RccTask& t) { return "rcc " + std::filesystem::path(t.source_file).filename().string(); },
-                            [&](const auto&) { return "run " + std::filesystem::path(id).filename().string(); }
+                            [&](const MocTask& t) { return "moc " + std::string(Path(t.source_file).filename()); },
+                            [&](const UicTask& t) { return "uic " + std::string(Path(t.source_file).filename()); },
+                            [&](const RccTask& t) { return "rcc " + std::string(Path(t.source_file).filename()); },
+                            [&](const auto&) { return "run " + std::string(Path(id).filename()); }
                         }, task.kind);
                     }
 
@@ -765,7 +765,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             std::filesystem::create_directories(task.working_dir, ec);
                         }
                         for (const auto& out : task.outputs) {
-                            std::filesystem::create_directories(std::filesystem::path(out).parent_path(), ec);
+                            std::filesystem::create_directories(std::string(Path(out).parent_path()), ec);
                             if (ec) { task_error = "Failed to create directory for " + out + ": " + ec.message(); break; }
                         }
                     }
@@ -819,7 +819,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             if (ep_target) {
                                 // 1. Install pre-computed target artifacts (TARGETS rules)
                                 for (const auto& install : ep_target->get_pending_target_installs()) {
-                                    std::filesystem::path dest_dir = std::filesystem::path(install.dest_path).parent_path();
+                                    std::string dest_dir(Path(install.dest_path).parent_path());
                                     std::filesystem::create_directories(dest_dir);
                                     std::error_code ec;
                                     std::filesystem::copy_file(install.artifact_path, install.dest_path,
@@ -911,7 +911,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             inject_module_dependencies(module_to_task, task_requires);
                         },
                         [&](const ModuleScannerTask& scanner) {
-                            std::string scan_display = std::filesystem::path(scanner.source_file).filename().string();
+                            std::string scan_display(Path(scanner.source_file).filename());
                             print_status("Scanning", scan_display);
 
                             auto result = run_command(task.commands[0], task.working_dir);
@@ -925,9 +925,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             // Regular task execution (compile, PCH, link, custom command/target, pre/post-build)
                             std::string verb = "Running";
                             auto src = task.get_source_file();
-                            std::string target_display = src.empty() ?
-                                std::filesystem::path(id).filename().string() :
-                                std::filesystem::path(src).filename().string();
+                            std::string target_display(src.empty() ?
+                                Path(id).filename() :
+                                Path(src).filename());
 
                             if (task.is_compilation()) {
                                  verb = "Compiling";
@@ -1302,7 +1302,7 @@ std::map<std::string, std::string> BuildGraph::load_cache(const std::string& bui
     auto canonical_build_dir = std::filesystem::canonical(build_dir, ec);
     if (ec) return cache;
 
-    std::ifstream meta_file(std::filesystem::path(build_dir) / ".dmake_build_path");
+    std::ifstream meta_file(Path::join(build_dir, ".dmake_build_path"));
     if (meta_file) {
         std::string cached_path;
         std::getline(meta_file, cached_path);
@@ -1312,7 +1312,7 @@ std::map<std::string, std::string> BuildGraph::load_cache(const std::string& bui
         }
     }
 
-    std::ifstream file(std::filesystem::path(build_dir) / ".dmake_cache");
+    std::ifstream file(Path::join(build_dir, ".dmake_cache"));
     if (!file) return cache;
 
     std::string line;
@@ -1337,14 +1337,15 @@ std::expected<void, std::string> BuildGraph::save_cache(const std::string& build
     if (ec) {
         return std::unexpected("Failed to canonicalize build directory: " + build_dir);
     }
-    std::ofstream meta_file(std::filesystem::path(build_dir) / ".dmake_build_path");
+    std::ofstream meta_file(Path::join(build_dir, ".dmake_build_path"));
     if (meta_file) {
         meta_file << canonical_build_dir.string();
     }
 
-    std::ofstream file(std::filesystem::path(build_dir) / ".dmake_cache");
+    std::string cache_path = Path::join(build_dir, ".dmake_cache");
+    std::ofstream file(cache_path);
     if (!file) {
-        return std::unexpected("Failed to open cache file for writing: " + (std::filesystem::path(build_dir) / ".dmake_cache").string());
+        return std::unexpected("Failed to open cache file for writing: " + cache_path);
     }
 
     for (const auto& [id, sig] : cache) {

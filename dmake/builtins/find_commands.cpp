@@ -363,12 +363,12 @@ SearchResult search_for_file(
                 // Check if directory exists using cache
                 auto parent = check_dir.parent_path();
                 auto dirname = check_dir.filename().string();
-                if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) {
+                if (!dirname.empty() && !interp.cached_file_exists(parent.string(), dirname)) {
                     searched_dirs.push_back(check_dir.string());
                     continue;
                 }
                 // Verify it's actually a directory
-                if (!interp.cached_is_directory(check_dir)) {
+                if (!interp.cached_is_directory(check_dir.string())) {
                     searched_dirs.push_back(check_dir.string());
                     continue;
                 }
@@ -381,8 +381,8 @@ SearchResult search_for_file(
                         std::filesystem::path full_path = check_dir / variant;
                         // For names with path components (e.g., X11/X.h), use single-parameter check
                         bool exists = (variant.find('/') != std::string::npos)
-                            ? interp.cached_file_exists(full_path)
-                            : interp.cached_file_exists(check_dir, variant);
+                            ? interp.cached_file_exists(full_path.string())
+                            : interp.cached_file_exists(check_dir.string(), variant);
                         bool valid = exists && builtin_validator(full_path);
 
                         // Check user-provided VALIDATOR function if specified
@@ -432,12 +432,12 @@ SearchResult search_for_file(
                     // Check if directory exists using cache
                     auto parent = check_dir.parent_path();
                     auto dirname = check_dir.filename().string();
-                    if (!dirname.empty() && !interp.cached_file_exists(parent, dirname)) {
+                    if (!dirname.empty() && !interp.cached_file_exists(parent.string(), dirname)) {
                         searched_dirs.push_back(check_dir.string());
                         continue;
                     }
                     // Verify it's actually a directory
-                    if (!interp.cached_is_directory(check_dir)) {
+                    if (!interp.cached_is_directory(check_dir.string())) {
                         searched_dirs.push_back(check_dir.string());
                         continue;
                     }
@@ -448,8 +448,8 @@ SearchResult search_for_file(
                         std::filesystem::path full_path = check_dir / variant;
                         // For names with path components (e.g., X11/X.h), use single-parameter check
                         bool exists = (variant.find('/') != std::string::npos)
-                            ? interp.cached_file_exists(full_path)
-                            : interp.cached_file_exists(check_dir, variant);
+                            ? interp.cached_file_exists(full_path.string())
+                            : interp.cached_file_exists(check_dir.string(), variant);
                         bool valid = exists && builtin_validator(full_path);
 
                         // Check user-provided VALIDATOR function if specified

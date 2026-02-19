@@ -3,6 +3,7 @@
 #include "target.hpp"
 #include "CMakeArray.hpp"
 #include "language.hpp"
+#include "path.hpp"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -310,8 +311,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!target) {
                 return std::unexpected("TARGET_FILE_NAME: target '" + node.raw_content + "' not found");
             }
-            std::filesystem::path output_path(target->get_output_path());
-            return output_path.filename().string();
+            return std::string(Path(target->get_output_path()).filename());
         }
 
         case GenexNodeType::TARGET_FILE_DIR: {
@@ -323,8 +323,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!target) {
                 return std::unexpected("TARGET_FILE_DIR: target '" + node.raw_content + "' not found");
             }
-            std::filesystem::path output_path(target->get_output_path());
-            return output_path.parent_path().string();
+            return std::string(Path(target->get_output_path()).parent_path());
         }
 
         case GenexNodeType::TARGET_OBJECTS: {
@@ -363,9 +362,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
 
                 // Skip sources marked HEADER_FILE_ONLY (e.g. unity build originals)
                 if (ctx_.source_properties) {
-                    std::filesystem::path sp(src);
-                    std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
-                        : (std::filesystem::path(source_dir) / sp).lexically_normal().string();
+                    std::string abs = Path::make_absolute_and_normal(source_dir, src);
                     auto sp_it = ctx_.source_properties->find(abs);
                     if (sp_it != ctx_.source_properties->end()) {
                         auto hfo = sp_it->second.find("HEADER_FILE_ONLY");

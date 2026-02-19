@@ -731,7 +731,7 @@ void register_path_builtins(Interpreter& interp) {
             }
 
             if (mode == "REALPATH") {
-                result = interp.cached_weakly_canonical(abs_path);
+                result = interp.cached_weakly_canonical(abs_path.string());
             } else {
                 result = abs_path.lexically_normal().string();
             }

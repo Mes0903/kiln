@@ -2,7 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../CMakeArray.hpp"
-#include "../cmake_path_utils.hpp"
+#include "../path.hpp"
 
 namespace dmake {
 
@@ -110,7 +110,7 @@ void register_source_properties_builtins(Interpreter& interp) {
             // Use specified directories
             std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
             for (const auto& dir : directories) {
-                base_dirs.push_back(path_utils::make_absolute_and_normal(current_source_dir, dir));
+                base_dirs.push_back(Path::make_absolute_and_normal(current_source_dir, dir));
             }
         } else {
             // Default to current source directory
@@ -122,7 +122,7 @@ void register_source_properties_builtins(Interpreter& interp) {
 
         for (const auto& base_dir : base_dirs) {
             for (const auto& file : files) {
-                std::string abs_path = path_utils::make_absolute_and_normal(base_dir, file);
+                std::string abs_path = Path::make_absolute_and_normal(base_dir, file);
 
                 // Set each property
                 for (const auto& [prop_name, prop_value] : properties) {
@@ -180,13 +180,13 @@ void register_source_properties_builtins(Interpreter& interp) {
             }
             base_dir = target->get_source_dir();
         } else if (!opt_directory.empty()) {
-            base_dir = path_utils::make_absolute_and_normal(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"), opt_directory);
+            base_dir = Path::make_absolute_and_normal(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"), opt_directory);
         } else {
             base_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         }
 
         // Resolve file path
-        std::string abs_path = path_utils::make_absolute_and_normal(base_dir, file);
+        std::string abs_path = Path::make_absolute_and_normal(base_dir, file);
 
         // Look up the property
         const auto& source_properties = interp.get_source_properties();

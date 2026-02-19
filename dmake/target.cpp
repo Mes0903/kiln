@@ -18,6 +18,7 @@
 #include <algorithm>
 #include "container_utils.hpp"
 #include "utils.hpp"
+#include "path.hpp"
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -250,8 +251,8 @@ bool Target::is_in_cxx_modules_file_set(const std::string& source) const {
         if (fs.type == "CXX_MODULES") {
             for (const auto& file : fs.files) {
                 // Check if source matches (could be absolute or relative)
-                std::filesystem::path src_path(source);
-                std::filesystem::path fs_path(file);
+                Path src_path(source);
+                Path fs_path(file);
 
                 // Try direct match
                 if (src_path == fs_path) return true;
@@ -260,12 +261,10 @@ bool Target::is_in_cxx_modules_file_set(const std::string& source) const {
                 if (src_path.filename() == fs_path.filename()) return true;
 
                 // Try resolved paths match
-                std::filesystem::path src_abs = src_path.is_absolute() ?
-                    src_path : (std::filesystem::path(source_dir_) / src_path);
-                std::filesystem::path fs_abs = fs_path.is_absolute() ?
-                    fs_path : (std::filesystem::path(source_dir_) / fs_path);
+                auto src_norm = Path::make_absolute_and_normal(source_dir_, source);
+                auto fs_norm = Path::make_absolute_and_normal(source_dir_, file);
 
-                if (src_abs.lexically_normal() == fs_abs.lexically_normal()) return true;
+                if (src_norm == fs_norm) return true;
             }
         }
     }
@@ -370,9 +369,9 @@ const std::vector<Target::PropInfo>& Target::build_props_to_resolve() {
 std::string Target::resolve_to_absolute_path(const std::string& p) const {
     std::string_view sv = p;
     if (sv.starts_with("-I")) sv.remove_prefix(2);
-    std::filesystem::path path(sv);
-    if (path.is_absolute()) return path.string();
-    return (std::filesystem::path(source_dir_) / path).lexically_normal().string();
+    Path path(sv);
+    if (path.is_absolute()) return path.str();
+    return (Path(source_dir_) / sv).lexically_normal().str();
 }
 
 void Target::initialize_local_properties(
@@ -644,7 +643,6 @@ std::string Target::get_output_path() const {
     }
 
     std::string out_name = get_output_name();
-    std::filesystem::path path;
 
     // Determine output directory: per-target property overrides binary_dir_.
     // CMake mapping: EXECUTABLE → RUNTIME, STATIC → ARCHIVE, SHARED → LIBRARY.
@@ -664,23 +662,25 @@ std::string Target::get_output_path() const {
     bool has_prefix = !prefix_prop.empty() || properties_.count("PREFIX");
     bool has_suffix = !suffix_prop.empty() || properties_.count("SUFFIX");
 
+    std::string filename;
     if (type_ == TargetType::EXECUTABLE) {
         std::string prefix = has_prefix ? prefix_prop : "";
         std::string suffix = has_suffix ? suffix_prop : "";
-        path = std::filesystem::path(dir) / (prefix + out_name + suffix);
+        filename = prefix + out_name + suffix;
     } else if (type_ == TargetType::SHARED_LIBRARY) {
         std::string prefix = has_prefix ? prefix_prop : "lib";
         std::string suffix = has_suffix ? suffix_prop : ".so";
-        path = std::filesystem::path(dir) / (prefix + out_name + suffix);
+        filename = prefix + out_name + suffix;
     } else if (type_ == TargetType::STATIC_LIBRARY) {
         std::string prefix = has_prefix ? prefix_prop : "lib";
         std::string suffix = has_suffix ? suffix_prop : ".a";
-        path = std::filesystem::path(dir) / (prefix + out_name + suffix);
+        filename = prefix + out_name + suffix;
     } else {
         return "";
     }
 
-    return dir.empty() ? path.string() : path.lexically_normal().string();
+    Path path = Path(dir) / filename;
+    return dir.empty() ? path.str() : path.lexically_normal().str();
 }
 
 // --- Qt Autogen Helpers ---
@@ -706,9 +706,7 @@ void Target::remove_source(const std::string& path) {
         std::erase_if(vis_it->second, [&](const std::string& s) {
             // Match by exact path or by normalized absolute path
             if (s == path) return true;
-            std::filesystem::path sp(s);
-            std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
-                : (std::filesystem::path(source_dir_) / sp).lexically_normal().string();
+            std::string abs = Path::make_absolute_and_normal(source_dir_, s);
             return abs == path;
         });
     }
@@ -723,20 +721,20 @@ static std::string normalize_include(const std::string& dir) {
 }
 
 std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path) {
-    std::filesystem::path src(source_path);
-    std::filesystem::path obj_suffix;
+    Path src(source_path);
+    std::string_view obj_suffix;
 
     if (src.is_absolute()) {
         // Use full path structure (minus root) to avoid collisions between
         // files with same name in different directories (e.g. posix/file.c vs file.c)
         obj_suffix = src.relative_path();
     } else {
-        obj_suffix = src;
+        obj_suffix = src.view();
     }
 
-    std::filesystem::path obj = std::filesystem::path(binary_dir) / "objs" / target_name / obj_suffix;
-    obj += ".o";
-    return binary_dir.empty() ? obj.string() : obj.lexically_normal().string();
+    Path obj = (Path(binary_dir) / "objs") / target_name / std::string(obj_suffix);
+    std::string obj_str = obj.str() + ".o";
+    return binary_dir.empty() ? obj_str : Path(obj_str).lexically_normal().str();
 }
 
 // Resolve executable target names in the first argument of COMMAND clauses.
@@ -830,20 +828,20 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
                 task.explicit_deps.push_back(dep);
             }
         } else {
-            std::filesystem::path p(dep);
+            Path p(dep);
             std::string normalized;
             if (p.is_absolute()) {
-                normalized = p.lexically_normal().string();
+                normalized = p.lexically_normal().str();
             } else {
                 // Try source dir first, then binary dir (custom command outputs are in binary dir)
-                normalized = (std::filesystem::path(rule.source_dir) / dep).lexically_normal().string();
+                normalized = Path::make_absolute_and_normal(rule.source_dir, dep);
             }
 
             // Check if a custom command rule produces this file
             auto cc_it = custom_rules.find(normalized);
-            if (cc_it == custom_rules.end() && !p.is_absolute()) {
+            if (cc_it == custom_rules.end() && p.is_relative()) {
                 // Fallback: check binary dir (custom command outputs are registered there)
-                auto bin_normalized = (std::filesystem::path(rule.binary_dir) / dep).lexically_normal().string();
+                auto bin_normalized = Path::make_absolute_and_normal(rule.binary_dir, dep);
                 cc_it = custom_rules.find(bin_normalized);
                 if (cc_it != custom_rules.end()) {
                     normalized = bin_normalized;
@@ -922,12 +920,10 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     for (const auto& fs : file_sets_) {
         if (fs.type == "CXX_MODULES") {
             for (const auto& file : fs.files) {
-                std::filesystem::path fs_path(file);
-                std::filesystem::path fs_abs = fs_path.is_absolute() ?
-                    fs_path : (std::filesystem::path(source_dir_) / fs_path);
-                cxx_module_files.insert(fs_abs.lexically_normal().string());
+                Path fs_path(file);
+                cxx_module_files.insert(Path::make_absolute_and_normal(source_dir_, file));
                 // Also add filename for filename-only matches
-                cxx_module_files.insert(fs_path.filename().string());
+                cxx_module_files.insert(std::string(fs_path.filename()));
             }
         }
     }
@@ -1009,13 +1005,13 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     // the source list, its custom command is wired as a dependency for all tasks.
     for (const auto& src : *evaluated_sources_result) {
         if (src.empty()) continue;
-        std::filesystem::path src_path(src);
+        Path src_path(src);
         std::string norm_src, norm_bin;
         if (src_path.is_absolute()) {
-            norm_src = norm_bin = src_path.lexically_normal().string();
+            norm_src = norm_bin = src_path.lexically_normal().str();
         } else {
-            norm_src = (std::filesystem::path(source_dir_) / src_path).lexically_normal().string();
-            norm_bin = (std::filesystem::path(binary_dir_) / src_path).lexically_normal().string();
+            norm_src = Path::make_absolute_and_normal(source_dir_, src);
+            norm_bin = Path::make_absolute_and_normal(binary_dir_, src);
         }
         auto cc_it = custom_rules.find(norm_src);
         if (cc_it == custom_rules.end()) cc_it = custom_rules.find(norm_bin);
@@ -1032,32 +1028,33 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         if (src.empty()) continue;
 
         // Handle pre-compiled object files
-        std::filesystem::path src_path(src);
-        if (src_path.extension() == ".o" || src_path.extension() == ".obj") {
+        Path src_path(src);
+        auto ext = src_path.extension();
+        if (ext == ".o" || ext == ".obj") {
             obj_files.push_back(src);
             continue;
         }
 
         // Determine if source is relative to source_dir or binary_dir
-        std::filesystem::path src_abs;
+        std::string src_abs_str;
         std::string src_normalized;
         // For custom command discovery, we need both normalizations of relative paths
         std::string normalized_src_dir, normalized_bin_dir;
 
         if (src_path.is_absolute()) {
-            src_abs = src_path;
-            src_normalized = src_path.lexically_normal().string();
+            src_abs_str = src_path.lexically_normal().str();
+            src_normalized = src_abs_str;
             normalized_src_dir = src_normalized;
             normalized_bin_dir = src_normalized;
         } else {
-            normalized_bin_dir = (std::filesystem::path(binary_dir_) / src_path).lexically_normal().string();
-            normalized_src_dir = (std::filesystem::path(source_dir_) / src_path).lexically_normal().string();
+            normalized_bin_dir = Path::make_absolute_and_normal(binary_dir_, src);
+            normalized_src_dir = Path::make_absolute_and_normal(source_dir_, src);
 
             if (custom_rules.find(normalized_bin_dir) != custom_rules.end()) {
-                src_abs = std::filesystem::path(binary_dir_) / src_path;
+                src_abs_str = Path::join(binary_dir_, src);
                 src_normalized = normalized_bin_dir;
             } else {
-                src_abs = std::filesystem::path(source_dir_) / src_path;
+                src_abs_str = Path::join(source_dir_, src);
                 src_normalized = normalized_src_dir;
             }
         }
@@ -1102,7 +1099,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         // Check CXX_MODULES using pre-built set (O(1) vs O(N*M))
         if (!cxx_module_files.empty()) {
             if (cxx_module_files.count(src_normalized) ||
-                cxx_module_files.count(src_path.filename().string())) {
+                cxx_module_files.count(std::string(src_path.filename()))) {
                 lang_info.is_module_interface = true;
             }
         }
@@ -1115,7 +1112,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         std::string obj = get_obj_path(binary_dir_, name_, src);
         obj_files.push_back(obj);
 
-        std::string src_abs_str = src_abs.string();
+        // src_abs_str already computed above
 
         CompileContext ctx;
         ctx.source = src_abs_str;
@@ -1257,11 +1254,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
             auto od_it = sp_it->second.find("OBJECT_DEPENDS");
             if (od_it != sp_it->second.end()) {
                 for (auto sv : CMakeArrayIterator(od_it->second)) {
-                    std::filesystem::path dep_path(sv);
-                    if (!dep_path.is_absolute()) {
-                        dep_path = std::filesystem::path(source_dir_) / dep_path;
-                    }
-                    std::string dep_normalized = dep_path.lexically_normal().string();
+                    std::string dep_normalized = Path::make_absolute_and_normal(source_dir_, sv);
                     task.inputs.push_back(dep_normalized);
 
                     // If this dependency is produced by a custom command, ensure
@@ -1327,8 +1320,8 @@ static std::pair<std::string, std::string> generate_pch_task(
         throw std::runtime_error("No compiler available for PCH generation in target '" + target->get_name() + "'");
     }
 
-    auto pch_path = std::filesystem::path(target->get_binary_dir()) / "objs" / (target->get_name() + "_pch.hpp");
-    std::string pch_wrapper = target->get_binary_dir().empty() ? pch_path.string() : pch_path.lexically_normal().string();
+    Path pch_path = (Path(target->get_binary_dir()) / "objs") / (target->get_name() + "_pch.hpp");
+    std::string pch_wrapper = target->get_binary_dir().empty() ? pch_path.str() : pch_path.lexically_normal().str();
     std::string pch_gch_path = pch_wrapper + ".gch";
     std::string pch_include_arg = " -include " + pch_wrapper;
 
@@ -1348,7 +1341,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     }
 
     if (needs_write) {
-        std::filesystem::create_directories(std::filesystem::path(pch_wrapper).parent_path());
+        std::filesystem::create_directories(std::string(Path(pch_wrapper).parent_path()));
         std::ofstream wrapper_file(pch_wrapper);
         if (!wrapper_file) {
             throw std::runtime_error("Failed to create PCH wrapper file: " + pch_wrapper);
@@ -1397,10 +1390,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     pch_task.inputs.push_back(pch_wrapper);
 
     for (const auto& hdr : own_pchs) {
-        auto hdr_abs = std::filesystem::path(hdr).is_absolute() ?
-            std::filesystem::path(hdr) :
-            std::filesystem::path(target->get_source_dir()) / hdr;
-        pch_task.inputs.push_back(hdr_abs.lexically_normal().string());
+        pch_task.inputs.push_back(Path::make_absolute_and_normal(target->get_source_dir(), hdr));
     }
 
     pch_task.outputs.push_back(pch_gch_path);
@@ -1556,9 +1546,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
                 auto lang_info = LanguageClassifier::from_path(src);
                 if (lang_info.lang != Language::UNKNOWN && !lang_info.is_header) {
                     // Skip sources marked HEADER_FILE_ONLY (e.g. unity build originals)
-                    std::filesystem::path sp(src);
-                    std::string abs = sp.is_absolute() ? sp.lexically_normal().string()
-                        : (std::filesystem::path(dep->get_source_dir()) / sp).lexically_normal().string();
+                    std::string abs = Path::make_absolute_and_normal(dep->get_source_dir(), src);
                     auto sp_it = source_props.find(abs);
                     if (sp_it != source_props.end()) {
                         auto hfo = sp_it->second.find("HEADER_FILE_ONLY");
@@ -1885,19 +1873,19 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
                 task.explicit_deps.push_back(dep_name);
             }
         } else {
-            std::filesystem::path p(dep_name);
+            Path p(dep_name);
             std::string normalized;
             if (p.is_absolute()) {
-                normalized = p.lexically_normal().string();
+                normalized = p.lexically_normal().str();
             } else {
-                normalized = (std::filesystem::path(source_dir_) / p).lexically_normal().string();
+                normalized = Path::make_absolute_and_normal(source_dir_, dep_name);
             }
 
             // Check if a custom command rule produces this file
             auto cc_it = custom_rules.find(normalized);
-            if (cc_it == custom_rules.end() && !p.is_absolute()) {
+            if (cc_it == custom_rules.end() && p.is_relative()) {
                 // Fallback: check binary dir (custom command outputs are registered there)
-                auto bin_normalized = (std::filesystem::path(binary_dir_) / p).lexically_normal().string();
+                auto bin_normalized = Path::make_absolute_and_normal(binary_dir_, dep_name);
                 cc_it = custom_rules.find(bin_normalized);
                 if (cc_it != custom_rules.end()) {
                     normalized = bin_normalized;
@@ -1926,9 +1914,7 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
 
     // Support SOURCES in custom targets just in case
     for (const auto& src : get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
-         std::filesystem::path p(src);
-         if (!p.is_absolute()) p = std::filesystem::path(source_dir_) / p;
-         task.inputs.push_back(p.string());
+         task.inputs.push_back(Path(src).is_absolute() ? src : Path::join(source_dir_, src));
     }
 
     txn.add(std::move(task));
@@ -1937,7 +1923,7 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
 // --- C++20 Modules Support ---
 
 std::string Target::get_module_mapper_path() const {
-    return (std::filesystem::path(binary_dir_) / (name_ + ".module-mapper")).lexically_normal().string();
+    return (Path(binary_dir_) / (name_ + ".module-mapper")).lexically_normal().str();
 }
 
 bool Target::has_module_sources() const {
@@ -1986,11 +1972,11 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
         if (!compiler) continue;
 
-        std::filesystem::path src_abs = std::filesystem::path(source_dir_) / src;
+        std::string src_abs = Path::join(source_dir_, src);
         std::string ddi_path = get_ddi_path(binary_dir_, src);
 
         ModuleScanContext ctx;
-        ctx.source = src_abs.string();
+        ctx.source = src_abs;
         ctx.output = ddi_path;
 
         // Determine standard: use highest of explicit standard or required by compile features
@@ -2019,10 +2005,10 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
 
         BuildTask scanner;
         scanner.id = ddi_path;
-        scanner.kind = ModuleScannerTask{src_abs.string()};
+        scanner.kind = ModuleScannerTask{src_abs};
         scanner.parent_target = this;
         scanner.commands.push_back(compiler->get_module_scan_command(ctx));
-        scanner.inputs.push_back(src_abs.string());
+        scanner.inputs.push_back(src_abs);
         scanner.outputs.push_back(ddi_path);
 
         txn.add(std::move(scanner));

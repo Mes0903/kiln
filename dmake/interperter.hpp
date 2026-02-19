@@ -264,22 +264,22 @@ public:
     std::expected<void, InterpreterError> include_file(const std::string& file_path, bool optional = false);
 
     // File existence check (caching handled internally)
-    bool cached_file_exists(const std::filesystem::path& full_path);
-    bool cached_file_exists(const std::filesystem::path& dir, const std::string& filename);
+    bool cached_file_exists(std::string_view full_path);
+    bool cached_file_exists(std::string_view dir, const std::string& filename);
 
     // Directory check with caching (uses dir_scan_cache_ from directory listings)
-    bool cached_is_directory(const std::filesystem::path& path);
+    bool cached_is_directory(std::string_view path);
 
     // Canonical path with directory-level caching (avoids redundant readlink syscalls)
-    std::string cached_weakly_canonical(const std::filesystem::path& p);
+    std::string cached_weakly_canonical(std::string_view p);
 
     // Get directory listing (caching handled internally)
     // Returns nullptr if directory doesn't exist or can't be read
-    const std::unordered_set<std::string>* get_directory_listing(const std::filesystem::path& dir);
+    const std::unordered_set<std::string>* get_directory_listing(std::string_view dir);
 
     // Get subdirectory names within a directory (populates cache if needed)
     // Returns nullptr if directory doesn't exist or can't be read
-    const std::unordered_set<std::string>* get_directory_subdirs(const std::filesystem::path& dir);
+    const std::unordered_set<std::string>* get_directory_subdirs(std::string_view dir);
 
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }

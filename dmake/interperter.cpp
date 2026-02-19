@@ -19,7 +19,7 @@
 #include "intercept/fetch_content.hpp"
 #include "condition_evaluator.hpp"
 #include "CMakeArray.hpp"
-#include "cmake_path_utils.hpp"
+#include "path.hpp"
 #include <cassert>
 #include <future>
 
@@ -299,7 +299,7 @@ DirectoryContext& Interpreter::get_current_directory_context() {
 }
 
 DirectoryContext* Interpreter::get_directory_context(const std::string& dir) {
-    std::string abs_dir = path_utils::make_absolute_and_normal(get_variable("CMAKE_CURRENT_SOURCE_DIR"), dir);
+    std::string abs_dir = Path::make_absolute_and_normal(get_variable("CMAKE_CURRENT_SOURCE_DIR"), dir);
 
     auto it = directory_contexts_.find(abs_dir);
     if (it != directory_contexts_.end()) {
@@ -1192,10 +1192,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             std::string subdir = args[0];
             std::string current_source_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
             std::string current_binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
-            std::string source_path_str = path_utils::join(current_source_dir, subdir);
+            std::string source_path_str = Path::join(current_source_dir, subdir);
             std::string abs_source_str = std::filesystem::absolute(std::filesystem::path(source_path_str)).string();
-            abs_source_str = path_utils::lexically_normal(abs_source_str);
-            std::string cmake_file_str = path_utils::join(abs_source_str, "CMakeLists.txt");
+            abs_source_str = Path(abs_source_str).lexically_normal().str();
+            std::string cmake_file_str = Path::join(abs_source_str, "CMakeLists.txt");
 
             // Compute binary directory for the subdirectory
             // Check for explicit binary_dir argument (args[1]), skipping EXCLUDE_FROM_ALL
@@ -1203,18 +1203,18 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             bool has_explicit_binary_dir = false;
             for (size_t i = 1; i < args.size(); ++i) {
                 if (args[i] != "EXCLUDE_FROM_ALL") {
-                    binary_path_str = path_utils::join(current_binary_dir, args[i]);
+                    binary_path_str = Path::join(current_binary_dir, args[i]);
                     has_explicit_binary_dir = true;
                     break;
                 }
             }
             if (!has_explicit_binary_dir) {
-                if (path_utils::is_absolute(subdir)) {
+                if (Path(subdir).is_absolute()) {
                     // For absolute source paths without explicit binary dir,
                     // use the last component as subdirectory name under current binary dir
-                    binary_path_str = path_utils::join(current_binary_dir, path_utils::filename(subdir));
+                    binary_path_str = Path::join(current_binary_dir, Path(subdir).filename());
                 } else {
-                    binary_path_str = path_utils::join(current_binary_dir, subdir);
+                    binary_path_str = Path::join(current_binary_dir, subdir);
                 }
             }
 
@@ -1246,7 +1246,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             interp.set_current_file(cmake_file_str);
 
             // Parse and interpret the subdirectory CMakeLists.txt
-            std::string subdir_filename = std::string(path_utils::filename(cmake_file_str));
+            std::string subdir_filename = std::string(Path(cmake_file_str).filename());
 
             ProfileScope parse_profile("parse " + subdir + "/" + subdir_filename, "parse");
             Parser parser(content, cmake_file_str);
@@ -1557,7 +1557,7 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
 }
 
 std::expected<void, InterpreterError> Interpreter::include_file(const std::string& file_path, bool optional) {
-    std::filesystem::path path = std::filesystem::path(file_path);
+    Path path(file_path);
 
     if(file_path.ends_with("CPack") || file_path.ends_with("CPack.cmake")) {
         print_message("WARNING", "dmake does not support cpack (yet). Ignoring..");
@@ -1577,14 +1577,12 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
 
     // Helper to check if a path exists, trying with and without .cmake extension
-    auto try_path = [this](const std::filesystem::path& p) -> std::optional<std::filesystem::path> {
+    auto try_path = [this](std::string_view p) -> std::optional<std::string> {
         if (cached_file_exists(p)) {
-            // Verify it's not a directory
-            if (!cached_is_directory(p)) return p;
+            if (!cached_is_directory(p)) return std::string(p);
         }
-        if (!p.has_extension()) {
-            std::filesystem::path with_ext = p;
-            with_ext.replace_extension(".cmake");
+        if (!Path(p).has_extension()) {
+            std::string with_ext = Path(p).replace_extension(".cmake").str();
             if (cached_file_exists(with_ext)) {
                 if (!cached_is_directory(with_ext)) return with_ext;
             }
@@ -1592,18 +1590,18 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         return std::nullopt;
     };
 
-    auto find_in_dir = [&try_path](const std::filesystem::path& dir, const std::string& file_path) -> std::optional<std::filesystem::path> {
-        auto candidate = dir / file_path;
+    auto find_in_dir = [&try_path](std::string_view dir, const std::string& file_path) -> std::optional<std::string> {
+        auto candidate = Path::join(dir, file_path);
         return try_path(candidate);
     };
 
-    std::optional<std::filesystem::path> found_path;
+    std::optional<std::string> found_path;
 
     if (path.is_absolute()) {
-        found_path = try_path(path);
+        found_path = try_path(file_path);
     } else {
         // Try relative to CMAKE_CURRENT_SOURCE_DIR first
-        std::filesystem::path candidate = std::filesystem::path(get_variable("CMAKE_CURRENT_SOURCE_DIR")) / file_path;
+        std::string candidate = Path::join(get_variable("CMAKE_CURRENT_SOURCE_DIR"), file_path);
         found_path = try_path(candidate);
 
         // If not found, search CMAKE_MODULE_PATH
@@ -1637,15 +1635,15 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() could not find: " + file_path, {}});
     }
 
-    path = *found_path;
+    const std::string& resolved_path = *found_path;
 
     // Check if it's a directory (reject directories, but accept symlinks to files)
-    if (std::filesystem::is_directory(path)) {
+    if (std::filesystem::is_directory(resolved_path)) {
         if (optional) return {};
-        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() path is a directory: " + path.string(), {}});
+        return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() path is a directory: " + resolved_path, {}});
     }
 
-    std::string abs_path = std::filesystem::absolute(path).string();
+    std::string abs_path = std::filesystem::absolute(resolved_path).string();
 
     // Check include guards
     if (global_guarded_files_.contains(abs_path)) return {};
@@ -1659,20 +1657,20 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     if (cached_ast) {
         ast_to_use = cached_ast;
     } else {
-        std::ifstream file(path);
+        std::ifstream file(resolved_path);
         if (!file) {
-            return std::unexpected(InterpreterError{path.string(), 0, 0, 0, 0, "include() could not read: " + path.string(), {}});
+            return std::unexpected(InterpreterError{resolved_path, 0, 0, 0, 0, "include() could not read: " + resolved_path, {}});
         }
 
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
         ProfileScope parse_profile("parse " + abs_path, "parse");
-        Parser parser(content, path.string());
+        Parser parser(content, resolved_path);
         parsed_ast = parser.parse();
         parse_profile.stop();
 
         if (!parsed_ast) {
-            return std::unexpected(InterpreterError{path.string(), parsed_ast.error().row, parsed_ast.error().col, parsed_ast.error().offset, parsed_ast.error().length, parsed_ast.error().reason, {}});
+            return std::unexpected(InterpreterError{resolved_path, parsed_ast.error().row, parsed_ast.error().col, parsed_ast.error().offset, parsed_ast.error().length, parsed_ast.error().reason, {}});
         }
 
         ast_to_use = &parsed_ast.value();
@@ -1686,7 +1684,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     }
 
     std::string old_file = get_current_file();
-    std::string abs_dir = std::string(path_utils::parent_path(abs_path));
+    std::string abs_dir = std::string(Path(abs_path).parent_path());
 
     std::string old_list_file = get_variable("CMAKE_CURRENT_LIST_FILE");
     std::string old_list_dir = get_variable("CMAKE_CURRENT_LIST_DIR");
@@ -1716,15 +1714,12 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     return res;
 }
 
-const std::unordered_set<std::string>* Interpreter::get_directory_listing(const std::filesystem::path& dir) {
+const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::string_view dir) {
     Interpreter* root = get_root();
 
-    // Normalize to absolute path
-    std::error_code ec;
-    std::filesystem::path abs_dir = std::filesystem::absolute(dir, ec);
-    if (ec) return nullptr;
-
-    std::string dir_key = abs_dir.string();
+    // Normalize to absolute path using string ops (no std::filesystem overhead)
+    std::string dir_key = Path(Path::absolute(dir)).lexically_normal().str();
+    if (dir_key.empty()) return nullptr;
 
     // Session cache lookup first — zero syscalls on hit
     auto it = root->dir_scan_cache_.find(dir_key);
@@ -1733,8 +1728,9 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(const 
     }
 
     // Cache miss — single stat via last_write_time (replaces exists + is_directory + last_write_time)
-    auto current_mtime = std::filesystem::last_write_time(abs_dir, ec);
-    if (ec) return nullptr;  // doesn't exist, not accessible, or not a directory
+    std::error_code ec2;
+    auto current_mtime = std::filesystem::last_write_time(dir_key, ec2);
+    if (ec2) return nullptr;  // doesn't exist, not accessible, or not a directory
 
     // Clock skew detection
     auto now = std::filesystem::file_time_type::clock::now();
@@ -1774,8 +1770,9 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(const 
     std::unordered_set<std::string> entries;
     std::unordered_set<std::string> subdirs;
     try {
-        for (const auto& entry : std::filesystem::directory_iterator(abs_dir, ec)) {
-            if (ec) {
+        std::error_code dir_ec;
+        for (const auto& entry : std::filesystem::directory_iterator(dir_key, dir_ec)) {
+            if (dir_ec) {
                 // Error during iteration - don't cache
                 return nullptr;
             }
@@ -1811,23 +1808,24 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(const 
     return &inserted_it->second.entries;
 }
 
-const std::unordered_set<std::string>* Interpreter::get_directory_subdirs(const std::filesystem::path& dir) {
+const std::unordered_set<std::string>* Interpreter::get_directory_subdirs(std::string_view dir) {
     // Ensure the directory is cached (populates entries + subdirs)
     if (!get_directory_listing(dir)) return nullptr;
 
-    std::error_code ec;
-    std::string dir_key = std::filesystem::absolute(dir, ec).string();
-    if (ec) return nullptr;
+    // Reconstruct the same key that get_directory_listing used
+    std::string dir_key = Path(Path::absolute(dir)).lexically_normal().str();
+    if (dir_key.empty()) return nullptr;
 
     auto it = get_root()->dir_scan_cache_.find(dir_key);
     if (it == get_root()->dir_scan_cache_.end()) return nullptr;
     return &it->second.subdirs;
 }
 
-bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
-    // Split path into directory and filename
-    auto parent = full_path.parent_path();
-    auto filename = full_path.filename().string();
+bool Interpreter::cached_file_exists(std::string_view full_path) {
+    // Split path into directory and filename using string ops
+    Path p(full_path);
+    auto parent = p.parent_path();
+    auto filename = p.filename();
 
     if (filename.empty()) {
         // Path is a root or has trailing slash — check if directory itself exists
@@ -1842,32 +1840,33 @@ bool Interpreter::cached_file_exists(const std::filesystem::path& full_path) {
         // Cache population failed (permissions, doesn't exist, etc.)
         // Fall back to direct filesystem check
         std::error_code ec;
-        return std::filesystem::exists(full_path, ec);
+        return std::filesystem::exists(std::string(full_path), ec);
     }
 
-    return entries->contains(filename);
+    return entries->contains(std::string(filename));
 }
 
-bool Interpreter::cached_file_exists(const std::filesystem::path& dir, const std::string& filename) {
+bool Interpreter::cached_file_exists(std::string_view dir, const std::string& filename) {
     auto* entries = get_directory_listing(dir);
     return entries && entries->contains(filename);
 }
 
-bool Interpreter::cached_is_directory(const std::filesystem::path& path) {
-    auto parent = path.parent_path();
-    auto filename = path.filename().string();
+bool Interpreter::cached_is_directory(std::string_view path) {
+    Path p(path);
+    auto parent = p.parent_path();
+    auto filename = p.filename();
 
     if (!filename.empty()) {
         // get_directory_listing handles session cache → persistent cache → directory scan
         auto* subdirs = get_directory_subdirs(parent);
         if (subdirs) {
-            return subdirs->contains(filename);
+            return subdirs->contains(std::string(filename));
         }
     }
 
     // Parent doesn't exist or can't be read — fall back to direct stat
     std::error_code ec;
-    return std::filesystem::is_directory(path, ec);
+    return std::filesystem::is_directory(std::string(path), ec);
 }
 
 void Interpreter::set_fatal_error(const std::string& message) {
@@ -3233,10 +3232,9 @@ std::optional<int64_t> Interpreter::get_dir_mtime_cached(const std::string& path
     return mtime;
 }
 
-std::string Interpreter::cached_weakly_canonical(const std::filesystem::path& p) {
-    auto path_str = p.string();
-    auto parent = std::string(path_utils::parent_path(path_str));
-    auto fname = std::string(path_utils::filename(path_str));
+std::string Interpreter::cached_weakly_canonical(std::string_view p) {
+    auto parent = std::string(Path(p).parent_path());
+    auto fname = std::string(Path(p).filename());
 
     // Look up resolved parent directory in cache
     std::string resolved_parent;
@@ -3247,23 +3245,23 @@ std::string Interpreter::cached_weakly_canonical(const std::filesystem::path& p)
         try {
             resolved_parent = std::filesystem::weakly_canonical(parent).string();
         } catch (...) {
-            resolved_parent = path_utils::lexically_normal(parent);
+            resolved_parent = Path(parent).lexically_normal().str();
         }
         canonical_dir_cache_[parent] = resolved_parent;
     }
 
     // For the leaf: check if it's a symlink (single lstat syscall)
-    std::string full_str = path_utils::join(resolved_parent, fname);
+    std::string full_str = Path::join(resolved_parent, fname);
     std::filesystem::path full(full_str);
     std::error_code ec;
     if (std::filesystem::is_symlink(full, ec)) {
         try {
             return std::filesystem::weakly_canonical(full).string();
         } catch (...) {
-            return path_utils::lexically_normal(full_str);
+            return Path(full_str).lexically_normal().str();
         }
     }
-    return path_utils::lexically_normal(full_str);
+    return Path(full_str).lexically_normal().str();
 }
 
 bool Interpreter::is_project_path(const std::string& path) const {

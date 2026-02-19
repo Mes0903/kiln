@@ -5,7 +5,7 @@
 #include "../genex_parser.hpp"
 #include "../compile_features.hpp"
 #include "../CMakeArray.hpp"
-#include "../cmake_path_utils.hpp"
+#include "../path.hpp"
 #include <sstream>
 #include <algorithm>
 #include <set>
@@ -400,19 +400,19 @@ void register_target_builtins(Interpreter& interp) {
             // Normalize output paths (relative to binary dir)
             std::vector<std::string> normalized_outputs;
             for (const auto& out : outputs) {
-                normalized_outputs.push_back(path_utils::make_absolute_and_normal(bin_dir, out));
+                normalized_outputs.push_back(Path::make_absolute_and_normal(bin_dir, out));
             }
 
             // Also treat BYPRODUCTS as outputs
             for (const auto& out : byproducts) {
-                normalized_outputs.push_back(path_utils::make_absolute_and_normal(bin_dir, out));
+                normalized_outputs.push_back(Path::make_absolute_and_normal(bin_dir, out));
             }
 
             // Default working directory to binary dir
             if (working_dir.empty()) {
                 working_dir = bin_dir;
-            } else if (!path_utils::is_absolute(working_dir)) {
-                working_dir = path_utils::lexically_normal(path_utils::join(bin_dir, working_dir));
+            } else if (Path(working_dir).is_relative()) {
+                working_dir = Path(Path::join(bin_dir, working_dir)).lexically_normal().str();
             }
 
             auto& rules = interp.get_custom_command_rules();
@@ -542,8 +542,8 @@ void register_target_builtins(Interpreter& interp) {
             // Default working directory
             if (working_dir.empty()) {
                 working_dir = bin_dir;
-            } else if (!path_utils::is_absolute(working_dir)) {
-                working_dir = path_utils::lexically_normal(path_utils::join(bin_dir, working_dir));
+            } else if (Path(working_dir).is_relative()) {
+                working_dir = Path(Path::join(bin_dir, working_dir)).lexically_normal().str();
             }
 
             // Join comment parts with spaces (CMake collects all args after COMMENT until next keyword)
@@ -1284,7 +1284,7 @@ void register_target_builtins(Interpreter& interp) {
             if (arg.find("$<") != std::string::npos) {
                 resolved_dirs.push_back(arg);
             } else {
-                resolved_dirs.push_back(path_utils::is_absolute(arg) ? arg : path_utils::join(src_dir, arg));
+                resolved_dirs.push_back(Path(arg).is_absolute() ? arg : Path::join(src_dir, arg));
             }
         }
 
@@ -1317,8 +1317,8 @@ void register_target_builtins(Interpreter& interp) {
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         auto resolve_dirs = [&](std::vector<std::string>& dirs) {
             for (auto& dir : dirs) {
-                if (!path_utils::is_absolute(dir)) {
-                    dir = path_utils::join(src_dir, dir);
+                if (Path(dir).is_relative()) {
+                    dir = Path::join(src_dir, dir);
                 }
             }
         };
@@ -1351,7 +1351,7 @@ void register_target_builtins(Interpreter& interp) {
             // Split semicolons - CMake treats all args as lists
             for (const auto& item : CMakeArrayIterator(arg)) {
                 if (item.empty()) continue;
-                dirs.push_back(path_utils::is_absolute(item) ? std::string(item) : path_utils::join(src_dir, item));
+                dirs.push_back(Path(item).is_absolute() ? std::string(item) : Path::join(src_dir, item));
             }
         }
     });
