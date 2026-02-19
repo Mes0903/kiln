@@ -8,8 +8,13 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <cstdlib>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace dmake {
+
+// Per-session validated Python binaries: maps "invoked_path:canonical_path" → validated -V output
+static std::unordered_map<std::string, std::string> s_python_validated;
 
 // Helper: Get file mtime or nullopt if doesn't exist
 static std::optional<int64_t> get_file_mtime(const std::string& path) {
@@ -110,6 +115,237 @@ static std::string compute_command_signature(
     }
 
     return oss.str();
+}
+
+// Helper: Check if command is a Python interpreter
+static bool is_python_interpreter(const std::string& cmd) {
+    std::filesystem::path cmd_path(cmd);
+    std::string filename = cmd_path.filename().string();
+    // Match python, python3, python3.14, etc.
+    if (!filename.starts_with("python")) return false;
+    // "python" alone is fine
+    if (filename.size() == 6) return true;
+    // After "python" must be a digit (python3, python3.14, etc.)
+    return std::isdigit(static_cast<unsigned char>(filename[6]));
+}
+
+// Helper: Check if a Python -c script only imports safe stdlib modules
+static bool is_safe_python_script(const std::vector<std::string>& cmd) {
+    if (cmd.size() < 2) return false;
+
+    // Check for -V flag anywhere in args
+    for (size_t i = 1; i < cmd.size(); ++i) {
+        if (cmd[i] == "-V" || cmd[i] == "--version") return true;
+    }
+
+    // Only cache -c <script> invocations
+    if (cmd.size() < 3) return false;
+    bool found_c = false;
+    std::string script;
+    for (size_t i = 1; i < cmd.size(); ++i) {
+        if (cmd[i] == "-c") {
+            found_c = true;
+            if (i + 1 < cmd.size()) script = cmd[i + 1];
+            break;
+        }
+    }
+    if (!found_c || script.empty()) return false;
+
+    // Step 1: Blocklist rejection — block non-deterministic or dangerous operations.
+    // os.getcwd() and os.path pure functions are safe (cwd is included in cache key).
+    static const std::array<std::string_view, 10> blocklist = {
+        "__import__", "exec(", "eval(", "open(",
+        "subprocess",
+        "environ",          // os.environ — depends on env vars
+        "listdir", "scandir", "os.walk(",  // filesystem enumeration
+        "os.stat(",         // filesystem metadata
+    };
+    for (auto bl : blocklist) {
+        if (script.find(bl) != std::string::npos) return false;
+    }
+
+    // Step 2: Extract all imported module names
+    static const std::unordered_set<std::string> safe_modules = {
+        "sys", "sysconfig", "distutils", "struct", "re", "importlib",
+        "os", "pathlib",  // safe with cwd in cache key; dangerous ops caught by blocklist
+    };
+
+    // Scan for import statements
+    // We look for "import" as a token (preceded by whitespace, start-of-string, or semicolon)
+    std::string_view sv(script);
+    size_t pos = 0;
+    while (pos < sv.size()) {
+        // Find next "import"
+        auto imp = sv.find("import", pos);
+        if (imp == std::string_view::npos) break;
+
+        // Check it's a token boundary (preceded by whitespace/start/semicolon)
+        if (imp > 0) {
+            char before = sv[imp - 1];
+            if (before != ' ' && before != '\t' && before != '\n' && before != '\r' && before != ';') {
+                pos = imp + 6;
+                continue;
+            }
+        }
+        // Check followed by whitespace (not part of a larger word)
+        size_t after = imp + 6;
+        if (after >= sv.size() || (sv[after] != ' ' && sv[after] != '\t')) {
+            pos = after;
+            continue;
+        }
+
+        // Check if this is "from X import ..." by looking back for "from"
+        bool is_from_import = false;
+        if (imp >= 2) {
+            // Scan backwards over whitespace to find "from"
+            auto back = imp - 1;
+            while (back > 0 && (sv[back] == ' ' || sv[back] == '\t')) --back;
+            // Check if there's a module name before this, preceded by "from"
+            // Find the start of the module name
+            auto mod_end = back + 1;
+            while (back > 0 && sv[back] != ' ' && sv[back] != '\t' && sv[back] != '\n' && sv[back] != ';') --back;
+            if (back > 0 || sv[0] == 'f') {
+                auto from_start = (sv[back] == ' ' || sv[back] == '\t' || sv[back] == '\n' || sv[back] == ';') ? back + 1 : back;
+                // The word before the module name should be "from"
+                // Actually, "from X import Y" — we need to check if we see "from <mod> import"
+                // Let's look backwards past the module name to find "from"
+                auto mod_start = (sv[back] == ' ' || sv[back] == '\t' || sv[back] == '\n' || sv[back] == ';') ? back + 1 : back;
+                std::string_view mod_name = sv.substr(mod_start, mod_end - mod_start);
+
+                // Now check if "from" precedes mod_name
+                if (mod_start >= 5) {
+                    auto from_check = mod_start - 1;
+                    while (from_check > 0 && (sv[from_check] == ' ' || sv[from_check] == '\t')) --from_check;
+                    if (from_check >= 3) {
+                        auto fw = from_check - 3;
+                        if (sv.substr(fw, 4) == "from") {
+                            // Verify "from" is at token boundary
+                            if (fw == 0 || sv[fw - 1] == ' ' || sv[fw - 1] == '\t' || sv[fw - 1] == '\n' || sv[fw - 1] == ';') {
+                                // Extract top-level module from dotted name
+                                auto dot = mod_name.find('.');
+                                std::string top_mod(dot != std::string_view::npos ? mod_name.substr(0, dot) : mod_name);
+                                if (!safe_modules.contains(top_mod)) return false;
+                                is_from_import = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!is_from_import) {
+            // Plain "import X, Y, Z" or "import X.Y.Z"
+            auto module_start = after;
+            while (module_start < sv.size() && (sv[module_start] == ' ' || sv[module_start] == '\t')) ++module_start;
+
+            // Parse comma-separated module names
+            auto p = module_start;
+            while (p < sv.size()) {
+                // Skip whitespace
+                while (p < sv.size() && (sv[p] == ' ' || sv[p] == '\t')) ++p;
+                if (p >= sv.size()) break;
+
+                // Read module name (may be dotted)
+                auto name_start = p;
+                while (p < sv.size() && sv[p] != ' ' && sv[p] != '\t' && sv[p] != ',' && sv[p] != '\n' && sv[p] != '\r' && sv[p] != ';' && sv[p] != '#') ++p;
+                if (p == name_start) break;
+
+                std::string_view full_name = sv.substr(name_start, p - name_start);
+                auto dot = full_name.find('.');
+                std::string top_mod(dot != std::string_view::npos ? full_name.substr(0, dot) : full_name);
+                if (!safe_modules.contains(top_mod)) return false;
+
+                // Skip whitespace after module name
+                while (p < sv.size() && (sv[p] == ' ' || sv[p] == '\t')) ++p;
+                // If comma, continue; otherwise done with this import
+                if (p < sv.size() && sv[p] == ',') {
+                    ++p;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        pos = after;
+    }
+
+    return true;
+}
+
+// Helper: Make a cache key for a Python binary
+static std::string make_python_binary_key(const std::string& invoked_path) {
+    std::error_code ec;
+    auto canonical = std::filesystem::canonical(invoked_path, ec);
+    std::string canon_str = ec ? invoked_path : canonical.string();
+    return invoked_path + ":" + canon_str;
+}
+
+// Helper: Validate a Python binary for this session by checking -V output
+// Returns the version string if validated, or empty string on failure
+static std::string validate_python_binary(const std::string& invoked_path, CacheStore& cache) {
+    std::string binary_key = make_python_binary_key(invoked_path);
+
+    // Already validated this session?
+    auto it = s_python_validated.find(binary_key);
+    if (it != s_python_validated.end()) return it->second;
+
+    // Run python -V to get current version
+    ProcessOptions vopts;
+    vopts.output_quiet = true;
+    vopts.error_quiet = true;
+    std::string dummy;
+    vopts.output_variable = &dummy;
+    vopts.error_variable = &dummy;
+    std::vector<std::vector<std::string>> vcmd = {{invoked_path, "-V"}};
+    auto vres = execute_pipeline(vcmd, vopts);
+    if (vres.exit_codes.empty() || vres.exit_codes[0] != 0) return "";
+
+    // Python 2 prints to stderr, Python 3 to stdout
+    std::string current_version = vres.captured_stdout.empty() ? vres.captured_stderr : vres.captured_stdout;
+    // Strip trailing whitespace
+    while (!current_version.empty() && std::isspace(static_cast<unsigned char>(current_version.back())))
+        current_version.pop_back();
+
+    // Check stored version from disk cache
+    std::string version_key = "python_version:" + binary_key;
+    auto stored = cache.lookup<CacheSubsystem::ExternalCommand>(version_key);
+    if (stored && stored->stdout_output == current_version) {
+        // Version matches — all cached entries are valid
+        s_python_validated[binary_key] = current_version;
+        return current_version;
+    }
+
+    // Version mismatch or no stored version — invalidate stale entries
+    // We can't selectively clear entries by prefix, so just store the new version
+    // and let individual lookups fail naturally (they won't exist or signature won't match)
+    ExternalCommandCacheEntry version_entry;
+    version_entry.stdout_output = current_version;
+    version_entry.exit_code = 0;
+    cache.insert<CacheSubsystem::ExternalCommand>(version_key, version_entry);
+
+    s_python_validated[binary_key] = current_version;
+    return current_version;
+}
+
+// Helper: Compute cache signature for a Python command
+// Includes effective cwd so os.getcwd()/os.path operations are correctly keyed
+static std::string compute_python_cache_signature(const std::string& binary_key,
+                                                   const std::vector<std::string>& cmd,
+                                                   const std::string& working_dir) {
+    std::string sig = "python:" + binary_key + "|";
+    for (size_t i = 1; i < cmd.size(); ++i) {
+        if (i > 1) sig += " ";
+        sig += cmd[i];
+    }
+    // Include working directory (or actual cwd if none specified) so that
+    // os.getcwd() and relative path operations produce correct cached results
+    sig += "|cwd:";
+    if (!working_dir.empty()) {
+        sig += working_dir;
+    } else {
+        sig += std::filesystem::current_path().string();
+    }
+    return sig;
 }
 
 // Helper: Get mtimes for directories to track (based on command type)
@@ -240,18 +476,74 @@ void register_process_builtins(Interpreter& interp) {
         if (!output_variable.empty()) options.output_variable = &output_variable;
         if (!error_variable.empty()) options.error_variable = &error_variable;
 
-        // Check if this is a pkg-config command that we can cache
+        // Check if this is a cacheable command
+        bool no_file_redirect = output_file.empty() && error_file.empty() && input_file.empty();
+        bool captures_output = !output_variable.empty() || !result_variable.empty();
         bool is_pkgconfig = !commands.empty() && !commands[0].empty() && is_pkgconfig_command(commands[0][0]);
-        bool can_cache = is_pkgconfig &&
-                        output_file.empty() &&   // No file redirection
-                        error_file.empty() &&
-                        input_file.empty() &&
-                        (!output_variable.empty() || !result_variable.empty());  // Must capture output or result
+        bool is_python = !commands.empty() && !commands[0].empty() &&
+                         commands.size() == 1 &&  // Single command, no pipes
+                         is_python_interpreter(commands[0][0]) && is_safe_python_script(commands[0]);
+        bool can_cache = (is_pkgconfig || is_python) && no_file_redirect && captures_output;
 
         PipelineResult res;
 
-        if (can_cache) {
-            // Try cache lookup
+        if (can_cache && is_python) {
+            auto& cache = interp.get_cache_store();
+            const auto& cmd = commands[0];
+            std::string binary_key = make_python_binary_key(cmd[0]);
+
+            // Check for -V flag — serve from in-session state if already validated
+            bool is_version_query = false;
+            for (size_t i = 1; i < cmd.size(); ++i) {
+                if (cmd[i] == "-V" || cmd[i] == "--version") { is_version_query = true; break; }
+            }
+
+            if (is_version_query) {
+                auto vit = s_python_validated.find(binary_key);
+                if (vit != s_python_validated.end()) {
+                    // Serve directly from in-session cache
+                    res.captured_stdout = vit->second + "\n";
+                    res.exit_codes.push_back(0);
+                } else {
+                    // Not yet validated — run normally, then prime the session cache
+                    res = execute_pipeline(commands, options);
+                    if (!res.exit_codes.empty() && res.exit_codes[0] == 0) {
+                        std::string ver = res.captured_stdout.empty() ? res.captured_stderr : res.captured_stdout;
+                        while (!ver.empty() && std::isspace(static_cast<unsigned char>(ver.back()))) ver.pop_back();
+                        s_python_validated[binary_key] = ver;
+                        // Store version to disk cache for next session
+                        ExternalCommandCacheEntry ve;
+                        ve.stdout_output = ver;
+                        ve.exit_code = 0;
+                        cache.insert<CacheSubsystem::ExternalCommand>("python_version:" + binary_key, ve);
+                    }
+                }
+            } else {
+                // -c script: validate binary once per session, then use disk cache
+                std::string version = validate_python_binary(cmd[0], cache);
+                if (version.empty()) {
+                    // Validation failed — execute normally
+                    res = execute_pipeline(commands, options);
+                } else {
+                    std::string signature = compute_python_cache_signature(binary_key, cmd, working_dir);
+                    auto cached = cache.lookup<CacheSubsystem::ExternalCommand>(signature);
+                    if (cached) {
+                        res.captured_stdout = cached->stdout_output;
+                        res.captured_stderr = cached->stderr_output;
+                        res.exit_codes.push_back(cached->exit_code);
+                    } else {
+                        res = execute_pipeline(commands, options);
+
+                        ExternalCommandCacheEntry entry;
+                        entry.stdout_output = res.captured_stdout;
+                        entry.stderr_output = res.captured_stderr;
+                        entry.exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
+                        cache.insert<CacheSubsystem::ExternalCommand>(signature, entry);
+                    }
+                }
+            }
+        } else if (can_cache && is_pkgconfig) {
+            // Try cache lookup for pkg-config
             auto& cache = interp.get_cache_store();
             std::string signature = compute_command_signature(commands, options);
 
