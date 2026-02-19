@@ -1925,7 +1925,11 @@ void Interpreter::expand_arguments_into(const std::vector<Argument>& args, std::
                 result.push_back(s);
             } else {
                 for (auto item : CMakeArrayIterator(s)) {
-                    result.emplace_back(item);
+                    if (item.find('\\') != std::string_view::npos) {
+                        result.push_back(unescape_list_element(item));
+                    } else {
+                        result.emplace_back(item);
+                    }
                 }
             }
             continue;
@@ -1944,7 +1948,13 @@ void Interpreter::expand_arguments_into(const std::vector<Argument>& args, std::
                         result.emplace_back(*view);
                     } else {
                         for (auto item : CMakeArrayIterator(*view)) {
-                            if (!item.empty()) result.emplace_back(item);
+                            if (!item.empty()) {
+                                if (item.find('\\') != std::string_view::npos) {
+                                    result.push_back(unescape_list_element(item));
+                                } else {
+                                    result.emplace_back(item);
+                                }
+                            }
                         }
                     }
                 }
@@ -1974,7 +1984,11 @@ void Interpreter::expand_arguments_into(const std::vector<Argument>& args, std::
                 if (has_var_ref && item.empty()) {
                     continue;
                 }
-                result.emplace_back(item);
+                if (item.find('\\') != std::string_view::npos) {
+                    result.push_back(unescape_list_element(item));
+                } else {
+                    result.emplace_back(item);
+                }
             }
         }
     }
@@ -2404,7 +2418,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         auto loop_entry = variables_.entry(loop_var_name);
         for (auto item : CMakeArrayIterator(items_raw)) {
             if (filter_empty && item.empty()) continue;
-            loop_entry.set(std::string(item));
+            if (item.find('\\') != std::string_view::npos) {
+                loop_entry.set(unescape_list_element(item));
+            } else {
+                loop_entry.set(std::string(item));
+            }
             auto res = interpret(block.body);
             if (!res) {
                 set_fatal_error(res.error());
@@ -2428,7 +2446,11 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
         // Slow path: use set_variable() which fires watches
         for (auto item : CMakeArrayIterator(items_raw)) {
             if (filter_empty && item.empty()) continue;
-            set_variable(loop_var_name, std::string(item));
+            if (item.find('\\') != std::string_view::npos) {
+                set_variable(loop_var_name, unescape_list_element(item));
+            } else {
+                set_variable(loop_var_name, std::string(item));
+            }
             auto res = interpret(block.body);
             if (!res) {
                 set_fatal_error(res.error());

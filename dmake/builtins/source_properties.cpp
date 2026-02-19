@@ -38,9 +38,9 @@ void register_source_properties_builtins(Interpreter& interp) {
             // Undocumented CMake behavior: the signature requires <files>..., but
             // CMake silently accepts zero files (e.g. when a variable expands to
             // empty) and treats it as a no-op. We match that behavior.
-            interp.print_message("WARNING",
-                "set_source_files_properties() called with no source files "
-                "(undocumented CMake behavior, accepted for compatibility)", true);
+            // interp.print_message("WARNING",
+            //     "set_source_files_properties() called with no source files "
+            //     "(undocumented CMake behavior, accepted for compatibility)", true);
             return;
         }
 

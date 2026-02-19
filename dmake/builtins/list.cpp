@@ -119,8 +119,11 @@ void register_list_builtins(Interpreter& interp) {
                 if (static_cast<long>(elem_idx) == target_idx) {
                     auto val = *it;
                     // Handle all requests for this same index
+                    // Unescape \; to ; in extracted elements (CMake behavior)
+                    auto unescaped = (val.find('\\') != std::string_view::npos)
+                        ? unescape_list_element(val) : std::string(val);
                     while (req_i < num_indices && requests[req_i].resolved == target_idx) {
-                        result_arr[requests[req_i].orig_pos] = std::string(val);
+                        result_arr[requests[req_i].orig_pos] = unescaped;
                         ++req_i;
                     }
                 }
@@ -166,7 +169,9 @@ void register_list_builtins(Interpreter& interp) {
             // String concatenation -- matches CMake behavior of preserving \; in raw string
             std::string val = entry.get();
             for (size_t i = 1; i < sub_args.size(); ++i) {
-                if (sub_args[i].empty()) continue;
+                // CMake skips empty elements only when the list is empty.
+                // When non-empty, appending "" adds a semicolon (empty element).
+                if (sub_args[i].empty() && val.empty()) continue;
                 if (!val.empty()) val += ';';
                 val += sub_args[i];
             }
@@ -426,7 +431,11 @@ void register_list_builtins(Interpreter& interp) {
             if (list_view && !list_view->empty()) {
                 size_t idx = 0;
                 for (auto item : CMakeArrayIterator(*list_view)) {
-                    if (item == value) { found_index = static_cast<long>(idx); break; }
+                    // Unescape \; before comparing (CMake compares unescaped values)
+                    bool match = (item.find('\\') != std::string_view::npos)
+                        ? unescape_list_element(item) == value
+                        : item == value;
+                    if (match) { found_index = static_cast<long>(idx); break; }
                     ++idx;
                 }
             }

@@ -529,6 +529,134 @@ TEST_CASE("list(APPEND) adds elements to list", "[interpreter][list]") {
     REQUIRE(output == "a;b;c;d\n");
 }
 
+TEST_CASE("list(APPEND) preserves empty elements when list is non-empty", "[interpreter][list]") {
+    // Regression: list(APPEND) was skipping empty elements unconditionally.
+    // CMake only skips empty elements when the list itself is empty.
+    // LLVM's configure_lit_site_cfg relies on this with a "dummy" trick.
+
+    // Append empty to non-empty list: should add empty element
+    auto output = run_script(R"(
+        set(mylist "dummy")
+        list(APPEND mylist "")
+        list(LENGTH mylist len)
+        message("${len}|${mylist}")
+    )");
+    REQUIRE(output == "2|dummy;\n");
+
+    // Append empty to empty list: should remain empty
+    output = run_script(R"(
+        set(mylist "")
+        list(APPEND mylist "")
+        list(LENGTH mylist len)
+        message("${len}|${mylist}")
+    )");
+    REQUIRE(output == "0|\n");
+
+    // Multiple empty appends to non-empty list
+    output = run_script(R"(
+        set(mylist "start")
+        list(APPEND mylist "" "" "")
+        list(LENGTH mylist len)
+        message("${len}|${mylist}")
+    )");
+    REQUIRE(output == "4|start;;;\n");
+
+    // LLVM dummy pattern: empty variable value should still count
+    output = run_script(R"(
+        set(A "val_a")
+        set(B "")
+        set(C "val_c")
+        set(PATHS "A;B;C")
+        set(VALUES "dummy")
+        foreach(path ${PATHS})
+            list(APPEND VALUES "${${path}}")
+        endforeach()
+        list(REMOVE_AT VALUES 0)
+        list(LENGTH PATHS len_p)
+        list(LENGTH VALUES len_v)
+        message("${len_p}|${len_v}|${VALUES}")
+    )");
+    REQUIRE(output == "3|3|val_a;;val_c\n");
+}
+
+TEST_CASE("escaped semicolons (backslash-semicolon) are unescaped on extraction", "[interpreter][list]") {
+    // Regression: \; in variable values was not unescaped when elements were
+    // extracted via unquoted expansion, list(GET), list(FIND), or foreach.
+    // CMake treats \; as a non-separator semicolon that gets unescaped to ;
+    // when the element is extracted from the list.
+
+    // Unquoted expansion unescapes \; to ;
+    auto output = run_script(R"(
+        function(show_argc)
+            message("${ARGC}|${ARGV0}")
+        endfunction()
+        set(var "x\;y\;z")
+        show_argc(${var})
+    )");
+    REQUIRE(output == "1|x;y;z\n");
+
+    // string(REPLACE) + unquoted expand (the LLVM make_paths_relative pattern)
+    output = run_script(R"(
+        function(show_argc)
+            message("${ARGC}|${ARGV0}")
+        endfunction()
+        set(paths "/a;/b;/c")
+        string(REPLACE ";" "\\;" escaped "${paths}")
+        show_argc(${escaped})
+    )");
+    REQUIRE(output == "1|/a;/b;/c\n");
+
+    // list(GET) unescapes \;
+    output = run_script(R"(
+        set(var "a\;b;c")
+        list(GET var 0 first)
+        list(GET var 1 second)
+        message("${first}|${second}")
+    )");
+    REQUIRE(output == "a;b|c\n");
+
+    // list(FIND) compares against unescaped value
+    output = run_script(R"(
+        set(var "a\;b;c;d")
+        list(FIND var "a;b" idx)
+        message("${idx}")
+    )");
+    REQUIRE(output == "0\n");
+
+    // foreach unescapes \;
+    output = run_script(R"(
+        set(var "x\;y;z")
+        foreach(item ${var})
+            message("${item}")
+        endforeach()
+    )");
+    REQUIRE(output == "x;y\nz\n");
+
+    // Quoted expansion preserves \; as-is
+    output = run_script(R"(
+        set(var "a\;b")
+        message("${var}")
+    )");
+    REQUIRE(output == "a\\;b\n");
+
+    // Multiple \; in one element
+    output = run_script(R"(
+        set(var "a\;b\;c;d")
+        list(GET var 0 first)
+        message("${first}")
+    )");
+    REQUIRE(output == "a;b;c\n");
+
+    // \; at start and end of element
+    output = run_script(R"(
+        set(var "\;a;b\;")
+        list(GET var 0 first)
+        list(GET var 1 second)
+        message("'${first}'|'${second}'")
+    )");
+    REQUIRE(output == "';a'|'b;'\n");
+}
+
 TEST_CASE("list(REVERSE) reverses the list", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "1" "2" "3")

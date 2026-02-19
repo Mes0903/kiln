@@ -171,4 +171,20 @@ inline bool cmake_list_contains(std::string_view list, std::string_view item) {
     return false;
 }
 
+// Unescape \; to ; in a list element extracted via CMakeArrayIterator/View.
+// Only call when sv contains '\\' (caller should check to avoid allocation).
+inline std::string unescape_list_element(std::string_view sv) {
+    std::string result;
+    result.reserve(sv.size());
+    for (size_t i = 0; i < sv.size(); ++i) {
+        if (sv[i] == '\\' && i + 1 < sv.size() && sv[i + 1] == ';') {
+            result += ';';
+            ++i;
+        } else {
+            result += sv[i];
+        }
+    }
+    return result;
+}
+
 }

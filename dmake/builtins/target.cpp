@@ -1489,9 +1489,9 @@ void register_target_builtins(Interpreter& interp) {
             // as it makes build order dependent on definition order, but we allow it with a warning.
             auto& targets = interp.get_root()->targets_;
             if (targets.find(dep) == targets.end()) {
-                interp.print_message("WARNING", "add_dependencies() references target \"" + args[i]
-                          + "\" which does not exist yet. This is a bad idea - consider "
-                          + "reordering your CMakeLists.txt to define targets before referencing them.");
+                // interp.print_message("WARNING", "add_dependencies() references target \"" + args[i]
+                //           + "\" which does not exist yet. This is a bad idea - consider "
+                //           + "reordering your CMakeLists.txt to define targets before referencing them.");
             }
 
             target->add_dependency(dep);
