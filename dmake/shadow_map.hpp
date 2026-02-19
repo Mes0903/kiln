@@ -6,17 +6,20 @@
 #include <vector>
 #include <expected>
 #include <optional>
-#include <functional>
+#include <memory>
+
+#include "inner/unordered_dense.h"
 
 namespace dmake {
 
 // Transparent hash/equal for heterogeneous lookup with string_view
-// Allows unordered_map<string,...>::find(string_view) without constructing a string
+// Uses wyhash (via ankerl) for better distribution than std::hash
 struct TransparentStringHash {
     using is_transparent = void;
+    using is_avalanching = void;
 
-    size_t operator()(std::string_view sv) const noexcept {
-        return std::hash<std::string_view>{}(sv);
+    auto operator()(std::string_view sv) const noexcept -> std::uint64_t {
+        return inner::ankerl::unordered_dense::detail::wyhash::hash(sv.data(), sv.size());
     }
 };
 
@@ -56,8 +59,8 @@ public:
      */
     const std::string* try_get(std::string_view name) const {
         auto it = variables_.find(name);
-        if (it == variables_.end() || it->second.empty()) return nullptr;
-        auto& val = it->second.back().value;
+        if (it == variables_.end() || it->second->empty()) return nullptr;
+        auto& val = it->second->back().value;
         return val.has_value() ? &*val : nullptr;
     }
 
@@ -89,7 +92,7 @@ public:
     std::optional<ConstEntry> const_entry(std::string_view name) const {
         auto it = variables_.find(name);
         if (it == variables_.end()) return std::nullopt;
-        return ConstEntry(&it->second);
+        return ConstEntry(it->second.get());
     }
 
     /**
@@ -168,8 +171,11 @@ public:
      * Returns a cached read-write handle. Creates map entry if needed.
      */
     Entry entry(const std::string& name) {
-        auto [it, _] = variables_.try_emplace(name);
-        return Entry(*this, &it->second);
+        auto [it, inserted] = variables_.try_emplace(name);
+        if (inserted) {
+            it->second = std::make_unique<std::vector<VariableVersion>>();
+        }
+        return Entry(*this, it->second.get());
     }
 
     /**
@@ -180,11 +186,11 @@ public:
     const std::string& get(std::string_view name) const {
         static const std::string empty;
         auto it = variables_.find(name);
-        if (it == variables_.end() || it->second.empty()) {
+        if (it == variables_.end() || it->second->empty()) {
             return empty;
         }
         // Check for tombstone (nullopt = unset)
-        const auto& val = it->second.back().value;
+        const auto& val = it->second->back().value;
         if (!val.has_value()) {
             return empty;
         }
@@ -199,25 +205,26 @@ public:
      * O(1) amortized complexity.
      */
     void set(const std::string& name, const std::string& value) {
-        // Fast path: transparent find for existing variables (avoids string key hash)
+        // Fast path: transparent find for existing variables
         auto it = variables_.find(std::string_view(name));
         if (it != variables_.end()) {
-            auto& versions = it->second;
-            if (!versions.empty() && versions.back().depth == current_depth_) {
-                versions.back().value = value;
+            auto* versions = it->second.get();
+            if (!versions->empty() && versions->back().depth == current_depth_) {
+                versions->back().value = value;
                 return;
             }
-            versions.push_back({std::optional<std::string>(value), current_depth_});
+            versions->push_back({std::optional<std::string>(value), current_depth_});
             if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].push_back(&versions);
+                modified_per_depth_[current_depth_].push_back(versions);
             }
             return;
         }
-        // Slow path: new variable — must allocate key
-        auto [new_it, _] = variables_.try_emplace(name);
-        new_it->second.push_back({std::optional<std::string>(value), current_depth_});
+        // Slow path: new variable — must allocate key + version vector
+        auto [new_it, _] = variables_.try_emplace(name, std::make_unique<std::vector<VariableVersion>>());
+        auto* versions = new_it->second.get();
+        versions->push_back({std::optional<std::string>(value), current_depth_});
         if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-            modified_per_depth_[current_depth_].push_back(&new_it->second);
+            modified_per_depth_[current_depth_].push_back(versions);
         }
     }
 
@@ -243,24 +250,27 @@ public:
         }
 
         int target_depth = current_depth_ - 1;
-        auto [it, _] = variables_.try_emplace(name);
-        auto& versions = it->second;
+        auto [it, inserted] = variables_.try_emplace(name);
+        if (inserted) {
+            it->second = std::make_unique<std::vector<VariableVersion>>();
+        }
+        auto* versions = it->second.get();
 
         // CMake semantics: PARENT_SCOPE should NOT affect current scope's view.
         // If the variable is visible from a parent depth but has no local entry,
         // we need to "snapshot" the current visible value into a local entry first.
-        bool has_local_entry = !versions.empty() && versions.back().depth == current_depth_;
-        if (!has_local_entry && !versions.empty() && versions.back().value.has_value()) {
+        bool has_local_entry = !versions->empty() && versions->back().depth == current_depth_;
+        if (!has_local_entry && !versions->empty() && versions->back().value.has_value()) {
             // Variable is visible from parent - snapshot current value to preserve local view
-            std::string current_value = *versions.back().value;
-            versions.push_back({std::optional<std::string>(current_value), current_depth_});
+            std::string current_value = *versions->back().value;
+            versions->push_back({std::optional<std::string>(current_value), current_depth_});
             if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].push_back(&versions);
+                modified_per_depth_[current_depth_].push_back(versions);
             }
         }
 
         // Search for existing entry at parent depth and modify
-        for (auto& ver : versions) {
+        for (auto& ver : *versions) {
             if (ver.depth == target_depth) {
                 ver.value = value;
                 return true;  // Replaced existing
@@ -275,24 +285,24 @@ public:
         // (If there's a local entry, the current scope's view is already established)
         if (!has_local_entry) {
             // Insert tombstone at current depth to hide the new parent variable
-            versions.push_back({std::nullopt, current_depth_});
+            versions->push_back({std::nullopt, current_depth_});
             if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].push_back(&versions);
+                modified_per_depth_[current_depth_].push_back(versions);
             }
         }
 
         // Insert the actual value at parent depth
         // Find the insertion point to maintain depth ordering
-        auto insert_pos = versions.begin();
-        while (insert_pos != versions.end() && insert_pos->depth < target_depth) {
+        auto insert_pos = versions->begin();
+        while (insert_pos != versions->end() && insert_pos->depth < target_depth) {
             ++insert_pos;
         }
 
-        versions.insert(insert_pos, {std::optional<std::string>(value), target_depth});
+        versions->insert(insert_pos, {std::optional<std::string>(value), target_depth});
 
         // Track modification at parent depth
         if (target_depth < static_cast<int>(modified_per_depth_.size())) {
-            modified_per_depth_[target_depth].push_back(&versions);
+            modified_per_depth_[target_depth].push_back(versions);
         }
 
         return false;  // Created new
@@ -306,26 +316,26 @@ public:
      */
     void unset(const std::string& name) {
         auto it = variables_.find(name);
-        if (it == variables_.end() || it->second.empty()) {
+        if (it == variables_.end() || it->second->empty()) {
             return;
         }
 
-        auto& versions = it->second;
-        if (versions.back().depth == current_depth_) {
+        auto* versions = it->second.get();
+        if (versions->back().depth == current_depth_) {
             // Variable is at current depth - remove it
-            versions.pop_back();
+            versions->pop_back();
             // If a parent version exists, insert a tombstone to mask it
-            if (!versions.empty() && versions.back().value.has_value()) {
-                versions.push_back({std::nullopt, current_depth_});
+            if (!versions->empty() && versions->back().value.has_value()) {
+                versions->push_back({std::nullopt, current_depth_});
                 if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                    modified_per_depth_[current_depth_].push_back(&versions);
+                    modified_per_depth_[current_depth_].push_back(versions);
                 }
             }
-        } else if (versions.back().depth < current_depth_ && versions.back().value.has_value()) {
+        } else if (versions->back().depth < current_depth_ && versions->back().value.has_value()) {
             // Variable exists at parent depth and is visible - insert tombstone to mask it
-            versions.push_back({std::nullopt, current_depth_});
+            versions->push_back({std::nullopt, current_depth_});
             if (current_depth_ > 0 && current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].push_back(&versions);
+                modified_per_depth_[current_depth_].push_back(versions);
             }
         }
         // If variable is already a tombstone at parent depth, do nothing
@@ -354,29 +364,29 @@ public:
 
         int target_depth = current_depth_ - 1;
         auto it = variables_.find(name);
-        if (it == variables_.end() || it->second.empty()) {
+        if (it == variables_.end() || it->second->empty()) {
             return false;  // Variable not found
         }
 
-        auto& versions = it->second;
+        auto* versions = it->second.get();
 
         // CMake semantics: unset PARENT_SCOPE should NOT affect current scope's view.
         // If the variable is visible from a parent depth but has no local entry,
         // we need to "snapshot" the current visible value into a local entry first.
-        bool has_local_entry = !versions.empty() && versions.back().depth == current_depth_;
-        if (!has_local_entry && !versions.empty() && versions.back().value.has_value()) {
+        bool has_local_entry = !versions->empty() && versions->back().depth == current_depth_;
+        if (!has_local_entry && !versions->empty() && versions->back().value.has_value()) {
             // Variable is visible from parent - snapshot current value to preserve local view
-            std::string current_value = *versions.back().value;
-            versions.push_back({std::optional<std::string>(current_value), current_depth_});
+            std::string current_value = *versions->back().value;
+            versions->push_back({std::optional<std::string>(current_value), current_depth_});
             if (current_depth_ < static_cast<int>(modified_per_depth_.size())) {
-                modified_per_depth_[current_depth_].push_back(&versions);
+                modified_per_depth_[current_depth_].push_back(versions);
             }
         }
 
         // Find and remove the entry at parent depth
-        for (auto ver_it = versions.begin(); ver_it != versions.end(); ++ver_it) {
+        for (auto ver_it = versions->begin(); ver_it != versions->end(); ++ver_it) {
             if (ver_it->depth == target_depth) {
-                versions.erase(ver_it);
+                versions->erase(ver_it);
                 return true;  // Found and removed
             }
         }
@@ -389,11 +399,11 @@ public:
      */
     bool is_defined(std::string_view name) const {
         auto it = variables_.find(name);
-        if (it == variables_.end() || it->second.empty()) {
+        if (it == variables_.end() || it->second->empty()) {
             return false;
         }
         // Check for tombstone
-        return it->second.back().value.has_value();
+        return it->second->back().value.has_value();
     }
 
     /**
@@ -449,8 +459,8 @@ public:
     std::unordered_map<std::string, std::string> snapshot() const {
         std::unordered_map<std::string, std::string> result;
         for (const auto& [name, versions] : variables_) {
-            if (!versions.empty() && versions.back().value.has_value()) {
-                result[name] = *versions.back().value;
+            if (!versions->empty() && versions->back().value.has_value()) {
+                result[name] = *versions->back().value;
             }
         }
         return result;
@@ -472,7 +482,7 @@ public:
     std::vector<std::string> get_all_names() const {
         std::vector<std::string> result;
         for (const auto& [name, versions] : variables_) {
-            if (!versions.empty() && versions.back().value.has_value()) {
+            if (!versions->empty() && versions->back().value.has_value()) {
                 result.push_back(name);
             }
         }
@@ -481,15 +491,18 @@ public:
 
 private:
     // Variable name -> [version history sorted by depth]
-    // Uses transparent hash/equal for string_view lookup without allocation
-    std::unordered_map<std::string, std::vector<VariableVersion>,
-                       TransparentStringHash, TransparentStringEqual> variables_;
+    // Uses open-addressing hash map (ankerl::unordered_dense) for cache-friendly probing.
+    // Values are heap-allocated via unique_ptr for stable pointers across rehash.
+    // Transparent hash/equal enables string_view lookup without allocation.
+    inner::ankerl::unordered_dense::map<
+        std::string, std::unique_ptr<std::vector<VariableVersion>>,
+        TransparentStringHash, TransparentStringEqual> variables_;
 
     // Current scope depth (0 = root)
     int current_depth_ = 0;
 
     // Track which variables were modified at each depth (for cleanup)
-    // Uses pointers to version vectors in variables_ (stable due to unordered_map guarantees).
+    // Uses pointers to version vectors in variables_ (stable due to unique_ptr heap allocation).
     // Duplicates are tolerated — pop_scope handles them gracefully.
     // Storing version vector pointers directly eliminates hash lookups in pop_scope.
     std::vector<std::vector<std::vector<VariableVersion>*>> modified_per_depth_;
