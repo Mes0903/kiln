@@ -92,7 +92,8 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
                      const std::vector<std::string>& components,
                      const std::vector<Regex>& compiled,
                      size_t comp_idx,
-                     bool recurse, const std::string& relative,
+                     bool recurse, bool list_directories,
+                     const std::string& relative,
                      CMakeArray& results,
                      std::map<std::string, int64_t>& dir_mtimes) {
     if (comp_idx >= components.size()) return;
@@ -113,6 +114,8 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
         auto* subdirs = interp.get_directory_subdirs(dir_str);
         for (const auto& name : *entries) {
             if (!rx.match(name)) continue;
+            // Filter out directories when list_directories is false
+            if (!list_directories && subdirs && subdirs->contains(name)) continue;
             if (!relative.empty()) {
                 results.push_back(
                     std::filesystem::relative(dir_str + '/' + name, relative).string());
@@ -127,7 +130,7 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
                 for (const auto& subdir_name : *subdirs) {
                     glob_components(interp, dir_str + '/' + subdir_name,
                                     components, compiled, comp_idx, true,
-                                    relative, results, dir_mtimes);
+                                    list_directories, relative, results, dir_mtimes);
                 }
             }
         }
@@ -138,8 +141,8 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
             std::string next = dir_str + '/' + comp;
             if (interp.cached_is_directory(next)) {
                 glob_components(interp, next, components, compiled,
-                                comp_idx + 1, recurse, relative,
-                                results, dir_mtimes);
+                                comp_idx + 1, recurse, list_directories,
+                                relative, results, dir_mtimes);
             }
         } else {
             auto* subdirs = interp.get_directory_subdirs(dir_str);
@@ -149,13 +152,14 @@ void glob_components(Interpreter& interp, const std::string& dir_str,
                 if (!rx.match(subdir_name)) continue;
                 glob_components(interp, dir_str + '/' + subdir_name,
                                 components, compiled, comp_idx + 1,
-                                recurse, relative, results, dir_mtimes);
+                                recurse, list_directories, relative,
+                                results, dir_mtimes);
             }
         }
     }
 }
 
-void perform_glob(Interpreter& interp, const std::string& var, const std::vector<std::string>& patterns, bool recurse, const std::string& relative) {
+void perform_glob(Interpreter& interp, const std::string& var, const std::vector<std::string>& patterns, bool recurse, bool list_directories, const std::string& relative) {
     CMakeArray results;
     std::filesystem::path base_path = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
     auto& cache = interp.get_cache_store();
@@ -241,6 +245,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
         // Cache key: dir + pattern + recurse + relative
         std::string cache_sig = search_dir_str + "|" + remaining_pattern +
                                 "|r:" + (pattern_recurse ? "1" : "0") +
+                                "|ld:" + (list_directories ? "1" : "0") +
                                 "|rel:" + relative;
 
         auto& profiler = Profiler::instance();
@@ -273,7 +278,7 @@ void perform_glob(Interpreter& interp, const std::string& var, const std::vector
             all_presorted = false;
             CMakeArray pattern_results;
             std::map<std::string, int64_t> dir_mtimes;
-            glob_components(interp, search_dir_str, pattern_components, compiled, 0, pattern_recurse, relative, pattern_results, dir_mtimes);
+            glob_components(interp, search_dir_str, pattern_components, compiled, 0, pattern_recurse, list_directories, relative, pattern_results, dir_mtimes);
 
             match_count = pattern_results.size();
 
@@ -370,18 +375,24 @@ void register_file_builtins(Interpreter& interp) {
             std::string relative;
             std::vector<std::string> patterns;
 
-            bool recurse = (ci_equals(operation, "GLOB_RECURSE"));
+            bool recurse = ci_equals(operation, "GLOB_RECURSE");
+            // CMake: GLOB includes directories by default, GLOB_RECURSE omits them by default
+            bool list_directories = !recurse;
 
             for (size_t i = 1; i < sub_args.size(); ++i) {
                 if (sub_args[i] == "RELATIVE" && i + 1 < sub_args.size()) {
                     relative = sub_args[++i];
                 } else if (sub_args[i] == "CONFIGURE_DEPENDS") {
                     // Ignore for now
+                } else if (sub_args[i] == "LIST_DIRECTORIES" && i + 1 < sub_args.size()) {
+                    list_directories = ci_equals(sub_args[++i], "true");
+                } else if (sub_args[i] == "FOLLOW_SYMLINKS") {
+                    // Only meaningful for GLOB_RECURSE, ignored for now
                 } else {
                     patterns.push_back(sub_args[i]);
                 }
             }
-            perform_glob(interp, var, patterns, recurse, relative);
+            perform_glob(interp, var, patterns, recurse, list_directories, relative);
         } else if (ci_equals(operation, "REAL_PATH")) {
             CommandParser parser("file", "REAL_PATH");
             std::string input_path, out_var, base_dir;
