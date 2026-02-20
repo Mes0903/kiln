@@ -1714,7 +1714,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     return res;
 }
 
-const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::string_view dir) {
+const Interpreter::DirectoryCacheEntry* Interpreter::get_directory_cache_entry(std::string_view dir) {
     Interpreter* root = get_root();
 
     // Normalize to absolute path using string ops (no std::filesystem overhead)
@@ -1724,7 +1724,7 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::s
     // Session cache lookup first — zero syscalls on hit
     auto it = root->dir_scan_cache_.find(dir_key);
     if (it != root->dir_scan_cache_.end()) {
-        return &it->second.entries;
+        return &it->second;
     }
 
     // Cache miss — single stat via last_write_time (replaces exists + is_directory + last_write_time)
@@ -1762,7 +1762,7 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::s
                 cache_entry.subdirs.insert(d);
             }
             auto [ins_it, _] = root->dir_scan_cache_.emplace(dir_key, std::move(cache_entry));
-            return &ins_it->second.entries;
+            return &ins_it->second;
         }
     }
 
@@ -1805,20 +1805,17 @@ const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::s
     // Store in session cache
     DirectoryCacheEntry cache_entry{current_mtime, std::move(entries), std::move(subdirs)};
     auto [inserted_it, _] = root->dir_scan_cache_.emplace(dir_key, std::move(cache_entry));
-    return &inserted_it->second.entries;
+    return &inserted_it->second;
+}
+
+const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::string_view dir) {
+    auto* entry = get_directory_cache_entry(dir);
+    return entry ? &entry->entries : nullptr;
 }
 
 const std::unordered_set<std::string>* Interpreter::get_directory_subdirs(std::string_view dir) {
-    // Ensure the directory is cached (populates entries + subdirs)
-    if (!get_directory_listing(dir)) return nullptr;
-
-    // Reconstruct the same key that get_directory_listing used
-    std::string dir_key = Path(Path::absolute(dir)).lexically_normal().str();
-    if (dir_key.empty()) return nullptr;
-
-    auto it = get_root()->dir_scan_cache_.find(dir_key);
-    if (it == get_root()->dir_scan_cache_.end()) return nullptr;
-    return &it->second.subdirs;
+    auto* entry = get_directory_cache_entry(dir);
+    return entry ? &entry->subdirs : nullptr;
 }
 
 bool Interpreter::cached_file_exists(std::string_view full_path) {

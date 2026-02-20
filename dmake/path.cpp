@@ -99,6 +99,33 @@ Path Path::operator/(std::string_view rhs) const {
 Path Path::lexically_normal() const {
     if (path_.empty()) return Path(".");
 
+    // Fast path: if the path has no . or .. components and no double slashes
+    // or trailing slash, it's already normal — return as-is without allocating.
+    {
+        bool dominated_by_slash = false;  // previous char was '/'
+        bool clean = true;
+        for (size_t i = 0, n = path_.size(); i < n; ++i) {
+            char c = path_[i];
+            if (c == '/') {
+                if (dominated_by_slash) { clean = false; break; }  // "//"
+                dominated_by_slash = true;
+            } else if (c == '.' && dominated_by_slash) {
+                // Check for "/." or "/.."
+                size_t next = i + 1;
+                if (next == n || path_[next] == '/') { clean = false; break; }        // "/." at end or "/./"
+                if (path_[next] == '.' && (next + 1 == n || path_[next + 1] == '/')) { // "/.."
+                    clean = false; break;
+                }
+                dominated_by_slash = false;
+            } else {
+                dominated_by_slash = false;
+            }
+        }
+        // Trailing slash on non-root paths is not normal
+        if (clean && path_.size() > 1 && path_.back() == '/') clean = false;
+        if (clean) return *this;
+    }
+
     size_t root_len = root_prefix_len(path_);
     std::string_view root = std::string_view(path_).substr(0, root_len);
     std::string_view rest = std::string_view(path_).substr(root_len);
