@@ -572,11 +572,44 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
     };
 
     auto walk_link_libs = [&](PropertyVisibility vis, bool is_public, bool is_interface_only) {
-        for (const auto& lib : get_property_list("LINK_LIBRARIES", vis)) {
+        const auto& raw_libs = get_property_list("LINK_LIBRARIES", vis);
+
+        // Reassemble fragmented genex: semicolons inside $<...> cause the
+        // interpreter to split a single genex like $<BUILD_INTERFACE:a;b;c>
+        // into separate list items. Rejoin them before evaluation.
+        std::vector<std::string> libs;
+        std::string pending;
+        int depth = 0;
+        for (const auto& lib : raw_libs) {
+            if (depth > 0) {
+                pending += ';';
+                pending += lib;
+            } else {
+                pending = lib;
+            }
+            for (size_t i = 0; i < lib.size(); ++i) {
+                if (lib[i] == '$' && i + 1 < lib.size() && lib[i + 1] == '<') {
+                    ++depth;
+                    ++i;
+                } else if (lib[i] == '>' && depth > 0) {
+                    --depth;
+                }
+            }
+            if (depth == 0) {
+                libs.push_back(std::move(pending));
+                pending.clear();
+            }
+        }
+        if (!pending.empty()) {
+            libs.push_back(std::move(pending));
+        }
+
+        for (const auto& lib : libs) {
             auto eval_result = evaluator.evaluate_link_library(lib);
             if (!eval_result) {
                 throw std::runtime_error("Error evaluating LINK_LIBRARIES for target '"
-                    + name_ + "': " + eval_result.error());
+                    + name_ + "': " + eval_result.error()
+                    + "\n  Value: " + lib);
             }
             if (!eval_result->value.empty()) {
                 for (auto part : CMakeArrayIterator(eval_result->value)) {
