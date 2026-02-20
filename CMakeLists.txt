@@ -5,6 +5,17 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
+
+find_package(CURL REQUIRED)
+find_package(LibArchive REQUIRED)
+find_package(pugixml REQUIRED)
+find_package(CLI11 CONFIG REQUIRED)
+
+# linenoise has no CMake package; find_library is the only available mechanism
+find_library(LINENOISE_LIBRARY NAMES linenoise REQUIRED)
+
 add_library(dmake SHARED
     dmake/cmake-language.cpp
     dmake/interperter.cpp
@@ -58,38 +69,30 @@ add_library(dmake SHARED
 )
 
 target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PCRE2 REQUIRED libpcre2-8)
-target_include_directories(dmake PUBLIC ${PCRE2_INCLUDE_DIRS})
-target_link_libraries(dmake PUBLIC ${PCRE2_LIBRARIES})
-
-find_package(CURL REQUIRED)
-target_link_libraries(dmake PUBLIC CURL::libcurl)
-
-find_package(LibArchive REQUIRED)
-target_link_libraries(dmake PUBLIC LibArchive::LibArchive)
-
-find_package(pugixml REQUIRED)
-target_link_libraries(dmake PUBLIC pugixml::pugixml)
-
-find_library(LINENOISE_LIBRARY NAMES linenoise REQUIRED)
-
-find_package(CLI11 CONFIG REQUIRED)
-add_executable(dmake_cli dmake-cli/main.cpp)
-target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11 ${LINENOISE_LIBRARY})
-
-set_target_properties(dmake_cli PROPERTIES
-    OUTPUT_NAME dmake
+target_link_libraries(dmake PUBLIC
+    PkgConfig::PCRE2
+    CURL::libcurl
+    LibArchive::LibArchive
+    pugixml::pugixml
 )
 
-# Install rules
-install(TARGETS dmake_cli RUNTIME DESTINATION bin)
-install(TARGETS dmake LIBRARY DESTINATION lib)
+# --- Executable ---
 
+add_executable(dmake_cli dmake-cli/main.cpp)
+target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11 ${LINENOISE_LIBRARY})
+set_target_properties(dmake_cli PROPERTIES OUTPUT_NAME dmake)
+
+# --- Install rules ---
+
+install(TARGETS dmake_cli dmake
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+)
+
+# --- Testing ---
+
+include(CTest)
 if(BUILD_TESTING)
-    enable_testing()
-
     find_package(Catch2 3 REQUIRED)
     add_executable(dmake_tests tests/main.cpp
         tests/interpreter_tests.cpp

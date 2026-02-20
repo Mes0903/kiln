@@ -1,2 +1,2 @@
 project(testproj)
-find_package(Qt6 COMPONENTS Core REQUIRED)
+find_package(PCRE2 REQUIRED)

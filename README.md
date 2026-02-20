@@ -108,6 +108,7 @@ Commands:
 ### Options
 Common flags:
 - `-j N`: Set number of parallel jobs (defaults to CPU count)
+- `-P <file to run>` script mode (like CMake)
 - `--config <debug|release|relwithdebinfo>`: Set build configuration
 - `-DVAR=VAL`: Define a CMake variable
 - `-B <dir>`: Set build root directory
