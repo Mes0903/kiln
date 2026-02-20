@@ -1222,7 +1222,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             std::error_code ec;
             std::filesystem::create_directories(binary_path_str, ec);
 
-            if (!std::filesystem::exists(cmake_file_str)) {
+            if (!interp.cached_file_exists(cmake_file_str)) {
                 interp.set_fatal_error("CMakeLists.txt not found in " + abs_source_str);
                 return;
             }
@@ -1574,8 +1574,6 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         return {};
     }
 
-
-
     // Helper to check if a path exists, trying with and without .cmake extension
     auto try_path = [this](std::string_view p) -> std::optional<std::string> {
         if (cached_file_exists(p)) {
@@ -1590,9 +1588,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         return std::nullopt;
     };
 
-    auto find_in_dir = [&try_path](std::string_view dir, const std::string& file_path) -> std::optional<std::string> {
-        auto candidate = Path::join(dir, file_path);
-        return try_path(candidate);
+    auto find_in_dir = [&try_path](std::string_view dir, const std::string& fp) -> std::optional<std::string> {
+        return try_path(Path::join(dir, fp));
     };
 
     std::optional<std::string> found_path;
@@ -1601,13 +1598,11 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         found_path = try_path(file_path);
     } else {
         // Try relative to CMAKE_CURRENT_SOURCE_DIR first
-        std::string candidate = Path::join(get_variable("CMAKE_CURRENT_SOURCE_DIR"), file_path);
-        found_path = try_path(candidate);
+        found_path = try_path(Path::join(get_variable("CMAKE_CURRENT_SOURCE_DIR"), file_path));
 
         // If not found, search CMAKE_MODULE_PATH
         if (!found_path) {
-            auto module_path_str = get_variable("CMAKE_MODULE_PATH");
-            for (auto dir : CMakeArrayIterator(module_path_str)) {
+            for (auto dir : CMakeArrayIterator(get_variable("CMAKE_MODULE_PATH"))) {
                 if (!dir.empty()) {
                     found_path = find_in_dir(dir, file_path);
                     if (found_path) break;
@@ -1617,13 +1612,10 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
         // If not found, search system paths
         if (!found_path) {
-            std::vector<std::string> system_modules = {
-                "/usr/share/cmake/Modules",
-                "/usr/local/share/cmake/Modules",
-                "/usr/lib/cmake/Modules",
-                "/usr/lib/x86_64-linux-gnu/cmake/Modules"
-            };
-            for (const auto& dir : system_modules) {
+            for (const auto& dir : {"/usr/share/cmake/Modules",
+                                    "/usr/local/share/cmake/Modules",
+                                    "/usr/lib/cmake/Modules",
+                                    "/usr/lib/x86_64-linux-gnu/cmake/Modules"}) {
                 found_path = find_in_dir(dir, file_path);
                 if (found_path) break;
             }
@@ -1638,7 +1630,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     const std::string& resolved_path = *found_path;
 
     // Check if it's a directory (reject directories, but accept symlinks to files)
-    if (std::filesystem::is_directory(resolved_path)) {
+    if (cached_is_directory(resolved_path)) {
         if (optional) return {};
         return std::unexpected(InterpreterError{current_file_, current_cmd_row_, current_cmd_col_, 0, 0, "include() path is a directory: " + resolved_path, {}});
     }
@@ -1657,20 +1649,20 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
     if (cached_ast) {
         ast_to_use = cached_ast;
     } else {
-        std::ifstream file(resolved_path);
+        std::ifstream file(abs_path);
         if (!file) {
-            return std::unexpected(InterpreterError{resolved_path, 0, 0, 0, 0, "include() could not read: " + resolved_path, {}});
+            return std::unexpected(InterpreterError{abs_path, 0, 0, 0, 0, "include() could not read: " + abs_path, {}});
         }
 
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
         ProfileScope parse_profile("parse " + abs_path, "parse");
-        Parser parser(content, resolved_path);
+        Parser parser(content, abs_path);
         parsed_ast = parser.parse();
         parse_profile.stop();
 
         if (!parsed_ast) {
-            return std::unexpected(InterpreterError{resolved_path, parsed_ast.error().row, parsed_ast.error().col, parsed_ast.error().offset, parsed_ast.error().length, parsed_ast.error().reason, {}});
+            return std::unexpected(InterpreterError{abs_path, parsed_ast.error().row, parsed_ast.error().col, parsed_ast.error().offset, parsed_ast.error().length, parsed_ast.error().reason, {}});
         }
 
         ast_to_use = &parsed_ast.value();
