@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 dmake is a fast C++23 build system that interprets CMake's language directly without a configure step. Features:
 - **Cargo-style multi-config builds** - separate `build/<config>/` directories
-- **Parallel, incremental builds** - signature-based caching
+- **Parallel, incremental builds** - signature-based caching (Blake2b)
 - **No configure step** - interprets CMakeLists.txt on every build
 - **Experimental C++20 modules support**
 
@@ -35,6 +35,11 @@ dmake -P <script.cmake>       # Script mode
 dmake -E <cmd> [args]         # Tool mode (echo, touch, copy, etc.)
 dmake --debug                 # Interactive debugger
 dmake --trace                 # Trace execution
+dmake --trace-expand          # Trace with variable expansion
+dmake --profile               # Chrome trace profiling output
+dmake --config-only           # Parse/cache only, no build
+dmake --fresh                 # Skip persistent cache
+dmake -C <dir>                # Set project directory
 ```
 
 ## Architecture
@@ -52,11 +57,18 @@ Four main layers:
 |--------|-------|---------|
 | Generator Expressions | `genex_parser.hpp/cpp`, `genex_evaluator.hpp/cpp` | `$<...>` expressions |
 | Install | `install_executor.hpp/cpp`, `builtins/install.cpp` | Installation support |
-| FetchContent | `intercept/fetch_content.cpp` | Dependency downloading |
-| ExternalProject | `intercept/external_project.cpp` | External builds |
+| FetchContent | `intercept/fetch_content.cpp/hpp` | Dependency downloading |
+| ExternalProject | `intercept/external_project.cpp/hpp`, `external_project_target.cpp/hpp` | External builds |
+| Download Utils | `intercept/download_utils.cpp/hpp` | CURL + libarchive download/extract |
 | Debugger | `debugger.hpp/cpp` | Interactive debugging |
-| Condition Evaluator | `condition_evaluator.hpp/cpp` | if() parsing |
-| Cache Store | `cache_store.hpp/cpp` | Persistent JSON cache |
+| Condition Evaluator | `condition_evaluator.hpp/cpp`, `condition_tree.cpp` | if() parsing |
+| Cache Store | `cache_store.hpp/cpp` | Persistent JSON cache (try_compile, find_*, globs) |
+| Variable Scoping | `shadow_map.hpp` | Depth-tagged scope stack, O(1) variable access |
+| Auto-generation | `autogen.cpp/hpp` | MOC/UIC/RCC and similar auto-gen steps |
+| AST Cache | `ast_cache.cpp/hpp` | Caching parsed ASTs for shared modules |
+| Profiler | `profiler.hpp/cpp` | Chrome trace events, gated by `g_profiling_enabled` |
+| Progress Bar | `progress_bar.cpp/hpp` | Terminal progress display |
+| Tool Mode | `tool_mode.cpp/hpp` | CMake -E compatible commands |
 
 ## Supported Commands
 
@@ -105,19 +117,22 @@ Supports common genex patterns:
 - **CLI**: `dmake-cli/main.cpp`
 
 ### Builtins (`dmake/builtins/`)
-Each file registers commands via `register_*_builtins()`:
+Each file registers commands via `register_*_builtins()` declared in `registry.hpp`:
 - `message.cpp`, `variable.cpp`, `list.cpp`, `string.cpp`, `math.cpp`
 - `target.cpp`, `project.cpp`, `file.cpp`, `path.cpp`
 - `find_commands.cpp`, `find_package.cpp`
 - `process.cpp`, `try_compile.cpp`
 - `property.cpp`, `source_properties.cpp`
-- `install.cpp`, `export_generator.cpp`
+- `install.cpp`, `export_generator.cpp/hpp`
 - `system_info.cpp`
 
 ### Utilities
-- **CommandParser**: `dmake/command_parser.hpp` - Builder API for parsing CMake args
-- **CMakeList**: `dmake/cmake_list.hpp` - Semicolon-separated list ops
+- **CommandParser**: `dmake/command_parser.hpp/cpp` - Builder API for parsing CMake args
+- **CMakeArray**: `dmake/CMakeArray.hpp/cpp` - Semicolon-separated list ops
+- **ShadowMap**: `dmake/shadow_map.hpp` - Variable scope stack
 - **Module Scanner**: `dmake/module_scanner.hpp/cpp` - C++20 module deps
+- **Regex**: `dmake/regex.hpp/cpp` - PCRE2-based regex support
+- **Bundled deps**: `dmake/inner/` - blake2b, md5, sha256, unordered_dense
 
 ## Adding New Features
 
@@ -139,7 +154,7 @@ Each file registers commands via `register_*_builtins()`:
 
 **Unit tests**: `tests/*.cpp` (Catch2 v3). Run with `./build/dmake_tests "[tag]"`.
 
-**Integration tests**: `tests/integration/*/`. Each has `CMakeLists.txt` + `test.sh` script taking dmake path as `$1`.
+**Integration tests**: ~50 test scenarios in `tests/integration/*/`. Each has `CMakeLists.txt` + `test.sh` script taking dmake path as `$1`. Covers executables, libraries, PCH, modules, find_*, FetchContent, ExternalProject, install, export, properties, try_compile, and more.
 
 ## Debugging
 

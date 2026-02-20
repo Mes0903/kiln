@@ -13,11 +13,11 @@ Modern C/C++ development is editor-first:
 * Builds are incremental and frequent
 * Developers expect fast, predictable errors
 
-CMake’s generator model was designed for a different era. This project keeps CMake compatibility while fixing the parts that routinely cause confusion:
+CMake is a mature and widely-supported build system, but its configure-then-generate model adds friction in tight edit-build loops. dmake keeps CMake as the input language while changing the execution model:
 
-* stale caches
-* generator-specific behavior
-* delayed or misleading errors
+* **No configure step** — CMakeLists.txt is interpreted directly on every build, eliminating stale cache surprises
+* **Faster interpretation** — dmake's interpreter is significantly faster than CMake's, with 10x+ speedups in some workloads
+* **Incremental by default** — signature-based caching means rebuilds are always minimal and correct
 
 ## Building
 
@@ -29,7 +29,9 @@ The project has a few dependencies:
 * Glaze (https://github.com/stephenberry/glaze)
 * pugixml (https://github.com/zeux/pugixml)
 * libcurl
-* C++23 apable compiler (GCC 13+)
+* libarchive
+* linenoise
+* C++23 capable compiler (GCC 13+)
 * CMake (dmake is an execution engine, you still need the CMake shipped modules)
 
 To build `dmake` for the first time using CMake:
@@ -69,6 +71,13 @@ dmake test "RegexPattern"  # Run matching tests
 ```
 Tests run in parallel with buffered output to keep the terminal clean.
 
+### Installing
+Install the project to a prefix:
+```bash
+dmake install
+dmake install --prefix /usr/local
+```
+
 ### Cleaning
 Remove build artifacts:
 ```bash
@@ -102,22 +111,27 @@ Commands:
   delete <n>           (d) Delete breakpoint by ID
   quit                 (q) Exit dmake
   help                 (h) Show this help
-(dmake) > 
+(dmake) >
 ```
 
 ### Options
 Common flags:
 - `-j N`: Set number of parallel jobs (defaults to CPU count)
-- `-P <file to run>` script mode (like CMake)
-- `--config <debug|release|relwithdebinfo>`: Set build configuration
-- `-DVAR=VAL`: Define a CMake variable
+- `-C <dir>`: Set project directory
 - `-B <dir>`: Set build root directory
-- `--profile`: Output a Chrome Trace Event Format compatiable profile that can be loaded into [Perfetto](https://ui.perfetto.dev/) and others
-- `--debugger`: Launch in debug mode (GDB-like commands with breaking and other features. Use `help` in the debugger for more information)
+- `-P <script.cmake>`: Script mode (like CMake -P)
+- `-DVAR=VAL`: Define a CMake variable
+- `--config <debug|release|relwithdebinfo|minsizerel>`: Set build configuration
+- `--profile`: Output a Chrome Trace Event Format compatible profile that can be loaded into [Perfetto](https://ui.perfetto.dev/) and others
+- `--trace`: Print commands as they are executed
+- `--trace-expand`: Like `--trace` but also shows variable expansion
+- `--debugger`: Launch in debug mode (use `help` inside for commands)
+- `--config-only`: Parse and cache only, skip the build step
+- `--fresh`: Skip persistent cache (force re-evaluation of find_* and try_compile)
 
 ## Self Hosting
 
-Since `dmake` uses CMake as its input language and itself built using CMake, it can build itself!
+Since `dmake` uses CMake as its input language and is itself built using CMake, it can build itself!
 
 ```bash
 # Assuming you have a dmake binary in build/
