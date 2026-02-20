@@ -526,12 +526,12 @@ Examples:
     dmake::DebugOptions debug_opts{opt.trace, opt.trace_expand, opt.debugger, opt.break_on_message};
     dmake::DebugController debug_controller(debug_opts);
 
-    if (debug_opts.any_enabled()) {
-        // Install signal handlers for graceful interruption in debugger mode
-        signal(SIGINT, signal_handler);
-        signal(SIGTERM, signal_handler);
-        signal(SIGHUP, signal_handler);
+    // Install signal handlers for graceful interruption (cache saving on Ctrl-C, etc.)
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGHUP, signal_handler);
 
+    if (debug_opts.any_enabled()) {
         // Set up linenoise-based input for interactive debugger
         static const char* dbg_commands[] = {
             "break", "break-on-message", "continue", "step", "next", "print",
