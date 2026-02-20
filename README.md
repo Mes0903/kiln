@@ -2,22 +2,23 @@
 
 Better C/C++ builds that just works, with CMake as an input language.
 
-> [!NOTE]
-> Experimental project, Linux + GCC/G++ only for now
+> [!IMPORTANT]
+> Experimental project, Linux + GCC/G++ + non cross compiling only for now
 
 ## Why
 
 Modern C/C++ development is editor-first:
 
-* LSPs rely on `compile_commands.json`
+* Language Servers rely on `compile_commands.json`
 * Builds are incremental and frequent
 * Developers expect fast, predictable errors
 
-CMake is a mature and widely-supported build system, but its configure-then-generate model adds friction in tight edit-build loops. dmake keeps CMake as the input language while changing the execution model:
+CMake is a mature and widely-supported build system generator, but the configure-then-generate model adds friction in tight development cycles and occationally causes major troubles. `dmake` keeps CMake as the input language while changing the execution model:
 
-* **No configure step** — CMakeLists.txt is interpreted directly on every build, eliminating stale cache surprises
-* **Faster interpretation** — dmake's interpreter is significantly faster than CMake's, with 10x+ speedups in some workloads
-* **Incremental by default** — signature-based caching means rebuilds are always minimal and correct
+* **No configure step** - CMakeLists.txt is interpreted directly on every build, eliminating stale cache surprises. With aggressively invalidated cache for heavy built-ins
+* **Faster interpretation** - dmake's interpreter is significantly faster than CMake's, with 10x+ speedups in some workloads
+* **Better error messagess** - no more looking at cryptic errors and guessing where it originates from
+* **It's a build system** - owns the entire build flow, better integration, no per-build system jank
 
 ## Building
 
@@ -84,6 +85,21 @@ Remove build artifacts:
 dmake clean
 ```
 
+### Options
+Common flags:
+- `-j N`: Set number of parallel jobs (defaults to CPU count)
+- `-C <dir>`: Set project directory
+- `-B <dir>`: Set build root directory
+- `-P <script.cmake>`: Script mode (like CMake -P)
+- `-DVAR=VAL`: Define a CMake variable
+- `--config <debug|release|relwithdebinfo|minsizerel>`: Set build configuration
+- `--profile`: Output a Chrome Trace Event Format compatible profile that can be loaded into [Perfetto](https://ui.perfetto.dev/) and others
+- `--trace`: Print commands as they are executed
+- `--trace-expand`: Like `--trace` but also shows variable expansion
+- `--debugger`: Launch in debug mode (use `help` inside for commands, or see below)
+- `--config-only`: Parse and cache only, skip the build step
+- `--fresh`: Skip persistent cache (force re-evaluation of find_* and try_compile)
+
 ### Debugging CMake
 Launch in debug mode (GDB-like commands with breaking and other features). The program is then immediately broken on the first command. Setup breakpoints here and use `c` or `continue` to start execution. Debug mode also automatically breaks on fatal errors.
 
@@ -113,21 +129,6 @@ Commands:
   help                 (h) Show this help
 (dmake) >
 ```
-
-### Options
-Common flags:
-- `-j N`: Set number of parallel jobs (defaults to CPU count)
-- `-C <dir>`: Set project directory
-- `-B <dir>`: Set build root directory
-- `-P <script.cmake>`: Script mode (like CMake -P)
-- `-DVAR=VAL`: Define a CMake variable
-- `--config <debug|release|relwithdebinfo|minsizerel>`: Set build configuration
-- `--profile`: Output a Chrome Trace Event Format compatible profile that can be loaded into [Perfetto](https://ui.perfetto.dev/) and others
-- `--trace`: Print commands as they are executed
-- `--trace-expand`: Like `--trace` but also shows variable expansion
-- `--debugger`: Launch in debug mode (use `help` inside for commands)
-- `--config-only`: Parse and cache only, skip the build step
-- `--fresh`: Skip persistent cache (force re-evaluation of find_* and try_compile)
 
 ## Self Hosting
 

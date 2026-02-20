@@ -612,8 +612,27 @@ Examples:
         std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
         std::filesystem::path build_path = build_root / opt.config;
         if (std::filesystem::exists(build_path)) {
+            std::uintmax_t total_bytes = 0;
+            for (auto const& entry : std::filesystem::recursive_directory_iterator(build_path, std::filesystem::directory_options::skip_permission_denied)) {
+                if (entry.is_regular_file()) {
+                    std::error_code ec;
+                    auto sz = entry.file_size(ec);
+                    if (!ec) total_bytes += sz;
+                }
+            }
             std::cout << "Cleaning " << build_path << "..." << std::endl;
             std::filesystem::remove_all(build_path);
+            // Format freed size
+            auto format_bytes = [](std::uintmax_t bytes) -> std::string {
+                constexpr double KB = 1024, MB = 1024*1024, GB = 1024*1024*1024;
+                char buf[32];
+                if (bytes >= GB)      std::snprintf(buf, sizeof(buf), "%.2f GB", bytes / GB);
+                else if (bytes >= MB) std::snprintf(buf, sizeof(buf), "%.2f MB", bytes / MB);
+                else if (bytes >= KB) std::snprintf(buf, sizeof(buf), "%.2f KB", bytes / KB);
+                else                  std::snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+                return buf;
+            };
+            std::cout << "Freed " << format_bytes(total_bytes) << std::endl;
         }
         return 0;
     }
