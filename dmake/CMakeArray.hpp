@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <string_view>
+#include <cstring>
 #include <stdexcept>
 
 namespace dmake {
@@ -136,16 +137,28 @@ public:
 
     private:
         void find_end() {
-            end_ = pos_;
-            while (end_ < source_.size()) {
-                if (source_[end_] == '\\' && end_ + 1 < source_.size() && source_[end_ + 1] == ';') {
-                    end_ += 2;
-                } else if (source_[end_] == ';') {
-                    break;
-                } else {
-                    ++end_;
+            // Use memchr to find ';' — SIMD-optimized in glibc, scans 16-32
+            // bytes/cycle vs 1 byte/iteration. Escaped semicolons (\;) are
+            // extremely rare, so the backtrack check almost never triggers.
+            const char* data = source_.data();
+            size_t len = source_.size();
+            size_t cur = pos_;
+            while (cur < len) {
+                const void* found = std::memchr(data + cur, ';', len - cur);
+                if (!found) {
+                    end_ = len;
+                    return;
                 }
+                size_t semi = static_cast<const char*>(found) - data;
+                if (semi > pos_ && data[semi - 1] == '\\') {
+                    // Escaped semicolon — skip past it and keep scanning
+                    cur = semi + 1;
+                    continue;
+                }
+                end_ = semi;
+                return;
             }
+            end_ = len;
         }
 
         std::string_view source_;
