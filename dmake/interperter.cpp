@@ -3259,11 +3259,10 @@ std::string Interpreter::cached_weakly_canonical(std::string_view p) {
 
     // For the leaf: check if it's a symlink (single lstat syscall)
     std::string full_str = Path::join(resolved_parent, fname);
-    std::filesystem::path full(full_str);
     std::error_code ec;
-    if (std::filesystem::is_symlink(full, ec)) {
+    if (std::filesystem::is_symlink(full_str, ec)) {
         try {
-            return std::filesystem::weakly_canonical(full).string();
+            return std::filesystem::weakly_canonical(full_str).string();
         } catch (...) {
             return Path(full_str).lexically_normal().str();
         }

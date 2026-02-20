@@ -1,6 +1,7 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
+#include "../path.hpp"
 #include "../utils.hpp"
 #include <filesystem>
 #include <algorithm>
@@ -22,6 +23,11 @@ std::string to_native_path(const std::filesystem::path& p) {
     return native.make_preferred().string();
 }
 
+// Dotfile helper: CMake treats filenames starting with '.' as having no extension/stem
+bool is_dotfile(std::string_view name) {
+    return !name.empty() && name[0] == '.';
+}
+
 // GET subcommands
 void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
     if (args.size() < 4) {
@@ -30,7 +36,7 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
     }
 
     // args[1] is a variable name, dereference it to get the path value
-    std::filesystem::path path(interp.get_variable(args[1]));
+    Path path(interp.get_variable(args[1]));
     const auto& component = args[2];
     std::string result;
 
@@ -39,47 +45,46 @@ void handle_get(Interpreter& interp, const std::vector<std::string>& args) {
     std::string out_var = last_only ? args[4] : args[3];
 
     if (ci_equals(component, "ROOT_NAME")) {
-        result = to_cmake_path(path.root_name());
+        // On Unix, root_name is always empty
+        result = "";
     } else if (ci_equals(component, "ROOT_DIRECTORY")) {
-        result = to_cmake_path(path.root_directory());
+        result = path.is_absolute() ? "/" : "";
     } else if (ci_equals(component, "ROOT_PATH")) {
-        result = to_cmake_path(path.root_path());
+        result = path.is_absolute() ? "/" : "";
     } else if (ci_equals(component, "FILENAME")) {
-        result = to_cmake_path(path.filename());
+        result = std::string(path.filename());
     } else if (ci_equals(component, "EXTENSION")) {
-        std::string filename = path.filename().string();
+        auto fname = path.filename();
 
-        if (!filename.empty() && filename != "." && filename != "..") {
-            // Dotfiles (starting with .) have no extension
-            if (filename[0] == '.') {
+        if (!fname.empty() && fname != "." && fname != "..") {
+            if (is_dotfile(fname)) {
                 result = "";
             } else {
-                size_t dot_pos = last_only ? filename.find_last_of('.') : filename.find_first_of('.', 1);
+                size_t dot_pos = last_only ? fname.find_last_of('.') : fname.find_first_of('.', 1);
                 if (dot_pos != std::string::npos && dot_pos > 0) {
-                    result = filename.substr(dot_pos);
+                    result = std::string(fname.substr(dot_pos));
                 }
             }
         }
     } else if (ci_equals(component, "STEM")) {
-        std::string filename = path.filename().string();
+        auto fname = path.filename();
 
-        if (!filename.empty() && filename != "." && filename != "..") {
-            // Dotfiles (starting with .) have empty stem
-            if (filename[0] == '.') {
+        if (!fname.empty() && fname != "." && fname != "..") {
+            if (is_dotfile(fname)) {
                 result = "";
             } else {
-                size_t dot_pos = last_only ? filename.find_last_of('.') : filename.find_first_of('.', 1);
+                size_t dot_pos = last_only ? fname.find_last_of('.') : fname.find_first_of('.', 1);
                 if (dot_pos != std::string::npos && dot_pos > 0) {
-                    result = filename.substr(0, dot_pos);
+                    result = std::string(fname.substr(0, dot_pos));
                 } else {
-                    result = filename;
+                    result = std::string(fname);
                 }
             }
         }
     } else if (ci_equals(component, "RELATIVE_PART")) {
-        result = to_cmake_path(path.relative_path());
+        result = std::string(path.relative_path());
     } else if (ci_equals(component, "PARENT_PATH")) {
-        result = to_cmake_path(path.parent_path());
+        result = std::string(path.parent_path());
     } else {
         interp.set_fatal_error("cmake_path(GET): unknown component '" + args[2] + "'");
         return;
@@ -100,30 +105,31 @@ void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
     // args[1] is a variable name, dereference it to get the path value
     // args[2] is the output variable
     const auto& subcommand = args[0];
-    std::filesystem::path path(interp.get_variable(args[1]));
+    Path path(interp.get_variable(args[1]));
     std::string out_var = args[2];
     bool result = false;
 
     if (ci_equals(subcommand, "HAS_ROOT_NAME")) {
-        result = path.has_root_name();
+        result = false;  // Unix: never has root name
     } else if (ci_equals(subcommand, "HAS_ROOT_DIRECTORY")) {
-        result = path.has_root_directory();
+        result = path.is_absolute();
     } else if (ci_equals(subcommand, "HAS_ROOT_PATH")) {
-        result = path.has_root_path();
+        result = path.is_absolute();
     } else if (ci_equals(subcommand, "HAS_FILENAME")) {
-        result = path.has_filename();
+        result = !path.filename().empty();
     } else if (ci_equals(subcommand, "HAS_EXTENSION")) {
         result = path.has_extension();
     } else if (ci_equals(subcommand, "HAS_STEM")) {
-        result = path.has_stem();
+        result = !path.stem().empty();
     } else if (ci_equals(subcommand, "HAS_RELATIVE_PATH")) {
-        result = path.has_relative_path();
+        result = !path.relative_path().empty();
     } else if (ci_equals(subcommand, "HAS_PARENT_PATH")) {
         // Root path (/) has no parent path in CMake
-        if (path == path.root_path() && !path.empty()) {
+        auto pp = path.parent_path();
+        if (path.is_absolute() && (pp.empty() || pp == "/")) {
             result = false;
         } else {
-            result = path.has_parent_path();
+            result = !pp.empty();
         }
     } else {
         interp.set_fatal_error("cmake_path: unknown query '" + args[0] + "'");
@@ -146,28 +152,27 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
     // args[1] is a variable name, dereference it to get the path value
     // args[2] is the output variable
     const auto& subcommand = args[0];
-    std::filesystem::path path(interp.get_variable(args[1]));
     std::string out_var = args[2];
     bool result = false;
 
     if (ci_equals(subcommand, "IS_ABSOLUTE")) {
-        result = path.is_absolute();
+        result = Path(interp.get_variable(args[1])).is_absolute();
     } else if (ci_equals(subcommand, "IS_RELATIVE")) {
-        result = path.is_relative();
+        result = Path(interp.get_variable(args[1])).is_relative();
     } else if (ci_equals(subcommand, "IS_PREFIX")) {
         if (args.size() < 4) {
             interp.set_fatal_error("cmake_path(IS_PREFIX) requires 4 arguments");
             return;
         }
-        // args[3] is another variable name for the path to check against
+        // Need fs::path iterators for component-wise prefix check
+        std::filesystem::path prefix_path(interp.get_variable(args[1]));
         std::filesystem::path other(interp.get_variable(args[3]));
 
-        // Check if 'path' is a prefix of 'other'
-        auto path_it = path.begin();
+        auto path_it = prefix_path.begin();
         auto other_it = other.begin();
 
         result = true;
-        while (path_it != path.end() && other_it != other.end()) {
+        while (path_it != prefix_path.end() && other_it != other.end()) {
             if (*path_it != *other_it) {
                 result = false;
                 break;
@@ -176,8 +181,7 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
             ++other_it;
         }
 
-        // If we ran out of path components, it's a prefix
-        if (path_it != path.end()) {
+        if (path_it != prefix_path.end()) {
             result = false;
         }
     } else {
@@ -196,9 +200,9 @@ void handle_compare(Interpreter& interp, const std::vector<std::string>& args) {
     }
 
     // args[1] and args[3] are variable names, dereference them
-    std::filesystem::path path1(interp.get_variable(args[1]));
+    const std::string& path1 = interp.get_variable(args[1]);
     const auto& op = args[2];
-    std::filesystem::path path2(interp.get_variable(args[3]));
+    const std::string& path2 = interp.get_variable(args[3]);
     std::string out_var = args[4];
     bool result = false;
 
@@ -232,12 +236,11 @@ void handle_set(Interpreter& interp, const std::vector<std::string>& args) {
         }
     }
 
-    std::filesystem::path path(input);
     if (normalize) {
-        path = path.lexically_normal();
+        interp.set_variable(path_var, Path(input).lexically_normal().str());
+    } else {
+        interp.set_variable(path_var, input);
     }
-
-    interp.set_variable(path_var, to_cmake_path(path));
 }
 
 // APPEND
@@ -248,7 +251,7 @@ void handle_append(Interpreter& interp, std::vector<std::string> args) {
     }
 
     std::string path_var = args[1];
-    std::filesystem::path path(interp.get_variable(path_var));
+    Path path(interp.get_variable(path_var));
 
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
@@ -265,10 +268,10 @@ void handle_append(Interpreter& interp, std::vector<std::string> args) {
 
     // Append all remaining arguments as path components
     for (size_t i = 2; i < args.size(); ++i) {
-        path /= args[i];
+        path = path / args[i];
     }
 
-    interp.set_variable(output_var, to_cmake_path(path));
+    interp.set_variable(output_var, path.str());
 }
 
 // APPEND_STRING
@@ -310,7 +313,7 @@ void handle_remove_filename(Interpreter& interp, const std::vector<std::string>&
     }
 
     std::string path_var = args[1];
-    std::filesystem::path path(interp.get_variable(path_var));
+    Path path(interp.get_variable(path_var));
 
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
@@ -318,8 +321,14 @@ void handle_remove_filename(Interpreter& interp, const std::vector<std::string>&
         output_var = args[3];
     }
 
-    path.remove_filename();
-    interp.set_variable(output_var, to_cmake_path(path));
+    // parent_path gives the directory part; add trailing slash to match CMake behavior
+    auto pp = path.parent_path();
+    std::string result;
+    if (!pp.empty()) {
+        result = std::string(pp);
+        if (result.back() != '/') result += '/';
+    }
+    interp.set_variable(output_var, result);
 }
 
 // REPLACE_FILENAME
@@ -331,7 +340,7 @@ void handle_replace_filename(Interpreter& interp, const std::vector<std::string>
 
     std::string path_var = args[1];
     std::string new_filename = args[2];
-    std::filesystem::path path(interp.get_variable(path_var));
+    Path path(interp.get_variable(path_var));
 
     // Check for OUTPUT_VARIABLE
     std::string output_var = path_var;
@@ -339,8 +348,8 @@ void handle_replace_filename(Interpreter& interp, const std::vector<std::string>
         output_var = args[4];
     }
 
-    path.replace_filename(new_filename);
-    interp.set_variable(output_var, to_cmake_path(path));
+    // Replace filename: parent_path / new_filename
+    interp.set_variable(output_var, Path::join(path.parent_path(), new_filename));
 }
 
 // REMOVE_EXTENSION
@@ -351,7 +360,7 @@ void handle_remove_extension(Interpreter& interp, const std::vector<std::string>
     }
 
     std::string path_var = args[1];
-    std::filesystem::path path(interp.get_variable(path_var));
+    Path path(interp.get_variable(path_var));
     bool last_only = false;
 
     // Check for LAST_ONLY and OUTPUT_VARIABLE
@@ -364,26 +373,24 @@ void handle_remove_extension(Interpreter& interp, const std::vector<std::string>
         }
     }
 
-    std::string filename = path.filename().string();
+    auto fname = path.filename();
     std::string stem;
 
-    if (!filename.empty() && filename != "." && filename != "..") {
-        // Dotfiles (starting with .) have no extension, so stem is empty
-        if (filename[0] == '.') {
+    if (!fname.empty() && fname != "." && fname != "..") {
+        if (is_dotfile(fname)) {
             stem = "";
         } else if (last_only) {
-            size_t dot_pos = filename.find_last_of('.');
-            stem = (dot_pos != std::string::npos && dot_pos > 0) ? filename.substr(0, dot_pos) : filename;
+            size_t dot_pos = fname.find_last_of('.');
+            stem = (dot_pos != std::string::npos && dot_pos > 0) ? std::string(fname.substr(0, dot_pos)) : std::string(fname);
         } else {
-            size_t dot_pos = filename.find_first_of('.', 1);
-            stem = (dot_pos != std::string::npos) ? filename.substr(0, dot_pos) : filename;
+            size_t dot_pos = fname.find_first_of('.', 1);
+            stem = (dot_pos != std::string::npos) ? std::string(fname.substr(0, dot_pos)) : std::string(fname);
         }
     } else {
-        stem = filename;
+        stem = std::string(fname);
     }
 
-    path.replace_filename(stem);
-    interp.set_variable(output_var, to_cmake_path(path));
+    interp.set_variable(output_var, Path::join(path.parent_path(), stem));
 }
 
 // REPLACE_EXTENSION
@@ -395,7 +402,7 @@ void handle_replace_extension(Interpreter& interp, const std::vector<std::string
 
     std::string path_var = args[1];
     std::string new_ext = args[2];
-    std::filesystem::path path(interp.get_variable(path_var));
+    Path path(interp.get_variable(path_var));
     bool last_only = false;
 
     // Check for LAST_ONLY and OUTPUT_VARIABLE
@@ -408,22 +415,21 @@ void handle_replace_extension(Interpreter& interp, const std::vector<std::string
         }
     }
 
-    std::string filename = path.filename().string();
+    auto fname = path.filename();
     std::string stem;
 
-    if (!filename.empty() && filename != "." && filename != "..") {
-        // Dotfiles (starting with .) have no extension, so stem is empty
-        if (filename[0] == '.') {
+    if (!fname.empty() && fname != "." && fname != "..") {
+        if (is_dotfile(fname)) {
             stem = "";
         } else if (last_only) {
-            size_t dot_pos = filename.find_last_of('.');
-            stem = (dot_pos != std::string::npos && dot_pos > 0) ? filename.substr(0, dot_pos) : filename;
+            size_t dot_pos = fname.find_last_of('.');
+            stem = (dot_pos != std::string::npos && dot_pos > 0) ? std::string(fname.substr(0, dot_pos)) : std::string(fname);
         } else {
-            size_t dot_pos = filename.find_first_of('.', 1);
-            stem = (dot_pos != std::string::npos) ? filename.substr(0, dot_pos) : filename;
+            size_t dot_pos = fname.find_first_of('.', 1);
+            stem = (dot_pos != std::string::npos) ? std::string(fname.substr(0, dot_pos)) : std::string(fname);
         }
     } else {
-        stem = filename;
+        stem = std::string(fname);
     }
 
     // Ensure extension starts with '.' if not empty
@@ -431,8 +437,7 @@ void handle_replace_extension(Interpreter& interp, const std::vector<std::string
         new_ext = "." + new_ext;
     }
 
-    path.replace_filename(stem + new_ext);
-    interp.set_variable(output_var, to_cmake_path(path));
+    interp.set_variable(output_var, Path::join(path.parent_path(), stem + new_ext));
 }
 
 // NORMAL_PATH
@@ -453,9 +458,7 @@ void handle_normal_path(Interpreter& interp, const std::vector<std::string>& arg
         }
     }
 
-    std::filesystem::path path(interp.get_variable(path_var));
-    path = path.lexically_normal();
-    interp.set_variable(out_var, to_cmake_path(path));
+    interp.set_variable(out_var, Path(interp.get_variable(path_var)).lexically_normal().str());
 }
 
 // RELATIVE_PATH
@@ -492,14 +495,14 @@ void handle_absolute_path(Interpreter& interp, const std::vector<std::string>& a
 
     std::string path_var = args[1];
     std::string out_var = path_var;
-    std::filesystem::path path(interp.get_variable(path_var));
+    Path path(interp.get_variable(path_var));
     bool normalize = false;
 
     // Check for BASE_DIRECTORY, NORMALIZE, and OUTPUT_VARIABLE
-    std::filesystem::path base_dir(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
+    std::string base_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
     for (size_t i = 2; i < args.size(); ++i) {
         if (ci_equals(args[i], "BASE_DIRECTORY") && i + 1 < args.size()) {
-            base_dir = std::filesystem::path(args[i + 1]);
+            base_dir = args[i + 1];
         } else if (ci_equals(args[i], "NORMALIZE")) {
             normalize = true;
         } else if (ci_equals(args[i], "OUTPUT_VARIABLE") && i + 1 < args.size()) {
@@ -507,15 +510,13 @@ void handle_absolute_path(Interpreter& interp, const std::vector<std::string>& a
         }
     }
 
-    if (!path.is_absolute()) {
-        path = base_dir / path;
-    }
+    Path result = path.is_absolute() ? path : Path(Path::join(base_dir, path.str()));
 
     if (normalize) {
-        path = path.lexically_normal();
+        result = result.lexically_normal();
     }
 
-    interp.set_variable(out_var, to_cmake_path(path));
+    interp.set_variable(out_var, result.str());
 }
 
 // NATIVE_PATH
@@ -527,7 +528,7 @@ void handle_native_path(Interpreter& interp, const std::vector<std::string>& arg
 
     std::string path_var = args[1];
     std::string out_var = path_var;
-    std::filesystem::path path(interp.get_variable(path_var));
+    std::string path_str = interp.get_variable(path_var);
 
     // Check for NORMALIZE and OUTPUT_VARIABLE
     bool normalize = false;
@@ -540,10 +541,11 @@ void handle_native_path(Interpreter& interp, const std::vector<std::string>& arg
     }
 
     if (normalize) {
-        path = path.lexically_normal();
+        path_str = Path(path_str).lexically_normal().str();
     }
 
-    interp.set_variable(out_var, to_native_path(path));
+    // On Unix, native path == cmake path (forward slashes)
+    interp.set_variable(out_var, path_str);
 }
 
 // CONVERT
@@ -666,74 +668,69 @@ void register_path_builtins(Interpreter& interp) {
 
         PARSE_OR_RETURN(parser, interp, args);
 
-        std::filesystem::path path(filename);
+        Path path(filename);
         std::string result;
 
         if (mode == "DIRECTORY" || mode == "PATH") {
-            result = path.parent_path().string();
+            result = std::string(path.parent_path());
         } else if (mode == "NAME") {
-            result = path.filename().string();
+            result = std::string(path.filename());
         } else if (mode == "EXT") {
-            std::string name = path.filename().string();
-            // Dotfiles (starting with .) have no extension
-            if (!name.empty() && name[0] == '.') {
-                result = "";
-            } else {
+            auto name = path.filename();
+            if (!name.empty() && !is_dotfile(name)) {
                 size_t first_dot = name.find_first_of('.', 1);
                 if (first_dot != std::string::npos) {
-                    result = name.substr(first_dot);
+                    result = std::string(name.substr(first_dot));
                 }
             }
         } else if (mode == "NAME_WE") {
-            std::string name = path.filename().string();
-            // Dotfiles (starting with .) have no extension, so return full name
-            if (!name.empty() && name[0] == '.') {
-                result = name;
-            } else {
-                size_t first_dot = name.find_first_of('.', 1);
-                if (first_dot != std::string::npos) {
-                    result = name.substr(0, first_dot);
+            auto name = path.filename();
+            if (!name.empty()) {
+                if (is_dotfile(name)) {
+                    result = std::string(name);
                 } else {
-                    result = name;
+                    size_t first_dot = name.find_first_of('.', 1);
+                    if (first_dot != std::string::npos) {
+                        result = std::string(name.substr(0, first_dot));
+                    } else {
+                        result = std::string(name);
+                    }
                 }
             }
         } else if (mode == "LAST_EXT") {
-            std::string name = path.filename().string();
-            // Dotfiles (starting with .) have no extension
-            if (!name.empty() && name[0] == '.') {
-                result = "";
-            } else {
+            auto name = path.filename();
+            if (!name.empty() && !is_dotfile(name)) {
                 size_t last_dot = name.find_last_of('.');
                 if (last_dot != std::string::npos && last_dot > 0) {
-                    result = name.substr(last_dot);
+                    result = std::string(name.substr(last_dot));
                 }
             }
         } else if (mode == "NAME_WLE") {
-            std::string name = path.filename().string();
-            // Dotfiles (starting with .) have no extension, so return full name
-            if (!name.empty() && name[0] == '.') {
-                result = name;
-            } else {
-                size_t last_dot = name.find_last_of('.');
-                if (last_dot != std::string::npos && last_dot > 0) {
-                    result = name.substr(0, last_dot);
+            auto name = path.filename();
+            if (!name.empty()) {
+                if (is_dotfile(name)) {
+                    result = std::string(name);
                 } else {
-                    result = name;
+                    size_t last_dot = name.find_last_of('.');
+                    if (last_dot != std::string::npos && last_dot > 0) {
+                        result = std::string(name.substr(0, last_dot));
+                    } else {
+                        result = std::string(name);
+                    }
                 }
             }
         } else if (mode == "ABSOLUTE" || mode == "REALPATH") {
-            std::filesystem::path abs_path = path;
+            Path abs_path = path;
             if (!path.is_absolute()) {
-                std::filesystem::path base = !base_dir.empty() ?
-                    std::filesystem::path(base_dir) :
-                    std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
-                abs_path = base / path;
+                std::string base = !base_dir.empty() ?
+                    base_dir : interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+                abs_path = Path(Path::join(base, path.str()));
             }
 
             if (mode == "REALPATH") {
-                result = interp.cached_weakly_canonical(abs_path.string());
+                result = interp.cached_weakly_canonical(abs_path.str());
             } else {
-                result = abs_path.lexically_normal().string();
+                result = abs_path.lexically_normal().str();
             }
         } else {
             interp.set_fatal_error("Invalid mode '" + mode + "' for get_filename_component()");

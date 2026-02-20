@@ -51,10 +51,20 @@ std::string_view Path::parent_path() const noexcept {
     if (path_.empty()) return {};
 
     size_t root_len = root_prefix_len(path_);
-    size_t end = path_.size();
-    while (end > root_len && path_[end - 1] == '/') --end;
 
-    size_t pos = path_.rfind('/', end - 1);
+    // Match std::filesystem::path::parent_path() — trailing slash means
+    // empty filename, so parent is the path with trailing slashes stripped.
+    if (path_.size() > root_len && path_.back() == '/') {
+        size_t end = path_.size();
+        while (end > root_len && path_[end - 1] == '/') --end;
+        if (end <= root_len) {
+            // All slashes after root — parent is root
+            return std::string_view(path_).substr(0, root_len);
+        }
+        return std::string_view(path_).substr(0, end);
+    }
+
+    size_t pos = path_.rfind('/');
     if (pos == std::string_view::npos || pos < root_len) {
         if (root_len > 0) return std::string_view(path_).substr(0, root_len);
         return {};
