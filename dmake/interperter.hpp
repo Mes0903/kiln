@@ -205,6 +205,7 @@ struct TraceEntry {
 class Interpreter {
 public:
     using BuiltinFunction = std::function<void(Interpreter&, const std::vector<std::string>&)>;
+    using TransparentStringSet = std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>;
     enum class LoopControl { NONE, BREAK, CONTINUE };
 
     explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, std::optional<std::string> build_dir = std::nullopt, bool skip_sys_init = false, bool skip_cache_load = false);
@@ -275,11 +276,11 @@ public:
 
     // Get directory listing (caching handled internally)
     // Returns nullptr if directory doesn't exist or can't be read
-    const std::unordered_set<std::string>* get_directory_listing(std::string_view dir);
+    const TransparentStringSet* get_directory_listing(std::string_view dir);
 
     // Get subdirectory names within a directory (populates cache if needed)
     // Returns nullptr if directory doesn't exist or can't be read
-    const std::unordered_set<std::string>* get_directory_subdirs(std::string_view dir);
+    const TransparentStringSet* get_directory_subdirs(std::string_view dir);
 
 
     int get_loop_depth() const { return loop_depth_; }
@@ -532,13 +533,14 @@ private:
     std::map<std::string, std::map<std::string, std::string>> install_properties_;
 
     // Directory scan cache for optimizing file lookups and glob
+    // Uses transparent hashing so lookups can use string_view without allocating
     struct DirectoryCacheEntry {
         std::filesystem::file_time_type mtime;           // Directory modification time
-        std::unordered_set<std::string> entries;         // All entries (filenames only) - O(1) lookup
-        std::unordered_set<std::string> subdirs;         // Subdirectory names (for recursive glob)
+        TransparentStringSet entries;                    // All entries (filenames only) - O(1) lookup
+        TransparentStringSet subdirs;                    // Subdirectory names (for recursive glob)
     };
     const DirectoryCacheEntry* get_directory_cache_entry(std::string_view dir);
-    std::unordered_map<std::string, DirectoryCacheEntry> dir_scan_cache_;  // Key: absolute directory path
+    std::unordered_map<std::string, DirectoryCacheEntry, TransparentStringHash, TransparentStringEqual> dir_scan_cache_;
 
     // Directory contexts: keyed by absolute source path (managed at root)
     // Each directory has its own context with properties, accumulated values, and owned targets

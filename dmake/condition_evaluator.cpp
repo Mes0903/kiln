@@ -208,6 +208,29 @@ std::string_view get_bare_literal(const Argument& arg) {
     return std::get<std::string>(arg.parts[0]);
 }
 
+// Try to resolve an argument to a string_view without any allocation.
+// Works for: bare literals ("foo"), and simple ${VAR} references (no namespace,
+// no nested refs). Returns nullopt if the argument is too complex.
+std::optional<std::string_view> try_resolve_sv(Interpreter& interp, const Argument& arg) {
+    if (arg.parts.size() != 1) return std::nullopt;
+
+    const auto& part = arg.parts[0];
+    if (std::holds_alternative<std::string>(part)) {
+        // Bare literal — return view into AST
+        return std::string_view(std::get<std::string>(part));
+    }
+    if (std::holds_alternative<VariableReference>(part)) {
+        const auto& ref = std::get<VariableReference>(part);
+        if (!ref.namespace_prefix.empty()) return std::nullopt;
+        if (ref.name_parts.size() != 1) return std::nullopt;
+        if (!std::holds_alternative<std::string>(ref.name_parts[0])) return std::nullopt;
+        auto view = interp.get_variable_view(std::get<std::string>(ref.name_parts[0]));
+        if (!view) return std::string_view{};  // undefined var → empty
+        return *view;
+    }
+    return std::nullopt;
+}
+
 // Check if argument contains any VariableReference parts
 bool arg_has_varref(const Argument& arg) {
     for (const auto& part : arg.parts) {
@@ -1208,6 +1231,21 @@ std::expected<bool, InterpreterError> evaluate_condition(
     if (pp.left_idx >= condition.size() ||
         (has_binary && pp.right_idx >= condition.size())) {
         return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
+    }
+
+    // Fast path for unary file-test ops with a simple ${VAR} operand.
+    // Resolves the variable to string_view and calls cached_is_directory /
+    // cached_file_exists directly — zero string allocations on the hot path.
+    if (pp.has_dynamic_args() &&
+        (pp.op == ConditionOp::IsDirectory || pp.op == ConditionOp::Exists)) {
+        if (auto sv = try_resolve_sv(interp, condition[pp.left_idx]);
+            sv && !sv->empty() && sv->find(';') == std::string_view::npos) {
+            bool r = (pp.op == ConditionOp::IsDirectory)
+                ? interp.cached_is_directory(*sv)
+                : interp.cached_file_exists(*sv);
+            if (pp.negated()) r = !r;
+            return r;
+        }
     }
 
     // Handle dynamic args: expand, check for empty/semicolons, fall back if dirty

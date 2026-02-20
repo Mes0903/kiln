@@ -1717,11 +1717,21 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 const Interpreter::DirectoryCacheEntry* Interpreter::get_directory_cache_entry(std::string_view dir) {
     Interpreter* root = get_root();
 
-    // Normalize to absolute path using string ops (no std::filesystem overhead)
+    // Fast path: if dir is already absolute and normalized, look up directly
+    // using string_view — zero allocations on cache hit.
+    // This covers the common case of paths from GLOB_RECURSE and other FS operations.
+    if (!dir.empty() && dir[0] == '/') {
+        auto it = root->dir_scan_cache_.find(dir);
+        if (it != root->dir_scan_cache_.end()) {
+            return &it->second;
+        }
+    }
+
+    // Slow path: normalize to absolute path
     std::string dir_key = Path(Path::absolute(dir)).lexically_normal().str();
     if (dir_key.empty()) return nullptr;
 
-    // Session cache lookup first — zero syscalls on hit
+    // Session cache lookup with normalized key
     auto it = root->dir_scan_cache_.find(dir_key);
     if (it != root->dir_scan_cache_.end()) {
         return &it->second;
@@ -1767,8 +1777,8 @@ const Interpreter::DirectoryCacheEntry* Interpreter::get_directory_cache_entry(s
     }
 
     // Cache miss - scan directory
-    std::unordered_set<std::string> entries;
-    std::unordered_set<std::string> subdirs;
+    TransparentStringSet entries;
+    TransparentStringSet subdirs;
     try {
         std::error_code dir_ec;
         for (const auto& entry : std::filesystem::directory_iterator(dir_key, dir_ec)) {
@@ -1808,12 +1818,12 @@ const Interpreter::DirectoryCacheEntry* Interpreter::get_directory_cache_entry(s
     return &inserted_it->second;
 }
 
-const std::unordered_set<std::string>* Interpreter::get_directory_listing(std::string_view dir) {
+const Interpreter::TransparentStringSet* Interpreter::get_directory_listing(std::string_view dir) {
     auto* entry = get_directory_cache_entry(dir);
     return entry ? &entry->entries : nullptr;
 }
 
-const std::unordered_set<std::string>* Interpreter::get_directory_subdirs(std::string_view dir) {
+const Interpreter::TransparentStringSet* Interpreter::get_directory_subdirs(std::string_view dir) {
     auto* entry = get_directory_cache_entry(dir);
     return entry ? &entry->subdirs : nullptr;
 }
@@ -1840,7 +1850,7 @@ bool Interpreter::cached_file_exists(std::string_view full_path) {
         return std::filesystem::exists(std::string(full_path), ec);
     }
 
-    return entries->contains(std::string(filename));
+    return entries->contains(filename);
 }
 
 bool Interpreter::cached_file_exists(std::string_view dir, const std::string& filename) {
@@ -1857,7 +1867,7 @@ bool Interpreter::cached_is_directory(std::string_view path) {
         // get_directory_listing handles session cache → persistent cache → directory scan
         auto* subdirs = get_directory_subdirs(parent);
         if (subdirs) {
-            return subdirs->contains(std::string(filename));
+            return subdirs->contains(filename);
         }
     }
 
