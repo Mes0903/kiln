@@ -1821,6 +1821,8 @@ const Interpreter::TransparentStringSet* Interpreter::get_directory_subdirs(std:
 }
 
 bool Interpreter::cached_file_exists(std::string_view full_path) {
+    if (full_path.empty()) return false;
+
     // Split path into directory and filename using string ops
     Path p(full_path);
     auto parent = p.parent_path();
