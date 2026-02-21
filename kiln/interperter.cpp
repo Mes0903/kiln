@@ -873,7 +873,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_COMMAND", get_executable_path());
     variables_.set("CMAKE_GENERATOR", "kiln");
     variables_.set("CMAKE_MAKE_PROGRAM", get_executable_path());
-    variables_.set("CMAKE_ROOT", "/usr/share/cmake");
+    {
+        auto& extra = cmake_extra_modules_root();
+        variables_.set("CMAKE_ROOT", extra.empty() ? "/usr/share/cmake" : extra);
+    }
 
     // Initialize cache store early so compiler detection can use it
     std::filesystem::path cache_path = std::filesystem::path(abs_binary_dir) / ".kiln_subsystem_cache.json";
@@ -1617,6 +1620,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
                 "/usr/local/share/cmake/Modules",
                 "/usr/lib/cmake/Modules",
             };
+            if (auto& extra = cmake_extra_modules_root(); !extra.empty())
+                sys_module_dirs.push_back(extra + "/Modules");
             if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
                 sys_module_dirs.push_back("/usr/lib/" + triplet + "/cmake/Modules");
             }

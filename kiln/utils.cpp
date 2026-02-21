@@ -14,6 +14,9 @@
 #include <signal.h>
 #include <cstring>
 #include <chrono>
+#include <algorithm>
+#include <charconv>
+#include <filesystem>
 
 kiln::Hash256 kiln::blake2b(const void *data, size_t len, const void* key, size_t keylen)
 {
@@ -603,6 +606,40 @@ std::vector<std::string> kiln::shell_split(std::string_view input) {
     }
 
     return result;
+}
+
+const std::string& kiln::cmake_extra_modules_root() {
+    static const std::string root = [] -> std::string {
+        if (std::filesystem::is_directory("/usr/share/cmake/Modules"))
+            return {};
+
+        std::vector<std::pair<std::pair<int,int>, std::string>> candidates;
+
+        std::error_code ec;
+        for (auto& entry : std::filesystem::directory_iterator("/usr/share", ec)) {
+            auto name = entry.path().filename().string();
+            if (!name.starts_with("cmake-")) continue;
+
+            std::string_view ver(name.c_str() + 6, name.size() - 6);
+            int major = 0, minor = 0;
+            auto [p1, e1] = std::from_chars(ver.data(), ver.data() + ver.size(), major);
+            if (e1 != std::errc{} || p1 >= ver.data() + ver.size() || *p1 != '.') continue;
+            auto [p2, e2] = std::from_chars(p1 + 1, ver.data() + ver.size(), minor);
+            if (e2 != std::errc{}) continue;
+
+            candidates.emplace_back(std::pair{major, minor}, entry.path().string());
+        }
+
+        std::ranges::sort(candidates, std::greater{}, [](auto& c) { return c.first; });
+
+        for (auto& [ver, path] : candidates) {
+            if (std::filesystem::is_directory(path + "/Modules"))
+                return path;
+        }
+
+        return {};
+    }();
+    return root;
 }
 
 const std::string& kiln::gnu_arch_triplet() {

@@ -367,6 +367,8 @@ void register_find_package_builtins(Interpreter& interp) {
                 "/usr/local/share/cmake/Modules",
                 "/usr/lib/cmake/Modules",
             };
+            if (auto& extra = cmake_extra_modules_root(); !extra.empty())
+                system_modules.push_back(extra + "/Modules");
             if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
                 system_modules.push_back("/usr/lib/" + triplet + "/cmake/Modules");
             }
@@ -768,6 +770,8 @@ void register_find_package_builtins(Interpreter& interp) {
                         "/usr/local/lib/cmake",
                         "/usr/local/share/cmake",
                     };
+                    if (auto& extra = cmake_extra_modules_root(); !extra.empty())
+                        system_roots.push_back(extra);
                     if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
                         system_roots.push_back("/usr/lib/" + triplet + "/cmake");
                     }

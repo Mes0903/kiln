@@ -178,4 +178,12 @@ std::vector<std::string> shell_split(std::string_view input);
  */
 const std::string& gnu_arch_triplet();
 
+/**
+ * @brief If /usr/share/cmake/Modules exists (Arch layout), returns empty string.
+ * Otherwise lists /usr/share/, filters cmake-X.Y entries, picks the highest version
+ * that has a Modules/ subdirectory, and returns that path (e.g. "/usr/share/cmake-3.28").
+ * Result is cached after the first call.
+ */
+const std::string& cmake_extra_modules_root();
+
 }
