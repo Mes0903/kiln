@@ -2,6 +2,7 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../CMakeArray.hpp"
+#include "../utils.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <vector>
@@ -365,8 +366,10 @@ void register_find_package_builtins(Interpreter& interp) {
                 "/usr/share/cmake/Modules",
                 "/usr/local/share/cmake/Modules",
                 "/usr/lib/cmake/Modules",
-                "/usr/lib/x86_64-linux-gnu/cmake/Modules"
             };
+            if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
+                system_modules.push_back("/usr/lib/" + triplet + "/cmake/Modules");
+            }
 
             std::string module_filename = "Find" + package_name + ".cmake";
             for (const auto& path : system_modules) {
@@ -622,12 +625,15 @@ void register_find_package_builtins(Interpreter& interp) {
                     }
 
                     // Also check arch-specific paths directly
-                    add_with_suffixes("/usr/lib/x86_64-linux-gnu/cmake");
-                    for (const auto& name : search_names) {
-                        std::string lower = kiln::to_lower(name);
-                        add_with_suffixes(std::filesystem::path("/usr/lib/x86_64-linux-gnu/cmake") / name);
-                        if (lower != name)
-                            add_with_suffixes(std::filesystem::path("/usr/lib/x86_64-linux-gnu/cmake") / lower);
+                    if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
+                        std::filesystem::path arch_cmake = std::filesystem::path("/usr/lib") / triplet / "cmake";
+                        add_with_suffixes(arch_cmake);
+                        for (const auto& name : search_names) {
+                            std::string lower = kiln::to_lower(name);
+                            add_with_suffixes(arch_cmake / name);
+                            if (lower != name)
+                                add_with_suffixes(arch_cmake / lower);
+                        }
                     }
                 }
             }
@@ -761,8 +767,10 @@ void register_find_package_builtins(Interpreter& interp) {
                         "/usr/share/cmake",
                         "/usr/local/lib/cmake",
                         "/usr/local/share/cmake",
-                        "/usr/lib/x86_64-linux-gnu/cmake"
                     };
+                    if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
+                        system_roots.push_back("/usr/lib/" + triplet + "/cmake");
+                    }
                     for (const auto& root : system_roots) {
                         if (scan_root_for_package(root)) break;
                     }

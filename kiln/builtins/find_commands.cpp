@@ -3,6 +3,7 @@
 #include "../command_parser.hpp"
 #include "../profiler.hpp"
 #include "../CMakeArray.hpp"
+#include "../utils.hpp"
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -619,9 +620,10 @@ std::vector<std::filesystem::path> get_library_default_paths(Interpreter& interp
     paths.emplace_back("/lib64");
 
     // Architecture-specific paths (common on Debian/Ubuntu)
-    const char* arch_triplet = "x86_64-linux-gnu";  // TODO: Detect dynamically
-    paths.emplace_back(std::string("/usr/lib/") + arch_triplet);
-    paths.emplace_back(std::string("/lib/") + arch_triplet);
+    if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
+        paths.emplace_back("/usr/lib/" + triplet);
+        paths.emplace_back("/lib/" + triplet);
+    }
 
     return paths;
 }

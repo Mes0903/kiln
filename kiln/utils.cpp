@@ -5,6 +5,7 @@
 #include "inner/md5.h"
 #ifdef __linux__
 #include <linux/limits.h>
+#include <sys/utsname.h>
 #endif
 #include <type_traits>
 #include <fcntl.h>
@@ -602,4 +603,30 @@ std::vector<std::string> kiln::shell_split(std::string_view input) {
     }
 
     return result;
+}
+
+const std::string& kiln::gnu_arch_triplet() {
+    static const std::string triplet = [] {
+#ifdef __linux__
+        struct utsname buf;
+        if (uname(&buf) != 0) {
+            fprintf(stderr, "fatal: uname() failed\n");
+            abort();
+        }
+        std::string machine = buf.machine;
+        if (machine == "x86_64")  return std::string("x86_64-linux-gnu");
+        if (machine == "aarch64") return std::string("aarch64-linux-gnu");
+        if (machine == "armv7l")  return std::string("arm-linux-gnueabihf");
+        if (machine == "i686" || machine == "i386")
+            return std::string("i386-linux-gnu");
+        if (machine == "riscv64") return std::string("riscv64-linux-gnu");
+        if (machine == "s390x")   return std::string("s390x-linux-gnu");
+        if (machine == "ppc64le") return std::string("powerpc64le-linux-gnu");
+        fprintf(stderr, "fatal: unrecognized architecture '%s' - please add support for it\n", machine.c_str());
+        abort();
+#else
+        return std::string{};
+#endif
+    }();
+    return triplet;
 }

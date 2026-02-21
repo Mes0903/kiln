@@ -171,4 +171,11 @@ std::string replace_all(std::string str, std::string_view from, std::string_view
  */
 std::vector<std::string> shell_split(std::string_view input);
 
+/**
+ * @brief Get the GNU architecture triplet for the current host (e.g. "x86_64-linux-gnu", "aarch64-linux-gnu").
+ * Returns empty string on non-Linux or unrecognized architectures.
+ * Result is cached after the first call.
+ */
+const std::string& gnu_arch_triplet();
+
 }

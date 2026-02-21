@@ -1612,10 +1612,15 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
         // If not found, search system paths
         if (!found_path) {
-            for (const auto& dir : {"/usr/share/cmake/Modules",
-                                    "/usr/local/share/cmake/Modules",
-                                    "/usr/lib/cmake/Modules",
-                                    "/usr/lib/x86_64-linux-gnu/cmake/Modules"}) {
+            std::vector<std::string> sys_module_dirs = {
+                "/usr/share/cmake/Modules",
+                "/usr/local/share/cmake/Modules",
+                "/usr/lib/cmake/Modules",
+            };
+            if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
+                sys_module_dirs.push_back("/usr/lib/" + triplet + "/cmake/Modules");
+            }
+            for (const auto& dir : sys_module_dirs) {
                 found_path = find_in_dir(dir, file_path);
                 if (found_path) break;
             }
