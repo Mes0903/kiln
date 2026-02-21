@@ -68,7 +68,10 @@ std::expected<void, std::string> download_url(
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &dl_data);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "kiln/1.0");
+    // Match CMake: set User-Agent to "curl/<version>"
+    curl_version_info_data* cv = curl_version_info(CURLVERSION_FIRST);
+    std::string ua = std::string("curl/") + (cv ? cv->version : LIBCURL_VERSION);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, ua.c_str());
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
 
