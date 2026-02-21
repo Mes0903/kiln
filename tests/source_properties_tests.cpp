@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
-#include "dmake/interperter.hpp"
-#include "dmake/cmake-language.hpp"
+#include "kiln/interperter.hpp"
+#include "kiln/cmake-language.hpp"
 #include <sstream>
 #include <fstream>
 #include <filesystem>
@@ -9,9 +9,9 @@
 // Helper to run a script and return output
 static std::string run_script(const std::string& src) {
     std::stringstream output;
-    dmake::Interpreter interpreter("", &output);
+    kiln::Interpreter interpreter("", &output);
 
-    dmake::Parser parser(src);
+    kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
         const auto error = ast_or_error.error();
@@ -29,9 +29,9 @@ static std::string run_script(const std::string& src) {
 // Helper to get a variable after running a script
 static std::string get_variable(const std::string& src, const std::string& var_name) {
     std::stringstream output;
-    dmake::Interpreter interpreter("", &output);
+    kiln::Interpreter interpreter("", &output);
 
-    dmake::Parser parser(src);
+    kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
         const auto error = ast_or_error.error();
@@ -57,7 +57,7 @@ TEST_CASE("set_source_files_properties basic", "[source_properties]") {
 
     SECTION("Set multiple properties on single file") {
         std::stringstream output;
-        dmake::Interpreter interpreter("", &output);
+        kiln::Interpreter interpreter("", &output);
 
         std::string src = R"(
             set_source_files_properties(test.cpp PROPERTIES
@@ -67,7 +67,7 @@ TEST_CASE("set_source_files_properties basic", "[source_properties]") {
             get_source_file_property(flags test.cpp COMPILE_FLAGS)
         )";
 
-        dmake::Parser parser(src);
+        kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -79,7 +79,7 @@ TEST_CASE("set_source_files_properties basic", "[source_properties]") {
 
     SECTION("Set property on multiple files") {
         std::stringstream output;
-        dmake::Interpreter interpreter("", &output);
+        kiln::Interpreter interpreter("", &output);
 
         std::string src = R"(
             set_source_files_properties(a.cpp b.cpp c.cpp PROPERTIES GENERATED TRUE)
@@ -88,7 +88,7 @@ TEST_CASE("set_source_files_properties basic", "[source_properties]") {
             get_source_file_property(c_gen c.cpp GENERATED)
         )";
 
-        dmake::Parser parser(src);
+        kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -186,13 +186,13 @@ TEST_CASE("Source property types", "[source_properties]") {
 TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
     SECTION("Error on missing PROPERTIES keyword") {
         std::stringstream output;
-        dmake::Interpreter interpreter("", &output);
+        kiln::Interpreter interpreter("", &output);
 
         std::string src = R"(
             set_source_files_properties(test.cpp GENERATED TRUE)
         )";
 
-        dmake::Parser parser(src);
+        kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -203,13 +203,13 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
     SECTION("Empty file list is accepted with warning") {
         // Undocumented CMake behavior: empty file list is silently accepted
         std::stringstream output;
-        dmake::Interpreter interpreter("", &output);
+        kiln::Interpreter interpreter("", &output);
 
         std::string src = R"(
             set_source_files_properties(PROPERTIES GENERATED TRUE)
         )";
 
-        dmake::Parser parser(src);
+        kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -218,13 +218,13 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
 
     SECTION("Error on odd property arguments") {
         std::stringstream output;
-        dmake::Interpreter interpreter("", &output);
+        kiln::Interpreter interpreter("", &output);
 
         std::string src = R"(
             set_source_files_properties(test.cpp PROPERTIES GENERATED)
         )";
 
-        dmake::Parser parser(src);
+        kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -235,7 +235,7 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
 TEST_CASE("Path normalization", "[source_properties]") {
     SECTION("Relative paths are normalized") {
         std::stringstream output;
-        dmake::Interpreter interpreter("", &output);
+        kiln::Interpreter interpreter("", &output);
 
         // Set CMAKE_CURRENT_SOURCE_DIR for path resolution
         interpreter.set_variable("CMAKE_CURRENT_SOURCE_DIR", "/project/src");
@@ -245,7 +245,7 @@ TEST_CASE("Path normalization", "[source_properties]") {
             get_source_file_property(val file.cpp GENERATED)
         )";
 
-        dmake::Parser parser(src);
+        kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);

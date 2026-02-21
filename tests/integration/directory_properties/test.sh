@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 echo "Testing directory properties (add_definitions, add_compile_definitions, etc.)..."
 
 # Build the project
-$DMAKE
+$KILN
 
 # Test 1: Retroactive application
 echo "Testing retroactive application (target before add_definitions)..."

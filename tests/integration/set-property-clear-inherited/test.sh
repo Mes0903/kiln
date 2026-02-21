@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 cd "$(dirname "$0")"
 
 echo "=== Testing set_property clearing inherited directory properties ==="
 
-$DMAKE 2>&1 | tee output.txt
+$KILN 2>&1 | tee output.txt
 
 # Parent has both includes
 grep -q "Parent INCLUDE_DIRECTORIES: /fake/parent/inc1;/fake/parent/inc2" output.txt || (echo "FAIL: parent includes" && exit 1)

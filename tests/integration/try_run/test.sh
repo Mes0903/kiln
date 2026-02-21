@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 cd "$(dirname "$0")"
 
-# Run dmake (which will execute the CMakeLists.txt and run all tests)
-OUTPUT=$($DMAKE 2>&1)
+# Run kiln (which will execute the CMakeLists.txt and run all tests)
+OUTPUT=$($KILN 2>&1)
 
 if echo "$OUTPUT" | grep -q "All try_run tests passed!"; then
     echo "✓ try_run test passed"

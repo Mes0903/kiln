@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 cd "$(dirname "$0")"
 
-echo "Building with dmake (set_property INTERFACE test)..."
-$DMAKE app
+echo "Building with kiln (set_property INTERFACE test)..."
+$KILN app
 
 echo "Running app..."
 ./build/debug/app

@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 # Build the project
-$DMAKE
+$KILN
 
 # Run the test executable
 ./build/debug/test_config

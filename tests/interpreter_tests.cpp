@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
-#include "dmake/interperter.hpp"
-#include "dmake/cmake-language.hpp"
+#include "kiln/interperter.hpp"
+#include "kiln/cmake-language.hpp"
 #include <sstream>
 #include <fstream>
 #include <filesystem>
@@ -9,9 +9,9 @@
 
 std::string run_script(std::string src) {
     std::stringstream output;
-    dmake::Interpreter interpreter("", &output);
+    kiln::Interpreter interpreter("", &output);
 
-    interpreter.add_builtin("message", [&](dmake::Interpreter& interp, const std::vector<std::string>& args) {
+    interpreter.add_builtin("message", [&](kiln::Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
             throw std::runtime_error("message called with incorrect number of arguments");
         }
@@ -24,7 +24,7 @@ std::string run_script(std::string src) {
 
 
 
-    dmake::Parser parser(src);
+    kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
         const auto error = ast_or_error.error();
@@ -2167,35 +2167,35 @@ TEST_CASE("multiple dereference", "[interpreter][dereference]") {
 TEST_CASE("ENV namespace", "[interpreter][env]") {
     // Test reading environment variables
     auto output = run_script(R"(
-        set(ENV{DMAKE_TEST_VAR} "test_value")
-        message("$ENV{DMAKE_TEST_VAR}")
+        set(ENV{KILN_TEST_VAR} "test_value")
+        message("$ENV{KILN_TEST_VAR}")
     )");
     CHECK(output == "test_value\n");
-    const char* dmake_test_ptr = std::getenv("DMAKE_TEST_VAR");
-    REQUIRE(dmake_test_ptr != nullptr);
-    CHECK(std::string_view(dmake_test_ptr) == "test_value");
+    const char* kiln_test_ptr = std::getenv("KILN_TEST_VAR");
+    REQUIRE(kiln_test_ptr != nullptr);
+    CHECK(std::string_view(kiln_test_ptr) == "test_value");
 
     // Test case insensitivity
     output = run_script(R"(
-        set(ENV{DMAKE_TEST_VAR2} "test123")
-        message("$env{DMAKE_TEST_VAR2}")
-        message("$Env{DMAKE_TEST_VAR2}")
+        set(ENV{KILN_TEST_VAR2} "test123")
+        message("$env{KILN_TEST_VAR2}")
+        message("$Env{KILN_TEST_VAR2}")
     )");
     CHECK(output == "test123\ntest123\n");
 
     // Test unset
     output = run_script(R"(
-        set(ENV{DMAKE_TEST_VAR3} "value")
-        message("Before: $ENV{DMAKE_TEST_VAR3}")
-        unset(ENV{DMAKE_TEST_VAR3})
-        message("After: $ENV{DMAKE_TEST_VAR3}")
+        set(ENV{KILN_TEST_VAR3} "value")
+        message("Before: $ENV{KILN_TEST_VAR3}")
+        unset(ENV{KILN_TEST_VAR3})
+        message("After: $ENV{KILN_TEST_VAR3}")
     )");
     CHECK(output == "Before: value\nAfter: \n");
 
     // Test with nested variable in name
     output = run_script(R"(
-        set(VAR_NAME "DMAKE_TEST_VAR4")
-        set(ENV{DMAKE_TEST_VAR4} "nested")
+        set(VAR_NAME "KILN_TEST_VAR4")
+        set(ENV{KILN_TEST_VAR4} "nested")
         message("$ENV{${VAR_NAME}}")
     )");
     CHECK(output == "nested\n");
@@ -2434,8 +2434,8 @@ TEST_CASE("PARENT_SCOPE does not affect current scope", "[interpreter][parent_sc
 TEST_CASE("nested variables with namespaces", "[interpreter][nested][namespaces]") {
     // Test nested with ENV
     auto output = run_script(R"(
-        set(ENV{DMAKE_PATH_TEST} "/usr/bin")
-        set(VAR_NAME "DMAKE_PATH_TEST")
+        set(ENV{KILN_PATH_TEST} "/usr/bin")
+        set(VAR_NAME "KILN_PATH_TEST")
         message("$ENV{${VAR_NAME}}")
     )");
     CHECK(output == "/usr/bin\n");
@@ -2459,8 +2459,8 @@ TEST_CASE("nested variables with namespaces", "[interpreter][nested][namespaces]
 
     // Test partial expansion with ENV
     output = run_script(R"(
-        set(ENV{DMAKE_PREFIX_TEST} "prefix_value")
-        set(PREFIX "DMAKE_")
+        set(ENV{KILN_PREFIX_TEST} "prefix_value")
+        set(PREFIX "KILN_")
         set(SUFFIX "_TEST")
         message("$ENV{${PREFIX}PREFIX${SUFFIX}}")
     )");
@@ -3270,7 +3270,7 @@ TEST_CASE("find_library with custom prefixes and suffixes", "[interpreter][find]
 
 TEST_CASE("find commands with PATH_SUFFIXES", "[interpreter][find]") {
     // Create a temporary directory structure for testing
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "dmake_test_find";
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "kiln_test_find";
     std::filesystem::create_directories(temp_dir / "subdir");
 
     // Create a test file
@@ -3297,7 +3297,7 @@ TEST_CASE("find commands with PATH_SUFFIXES", "[interpreter][find]") {
 
 TEST_CASE("find_program with NO_CACHE flag", "[interpreter][find]") {
     // Create a temporary executable
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "dmake_test_nocache";
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "kiln_test_nocache";
     std::filesystem::create_directories(temp_dir);
     std::filesystem::path test_prog = temp_dir / "test_prog";
 
@@ -3362,7 +3362,7 @@ TEST_CASE("find_path returns directory containing file", "[interpreter][find]") 
 
 TEST_CASE("find_path with PATH_SUFFIXES", "[interpreter][find]") {
     // Create a temporary directory structure for testing
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "dmake_test_find_path";
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "kiln_test_find_path";
     std::filesystem::create_directories(temp_dir / "include" / "mylib");
 
     // Create a test header file
@@ -4272,7 +4272,7 @@ TEST_CASE("if condition: EXISTS with unquoted paths", "[interpreter][if][bugfix]
 
     // Create a temporary file for testing
     auto temp_dir = std::filesystem::temp_directory_path();
-    auto test_file = temp_dir / "dmake_test_exists.txt";
+    auto test_file = temp_dir / "kiln_test_exists.txt";
     {
         std::ofstream f(test_file);
         f << "test content";
@@ -4604,7 +4604,7 @@ TEST_CASE("get_property TARGET TYPE", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     // Parse and run a script that tests get_property
     std::string script = R"(
@@ -4630,7 +4630,7 @@ TEST_CASE("get_property TARGET TYPE", "[interpreter][property]") {
         message(STATUS "custom=${CUSTOM_TYPE}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4662,7 +4662,7 @@ TEST_CASE("get_target_property TYPE", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main2.cpp)
@@ -4675,7 +4675,7 @@ TEST_CASE("get_target_property TYPE", "[interpreter][property]") {
         message(STATUS "lib=${LIB_TYPE}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4701,7 +4701,7 @@ TEST_CASE("get_property TARGET other properties", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main3.cpp)
@@ -4713,7 +4713,7 @@ TEST_CASE("get_property TARGET other properties", "[interpreter][property]") {
         message(STATUS "imported=${IMPORTED_VAL}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4738,7 +4738,7 @@ TEST_CASE("get_property TARGET SET mode", "[interpreter][property]") {
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main4.cpp)
@@ -4750,7 +4750,7 @@ TEST_CASE("get_property TARGET SET mode", "[interpreter][property]") {
         message(STATUS "unknown_set=${UNKNOWN_SET}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4775,7 +4775,7 @@ TEST_CASE("get_target_property NOTFOUND for missing property", "[interpreter][pr
     }
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_executable(myexe test_main5.cpp)
@@ -4785,7 +4785,7 @@ TEST_CASE("get_target_property NOTFOUND for missing property", "[interpreter][pr
         message(STATUS "unknown=${UNKNOWN_PROP}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4805,7 +4805,7 @@ TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(".", &output, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &output, &std::cerr, temp_dir);
 
     std::string script = R"(
         add_library(myimported SHARED IMPORTED)
@@ -4820,7 +4820,7 @@ TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
         message(STATUS "location=${LOCATION_VAL}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4841,9 +4841,9 @@ TEST_CASE("Built-in global properties", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
+    kiln::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
-    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+    interp.add_builtin("message", [&](kiln::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
         output << std::endl;
     });
@@ -4866,7 +4866,7 @@ TEST_CASE("Built-in global properties", "[interpreter][property]") {
         message("lib64=${LIB64}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4890,9 +4890,9 @@ TEST_CASE("set/get_property INSTALL scope", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
+    kiln::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
-    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+    interp.add_builtin("message", [&](kiln::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
         output << std::endl;
     });
@@ -4915,7 +4915,7 @@ TEST_CASE("set/get_property INSTALL scope", "[interpreter][property]") {
         message("missing=${MISSING}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4937,9 +4937,9 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
+    kiln::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
-    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+    interp.add_builtin("message", [&](kiln::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
         output << std::endl;
     });
@@ -4957,7 +4957,7 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
         message("c_loaded=${CMAKE_C_COMPILER_LOADED}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -4981,9 +4981,9 @@ TEST_CASE("enable_language() updates ENABLED_LANGUAGES", "[interpreter][language
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
+    kiln::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
-    interp.add_builtin("message", [&](dmake::Interpreter&, const std::vector<std::string>& args) {
+    interp.add_builtin("message", [&](kiln::Interpreter&, const std::vector<std::string>& args) {
         for (const auto& arg : args) output << arg;
         output << std::endl;
     });
@@ -5010,7 +5010,7 @@ TEST_CASE("enable_language() updates ENABLED_LANGUAGES", "[interpreter][language
         message("final=${FINAL}")
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -5031,7 +5031,7 @@ TEST_CASE("enable_language() with OPTIONAL", "[interpreter][language]") {
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
+    kiln::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     // Test OPTIONAL flag - unsupported language should not error
     std::string script = R"(
@@ -5041,7 +5041,7 @@ TEST_CASE("enable_language() with OPTIONAL", "[interpreter][language]") {
         get_property(LANGS GLOBAL PROPERTY ENABLED_LANGUAGES)
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -5061,14 +5061,14 @@ TEST_CASE("enable_language() error on unsupported language", "[interpreter][lang
     std::filesystem::create_directories(temp_dir);
 
     std::stringstream output;
-    dmake::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
+    kiln::Interpreter interp(temp_dir, &output, &output, temp_dir + "/build");
 
     // Test error on unsupported language without OPTIONAL
     std::string script = R"(
         enable_language(Fortran)
     )";
 
-    dmake::Parser parser(script);
+    kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
 
@@ -6102,7 +6102,7 @@ TEST_CASE("file(STRINGS) REGEX uses substring matching", "[interpreter][file][re
     // Fix: Changed regex_match to regex_search
 
     // Create a temporary test file
-    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "dmake_test_strings.txt";
+    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "kiln_test_strings.txt";
     {
         std::ofstream out(temp_file);
         out << "This line contains ERROR message\n";
@@ -6130,7 +6130,7 @@ TEST_CASE("file(STRINGS) REGEX sets CMAKE_MATCH_* variables", "[interpreter][fil
     // Regression test: file(STRINGS) with REGEX should set CMAKE_MATCH_* variables
     // for the most recent match (last matching line)
 
-    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "dmake_test_regex_match.txt";
+    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "kiln_test_regex_match.txt";
     {
         std::ofstream out(temp_file);
         out << "Version: 1.2.3\n";
@@ -6275,9 +6275,9 @@ TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_propertie
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_definitions(-DFOO -DBAR=123)
         add_executable(mytest test.cpp)
     )");
@@ -6293,7 +6293,7 @@ TEST_CASE("add_definitions strips -D prefix", "[interpreter][directory_propertie
     REQUIRE(targets.find("mytest") != targets.end());
 
     auto& target = targets["mytest"];
-    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(defs.size() == 2);
     REQUIRE(defs[0] == "FOO");
     REQUIRE(defs[1] == "BAR=123");
@@ -6307,9 +6307,9 @@ TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][direct
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_compile_definitions(FOO BAR=456)
         add_executable(mytest test.cpp)
     )");
@@ -6322,7 +6322,7 @@ TEST_CASE("add_compile_definitions does not strip prefix", "[interpreter][direct
 
     auto& targets = interp.get_targets();
     auto& target = targets["mytest"];
-    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(defs.size() == 2);
     REQUIRE(defs[0] == "FOO");
     REQUIRE(defs[1] == "BAR=456");
@@ -6336,9 +6336,9 @@ TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_pro
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_compile_options(-Wall -Werror)
         add_executable(mytest test.cpp)
     )");
@@ -6351,7 +6351,7 @@ TEST_CASE("add_compile_options applies to targets", "[interpreter][directory_pro
 
     auto& targets = interp.get_targets();
     auto& target = targets["mytest"];
-    const auto& opts = target->get_property_list("COMPILE_OPTIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& opts = target->get_property_list("COMPILE_OPTIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(opts.size() == 2);
     REQUIRE(opts[0] == "-Wall");
     REQUIRE(opts[1] == "-Werror");
@@ -6365,9 +6365,9 @@ TEST_CASE("add_link_options applies to targets", "[interpreter][directory_proper
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_link_options(-Wl,--as-needed)
         add_executable(mytest test.cpp)
     )");
@@ -6380,7 +6380,7 @@ TEST_CASE("add_link_options applies to targets", "[interpreter][directory_proper
 
     auto& targets = interp.get_targets();
     auto& target = targets["mytest"];
-    const auto& opts = target->get_property_list("LINK_OPTIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& opts = target->get_property_list("LINK_OPTIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(opts.size() == 1);
     REQUIRE(opts[0] == "-Wl,--as-needed");
 
@@ -6394,9 +6394,9 @@ TEST_CASE("link_libraries applies to targets", "[interpreter][directory_properti
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
     { std::ofstream f("lib.cpp"); f << "void lib_func() {}\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_library(mylib STATIC lib.cpp)
         link_libraries(mylib pthread)
         add_executable(mytest test.cpp)
@@ -6411,7 +6411,7 @@ TEST_CASE("link_libraries applies to targets", "[interpreter][directory_properti
 
     auto& targets = interp.get_targets();
     auto& target = targets["mytest"];
-    const auto& libs = target->get_property_list("LINK_LIBRARIES", dmake::PropertyVisibility::PRIVATE);
+    const auto& libs = target->get_property_list("LINK_LIBRARIES", kiln::PropertyVisibility::PRIVATE);
     // Check that required libs are present (may have duplicates due to creation + finalization)
     REQUIRE(libs.size() >= 2);
     REQUIRE(std::find(libs.begin(), libs.end(), "mylib") != libs.end());
@@ -6428,9 +6428,9 @@ TEST_CASE("Directory properties apply retroactively", "[interpreter][directory_p
     { std::ofstream f("before.cpp"); f << "int main() { return 0; }\n"; }
     { std::ofstream f("after.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_executable(before before.cpp)
         add_definitions(-DTEST_VALUE=100)
         add_executable(after after.cpp)
@@ -6448,12 +6448,12 @@ TEST_CASE("Directory properties apply retroactively", "[interpreter][directory_p
 
     // Both targets should have the definition
     auto& before = targets["before"];
-    const auto& before_defs = before->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& before_defs = before->get_property_list("COMPILE_DEFINITIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(before_defs.size() >= 1);
     REQUIRE(std::find(before_defs.begin(), before_defs.end(), "TEST_VALUE=100") != before_defs.end());
 
     auto& after = targets["after"];
-    const auto& after_defs = after->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& after_defs = after->get_property_list("COMPILE_DEFINITIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(after_defs.size() >= 1);
     REQUIRE(std::find(after_defs.begin(), after_defs.end(), "TEST_VALUE=100") != after_defs.end());
 
@@ -6467,9 +6467,9 @@ TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_p
     std::filesystem::create_directories(temp_dir);
     { std::ofstream f("test.cpp"); f << "int main() { return 0; }\n"; }
 
-    dmake::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
+    kiln::Interpreter interp(".", &std::cout, &std::cerr, temp_dir);
 
-    dmake::Parser parser(R"(
+    kiln::Parser parser(R"(
         add_definitions(-DFOO=1)
         add_compile_definitions(BAR=2)
         add_compile_options(-Wall)
@@ -6488,13 +6488,13 @@ TEST_CASE("Multiple directory properties accumulate", "[interpreter][directory_p
     auto& targets = interp.get_targets();
     auto& target = targets["mytest"];
 
-    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& defs = target->get_property_list("COMPILE_DEFINITIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(defs.size() >= 3);
     REQUIRE(std::find(defs.begin(), defs.end(), "FOO=1") != defs.end());
     REQUIRE(std::find(defs.begin(), defs.end(), "BAR=2") != defs.end());
     REQUIRE(std::find(defs.begin(), defs.end(), "BAZ=3") != defs.end());
 
-    const auto& opts = target->get_property_list("COMPILE_OPTIONS", dmake::PropertyVisibility::PRIVATE);
+    const auto& opts = target->get_property_list("COMPILE_OPTIONS", kiln::PropertyVisibility::PRIVATE);
     REQUIRE(opts.size() >= 1);
     REQUIRE(std::find(opts.begin(), opts.end(), "-Wall") != opts.end());
 
@@ -6777,7 +6777,7 @@ TEST_CASE("Truthiness - CMake exact rules", "[interpreter][if][truthiness]") {
 }
 
 TEST_CASE("IS_NEWER_THAN operator", "[interpreter][if][is_newer_than]") {
-    auto temp_dir = std::filesystem::temp_directory_path() / "dmake_test_is_newer_than";
+    auto temp_dir = std::filesystem::temp_directory_path() / "kiln_test_is_newer_than";
     std::filesystem::create_directories(temp_dir);
     auto cleanup = [&]() { std::filesystem::remove_all(temp_dir); };
 
@@ -7456,7 +7456,7 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD)
             message("${BUILD_CMD}")
         )");
-        REQUIRE(output == "dmake\n");
+        REQUIRE(output == "kiln\n");
     }
 
     SECTION("with CONFIGURATION") {
@@ -7464,7 +7464,7 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD CONFIGURATION Release)
             message("${BUILD_CMD}")
         )");
-        REQUIRE(output == "dmake --config Release\n");
+        REQUIRE(output == "kiln --config Release\n");
     }
 
     SECTION("with PARALLEL_LEVEL") {
@@ -7472,7 +7472,7 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD PARALLEL_LEVEL 8)
             message("${BUILD_CMD}")
         )");
-        REQUIRE(output == "dmake -j 8\n");
+        REQUIRE(output == "kiln -j 8\n");
     }
 
     SECTION("with TARGET") {
@@ -7480,7 +7480,7 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD TARGET myapp)
             message("${BUILD_CMD}")
         )");
-        REQUIRE(output == "dmake myapp\n");
+        REQUIRE(output == "kiln myapp\n");
     }
 
     SECTION("with multiple TARGETs") {
@@ -7488,7 +7488,7 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD TARGET myapp TARGET mylib)
             message("${BUILD_CMD}")
         )");
-        REQUIRE(output == "dmake myapp mylib\n");
+        REQUIRE(output == "kiln myapp mylib\n");
     }
 
     SECTION("with all options") {
@@ -7496,7 +7496,7 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD CONFIGURATION Debug PARALLEL_LEVEL 4 TARGET foo TARGET bar)
             message("${BUILD_CMD}")
         )");
-        REQUIRE(output == "dmake --config Debug -j 4 foo bar\n");
+        REQUIRE(output == "kiln --config Debug -j 4 foo bar\n");
     }
 
     SECTION("legacy signature") {
@@ -7504,8 +7504,8 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
             build_command(BUILD_CMD /usr/bin/make)
             message("${BUILD_CMD}")
         )");
-        // Legacy form ignores the makecommand and returns bare dmake (no --target)
-        REQUIRE(output == "dmake\n");
+        // Legacy form ignores the makecommand and returns bare kiln (no --target)
+        REQUIRE(output == "kiln\n");
     }
 
     SECTION("PROJECT_NAME is accepted but ignored") {
@@ -7517,6 +7517,6 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
         )");
         REQUIRE(output.find("WARNING") != std::string::npos);
         REQUIRE(output.find("PROJECT_NAME") != std::string::npos);
-        REQUIRE(output.find("dmake myapp") != std::string::npos);
+        REQUIRE(output.find("kiln myapp") != std::string::npos);
     }
 }

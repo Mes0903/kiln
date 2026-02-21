@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(dmake)
+project(kiln)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,60 +16,60 @@ find_package(CLI11 CONFIG REQUIRED)
 # linenoise has no CMake package; find_library is the only available mechanism
 find_library(LINENOISE_LIBRARY NAMES linenoise REQUIRED)
 
-add_library(dmake SHARED
-    dmake/cmake-language.cpp
-    dmake/interperter.cpp
-    dmake/target.cpp
-    dmake/build_system.cpp
-    dmake/utils.cpp
-    dmake/command_parser.cpp
-    dmake/language.cpp
-    dmake/module_scanner.cpp
-    dmake/cache_store.cpp
-    dmake/genex_parser.cpp
-    dmake/genex_evaluator.cpp
-    dmake/compile_features.cpp
-    dmake/inner/blake2b.c
-    dmake/inner/sha256.cpp
-    dmake/inner/md5.cpp
-    dmake/builtins/message.cpp
-    dmake/builtins/variable.cpp
-    dmake/builtins/list.cpp
-    dmake/builtins/target.cpp
-    dmake/builtins/project.cpp
-    dmake/builtins/file.cpp
-    dmake/builtins/find_package.cpp
-    dmake/builtins/find_commands.cpp
-    dmake/builtins/math.cpp
-    dmake/builtins/string.cpp
-    dmake/builtins/process.cpp
-    dmake/builtins/property.cpp
-    dmake/builtins/try_compile.cpp
-    dmake/builtins/path.cpp
-    dmake/builtins/install.cpp
-    dmake/builtins/export_generator.cpp
-    dmake/builtins/source_properties.cpp
-    dmake/builtins/system_info.cpp
-    dmake/intercept/download_utils.cpp
-    dmake/intercept/external_project.cpp
-    dmake/intercept/external_project_target.cpp
-    dmake/intercept/fetch_content.cpp
-    dmake/install_executor.cpp
-    dmake/printing.cpp
-    dmake/progress_bar.cpp
-    dmake/profiler.cpp
-    dmake/regex.cpp
-    dmake/CMakeArray.cpp
-    dmake/tool_mode.cpp
-    dmake/condition_evaluator.cpp
-    dmake/ast_cache.cpp
-    dmake/path.cpp
-    dmake/debugger.cpp
-    dmake/autogen.cpp
+add_library(kiln SHARED
+    kiln/cmake-language.cpp
+    kiln/interperter.cpp
+    kiln/target.cpp
+    kiln/build_system.cpp
+    kiln/utils.cpp
+    kiln/command_parser.cpp
+    kiln/language.cpp
+    kiln/module_scanner.cpp
+    kiln/cache_store.cpp
+    kiln/genex_parser.cpp
+    kiln/genex_evaluator.cpp
+    kiln/compile_features.cpp
+    kiln/inner/blake2b.c
+    kiln/inner/sha256.cpp
+    kiln/inner/md5.cpp
+    kiln/builtins/message.cpp
+    kiln/builtins/variable.cpp
+    kiln/builtins/list.cpp
+    kiln/builtins/target.cpp
+    kiln/builtins/project.cpp
+    kiln/builtins/file.cpp
+    kiln/builtins/find_package.cpp
+    kiln/builtins/find_commands.cpp
+    kiln/builtins/math.cpp
+    kiln/builtins/string.cpp
+    kiln/builtins/process.cpp
+    kiln/builtins/property.cpp
+    kiln/builtins/try_compile.cpp
+    kiln/builtins/path.cpp
+    kiln/builtins/install.cpp
+    kiln/builtins/export_generator.cpp
+    kiln/builtins/source_properties.cpp
+    kiln/builtins/system_info.cpp
+    kiln/intercept/download_utils.cpp
+    kiln/intercept/external_project.cpp
+    kiln/intercept/external_project_target.cpp
+    kiln/intercept/fetch_content.cpp
+    kiln/install_executor.cpp
+    kiln/printing.cpp
+    kiln/progress_bar.cpp
+    kiln/profiler.cpp
+    kiln/regex.cpp
+    kiln/CMakeArray.cpp
+    kiln/tool_mode.cpp
+    kiln/condition_evaluator.cpp
+    kiln/ast_cache.cpp
+    kiln/path.cpp
+    kiln/debugger.cpp
+    kiln/autogen.cpp
 )
 
-target_include_directories(dmake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(dmake PUBLIC
+target_include_directories(kiln PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kiln PUBLIC
     PkgConfig::PCRE2
     CURL::libcurl
     LibArchive::LibArchive
@@ -78,13 +78,13 @@ target_link_libraries(dmake PUBLIC
 
 # --- Executable ---
 
-add_executable(dmake_cli dmake-cli/main.cpp)
-target_link_libraries(dmake_cli PRIVATE dmake CLI11::CLI11 ${LINENOISE_LIBRARY})
-set_target_properties(dmake_cli PROPERTIES OUTPUT_NAME dmake)
+add_executable(kiln_cli kiln-cli/main.cpp)
+target_link_libraries(kiln_cli PRIVATE kiln CLI11::CLI11 ${LINENOISE_LIBRARY})
+set_target_properties(kiln_cli PROPERTIES OUTPUT_NAME kiln)
 
 # --- Install rules ---
 
-install(TARGETS dmake_cli dmake
+install(TARGETS kiln_cli kiln
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
 )
@@ -94,7 +94,7 @@ install(TARGETS dmake_cli dmake
 include(CTest)
 if(BUILD_TESTING)
     find_package(Catch2 3 REQUIRED)
-    add_executable(dmake_tests tests/main.cpp
+    add_executable(kiln_tests tests/main.cpp
         tests/interpreter_tests.cpp
         tests/pch_tests.cpp
         tests/command_parser.cpp
@@ -108,7 +108,7 @@ if(BUILD_TESTING)
         tests/cmake_array_tests.cpp
         tests/resolve_tests.cpp
         tests/path_tests.cpp)
-    target_link_libraries(dmake_tests PRIVATE dmake Catch2::Catch2WithMain)
+    target_link_libraries(kiln_tests PRIVATE kiln Catch2::Catch2WithMain)
 
-    add_test(NAME interpreter_tests COMMAND dmake_tests)
+    add_test(NAME interpreter_tests COMMAND kiln_tests)
 endif()

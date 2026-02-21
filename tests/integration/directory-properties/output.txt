@@ -7,7 +7,7 @@
 [STATUS] Property via set_property: SetPropertyValue
 [STATUS] Include directories: /test/include
 [STATUS] DEFINITION keyword: DefinitionValue
-[STATUS] Subdir PARENT_DIRECTORY: /home/marty/Documents/dmake/tests/integration/directory-properties
+[STATUS] Subdir PARENT_DIRECTORY: /home/marty/Documents/kiln/tests/integration/directory-properties
 [STATUS] Parent property from subdir: NewValue
 [STATUS] Subdir property from parent: SubdirValue
 [STATUS] === Directory Properties Test Complete ===

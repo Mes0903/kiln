@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Run dmake
+# Run kiln
 # We expect the build to fail if our assertions in CMakeLists.txt trigger (SEND_ERROR or FATAL_ERROR)
 # Currently, without the fix, Test 2 will likely trigger SEND_ERROR because it finds the package.
 

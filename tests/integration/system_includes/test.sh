@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-DMAKE="$1"
+KILN="$1"
 cd "$(dirname "$0")"
 rm -rf build
 
-# Run dmake
-"$DMAKE" 2>&1
+# Run kiln
+"$KILN" 2>&1
 
 # Check compile_commands.json exists
 if [ ! -f build/debug/compile_commands.json ]; then

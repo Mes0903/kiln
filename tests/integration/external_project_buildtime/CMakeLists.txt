@@ -24,4 +24,4 @@ add_dependencies(mylib mylib_ep)
 add_executable(main_app main.cpp)
 target_link_libraries(main_app PRIVATE mylib)
 
-dmake_dump_target_info(main_app AT_BUILD)
+kiln_dump_target_info(main_app AT_BUILD)

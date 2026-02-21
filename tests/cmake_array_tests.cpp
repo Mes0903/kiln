@@ -1,9 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/CMakeArray.hpp"
+#include "kiln/CMakeArray.hpp"
 #include <vector>
 #include <string>
 
-using namespace dmake;
+using namespace kiln;
 
 // --- CMakeArray tests ---
 

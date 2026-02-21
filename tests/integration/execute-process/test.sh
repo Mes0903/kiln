@@ -1,5 +1,5 @@
 #!/bin/bash
 set -e
-DMAKE=$1
+KILN=$1
 
-"$DMAKE" | grep "ExecuteProcess tests passed in CMakeLists.txt"
+"$KILN" | grep "ExecuteProcess tests passed in CMakeLists.txt"

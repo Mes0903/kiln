@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 TEST_DIR=$(dirname "$0")
 
 cd "$TEST_DIR"
@@ -10,8 +10,8 @@ cd "$TEST_DIR"
 rm -rf build
 mkdir -p build
 
-# Run dmake (creates build/debug/)
-$DMAKE
+# Run kiln (creates build/debug/)
+$KILN
 
 # Navigate to the actual build directory
 cd build/debug

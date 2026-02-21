@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
-DMAKE="$1"
+KILN="$1"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-output=$("$DMAKE" -P /dev/null -DCMAKE_CURRENT_SOURCE_DIR="$DIR" -- 2>&1 || true)
+output=$("$KILN" -P /dev/null -DCMAKE_CURRENT_SOURCE_DIR="$DIR" -- 2>&1 || true)
 
-# Run dmake on the test project
-output=$("$DMAKE" -C "$DIR" 2>&1)
+# Run kiln on the test project
+output=$("$KILN" -C "$DIR" 2>&1)
 
 echo "$output"
 

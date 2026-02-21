@@ -5,4 +5,4 @@ if [ ! -f build/debug/hello ]; then
     echo "Executable 'hello' not found"
     exit 1
 fi
-./build/debug/hello | grep -q "Hello, dmake!"
+./build/debug/hello | grep -q "Hello, kiln!"

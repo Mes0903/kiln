@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 # Build all targets
-$DMAKE test_basic test_modules test_lib
+$KILN test_basic test_modules test_lib
 
 # Run the basic test
 ./build/debug/test_basic

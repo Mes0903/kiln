@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 cd "$(dirname "$0")"
 
-# Run dmake - it will fail if any messages are FATAL_ERROR
-output=$($DMAKE 2>&1)
+# Run kiln - it will fail if any messages are FATAL_ERROR
+output=$($KILN 2>&1)
 
 # Check that function name is reported correctly
 echo "$output" | grep -q "Function name: test_function_from_subdir" || {

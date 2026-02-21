@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 cd "$(dirname "$0")"
 
-echo "Building with dmake..."
-$DMAKE app
+echo "Building with kiln..."
+$KILN app
 
 echo "Running app..."
 ./build/debug/app

@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 TEST_DIR=$(dirname "$0")
 
 echo "Running file(STRINGS) test..."
 cd "$TEST_DIR"
 
-# Run dmake
-$DMAKE
+# Run kiln
+$KILN
 
 echo "✓ file(STRINGS) test passed"

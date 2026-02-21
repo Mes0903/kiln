@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 # Build the project
-$DMAKE
+$KILN
 
 # Verify executables were built
 test -f build/debug/test_std17

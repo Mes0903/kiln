@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 echo "Testing LINK_ONLY generator expression..."
 
 # Clean and build
 rm -rf build
-$DMAKE
+$KILN
 
 # Run both apps
 echo "Running normal_app (should have MYLIB_ENABLED)..."

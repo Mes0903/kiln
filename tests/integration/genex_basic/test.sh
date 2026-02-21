@@ -1,16 +1,16 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 # Test Debug build
 echo "Testing Debug build..."
-$DMAKE --config debug
+$KILN --config debug
 ./build/debug/test_exe | grep "Debug"
 
 # Test Release build
 echo "Testing Release build..."
-$DMAKE --config release
+$KILN --config release
 ./build/release/test_exe | grep "Release"
 
 # Verify compile_commands.json contains the expanded include path (not the unexpanded variable)

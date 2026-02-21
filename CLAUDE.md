@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-dmake is a fast C++23 build system that interprets CMake's language directly without a configure step. Features:
+kiln is a fast C++23 build system that interprets CMake's language directly without a configure step. Features:
 - **Cargo-style multi-config builds** - separate `build/<config>/` directories
 - **Parallel, incremental builds** - signature-based caching (Blake2b)
 - **No configure step** - interprets CMakeLists.txt on every build
@@ -17,29 +17,29 @@ dmake is a fast C++23 build system that interprets CMake's language directly wit
 mkdir -p build && cd build && cmake .. && make
 
 # Self-host (once bootstrapped)
-./build/dmake                           # Output: build/debug/dmake
+./build/kiln                           # Output: build/debug/kiln
 
 # Run tests
-./build/dmake_tests                     # Unit tests
-./build/dmake_tests "[test-name]"       # Specific test
-./tests/integration/run_tests.sh ./build/dmake  # Integration tests
+./build/kiln_tests                     # Unit tests
+./build/kiln_tests "[test-name]"       # Specific test
+./tests/integration/run_tests.sh ./build/kiln  # Integration tests
 
 # CLI usage
-dmake [targets...] [-j N] [-DVAR=VAL] [--config CONFIG]
-dmake build [targets...]      # Build targets
-dmake run <target> [-- args]  # Build and run
-dmake test [pattern]          # Run tests
-dmake clean                   # Clean build
-dmake install [--prefix PATH] # Install project
-dmake -P <script.cmake>       # Script mode
-dmake -E <cmd> [args]         # Tool mode (echo, touch, copy, etc.)
-dmake --debug                 # Interactive debugger
-dmake --trace                 # Trace execution
-dmake --trace-expand          # Trace with variable expansion
-dmake --profile               # Chrome trace profiling output
-dmake --config-only           # Parse/cache only, no build
-dmake --fresh                 # Skip persistent cache
-dmake -C <dir>                # Set project directory
+kiln [targets...] [-j N] [-DVAR=VAL] [--config CONFIG]
+kiln build [targets...]      # Build targets
+kiln run <target> [-- args]  # Build and run
+kiln test [pattern]          # Run tests
+kiln clean                   # Clean build
+kiln install [--prefix PATH] # Install project
+kiln -P <script.cmake>       # Script mode
+kiln -E <cmd> [args]         # Tool mode (echo, touch, copy, etc.)
+kiln --debug                 # Interactive debugger
+kiln --trace                 # Trace execution
+kiln --trace-expand          # Trace with variable expansion
+kiln --profile               # Chrome trace profiling output
+kiln --config-only           # Parse/cache only, no build
+kiln --fresh                 # Skip persistent cache
+kiln -C <dir>                # Set project directory
 ```
 
 ## Architecture
@@ -110,13 +110,13 @@ Supports common genex patterns:
 ## Code Locations
 
 ### Core Files
-- **Parser**: `dmake/cmake-language.hpp/cpp`
-- **Interpreter**: `dmake/interperter.hpp/cpp`
-- **Target**: `dmake/target.hpp/cpp`
-- **Build System**: `dmake/build_system.hpp/cpp`
-- **CLI**: `dmake-cli/main.cpp`
+- **Parser**: `kiln/cmake-language.hpp/cpp`
+- **Interpreter**: `kiln/interperter.hpp/cpp`
+- **Target**: `kiln/target.hpp/cpp`
+- **Build System**: `kiln/build_system.hpp/cpp`
+- **CLI**: `kiln-cli/main.cpp`
 
-### Builtins (`dmake/builtins/`)
+### Builtins (`kiln/builtins/`)
 Each file registers commands via `register_*_builtins()` declared in `registry.hpp`:
 - `message.cpp`, `variable.cpp`, `list.cpp`, `string.cpp`, `math.cpp`
 - `target.cpp`, `project.cpp`, `file.cpp`, `path.cpp`
@@ -127,16 +127,16 @@ Each file registers commands via `register_*_builtins()` declared in `registry.h
 - `system_info.cpp`
 
 ### Utilities
-- **CommandParser**: `dmake/command_parser.hpp/cpp` - Builder API for parsing CMake args
-- **CMakeArray**: `dmake/CMakeArray.hpp/cpp` - Semicolon-separated list ops
-- **ShadowMap**: `dmake/shadow_map.hpp` - Variable scope stack
-- **Module Scanner**: `dmake/module_scanner.hpp/cpp` - C++20 module deps
-- **Regex**: `dmake/regex.hpp/cpp` - PCRE2-based regex support
-- **Bundled deps**: `dmake/inner/` - blake2b, md5, sha256, unordered_dense
+- **CommandParser**: `kiln/command_parser.hpp/cpp` - Builder API for parsing CMake args
+- **CMakeArray**: `kiln/CMakeArray.hpp/cpp` - Semicolon-separated list ops
+- **ShadowMap**: `kiln/shadow_map.hpp` - Variable scope stack
+- **Module Scanner**: `kiln/module_scanner.hpp/cpp` - C++20 module deps
+- **Regex**: `kiln/regex.hpp/cpp` - PCRE2-based regex support
+- **Bundled deps**: `kiln/inner/` - blake2b, md5, sha256, unordered_dense
 
 ## Adding New Features
 
-**New builtin**: Create in `dmake/builtins/`, use `CommandParser`, add `register_*_builtins()` declaration to `registry.hpp`, call from `Interpreter` constructor
+**New builtin**: Create in `kiln/builtins/`, use `CommandParser`, add `register_*_builtins()` declaration to `registry.hpp`, call from `Interpreter` constructor
 
 **New target property**: Add to `Target` class, update `resolve()` if transitive, modify `generate_tasks()` for build usage
 
@@ -152,17 +152,17 @@ Each file registers commands via `register_*_builtins()` declared in `registry.h
 
 ## Testing
 
-**Unit tests**: `tests/*.cpp` (Catch2 v3). Run with `./build/dmake_tests "[tag]"`.
+**Unit tests**: `tests/*.cpp` (Catch2 v3). Run with `./build/kiln_tests "[tag]"`.
 
-**Integration tests**: ~50 test scenarios in `tests/integration/*/`. Each has `CMakeLists.txt` + `test.sh` script taking dmake path as `$1`. Covers executables, libraries, PCH, modules, find_*, FetchContent, ExternalProject, install, export, properties, try_compile, and more.
+**Integration tests**: ~50 test scenarios in `tests/integration/*/`. Each has `CMakeLists.txt` + `test.sh` script taking kiln path as `$1`. Covers executables, libraries, PCH, modules, find_*, FetchContent, ExternalProject, install, export, properties, try_compile, and more.
 
 ## Debugging
 
 ```bash
-dmake --debug              # Interactive debugger (step, breakpoints, backtrace)
-dmake --trace              # Trace all command execution
-dmake --trace-expand       # Trace with variable expansion shown
-dmake --break-on-message="pattern"  # Break on matching message
+kiln --debug              # Interactive debugger (step, breakpoints, backtrace)
+kiln --trace              # Trace all command execution
+kiln --trace-expand       # Trace with variable expansion shown
+kiln --break-on-message="pattern"  # Break on matching message
 ```
 
 Debugger commands: `s`tep, `n`ext, `c`ontinue, `b`reak, `d`elete, `p`rint, `bt` (backtrace), `l`ist, `q`uit

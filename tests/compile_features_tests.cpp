@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "../dmake/compile_features.hpp"
+#include "../kiln/compile_features.hpp"
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("CompileFeatures - C++ meta-features", "[compile_features]") {
     const auto& features = CompileFeatures::instance();

@@ -1,19 +1,19 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/build_system.hpp"
-#include "dmake/target.hpp"
-#include "dmake/toolchain.hpp"
-#include "dmake/gnu_compiler.hpp"
-#include "dmake/language.hpp"
-#include "dmake/interperter.hpp" // For Interpreter
-#include "dmake/cmake-language.hpp" // For Parser
-#include "dmake/builtins/registry.hpp" // For register_target_builtins
+#include "kiln/build_system.hpp"
+#include "kiln/target.hpp"
+#include "kiln/toolchain.hpp"
+#include "kiln/gnu_compiler.hpp"
+#include "kiln/language.hpp"
+#include "kiln/interperter.hpp" // For Interpreter
+#include "kiln/cmake-language.hpp" // For Parser
+#include "kiln/builtins/registry.hpp" // For register_target_builtins
 #include <filesystem>
 #include <string>
 #include <algorithm>
 #include <iostream>
 #include <fstream> // For std::ofstream
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("PCH Task Generation", "[target][pch]") {
     // Create a dummy environment

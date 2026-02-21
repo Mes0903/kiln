@@ -1,0 +1,758 @@
+#include "kiln/cmake-language.hpp"
+#include "kiln/interperter.hpp"
+#include "kiln/printing.hpp"
+#include "kiln/utils.hpp"
+#include "kiln/install_executor.hpp"
+#include "kiln/profiler.hpp"
+#include "kiln/tool_mode.hpp"
+#include "kiln/debugger.hpp"
+#include "kiln/parse_number.hpp"
+#include <linenoise.h>
+#include <algorithm>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <CLI/CLI.hpp>
+#include <unistd.h>
+#include <future>
+#include "kiln/regex.hpp"
+#include <chrono>
+#include <iomanip>
+#include <csignal>
+#include "kiln/build_system.hpp"
+
+namespace {
+
+void signal_handler(int sig) {
+    if (kiln::g_interrupted.exchange(true, std::memory_order_relaxed)) {
+        // Second signal — restore default handler and re-raise for hard kill
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+}
+
+struct GlobalOptions {
+    int jobs = 0;
+    std::string build_dir_str;
+    std::vector<std::string> definitions;
+    std::string config = "debug";
+    std::string script_path;
+    std::string source_dir_str;  // -S flag for ExternalProject recursive invocation
+    std::string project_dir_str = ".";  // -C flag for project directory
+    bool profile = false;
+    bool trace = false;
+    bool trace_expand = false;
+    bool debugger = false;
+    bool config_only = false;  // Debug: interpret + save cache, then exit (no build)
+    bool no_sys_init = false;   // Skip compiler detection (for benchmarking)
+    bool fresh = false;         // Skip loading persistent cache (fresh configure)
+    std::string break_on_message;
+};
+
+void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<kiln::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
+    kiln::print_diagnostic(std::cerr, kiln::DiagnosticSeverity::Error, message, file_path, row, col, offset, length, backtrace, source_content);
+}
+
+void print_error_context(const kiln::InterpreterError& error) {
+    print_error_context(error.file, error.row, error.col, error.offset, error.length, error.message, error.backtrace, error.source_content);
+}
+
+std::string to_cmake_case(const std::string& config) {
+    if (config.empty()) return "";
+    std::string result = config;
+    result[0] = std::toupper(result[0]);
+    if (result == "Relwithdebinfo") return "RelWithDebInfo";
+    if (result == "Minsizerel") return "MinSizeRel";
+    return result;
+}
+
+void apply_definitions(kiln::Interpreter& interpreter, const std::vector<std::string>& definitions) {
+    for (const auto& def : definitions) {
+        size_t eq = def.find('=');
+        if (eq != std::string::npos) {
+            std::string var_name = def.substr(0, eq);
+            std::string value = def.substr(eq + 1);
+
+            // Strip type annotation if present (e.g., VAR:STRING=value -> VAR=value)
+            size_t colon = var_name.find(':');
+            if (colon != std::string::npos) {
+                var_name = var_name.substr(0, colon);
+            }
+
+            interpreter.set_variable(var_name, value);
+        } else {
+            // Handle -DVAR or -DVAR:BOOL (no value)
+            std::string var_name = def;
+            size_t colon = var_name.find(':');
+            if (colon != std::string::npos) {
+                var_name = var_name.substr(0, colon);
+            }
+            interpreter.set_variable(var_name, "ON");
+        }
+    }
+}
+
+void set_default_flags(kiln::Interpreter& interpreter, const std::vector<std::string>& definitions, const std::string& var, const std::string& flags) {
+    bool already_set = false;
+    for (const auto& def : definitions) {
+        // Check for VAR=value or VAR:TYPE=value or VAR or VAR:TYPE
+        std::string def_var = def;
+        size_t eq = def_var.find('=');
+        if (eq != std::string::npos) {
+            def_var = def_var.substr(0, eq);
+        }
+        size_t colon = def_var.find(':');
+        if (colon != std::string::npos) {
+            def_var = def_var.substr(0, colon);
+        }
+
+        if (def_var == var) {
+            already_set = true;
+            break;
+        }
+    }
+    if (!already_set && interpreter.get_variable(var).empty()) {
+        interpreter.set_variable(var, flags);
+    }
+}
+
+std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(const GlobalOptions& opt, kiln::DebugController& debug_controller, const std::string& project_dir, const std::vector<std::string>& targets, bool is_test_mode = false) {
+    try {
+        std::filesystem::path project_path = std::filesystem::canonical(project_dir);
+        std::filesystem::path cmake_lists = project_path / "CMakeLists.txt";
+
+        if (!std::filesystem::exists(cmake_lists)) {
+            return std::unexpected("CMakeLists.txt not found in " + project_path.string());
+        }
+
+        std::filesystem::path build_path;
+        std::filesystem::path build_root_path;  // For KILN_BUILD_ROOT
+
+        if (!opt.source_dir_str.empty()) {
+            // -S mode: use -B as-is (no config appended), used for ExternalProject recursive builds
+            if (opt.build_dir_str.empty()) {
+                return std::unexpected("-S requires -B to be specified");
+            }
+            build_path = std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+            // In -S mode, build_root is the parent of build_path (EP creates config-specific dirs)
+            build_root_path = build_path.parent_path();
+        } else {
+            build_root_path = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+            build_path = build_root_path / opt.config;
+        }
+
+        if (build_path == project_path) {
+            return std::unexpected("Build directory cannot be source directory");
+        }
+
+        std::ifstream file(cmake_lists);
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+        kiln::ProfileScope parse_profile("parse " + cmake_lists.filename().string(), "parse");
+        kiln::Parser parser(content, cmake_lists.string());
+        auto ast_or_error = parser.parse();
+        parse_profile.stop();
+
+        if (!ast_or_error) {
+            const auto& error = ast_or_error.error();
+            print_error_context(cmake_lists.string(), error.row, error.col, error.offset, error.length, error.reason);
+            return std::unexpected("Parse error");
+        }
+
+        kiln::ProfileScope init_profile("setup for execution", "init");
+        auto interpreter = std::make_unique<kiln::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string(), opt.no_sys_init, opt.fresh);
+        interpreter->set_current_file(cmake_lists.string());
+        debug_controller.attach(*interpreter);
+
+        // Set KILN_BUILD_ROOT - shared location for EP/FetchContent sources
+        interpreter->set_variable("KILN_BUILD_ROOT", build_root_path.string());
+
+        // Initialize FETCHCONTENT_BASE_DIR (like CMake's FetchContent module does on include)
+        // This must be set before any FetchContent_Declare is parsed since args reference it
+        interpreter->set_cache_variable("FETCHCONTENT_BASE_DIR", build_root_path.string() + "/_deps");
+
+        // Set BUILD_TESTING before user definitions (user can override with -D)
+        interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
+        apply_definitions(*interpreter, opt.definitions);
+
+        if (interpreter->get_variable("CMAKE_BUILD_TYPE").empty()) {
+            interpreter->set_variable("CMAKE_BUILD_TYPE", to_cmake_case(opt.config));
+        }
+
+        set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_DEBUG", "-g -O0");
+        set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
+        set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_RELWITHDEBINFO", "-g -O2 -DNDEBUG");
+        set_default_flags(*interpreter, opt.definitions, "CMAKE_CXX_FLAGS_MINSIZEREL", "-Os -DNDEBUG");
+        init_profile.stop();
+
+        // Save subsystem cache on all exit paths where the interpreter exists.
+        // Cache entries (try_compile, find_*, globs) are valid regardless of
+        // whether later commands fail, so persisting them avoids redundant work
+        // when re-running after a configuration or build error.
+        auto save_cache = [&]() {
+            auto cache_save_result = interpreter->get_cache_store().save();
+            if (!cache_save_result) {
+                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW) << "warning:" << kiln::c(std::cerr, kiln::colors::RESET) << " Failed to save cache: " << cache_save_result.error() << std::endl;
+            }
+        };
+
+        {
+            kiln::ProfileScope scope("interpret " + cmake_lists.filename().string(), "interpret");
+            auto interpret_result = interpreter->interpret(ast_or_error.value());
+            if (!interpret_result) {
+                print_error_context(interpret_result.error());
+                save_cache();
+                return std::unexpected("Interpretation error");
+            }
+
+            // Execute deferred calls and apply retroactive directory properties
+            interpreter->execute_deferred_calls();
+            interpreter->finalize_directory_targets();
+        }
+
+        if (opt.config_only) {
+            save_cache();
+            if (kiln::g_profiling_enabled.load(std::memory_order_relaxed)) {
+                auto profile_path = (build_path / "profile.json").string();
+                kiln::Profiler::instance().write(profile_path);
+                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_CYAN) << "Profile" << kiln::c(std::cerr, kiln::colors::RESET) << " written to " << profile_path << std::endl;
+            }
+            return interpreter;
+        }
+
+        auto build_result = interpreter->run_build(opt.jobs, targets);
+        if (!build_result) {
+            if (!kiln::g_interrupted.load(std::memory_order_relaxed)) {
+                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET) << " " << build_result.error().message << std::endl;
+            }
+            save_cache();
+            return std::unexpected(kiln::g_interrupted.load(std::memory_order_relaxed) ? "Interrupted" : "Build failed");
+        }
+
+        save_cache();
+
+        // Write profile if enabled
+        if (kiln::g_profiling_enabled.load(std::memory_order_relaxed)) {
+            auto profile_path = (build_path / "profile.json").string();
+            kiln::Profiler::instance().write(profile_path);
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_CYAN) << "Profile" << kiln::c(std::cerr, kiln::colors::RESET) << " written to " << profile_path << std::endl;
+        }
+
+        return interpreter;
+    } catch (const std::exception& e) {
+        return std::unexpected(std::string("Exception: ") + e.what());
+    }
+}
+
+// Must insure build is up to date before running tests
+int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, const std::string& pattern) {
+    auto& tests = interpreter->get_tests();
+    auto& targets_map = interpreter->get_targets();
+
+    std::vector<kiln::TestDefinition*> selected_tests;
+    std::set<std::string> targets_to_build;
+
+    std::optional<kiln::Regex> filter;
+    bool has_filter = !pattern.empty();
+    if (has_filter) {
+        auto re = kiln::Regex::compile(pattern);
+        if (!re) {
+            std::cerr << "Error: Invalid test pattern regex: " << re.error() << std::endl;
+            return 1;
+        }
+        filter = std::move(*re);
+    }
+
+    for (auto& test : tests) {
+        if (has_filter && !filter->search(test.name)) {
+            continue;
+        }
+        selected_tests.push_back(&test);
+        if (targets_map.count(test.command)) {
+            targets_to_build.insert(test.command);
+        }
+    }
+
+    if (selected_tests.empty()) {
+        std::cout << "No tests matched the pattern." << std::endl;
+        return 0;
+    }
+
+    std::vector<std::string> target_list(targets_to_build.begin(), targets_to_build.end());
+
+    std::cout << kiln::c(std::cout, kiln::colors::BOLD_BLUE) << "Running " << selected_tests.size() << " tests..." << kiln::c(std::cout, kiln::colors::RESET) << std::endl;
+
+    struct TestResult {
+        std::string name;
+        bool passed;
+        bool skipped;
+        bool timed_out;
+        double duration;
+        std::string output;
+    };
+
+    std::vector<std::future<TestResult>> futures;
+    auto start_all = std::chrono::high_resolution_clock::now();
+
+    for (auto* test : selected_tests) {
+        futures.push_back(std::async(std::launch::async, [test, &targets_map]() -> TestResult {
+            TestResult res;
+            res.name = test->name;
+            res.passed = false;
+            res.skipped = false;
+            res.timed_out = false;
+
+            auto start = std::chrono::high_resolution_clock::now();
+
+            std::string cmd = test->command;
+            if (targets_map.count(cmd)) {
+                cmd = targets_map[cmd]->get_output_path();
+            }
+
+            std::vector<std::string> command_vec;
+            command_vec.push_back(cmd);
+            for (const auto& arg : test->args) {
+                command_vec.push_back(arg);
+            }
+
+            // Check for TIMEOUT property
+            double timeout = 0.0;
+            auto timeout_it = test->properties.find("TIMEOUT");
+            if (timeout_it != test->properties.end()) {
+                auto v = kiln::parse_double(timeout_it->second);
+                if (!v) {
+                    res.output = "Error: Invalid TIMEOUT value '" + timeout_it->second + "'\n";
+                    res.duration = 0.0;
+                    return res;
+                }
+                timeout = *v;
+            }
+
+            // Check for SKIP_RETURN_CODE property
+            std::optional<int> skip_code;
+            auto skip_it = test->properties.find("SKIP_RETURN_CODE");
+            if (skip_it != test->properties.end()) {
+                auto v = kiln::parse_number<int>(skip_it->second);
+                if (!v) {
+                    res.output = "Error: Invalid SKIP_RETURN_CODE value '" + skip_it->second + "'\n";
+                    res.duration = 0.0;
+                    return res;
+                }
+                skip_code = *v;
+            }
+
+            // Execute the command with timeout handling
+            std::future<kiln::CommandResult> cmd_future = std::async(std::launch::async, [&]() {
+                return kiln::run_command(command_vec, test->working_dir);
+            });
+
+            kiln::CommandResult result;
+            if (timeout > 0.0) {
+                auto timeout_duration = std::chrono::duration<double>(timeout);
+                if (cmd_future.wait_for(timeout_duration) == std::future_status::timeout) {
+                    res.timed_out = true;
+                    res.passed = false;
+                    res.output = "Test timed out after " + std::to_string(timeout) + " seconds\n";
+                    auto end = std::chrono::high_resolution_clock::now();
+                    res.duration = std::chrono::duration<double>(end - start).count();
+                    // Note: The actual test process may still be running, but we don't wait for it
+                    return res;
+                }
+                result = cmd_future.get();
+            } else {
+                result = cmd_future.get();
+            }
+
+            res.output = result.output;
+
+            // Check if test was skipped
+            if (skip_code.has_value() && result.exit_code == skip_code.value()) {
+                res.skipped = true;
+                res.passed = true;  // Skipped tests count as passed
+            } else {
+                res.passed = (result.exit_code == 0);
+            }
+
+            auto end = std::chrono::high_resolution_clock::now();
+            res.duration = std::chrono::duration<double>(end - start).count();
+            return res;
+        }));
+    }
+
+    int passed_count = 0;
+    int skipped_count = 0;
+    int failed_count = 0;
+    for (size_t i = 0; i < futures.size(); ++i) {
+        auto res = futures[i].get();
+        std::cout << "[" << (i + 1) << "/" << selected_tests.size() << "] "
+                  << std::left << std::setw(40) << res.name << " ";
+
+        if (res.skipped) {
+            std::cout << kiln::c(std::cout, kiln::colors::BOLD_YELLOW) << "SKIPPED" << kiln::c(std::cout, kiln::colors::RESET);
+            skipped_count++;
+            passed_count++;  // Skipped tests count as passed
+        } else if (res.timed_out) {
+            std::cout << kiln::c(std::cout, kiln::colors::BOLD_MAGENTA) << "TIMEOUT" << kiln::c(std::cout, kiln::colors::RESET);
+            failed_count++;
+        } else if (res.passed) {
+            std::cout << kiln::c(std::cout, kiln::colors::BOLD_GREEN) << "PASSED" << kiln::c(std::cout, kiln::colors::RESET);
+            passed_count++;
+        } else {
+            std::cout << kiln::c(std::cout, kiln::colors::BOLD_RED) << "FAILED" << kiln::c(std::cout, kiln::colors::RESET);
+            failed_count++;
+        }
+        std::cout << " (" << std::fixed << std::setprecision(2) << res.duration << "s)" << std::endl;
+
+        if (!res.passed || res.timed_out) {
+            std::cout << "--- Output ---" << std::endl;
+            std::cout << res.output;
+            std::cout << "--------------" << std::endl;
+        }
+    }
+
+    auto end_all = std::chrono::high_resolution_clock::now();
+    double total_duration = std::chrono::duration<double>(end_all - start_all).count();
+
+    std::cout << "\nTest Summary: " << passed_count << "/" << selected_tests.size() << " passed";
+    if (skipped_count > 0) {
+        std::cout << " (" << skipped_count << " skipped)";
+    }
+    std::cout << " ("
+              << std::fixed << std::setprecision(2) << total_duration << "s)" << std::endl;
+
+    return (passed_count == selected_tests.size()) ? 0 : 1;
+}
+
+} // namespace
+
+int main(int argc, char* argv[]) {
+    CLI::App app{"kiln - A modern C++ build system with CMake compatibility.\n"
+                  "  Use 'kiln <subcommand> --help' for subcommand-specific options."};
+    app.set_version_flag("-v,--version", "0.1.0-alpha");
+    GlobalOptions opt;
+    std::string ignored_generator;
+
+    // Helper to add global options to app or subcommand
+    auto add_global_options = [&](CLI::App* target) {
+        target->add_option("-C,--project", opt.project_dir_str, "Project directory (default: current directory)");
+        target->add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)")
+           ->default_val(0);
+        target->add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
+        target->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
+        target->add_option("-G", ignored_generator, "Generator (ignored, CMake compatibility)");
+        target->add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
+        target->add_flag("--trace", opt.trace, "Print each command as it is executed (raw arguments)");
+        target->add_flag("--trace-expand", opt.trace_expand, "Print each command with expanded arguments");
+        target->add_flag("--debugger", opt.debugger, "Start interactive CMake debugger");
+        target->add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
+        target->add_flag("--config-only", opt.config_only, "[debug] Interpret CMakeLists.txt and save cache, then exit without building");
+        target->add_flag("--no-sys-init", opt.no_sys_init, "[benchmark] Skip compiler detection and system init");
+        target->add_flag("--fresh", opt.fresh, "Skip loading persistent cache (fresh configure)");
+        target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
+           ->default_val("debug")
+           ->transform([](const std::string& value) -> std::string {
+               auto copy = kiln::to_lower(value);
+               if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
+                   return copy;
+               }
+               throw CLI::ValidationError("Invalid configuration");
+           }, "", "lowercase");
+    };
+
+    // Add global options to main app
+    add_global_options(&app);
+
+    // Special modes (only on main app)
+    app.add_option("-P", opt.script_path, "Run a CMake script (script mode)");
+    app.add_option("-S", opt.source_dir_str, "Source directory (CMake compat, requires -B)");
+
+    app.footer(R"(
+Examples:
+  kiln                             # Build current directory (debug)
+  kiln -j8 --config release        # Build with 8 jobs in release mode
+  kiln -C ~/other/project          # Build a different project
+  kiln run my_app -- --verbose     # Build and run a target with args
+  kiln test "parser.*"             # Run tests matching a regex
+  kiln -E copy file.txt dest/      # CMake-compatible tool command
+  kiln -P script.cmake -DFOO=bar   # Run a CMake script
+)");
+
+    // Subcommands
+    std::vector<std::string> build_targets;
+    auto* build_cmd = app.add_subcommand("build", "Build specific targets (default if no subcommand given)");
+    build_cmd->add_option("targets", build_targets, "Target names to build (default: all)");
+    add_global_options(build_cmd);
+
+    std::string test_pattern;
+    auto* test_cmd = app.add_subcommand("test", "Build and run tests (sets BUILD_TESTING=ON)");
+    test_cmd->add_option("pattern", test_pattern, "Regex filter for test names");
+    add_global_options(test_cmd);
+
+    std::string run_target;
+    std::vector<std::string> run_args;
+    auto* run_cmd = app.add_subcommand("run", "Build and run an executable target");
+    run_cmd->add_option("target", run_target, "Executable target to run")->required();
+    run_cmd->add_option("args", run_args, "Arguments passed to the target (use -- to separate)");
+    add_global_options(run_cmd);
+
+    auto* clean_cmd = app.add_subcommand("clean", "Remove build artifacts for the current config");
+    add_global_options(clean_cmd);
+
+    auto* install_cmd = app.add_subcommand("install", "Build and install project files");
+    std::string install_prefix;
+    std::string install_component;
+    install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
+    install_cmd->add_option("--component", install_component, "Install only the specified component");
+    add_global_options(install_cmd);
+
+    auto* e_cmd = app.add_subcommand("tool", "CMake-compatible tool commands (echo, touch, copy, ...)");
+    e_cmd->alias("-E");
+    e_cmd->prefix_command();
+
+    // Default targets when no subcommand (positionals go to build_targets)
+    std::vector<std::string> positionals;
+    app.add_option("targets", positionals, "Target names to build (default: all)");
+
+    app.require_subcommand(0, 1);
+
+    CLI11_PARSE(app, argc, argv);
+
+    if (opt.profile) {
+        kiln::Profiler::instance().enable();
+    }
+
+    // Set up debug/trace controller
+    kiln::DebugOptions debug_opts{opt.trace, opt.trace_expand, opt.debugger, opt.break_on_message};
+    kiln::DebugController debug_controller(debug_opts);
+
+    // Install signal handlers for graceful interruption (cache saving on Ctrl-C, etc.)
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGHUP, signal_handler);
+
+    if (debug_opts.any_enabled()) {
+        // Set up linenoise-based input for interactive debugger
+        static const char* dbg_commands[] = {
+            "break", "break-on-message", "continue", "step", "next", "print",
+            "backtrace", "list", "frame", "up", "down", "info variables",
+            "info breakpoints", "watch", "delete", "quit", "help", nullptr
+        };
+        linenoiseSetCompletionCallback([](const char* buf, linenoiseCompletions* lc) {
+            std::string_view prefix(buf);
+            for (const char** cmd = dbg_commands; *cmd; ++cmd) {
+                if (std::string_view(*cmd).starts_with(prefix)) {
+                    linenoiseAddCompletion(lc, *cmd);
+                }
+            }
+        });
+        linenoiseHistorySetMaxLen(100);
+
+        debug_controller.set_input_function([](const char* prompt, int& key_type) -> std::optional<std::string> {
+            key_type = 0;
+            char* raw = linenoise(prompt);
+            if (!raw) {
+                key_type = linenoiseKeyType();  // 1=Ctrl+C, 2=Ctrl+D
+                return std::nullopt;
+            }
+            std::string line(raw);
+            free(raw);
+            linenoiseHistoryAdd(line.c_str());
+            return line;
+        });
+    }
+
+    if (e_cmd->parsed()) {
+        auto e_args = e_cmd->remaining();
+        return kiln::run_tool_mode(e_args);
+    }
+
+    if (!opt.script_path.empty()) {
+        try {
+            std::filesystem::path script_abs = std::filesystem::absolute(opt.script_path);
+            if (!std::filesystem::exists(script_abs)) {
+                std::cerr << "Error: Script not found: " << opt.script_path << std::endl;
+                return 1;
+            }
+
+            std::ifstream file(script_abs);
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+            kiln::Parser parser(content, script_abs.string());
+            auto ast_or_error = parser.parse();
+            if (!ast_or_error) {
+                print_error_context(script_abs.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
+                return 1;
+            }
+
+            kiln::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr, std::nullopt, opt.no_sys_init, /*skip_cache_load=*/true);
+            interpreter.set_current_file(script_abs.string());
+            debug_controller.attach(interpreter);
+            apply_definitions(interpreter, opt.definitions);
+
+            auto result = interpreter.interpret(ast_or_error.value());
+            if (!result) {
+                print_error_context(result.error());
+                return 1;
+            }
+            interpreter.execute_deferred_calls();
+            if (auto err = interpreter.get_fatal_error()) {
+                print_error_context(*err);
+                return 1;
+            }
+            return 0;
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return 1;
+        }
+    }
+
+    if (clean_cmd->parsed()) {
+        std::filesystem::path project_path = std::filesystem::absolute(opt.project_dir_str);
+        std::filesystem::path build_root = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+        std::filesystem::path build_path = build_root / opt.config;
+        if (std::filesystem::exists(build_path)) {
+            std::uintmax_t total_bytes = 0;
+            for (auto const& entry : std::filesystem::recursive_directory_iterator(build_path, std::filesystem::directory_options::skip_permission_denied)) {
+                if (entry.is_regular_file()) {
+                    std::error_code ec;
+                    auto sz = entry.file_size(ec);
+                    if (!ec) total_bytes += sz;
+                }
+            }
+            std::cout << "Cleaning " << build_path << "..." << std::endl;
+            std::filesystem::remove_all(build_path);
+            // Format freed size
+            auto format_bytes = [](std::uintmax_t bytes) -> std::string {
+                constexpr double KB = 1024, MB = 1024*1024, GB = 1024*1024*1024;
+                char buf[32];
+                if (bytes >= GB)      std::snprintf(buf, sizeof(buf), "%.2f GB", bytes / GB);
+                else if (bytes >= MB) std::snprintf(buf, sizeof(buf), "%.2f MB", bytes / MB);
+                else if (bytes >= KB) std::snprintf(buf, sizeof(buf), "%.2f KB", bytes / KB);
+                else                  std::snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+                return buf;
+            };
+            std::cout << "Freed " << format_bytes(total_bytes) << std::endl;
+        }
+        return 0;
+    }
+
+    if (install_cmd->parsed()) {
+        // Build project first
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {});
+        if (!build_res) {
+            std::cerr << "Build failed: " << build_res.error() << std::endl;
+            return 1;
+        }
+
+        auto& interpreter = build_res.value();
+
+        // Determine install prefix
+        std::string prefix = install_prefix.empty()
+            ? interpreter->get_variable("CMAKE_INSTALL_PREFIX")
+            : install_prefix;
+
+        if (prefix.empty()) {
+            prefix = "/usr/local";  // CMake default
+        }
+
+        std::cout << kiln::c(std::cout, kiln::colors::BOLD_BLUE) << "Installing to:" << kiln::c(std::cout, kiln::colors::RESET) << " " << prefix << std::endl;
+
+        // Execute install
+        auto result = kiln::execute_install_rules(
+            interpreter.get(),
+            interpreter->get_install_rules(),
+            prefix,
+            to_cmake_case(opt.config),
+            install_component
+        );
+
+        if (!result) {
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET) << " " << result.error() << std::endl;
+            return 1;
+        }
+
+        std::cout << kiln::c(std::cout, kiln::colors::BOLD_GREEN) << "Installation complete." << kiln::c(std::cout, kiln::colors::RESET) << std::endl;
+        return 0;
+    }
+
+    if (run_cmd->parsed()) {
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {run_target});
+        if (!build_res) {
+            std::cerr << "Error: " << build_res.error() << std::endl;
+            return 1;
+        }
+
+        auto& interpreter = build_res.value();
+        auto* target = interpreter->find_target(run_target);
+        if (!target) {
+            std::cerr << "Error: Target '" << run_target << "' not found after build." << std::endl;
+            return 1;
+        }
+
+        if (target->get_type() != kiln::TargetType::EXECUTABLE) {
+            std::cerr << "Error: Target '" << run_target << "' is not an executable." << std::endl;
+            return 1;
+        }
+
+        std::string exec_path = target->get_output_path();
+        if (!std::filesystem::exists(exec_path)) {
+            std::cerr << "Error: Executable not found at " << exec_path << std::endl;
+            return 1;
+        }
+
+        std::vector<char*> argv_exec;
+        argv_exec.push_back(const_cast<char*>(exec_path.c_str()));
+        for (const auto& arg : run_args) {
+            argv_exec.push_back(const_cast<char*>(arg.c_str()));
+        }
+        argv_exec.push_back(nullptr);
+
+        std::cout << kiln::c(std::cout, kiln::colors::BOLD_GREEN) << "Running" << kiln::c(std::cout, kiln::colors::RESET) << " " << exec_path << "..." << std::endl;
+        execvp(argv_exec[0], argv_exec.data());
+
+        std::cerr << "Error: Failed to execute " << exec_path << ": " << strerror(errno) << std::endl;
+        return 1;
+    }
+
+    if (test_cmd->parsed()) {
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {}, true);
+        if (!build_res) {
+            std::cerr << "Error: " << build_res.error() << std::endl;
+            return 1;
+        }
+
+        return run_test_action(opt, build_res.value().get(), test_pattern);
+    }
+
+    // Handle -S flag: CMake-style build (ExternalProject compatibility)
+    if (!opt.source_dir_str.empty()) {
+        auto build_res = run_build_action(opt, debug_controller, opt.source_dir_str, {});
+        if (!build_res) {
+            std::cerr << "Error: " << build_res.error() << std::endl;
+            return 1;
+        }
+        return 0;
+    }
+
+    // Determine targets: use build_targets if build subcommand, else positionals
+    std::vector<std::string> targets = build_cmd->parsed() ? build_targets : positionals;
+
+    // Migration hint: if a target looks like a project directory, suggest -C
+    for (const auto& target : targets) {
+        std::filesystem::path target_path(target);
+        if (std::filesystem::exists(target_path / "CMakeLists.txt")) {
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW) << "hint:"
+                      << kiln::c(std::cerr, kiln::colors::RESET)
+                      << " '" << target << "' looks like a project directory. "
+                      << "Use 'kiln -C " << target << "' to build it." << std::endl;
+        }
+    }
+
+    auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, targets);
+    if (!build_res) {
+        std::cerr << "Error: " << build_res.error() << std::endl;
+        return 1;
+    }
+    return 0;
+}

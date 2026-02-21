@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/language.hpp"
+#include "kiln/language.hpp"
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("LanguageClassifier: CXX detection", "[language]") {
     CHECK(LanguageClassifier::from_extension(".cpp").lang == Language::CXX);

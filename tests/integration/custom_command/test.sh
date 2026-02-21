@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DMAKE="$1"
+KILN="$1"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Clean up
@@ -9,7 +9,7 @@ rm -rf "$DIR/build"
 
 # Build
 cd "$DIR"
-"$DMAKE" --config debug -j 1
+"$KILN" --config debug -j 1
 
 # Verify the executable was built
 if [ ! -f "$DIR/build/debug/myapp" ]; then

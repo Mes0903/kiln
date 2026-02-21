@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/target.hpp"
-#include "dmake/interperter.hpp"
-#include "dmake/cmake-language.hpp"
-#include "dmake/builtins/registry.hpp"
+#include "kiln/target.hpp"
+#include "kiln/interperter.hpp"
+#include "kiln/cmake-language.hpp"
+#include "kiln/builtins/registry.hpp"
 #include <filesystem>
 #include <sstream>
 
-using namespace dmake;
+using namespace kiln;
 
 // Helper: interpret a script, resolve all targets, return them + stderr output
 static auto run_and_resolve(const std::string& script) {

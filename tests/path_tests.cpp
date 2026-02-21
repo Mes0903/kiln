@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/path.hpp"
+#include "kiln/path.hpp"
 #include <filesystem>
 
-using dmake::Path;
+using kiln::Path;
 namespace fs = std::filesystem;
 
 // --- Construction and access ---

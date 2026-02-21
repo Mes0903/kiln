@@ -1,14 +1,14 @@
 #!/bin/bash
 set -e
-DMAKE=$1
+KILN=$1
 
 echo "=== ExternalProject Build-Time Test ==="
 
 # Clean any previous build
 rm -rf build
 
-# Run dmake
-"$DMAKE" 2>&1 | tee build.log
+# Run kiln
+"$KILN" 2>&1 | tee build.log
 
 # Check: EP library should have been built (in EP's binary dir)
 if [ ! -f build/debug/_ep/mylib/libmylib.a ]; then

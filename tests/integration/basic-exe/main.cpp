@@ -1,5 +1,5 @@
 #include <iostream>
 int main() {
-    std::cout << "Hello, dmake!" << std::endl;
+    std::cout << "Hello, kiln!" << std::endl;
     return 0;
 }

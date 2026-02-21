@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 
 echo "Testing add_dependencies()..."
 
 # Clean and build
 rm -rf build
-$DMAKE
+$KILN
 
 # Run the executable - it should have access to the generated header
 ./build/debug/app

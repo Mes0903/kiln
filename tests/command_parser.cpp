@@ -1,9 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/command_parser.hpp"
+#include "kiln/command_parser.hpp"
 #include <vector>
 #include <string>
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("CommandParser: basic positional", "[command_parser]") {
     std::vector<std::string> args = {"my_target", "src1.cpp", "src2.cpp"};

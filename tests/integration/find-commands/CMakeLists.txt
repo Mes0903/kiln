@@ -55,5 +55,5 @@ message(STATUS "Skip-search optimization works")
 # Build a simple executable to verify the project builds
 add_executable(find_test main.cpp)
 
-# Link with the found math library (full path) - tests that dmake handles full paths correctly
+# Link with the found math library (full path) - tests that kiln handles full paths correctly
 target_link_libraries(find_test PRIVATE ${MATH_LIB})

@@ -2,15 +2,15 @@
 set -e
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <path-to-dmake-binary>"
+    echo "Usage: $0 <path-to-kiln-binary>"
     exit 1
 fi
 
-DMAKE_BIN=$(realpath "$1")
+KILN_BIN=$(realpath "$1")
 TEST_ROOT=$(realpath $(dirname "$0"))
-TEMP_DIR=$(mktemp -d -t dmake-tests-XXXXXXXXXX)
+TEMP_DIR=$(mktemp -d -t kiln-tests-XXXXXXXXXX)
 
-echo "Using dmake: $DMAKE_BIN"
+echo "Using kiln: $KILN_BIN"
 echo "Work directory: $TEMP_DIR"
 
 cleanup() {
@@ -38,7 +38,7 @@ for d in $(find "$TEST_ROOT" -maxdepth 1 -type d); do
 
     # Run test
     cd "$work_dir"
-    if ./test.sh "$DMAKE_BIN" ; then
+    if ./test.sh "$KILN_BIN" ; then
         echo "PASSED"
         PASSED=$((PASSED + 1))
     else

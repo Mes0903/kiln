@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 TEST_DIR=$(cd "$(dirname "$0")" && pwd)
 
 cd "$TEST_DIR"
@@ -9,9 +9,9 @@ cd "$TEST_DIR"
 # Clean any previous build
 rm -rf build
 
-# Build with dmake
-echo "Building modules_basic with dmake..."
-$DMAKE -j4
+# Build with kiln
+echo "Building modules_basic with kiln..."
+$KILN -j4
 
 # Check that output exists
 if [ ! -f build/debug/modules_basic_app ]; then

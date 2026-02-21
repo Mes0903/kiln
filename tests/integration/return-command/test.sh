@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DMAKE="$1"
+KILN="$1"
 TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Testing return() command behavior..."
@@ -9,7 +9,7 @@ echo "Testing return() command behavior..."
 # Test 1 & 2: Function and Macro return
 echo ""
 echo "Running function and macro tests..."
-OUTPUT=$("$DMAKE" -P "$TEST_DIR/CMakeLists.txt" 2>&1)
+OUTPUT=$("$KILN" -P "$TEST_DIR/CMakeLists.txt" 2>&1)
 
 # Check that function return worked correctly
 if ! echo "$OUTPUT" | grep -q "Inside function before return"; then
@@ -48,7 +48,7 @@ echo "✓ Function and macro tests passed"
 # Test 3: Include file return
 echo ""
 echo "Running include file test..."
-OUTPUT=$("$DMAKE" -P "$TEST_DIR/test_include.cmake" 2>&1)
+OUTPUT=$("$KILN" -P "$TEST_DIR/test_include.cmake" 2>&1)
 
 if ! echo "$OUTPUT" | grep -q "Main file: before include"; then
     echo "FAIL: Main file did not execute before include"
@@ -75,7 +75,7 @@ echo "✓ Include file test passed"
 # Test 4: Script body return
 echo ""
 echo "Running script body return test..."
-OUTPUT=$("$DMAKE" -P "$TEST_DIR/test_script_return.cmake" 2>&1)
+OUTPUT=$("$KILN" -P "$TEST_DIR/test_script_return.cmake" 2>&1)
 
 if ! echo "$OUTPUT" | grep -q "Script: before return"; then
     echo "FAIL: Script did not execute before return"

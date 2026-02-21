@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
-DMAKE=$1
+KILN=$1
 
-"$DMAKE"
+"$KILN"
 
 # Verify custom command stripped quotes: should be -flag=hello, not -flag="hello"
 OUTPUT=$(cat build/debug/quote_output.txt)

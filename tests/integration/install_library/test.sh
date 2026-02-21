@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 TESTDIR=$(dirname "$0")
 INSTALL_PREFIX=$(mktemp -d)
 
@@ -9,7 +9,7 @@ echo "Testing install(TARGETS ... LIBRARY) with versioning"
 
 # Build and install
 cd "$TESTDIR"
-$DMAKE install --prefix "$INSTALL_PREFIX"
+$KILN install --prefix "$INSTALL_PREFIX"
 
 # Verify main library file exists
 if [ ! -f "$INSTALL_PREFIX/lib/libmylib.so.1.2.3" ]; then

@@ -1,17 +1,17 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 TEST_DIR=$(dirname "$0")
 
 echo "=== Testing ALIAS support ==="
 
 # Clean first
 cd "$TEST_DIR"
-$DMAKE clean
+$KILN clean
 
 # Build the project (should handle aliases correctly)
-$DMAKE
+$KILN
 
 # Verify outputs exist
 if [ ! -f "build/debug/myapp" ]; then
@@ -37,15 +37,15 @@ if [ $? -ne 0 ]; then
 fi
 
 # Test building with alias name (should resolve to real target)
-$DMAKE MyNamespace::App
+$KILN MyNamespace::App
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to build using alias name"
     exit 1
 fi
 
 # Clean and test building library alias
-$DMAKE clean
-$DMAKE MyNamespace::MyLib
+$KILN clean
+$KILN MyNamespace::MyLib
 if [ ! -f "build/debug/libmylib.a" ]; then
     echo "ERROR: Failed to build library using alias name"
     exit 1

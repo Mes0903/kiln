@@ -13,7 +13,7 @@ else()
 endif()
 
 # Test 2: Incompatible version (Request 3.0) -> Should NOT find 2.0.0
-# Note: Since dmake currently ignores version, this is expected to FAIL the test once we fix it
+# Note: Since kiln currently ignores version, this is expected to FAIL the test once we fix it
 # But initially it will PASS finding the package (and we assert that it shouldn't have)
 message(STATUS "Test 2: Finding MockPkg 3.0 (Incompatible)...")
 find_package(MockPkg 3.0 QUIET)

@@ -1,5 +1,5 @@
 #!/bin/bash
 set -e
 
-# Run dmake (first argument is the dmake binary path)
+# Run kiln (first argument is the kiln binary path)
 "$1"

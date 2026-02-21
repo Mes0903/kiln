@@ -1,9 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/gnu_compiler.hpp"
-#include "dmake/utils.hpp"
+#include "kiln/gnu_compiler.hpp"
+#include "kiln/utils.hpp"
 #include <vector>
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("GnuCompiler: CXX compile command", "[compiler]") {
     GnuCompiler compiler("g++", Language::CXX);
@@ -17,7 +17,7 @@ TEST_CASE("GnuCompiler: CXX compile command", "[compiler]") {
     
         std::vector<std::string> cmd_vec = compiler.get_compile_command(ctx);
     
-        std::string cmd = dmake::join_command(cmd_vec);
+        std::string cmd = kiln::join_command(cmd_vec);
     
             CHECK(cmd_vec[0] == "g++");
             CHECK(cmd_vec[1] == "-std=gnu++23");

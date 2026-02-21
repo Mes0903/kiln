@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Run dmake
+# Run kiln
 "$1"
 
 echo "find_package HINTS test passed!"

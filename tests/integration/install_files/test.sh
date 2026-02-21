@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 TESTDIR=$(dirname "$0")
 INSTALL_PREFIX=$(mktemp -d)
 
@@ -9,7 +9,7 @@ echo "Testing install(FILES) and install(PROGRAMS)"
 
 # Build and install
 cd "$TESTDIR"
-$DMAKE install --prefix "$INSTALL_PREFIX"
+$KILN install --prefix "$INSTALL_PREFIX"
 
 # Verify config file was installed
 if [ ! -f "$INSTALL_PREFIX/etc/config.txt" ]; then

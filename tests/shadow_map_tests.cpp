@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/shadow_map.hpp"
+#include "kiln/shadow_map.hpp"
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("ShadowMap basic operations", "[shadow_map]") {
     ShadowMap map;

@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-DMAKE=$1
+KILN=$1
 cd "$(dirname "$0")"
 
 echo "=== Testing directory properties ==="
 
-# Run dmake - it should interpret the CMakeLists.txt and print messages
-$DMAKE 2>&1 | tee output.txt
+# Run kiln - it should interpret the CMakeLists.txt and print messages
+$KILN 2>&1 | tee output.txt
 
 # Verify expected messages are present
 grep -q "Single property: TestValue" output.txt || (echo "FAIL: Single property not set" && exit 1)

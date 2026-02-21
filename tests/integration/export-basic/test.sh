@@ -3,7 +3,7 @@
 
 set -e
 
-DMAKE="$1"
+KILN="$1"
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Clean up any previous test
@@ -11,8 +11,8 @@ rm -rf "$TEST_DIR/build"
 
 cd "$TEST_DIR"
 
-# Build with dmake
-"$DMAKE" 2>&1
+# Build with kiln
+"$KILN" 2>&1
 
 # Check that the export file was generated
 EXPORT_FILE="$TEST_DIR/build/debug/MyLibTargets.cmake"

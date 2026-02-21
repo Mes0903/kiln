@@ -6,7 +6,7 @@ add_library(mylib STATIC mylib.cpp)
 target_include_directories(mylib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Dump target info at build time for debugging
-dmake_dump_target_info(mylib AT_BUILD)
+kiln_dump_target_info(mylib AT_BUILD)
 
 # Install the library
 install(TARGETS mylib ARCHIVE DESTINATION lib)

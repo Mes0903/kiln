@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
-#include "../dmake/genex_parser.hpp"
-#include "../dmake/genex_evaluator.hpp"
-#include "../dmake/target.hpp"
-#include "../dmake/build_system.hpp"
+#include "../kiln/genex_parser.hpp"
+#include "../kiln/genex_evaluator.hpp"
+#include "../kiln/target.hpp"
+#include "../kiln/build_system.hpp"
 #include <map>
 #include <memory>
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("GenexParser - Simple literal", "[genex][parser]") {
     GenexParser parser;

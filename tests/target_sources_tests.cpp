@@ -1,17 +1,17 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dmake/build_system.hpp"
-#include "dmake/target.hpp"
-#include "dmake/toolchain.hpp"
-#include "dmake/gnu_compiler.hpp"
-#include "dmake/language.hpp"
-#include "dmake/interperter.hpp"
-#include "dmake/cmake-language.hpp"
-#include "dmake/builtins/registry.hpp"
+#include "kiln/build_system.hpp"
+#include "kiln/target.hpp"
+#include "kiln/toolchain.hpp"
+#include "kiln/gnu_compiler.hpp"
+#include "kiln/language.hpp"
+#include "kiln/interperter.hpp"
+#include "kiln/cmake-language.hpp"
+#include "kiln/builtins/registry.hpp"
 #include <filesystem>
 #include <string>
 #include <fstream>
 
-using namespace dmake;
+using namespace kiln;
 
 TEST_CASE("target_sources basic", "[target][target_sources]") {
     std::string temp_dir = "build_test_target_sources";
