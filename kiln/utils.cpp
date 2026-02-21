@@ -88,7 +88,11 @@ kiln::CommandResult kiln::run_command(const std::string& command, const std::str
     std::string full_command = command + " 2>&1";
     FILE* pipe = popen(full_command.c_str(), "r");
     if (!pipe) {
-        if (!prev_dir.empty()) chdir(prev_dir.c_str());
+        if (!prev_dir.empty()) {
+            if (chdir(prev_dir.c_str()) != 0) {
+                return {-1, "Failed to restore directory"};
+            }
+        }
         return {-1, "Failed to execute command"};
     }
 
@@ -99,7 +103,11 @@ kiln::CommandResult kiln::run_command(const std::string& command, const std::str
     }
 
     int status = pclose(pipe);
-    if (!prev_dir.empty()) chdir(prev_dir.c_str());
+    if (!prev_dir.empty()) {
+        if (chdir(prev_dir.c_str()) != 0) {
+            return {-1, "Failed to restore directory after command execution"};
+        }
+    }
 
     // WEXITSTATUS is only valid if WIFEXITED is true.
     // On many systems pclose returns the raw status.
@@ -377,8 +385,16 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
 
     int stdout_pipe[2];
     int stderr_pipe[2];
-    if (options.output_variable) pipe(stdout_pipe);
-    if (options.error_variable) pipe(stderr_pipe);
+    if (options.output_variable) {
+        if (pipe(stdout_pipe) == -1) {
+            return {{1}, "", "Failed to create stdout pipe"};
+        }
+    }
+    if (options.error_variable) {
+        if (pipe(stderr_pipe) == -1) {
+            return {{1}, "", "Failed to create stderr pipe"};
+        }
+    }
 
     for (size_t i = 0; i < num_commands; ++i) {
         pids[i] = fork();
