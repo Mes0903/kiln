@@ -569,24 +569,36 @@ Examples:
 
     if (!opt.script_path.empty()) {
         try {
-            std::filesystem::path script_abs = std::filesystem::absolute(opt.script_path);
-            if (!std::filesystem::exists(script_abs)) {
-                std::cerr << "Error: Script not found: " << opt.script_path << std::endl;
-                return 1;
+            std::string content;
+            std::string script_name;
+            std::string working_dir;
+
+            if (opt.script_path == "-") {
+                // Read script from stdin
+                content.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
+                script_name = "<stdin>";
+                working_dir = std::filesystem::current_path().string();
+            } else {
+                std::filesystem::path script_abs = std::filesystem::absolute(opt.script_path);
+                if (!std::filesystem::exists(script_abs)) {
+                    std::cerr << "Error: Script not found: " << opt.script_path << std::endl;
+                    return 1;
+                }
+                std::ifstream file(script_abs);
+                content.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+                script_name = script_abs.string();
+                working_dir = script_abs.parent_path().string();
             }
 
-            std::ifstream file(script_abs);
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-            kiln::Parser parser(content, script_abs.string());
+            kiln::Parser parser(content, script_name);
             auto ast_or_error = parser.parse();
             if (!ast_or_error) {
-                print_error_context(script_abs.string(), ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
+                print_error_context(script_name, ast_or_error.error().row, ast_or_error.error().col, ast_or_error.error().offset, ast_or_error.error().length, ast_or_error.error().reason);
                 return 1;
             }
 
-            kiln::Interpreter interpreter(script_abs.parent_path().string(), &std::cout, &std::cerr, std::nullopt, opt.no_sys_init, /*skip_cache_load=*/true);
-            interpreter.set_current_file(script_abs.string());
+            kiln::Interpreter interpreter(working_dir, &std::cout, &std::cerr, std::nullopt, opt.no_sys_init, /*skip_cache_load=*/true);
+            interpreter.set_current_file(script_name);
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
 
