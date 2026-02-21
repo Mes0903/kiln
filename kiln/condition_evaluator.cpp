@@ -271,11 +271,12 @@ std::string_view eval_operand_sv(Interpreter& interp, const Argument& arg, std::
 // Returns true if both strings were successfully parsed as numbers, with result in cmp.
 // cmp is <0, 0, or >0 like strcmp.
 bool try_numeric_compare(std::string_view left, std::string_view right, int& cmp) {
+    // CMake parses only the leading numeric portion (e.g. "0;\"No error\"" → 0),
+    // so we only require from_chars to succeed, not consume the entire string.
     int64_t li, ri;
     auto lr = std::from_chars(left.data(), left.data() + left.size(), li);
     auto rr = std::from_chars(right.data(), right.data() + right.size(), ri);
-    if (lr.ec == std::errc{} && lr.ptr == left.data() + left.size() &&
-        rr.ec == std::errc{} && rr.ptr == right.data() + right.size()) {
+    if (lr.ec == std::errc{} && rr.ec == std::errc{}) {
         cmp = (li > ri) - (li < ri);
         return true;
     }
@@ -283,8 +284,7 @@ bool try_numeric_compare(std::string_view left, std::string_view right, int& cmp
     double ld, rd;
     auto lrd = std::from_chars(left.data(), left.data() + left.size(), ld);
     auto rrd = std::from_chars(right.data(), right.data() + right.size(), rd);
-    if (lrd.ec == std::errc{} && lrd.ptr == left.data() + left.size() &&
-        rrd.ec == std::errc{} && rrd.ptr == right.data() + right.size()) {
+    if (lrd.ec == std::errc{} && rrd.ec == std::errc{}) {
         cmp = (ld > rd) - (ld < rd);
         return true;
     }

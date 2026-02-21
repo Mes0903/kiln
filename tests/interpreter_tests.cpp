@@ -1609,6 +1609,64 @@ TEST_CASE("if condition: numeric comparisons", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 }
 
+TEST_CASE("if condition: numeric comparison with list values", "[interpreter][if]") {
+    // file(DOWNLOAD ... STATUS status) sets status to a list like "0;\"No error\"".
+    // CMake's EQUAL parses only the leading numeric portion (uses sscanf "%lg").
+    SECTION("EQUAL with semicolon-separated list") {
+        auto output = run_script(R"(
+            set(status "0;\"No error\"")
+            if(status EQUAL 0)
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("NOT EQUAL with list value") {
+        auto output = run_script(R"(
+            set(status "0;\"No error\"")
+            if(NOT status EQUAL 0)
+                message("fail")
+            else()
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("non-zero status code in list") {
+        auto output = run_script(R"(
+            set(status "1;\"Download failed\"")
+            if(status EQUAL 1)
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("LESS/GREATER with list values") {
+        auto output = run_script(R"(
+            set(status "0;\"No error\"")
+            if(status LESS 1)
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("non-numeric leading value fails comparison") {
+        auto output = run_script(R"(
+            set(status "abc;123")
+            if(status EQUAL 0)
+                message("fail")
+            else()
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+}
+
 TEST_CASE("if condition: string comparisons", "[interpreter][if]") {
     auto output = run_script(R"(
         set(A "abc")

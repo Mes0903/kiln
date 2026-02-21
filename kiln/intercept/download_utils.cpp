@@ -68,6 +68,7 @@ std::expected<void, std::string> download_url(
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &dl_data);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "kiln/1.0");
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
 

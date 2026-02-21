@@ -1536,6 +1536,7 @@ void register_file_builtins(Interpreter& interp) {
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &dl_data);
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
             curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+            curl_easy_setopt(curl, CURLOPT_USERAGENT, "kiln/1.0");
 
             // TLS verification (default ON)
             bool verify_tls = true;
