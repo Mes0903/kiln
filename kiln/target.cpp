@@ -556,12 +556,20 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
         if (!is_interface_only) {
             propagate_from_dependency(*dep, props_to_resolve,
                 resolved_properties_, /*skip_non_link=*/link_only);
-            if (dep->get_type() == TargetType::OBJECT_LIBRARY) {
+            // CMake 3.21+: OBJECT libraries on the right side of
+            // target_link_libraries() have "their object files included in
+            // the link too" (cmake.org docs).  But OBJECT libraries on the
+            // LEFT side only receive usage requirements — there is no link
+            // step to include objects in.
+            if (dep->get_type() == TargetType::OBJECT_LIBRARY &&
+                type_ != TargetType::OBJECT_LIBRARY) {
                 resolved_object_lib_deps_.push_back(lib_name);
             }
-            if (dep->get_type() == TargetType::STATIC_LIBRARY && !dep->is_imported()) {
-                merge_dedup(resolved_object_lib_deps_, dep->resolved_object_lib_deps_);
-            }
+            // Don't merge resolved_object_lib_deps_ from STATIC library deps:
+            // those objects are already archived inside the .a file and will be
+            // picked up by the linker from the archive.  Merging would cause
+            // the same .o files to appear both in the archive AND directly on
+            // the link line, leading to "multiple definition" errors.
         }
 
         // For propagating to OUR dependents (PUBLIC or INTERFACE dep)
