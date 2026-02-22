@@ -1543,44 +1543,70 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     bool has_modules = generate_module_scanner_tasks(txn, toolchain, cxx_default_std);
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
-    // Create CXX-specific evaluator for PCH (PCH is always C++)
-    auto pch_genex_ctx = make_genex_context(this, interp, all_targets, Language::CXX);
-    GenexEvaluator pch_evaluator(pch_genex_ctx);
+    // PCH: either reuse from provider or generate own
+    std::string pch_gch_path, pch_include_arg;
+    std::string reuse_from = get_property("PRECOMPILE_HEADERS_REUSE_FROM");
+    if (!reuse_from.empty()) {
+        // REUSE_FROM mode: use provider's PCH artifact
+        auto provider_it = all_targets.find(reuse_from);
+        if (provider_it == all_targets.end()) {
+            throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' not found");
+        }
+        auto& provider = provider_it->second;
+        if (provider->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD).empty()) {
+            throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' has no PRECOMPILE_HEADERS");
+        }
+        if (!provider->get_property("PRECOMPILE_HEADERS_REUSE_FROM").empty()) {
+            throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' itself uses REUSE_FROM (chaining not allowed)");
+        }
+        // Compute provider's PCH paths (same formula as generate_pch_task)
+        Path provider_pch_path = (Path(provider->get_binary_dir()) / "objs") / (provider->get_name() + "_pch.hpp");
+        std::string pch_wrapper = provider->get_binary_dir().empty() ? provider_pch_path.str() : provider_pch_path.lexically_normal().str();
+        pch_gch_path = pch_wrapper + ".gch";
+        pch_include_arg = " -include " + pch_wrapper;
+    } else {
+        // Standard PCH generation
+        // Create CXX-specific evaluator for PCH (PCH is always C++)
+        auto pch_genex_ctx = make_genex_context(this, interp, all_targets, Language::CXX);
+        GenexEvaluator pch_evaluator(pch_genex_ctx);
 
-    // Helper to evaluate deferred COMPILE_LANGUAGE genex for PCH
-    auto evaluate_for_pch = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
-        std::vector<std::string> result;
-        for (const auto& val : values) {
-            if (val.find("$<COMPILE_LANG") != std::string::npos) {
-                auto eval_result = pch_evaluator.evaluate(val);
-                if (eval_result && !eval_result->empty()) {
-                    // Genex may produce semicolon-separated lists
-                    for (auto sv : CMakeArrayIterator(*eval_result)) {
-                        result.emplace_back(sv);
+        // Helper to evaluate deferred COMPILE_LANGUAGE genex for PCH
+        auto evaluate_for_pch = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
+            std::vector<std::string> result;
+            for (const auto& val : values) {
+                if (val.find("$<COMPILE_LANG") != std::string::npos) {
+                    auto eval_result = pch_evaluator.evaluate(val);
+                    if (eval_result && !eval_result->empty()) {
+                        // Genex may produce semicolon-separated lists
+                        for (auto sv : CMakeArrayIterator(*eval_result)) {
+                            result.emplace_back(sv);
+                        }
                     }
+                } else {
+                    result.push_back(val);
                 }
-            } else {
-                result.push_back(val);
             }
-        }
-        return result;
-    };
+            return result;
+        };
 
-    // Filter out implicit includes for PCH
-    auto filter_implicit = [&](const std::vector<std::string>& dirs) {
-        std::vector<std::string> result;
-        for (const auto& dir : dirs) {
-            if (!implicit_includes.contains(normalize_include(dir))) result.push_back(dir);
-        }
-        return result;
-    };
+        // Filter out implicit includes for PCH
+        auto filter_implicit = [&](const std::vector<std::string>& dirs) {
+            std::vector<std::string> result;
+            for (const auto& dir : dirs) {
+                if (!implicit_includes.contains(normalize_include(dir))) result.push_back(dir);
+            }
+            return result;
+        };
 
-    auto [pch_gch_path, pch_include_arg] = generate_pch_task(txn, toolchain, this, is_shared,
-        filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
-        filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
-        evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
-        evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
-        cxx_default_std);
+        auto [gch, inc] = generate_pch_task(txn, toolchain, this, is_shared,
+            filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
+            filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
+            evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
+            evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
+            cxx_default_std);
+        pch_gch_path = std::move(gch);
+        pch_include_arg = std::move(inc);
+    }
 
     // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.

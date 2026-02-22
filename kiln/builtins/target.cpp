@@ -821,7 +821,66 @@ void register_target_builtins(Interpreter& interp) {
 
     interp.add_builtin("target_compile_definitions", make_target_command("target_compile_definitions", "COMPILE_DEFINITIONS"));
     interp.add_builtin("target_compile_options", make_target_command("target_compile_options", "COMPILE_OPTIONS"));
-    interp.add_builtin("target_precompile_headers", make_target_command("target_precompile_headers", "PRECOMPILE_HEADERS"));
+    interp.add_builtin("target_precompile_headers", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
+        if (args.size() < 3) {
+            interp.set_fatal_error("target_precompile_headers() requires at least 3 arguments");
+            return;
+        }
+
+        auto target = get_target_from_name(interp, args[0], "target_precompile_headers");
+        if (!target) return;
+
+        // REUSE_FROM mode: target_precompile_headers(<target> REUSE_FROM <provider>)
+        // Just stores the property; validation happens at generate time (order-independent).
+        if (args[1] == "REUSE_FROM") {
+            if (args.size() != 3) {
+                interp.set_fatal_error("target_precompile_headers(REUSE_FROM) expects exactly one provider target name");
+                return;
+            }
+            target->set_property("PRECOMPILE_HEADERS_REUSE_FROM", args[2]);
+            return;
+        }
+
+        // Standard mode: parse BEFORE/PUBLIC/PRIVATE/INTERFACE
+        CommandParser parser("target_precompile_headers");
+        std::string name;
+        bool before = false;
+        std::vector<std::string> pub, priv, inter;
+        parser.positional(name, "target name");
+        parser.flag("BEFORE", before);
+        parser.list("PUBLIC", pub);
+        parser.list("PRIVATE", priv);
+        parser.list("INTERFACE", inter);
+        PARSE_OR_RETURN(parser, interp, args);
+
+        auto validate_values = [&](const std::vector<std::string>& values, const char* visibility) -> bool {
+            std::string joined;
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) joined += ';';
+                joined += values[i];
+            }
+            auto validation = GenexParser::validate_genex_support(joined);
+            if (!validation) {
+                interp.set_fatal_error("target_precompile_headers: " + validation.error() + " in " + visibility + " scope");
+                return false;
+            }
+            return true;
+        };
+
+        if (!pub.empty() && !validate_values(pub, "PUBLIC")) return;
+        if (!priv.empty() && !validate_values(priv, "PRIVATE")) return;
+        if (!inter.empty() && !validate_values(inter, "INTERFACE")) return;
+
+        if (before) {
+            if (!pub.empty()) target->prepend_property("PRECOMPILE_HEADERS", pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->prepend_property("PRECOMPILE_HEADERS", priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->prepend_property("PRECOMPILE_HEADERS", inter, PropertyVisibility::INTERFACE);
+        } else {
+            if (!pub.empty()) target->append_property("PRECOMPILE_HEADERS", pub, PropertyVisibility::PUBLIC);
+            if (!priv.empty()) target->append_property("PRECOMPILE_HEADERS", priv, PropertyVisibility::PRIVATE);
+            if (!inter.empty()) target->append_property("PRECOMPILE_HEADERS", inter, PropertyVisibility::INTERFACE);
+        }
+    });
 
     // target_compile_features - specify compiler features required for a target
     interp.add_builtin("target_compile_features", [get_target_from_name](Interpreter& interp, const std::vector<std::string>& args) {
