@@ -1127,7 +1127,27 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
             }
         }
 
-        if (lang_info.lang == Language::UNKNOWN) continue;
+        // CMake allows sources without extensions (e.g. "src/test" for "src/test.cpp").
+        // Try appending known source extensions to find the actual file.
+        if (lang_info.lang == Language::UNKNOWN) {
+            static constexpr std::string_view try_extensions[] = {
+                ".cpp", ".cc", ".cxx", ".C", ".c++",
+                ".c",
+                ".cu",
+                ".s", ".S", ".asm",
+            };
+            bool resolved = false;
+            for (auto try_ext : try_extensions) {
+                std::string candidate = src_abs_str + std::string(try_ext);
+                if (std::filesystem::exists(candidate)) {
+                    src_abs_str = std::move(candidate);
+                    lang_info = LanguageClassifier::from_extension(try_ext);
+                    resolved = true;
+                    break;
+                }
+            }
+            if (!resolved) continue;
+        }
 
         // Check CXX_MODULES using pre-built set (O(1) vs O(N*M))
         if (!cxx_module_files.empty()) {
@@ -1612,9 +1632,24 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 
     auto sources_list = get_property_list("SOURCES", TargetPropertyScope::BUILD);
-    Language linker_lang = std::any_of(sources_list.begin(), sources_list.end(),
-        [](const std::string& src) { return LanguageClassifier::from_path(src).lang == Language::CXX; })
-        ? Language::CXX : Language::C;
+    // Determine linker language. If any source is C++, use g++ for linking.
+    // For extensionless sources, check if a C++ file exists with that base name.
+    Language linker_lang = Language::C;
+    for (const auto& src : sources_list) {
+        auto info = LanguageClassifier::from_path(src);
+        if (info.lang == Language::CXX) { linker_lang = Language::CXX; break; }
+        if (info.lang == Language::UNKNOWN) {
+            // Try resolving extensionless source (CMake compat)
+            std::string abs = Path::make_absolute_and_normal(source_dir_, src);
+            for (auto ext : {".cpp", ".cc", ".cxx", ".C", ".c++"}) {
+                if (std::filesystem::exists(abs + ext)) {
+                    linker_lang = Language::CXX;
+                    break;
+                }
+            }
+            if (linker_lang == Language::CXX) break;
+        }
+    }
 
     std::string output_path = get_output_path();
     BuildTask link;
