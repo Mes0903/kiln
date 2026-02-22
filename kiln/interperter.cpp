@@ -1605,7 +1605,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
         // If not found, search CMAKE_MODULE_PATH
         if (!found_path) {
-            for (auto dir : CMakeArrayIterator(get_variable("CMAKE_MODULE_PATH"))) {
+            std::string module_path = get_variable("CMAKE_MODULE_PATH");
+            for (auto dir : CMakeArrayIterator(module_path)) {
                 if (!dir.empty()) {
                     found_path = find_in_dir(dir, file_path);
                     if (found_path) break;
