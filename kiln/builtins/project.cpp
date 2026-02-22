@@ -358,6 +358,11 @@ void register_project_builtins(Interpreter& interp) {
 
     interp.add_builtin("cmake_policy", [](Interpreter&, const std::vector<std::string>&) {});
     interp.add_builtin("mark_as_advanced", [](Interpreter&, const std::vector<std::string>&) {});
+    interp.add_builtin("include_regular_expression", [](Interpreter&, const std::vector<std::string>& args) {
+        if (args.empty()) throw std::runtime_error("include_regular_expression requires at least 1 argument");
+        if (args[0] != "^.*$")
+            throw std::runtime_error("include_regular_expression: only the default \"^.*$\" pattern is supported");
+    });
 
     interp.add_builtin("enable_language", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
