@@ -1183,8 +1183,17 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             if (current_file.empty()) return;
 
             if (scope == "GLOBAL") {
+                // If already guarded, trigger early return (skip rest of file)
+                if (interp.global_guarded_files_.contains(current_file)) {
+                    interp.request_return();
+                    return;
+                }
                 interp.global_guarded_files_.insert(current_file);
             } else {
+                if (interp.get_current_directory_context().guarded_files.contains(current_file)) {
+                    interp.request_return();
+                    return;
+                }
                 interp.get_current_directory_context().guarded_files.insert(current_file);
             }
         });
@@ -1649,9 +1658,9 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     std::string abs_path = std::filesystem::absolute(resolved_path).string();
 
-    // Check include guards
-    if (global_guarded_files_.contains(abs_path)) return {};
-    if (get_current_directory_context().guarded_files.contains(abs_path)) return {};
+    // Note: include guards are NOT checked here. CMake executes code before
+    // include_guard() on every inclusion; include_guard() itself triggers an
+    // early return. We must enter the file so pre-guard code runs.
 
     // Check AST cache for frequently-included system modules
     const std::vector<AstNode>* cached_ast = ast_cache_.get(abs_path);
