@@ -17,6 +17,8 @@
 #include <unistd.h>
 #include <future>
 #include "kiln/regex.hpp"
+#include "kiln/genex_evaluator.hpp"
+#include "kiln/genex_parser.hpp"
 #include <chrono>
 #include <iomanip>
 #include <csignal>
@@ -264,10 +266,30 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
         filter = std::move(*re);
     }
 
+    // Create genex context for evaluating generator expressions in test commands/args
+    auto genex_ctx = kiln::Target::make_genex_context(nullptr, *interpreter, targets_map, std::nullopt, false);
+
     for (auto& test : tests) {
         if (has_filter && !filter->search(test.name)) {
             continue;
         }
+
+        // Evaluate genex in test command and arguments
+        auto eval = [&](std::string& s) {
+            if (kiln::GenexParser::contains_genex(s)) {
+                kiln::GenexEvaluator evaluator(genex_ctx);
+                auto result = evaluator.evaluate(s);
+                if (result) {
+                    s = std::move(*result);
+                }
+            }
+        };
+        eval(test.command);
+        for (auto& arg : test.args) {
+            eval(arg);
+        }
+        eval(test.working_dir);
+
         selected_tests.push_back(&test);
         if (targets_map.count(test.command)) {
             targets_to_build.insert(test.command);

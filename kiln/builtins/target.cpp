@@ -717,8 +717,10 @@ void register_target_builtins(Interpreter& interp) {
         return [get_target_from_name, cmd_name, prop_name](Interpreter& interp, const std::vector<std::string>& args) {
             CommandParser parser(cmd_name);
             std::string name;
+            bool before = false;
             std::vector<std::string> pub, priv, inter;
             parser.positional(name, "target name");
+            parser.flag("BEFORE", before);
             parser.list("PUBLIC", pub);
             parser.list("PRIVATE", priv);
             parser.list("INTERFACE", inter);
@@ -748,10 +750,16 @@ void register_target_builtins(Interpreter& interp) {
             if (!priv.empty() && !validate_values(priv, "PRIVATE")) return;
             if (!inter.empty() && !validate_values(inter, "INTERFACE")) return;
 
-            // Store validated values (will be evaluated during resolve)
-            if (!pub.empty()) target->append_property(prop_name, pub, PropertyVisibility::PUBLIC);
-            if (!priv.empty()) target->append_property(prop_name, priv, PropertyVisibility::PRIVATE);
-            if (!inter.empty()) target->append_property(prop_name, inter, PropertyVisibility::INTERFACE);
+            // Store validated values (prepend if BEFORE, otherwise append)
+            if (before) {
+                if (!pub.empty()) target->prepend_property(prop_name, pub, PropertyVisibility::PUBLIC);
+                if (!priv.empty()) target->prepend_property(prop_name, priv, PropertyVisibility::PRIVATE);
+                if (!inter.empty()) target->prepend_property(prop_name, inter, PropertyVisibility::INTERFACE);
+            } else {
+                if (!pub.empty()) target->append_property(prop_name, pub, PropertyVisibility::PUBLIC);
+                if (!priv.empty()) target->append_property(prop_name, priv, PropertyVisibility::PRIVATE);
+                if (!inter.empty()) target->append_property(prop_name, inter, PropertyVisibility::INTERFACE);
+            }
         };
     };
 
