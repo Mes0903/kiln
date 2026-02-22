@@ -19,6 +19,7 @@
 #include "kiln/regex.hpp"
 #include "kiln/genex_evaluator.hpp"
 #include "kiln/genex_parser.hpp"
+#include "kiln/CMakeArray.hpp"
 #include <chrono>
 #include <iomanip>
 #include <csignal>
@@ -314,106 +315,142 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
         std::string output;
     };
 
-    std::vector<std::future<TestResult>> futures;
     auto start_all = std::chrono::high_resolution_clock::now();
 
+    // Build dependency map and validate DEPENDS references
+    std::set<std::string> selected_names;
     for (auto* test : selected_tests) {
-        futures.push_back(std::async(std::launch::async, [test, &targets_map]() -> TestResult {
-            TestResult res;
-            res.name = test->name;
-            res.passed = false;
-            res.skipped = false;
-            res.timed_out = false;
+        selected_names.insert(test->name);
+    }
 
-            auto start = std::chrono::high_resolution_clock::now();
+    // Parse DEPENDS for each test, warn on unknown deps (supported for compat, but wrong)
+    std::map<std::string, std::vector<std::string>> deps_map;
+    for (auto* test : selected_tests) {
+        auto it = test->properties.find("DEPENDS");
+        if (it == test->properties.end()) continue;
 
-            std::string cmd = test->command;
-            if (targets_map.count(cmd)) {
-                cmd = targets_map[cmd]->get_output_path();
-            }
-
-            std::vector<std::string> command_vec;
-            command_vec.push_back(cmd);
-            for (const auto& arg : test->args) {
-                command_vec.push_back(arg);
-            }
-
-            // Check for TIMEOUT property
-            double timeout = 0.0;
-            auto timeout_it = test->properties.find("TIMEOUT");
-            if (timeout_it != test->properties.end()) {
-                auto v = kiln::parse_double(timeout_it->second);
-                if (!v) {
-                    res.output = "Error: Invalid TIMEOUT value '" + timeout_it->second + "'\n";
-                    res.duration = 0.0;
-                    return res;
-                }
-                timeout = *v;
-            }
-
-            // Check for SKIP_RETURN_CODE property
-            std::optional<int> skip_code;
-            auto skip_it = test->properties.find("SKIP_RETURN_CODE");
-            if (skip_it != test->properties.end()) {
-                auto v = kiln::parse_number<int>(skip_it->second);
-                if (!v) {
-                    res.output = "Error: Invalid SKIP_RETURN_CODE value '" + skip_it->second + "'\n";
-                    res.duration = 0.0;
-                    return res;
-                }
-                skip_code = *v;
-            }
-
-            // Execute the command with timeout handling
-            std::future<kiln::CommandResult> cmd_future = std::async(std::launch::async, [&]() {
-                return kiln::run_command(command_vec, test->working_dir);
-            });
-
-            kiln::CommandResult result;
-            if (timeout > 0.0) {
-                auto timeout_duration = std::chrono::duration<double>(timeout);
-                if (cmd_future.wait_for(timeout_duration) == std::future_status::timeout) {
-                    res.timed_out = true;
-                    res.passed = false;
-                    res.output = "Test timed out after " + std::to_string(timeout) + " seconds\n";
-                    auto end = std::chrono::high_resolution_clock::now();
-                    res.duration = std::chrono::duration<double>(end - start).count();
-                    // Note: The actual test process may still be running, but we don't wait for it
-                    return res;
-                }
-                result = cmd_future.get();
+        auto& deps = deps_map[test->name];
+        for (auto dep_it = kiln::CMakeArrayIterator::iterator(it->second);
+             dep_it != kiln::CMakeArrayIterator::sentinel{}; ++dep_it) {
+            std::string dep(*dep_it);
+            if (selected_names.find(dep) == selected_names.end()) {
+                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW)
+                          << "Warning: " << kiln::c(std::cerr, kiln::colors::RESET)
+                          << "Test '" << test->name << "' DEPENDS on unknown test '" << dep
+                          << "' (ignored)" << std::endl;
             } else {
-                result = cmd_future.get();
+                deps.push_back(dep);
             }
+        }
+    }
 
-            res.output = result.output;
+    // Run a single test and return its result
+    auto run_one_test = [&targets_map](kiln::TestDefinition* test) -> TestResult {
+        TestResult res;
+        res.name = test->name;
+        res.passed = false;
+        res.skipped = false;
+        res.timed_out = false;
 
-            // Check if test was skipped
-            if (skip_code.has_value() && result.exit_code == skip_code.value()) {
-                res.skipped = true;
-                res.passed = true;  // Skipped tests count as passed
-            } else {
-                res.passed = (result.exit_code == 0);
+        auto start = std::chrono::high_resolution_clock::now();
+
+        std::string cmd = test->command;
+        if (targets_map.count(cmd)) {
+            cmd = targets_map[cmd]->get_output_path();
+        }
+
+        std::vector<std::string> command_vec;
+        command_vec.push_back(cmd);
+        for (const auto& arg : test->args) {
+            command_vec.push_back(arg);
+        }
+
+        // Check for TIMEOUT property
+        double timeout = 0.0;
+        auto timeout_it = test->properties.find("TIMEOUT");
+        if (timeout_it != test->properties.end()) {
+            auto v = kiln::parse_double(timeout_it->second);
+            if (!v) {
+                res.output = "Error: Invalid TIMEOUT value '" + timeout_it->second + "'\n";
+                res.duration = 0.0;
+                return res;
             }
+            timeout = *v;
+        }
 
-            auto end = std::chrono::high_resolution_clock::now();
-            res.duration = std::chrono::duration<double>(end - start).count();
-            return res;
-        }));
+        // Check for SKIP_RETURN_CODE property
+        std::optional<int> skip_code;
+        auto skip_it = test->properties.find("SKIP_RETURN_CODE");
+        if (skip_it != test->properties.end()) {
+            auto v = kiln::parse_number<int>(skip_it->second);
+            if (!v) {
+                res.output = "Error: Invalid SKIP_RETURN_CODE value '" + skip_it->second + "'\n";
+                res.duration = 0.0;
+                return res;
+            }
+            skip_code = *v;
+        }
+
+        // Execute the command with timeout handling
+        std::future<kiln::CommandResult> cmd_future = std::async(std::launch::async, [&]() {
+            return kiln::run_command(command_vec, test->working_dir);
+        });
+
+        kiln::CommandResult result;
+        if (timeout > 0.0) {
+            auto timeout_duration = std::chrono::duration<double>(timeout);
+            if (cmd_future.wait_for(timeout_duration) == std::future_status::timeout) {
+                res.timed_out = true;
+                res.passed = false;
+                res.output = "Test timed out after " + std::to_string(timeout) + " seconds\n";
+                auto end = std::chrono::high_resolution_clock::now();
+                res.duration = std::chrono::duration<double>(end - start).count();
+                return res;
+            }
+            result = cmd_future.get();
+        } else {
+            result = cmd_future.get();
+        }
+
+        res.output = result.output;
+
+        if (skip_code.has_value() && result.exit_code == skip_code.value()) {
+            res.skipped = true;
+            res.passed = true;
+        } else {
+            res.passed = (result.exit_code == 0);
+        }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        res.duration = std::chrono::duration<double>(end - start).count();
+        return res;
+    };
+
+    // Schedule tests respecting DEPENDS ordering.
+    // Tests with no deps (or only unknown deps) launch immediately in parallel.
+    // Tests with deps wait until all their deps have completed.
+    std::set<std::string> completed;
+    std::vector<TestResult> results;
+    results.reserve(selected_tests.size());
+
+    // Track which tests are pending vs in-flight
+    std::set<size_t> pending;
+    for (size_t i = 0; i < selected_tests.size(); ++i) {
+        pending.insert(i);
     }
 
     int passed_count = 0;
     int skipped_count = 0;
     int failed_count = 0;
-    for (size_t i = 0; i < futures.size(); ++i) {
-        auto res = futures[i].get();
-        std::cout << "[" << (i + 1) << "/" << selected_tests.size() << "] "
+
+    auto print_result = [&](const TestResult& res) {
+        std::cout << "[" << results.size() << "/" << selected_tests.size() << "] "
                   << std::left << std::setw(40) << res.name << " ";
 
         if (res.skipped) {
             std::cout << kiln::c(std::cout, kiln::colors::BOLD_YELLOW) << "SKIPPED" << kiln::c(std::cout, kiln::colors::RESET);
             skipped_count++;
-            passed_count++;  // Skipped tests count as passed
+            passed_count++;
         } else if (res.timed_out) {
             std::cout << kiln::c(std::cout, kiln::colors::BOLD_MAGENTA) << "TIMEOUT" << kiln::c(std::cout, kiln::colors::RESET);
             failed_count++;
@@ -431,6 +468,41 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
             std::cout << res.output;
             std::cout << "--------------" << std::endl;
         }
+    };
+
+    while (!pending.empty()) {
+        // Find tests whose deps are all completed
+        std::vector<size_t> ready;
+        for (auto idx : pending) {
+            auto dit = deps_map.find(selected_tests[idx]->name);
+            if (dit == deps_map.end()) {
+                ready.push_back(idx);
+                continue;
+            }
+            bool all_met = true;
+            for (const auto& dep : dit->second) {
+                if (completed.find(dep) == completed.end()) {
+                    all_met = false;
+                    break;
+                }
+            }
+            if (all_met) ready.push_back(idx);
+        }
+
+        // Launch all ready tests in parallel
+        std::vector<std::pair<size_t, std::future<TestResult>>> in_flight;
+        for (auto idx : ready) {
+            pending.erase(idx);
+            in_flight.emplace_back(idx, std::async(std::launch::async, run_one_test, selected_tests[idx]));
+        }
+
+        // Collect results from this wave
+        for (auto& [idx, fut] : in_flight) {
+            auto res = fut.get();
+            completed.insert(res.name);
+            results.push_back(res);
+            print_result(res);
+        }
     }
 
     auto end_all = std::chrono::high_resolution_clock::now();
@@ -443,7 +515,7 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
     std::cout << " ("
               << std::fixed << std::setprecision(2) << total_duration << "s)" << std::endl;
 
-    return (passed_count == selected_tests.size()) ? 0 : 1;
+    return (passed_count == static_cast<int>(selected_tests.size())) ? 0 : 1;
 }
 
 } // namespace

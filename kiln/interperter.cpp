@@ -1105,9 +1105,10 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             static const std::unordered_set<std::string> SUPPORTED_PROPERTIES = {
                 "TIMEOUT",
                 "SKIP_RETURN_CODE",
+                "DEPENDS",
                 // Future properties can be added here:
                 // "WILL_FAIL", "PASS_REGULAR_EXPRESSION", "FAIL_REGULAR_EXPRESSION",
-                // "WORKING_DIRECTORY", "ENVIRONMENT", "LABELS", "DEPENDS", etc.
+                // "WORKING_DIRECTORY", "ENVIRONMENT", "LABELS", etc.
             };
 
             // Parse: set_tests_properties(test1 [test2...] PROPERTIES prop1 val1 [prop2 val2...])
