@@ -529,6 +529,111 @@ static bool validate_command_cache(const ExternalCommandCacheEntry& entry) {
     return true;
 }
 
+// Helper: Check if an execute_process command is invoking CMAKE_COMMAND (kiln itself)
+// with CMake-style CLI arguments, and rewrite them to kiln semantics.
+// e.g. "cmake -G 'Unix Makefiles' ." → "kiln -C ."
+//      "cmake --build ."             → "kiln -C ."
+//      "cmake --build . --target foo" → "kiln -C . foo"
+static bool translate_cmake_self_invocation(std::vector<std::string>& cmd, const Interpreter& interp) {
+    if (cmd.empty()) return false;
+
+    std::string cmake_command = interp.get_variable("CMAKE_COMMAND");
+    if (cmake_command.empty()) return false;
+
+    // Normalize paths for comparison
+    std::error_code ec;
+    auto cmd_canonical = std::filesystem::canonical(cmd[0], ec);
+    if (ec) return false;
+    auto cmake_canonical = std::filesystem::canonical(cmake_command, ec);
+    if (ec) return false;
+
+    if (cmd_canonical != cmake_canonical) return false;
+
+    // It's invoking kiln with cmake-style args — translate
+    std::string project_dir;
+    std::string build_dir;
+    std::string config;
+    std::vector<std::string> definitions;
+    std::vector<std::string> targets;
+
+    size_t i = 1;
+    while (i < cmd.size()) {
+        if (cmd[i] == "--build") {
+            // cmake --build <dir> — dir is the project directory for kiln
+            ++i;
+            if (i < cmd.size()) {
+                project_dir = cmd[i];
+                ++i;
+            }
+        } else if (cmd[i] == "--target") {
+            ++i;
+            if (i < cmd.size()) {
+                targets.push_back(cmd[i]);
+                ++i;
+            }
+        } else if (cmd[i] == "--config") {
+            ++i;
+            if (i < cmd.size()) {
+                config = cmd[i];
+                ++i;
+            }
+        } else if (cmd[i] == "-G") {
+            // Skip generator and its value (kiln has no generators)
+            ++i;
+            if (i < cmd.size()) ++i;
+        } else if (cmd[i] == "-S") {
+            ++i;
+            if (i < cmd.size()) {
+                project_dir = cmd[i];
+                ++i;
+            }
+        } else if (cmd[i] == "-B") {
+            ++i;
+            if (i < cmd.size()) {
+                build_dir = cmd[i];
+                ++i;
+            }
+        } else if (cmd[i].starts_with("-D")) {
+            // Pass through definitions
+            definitions.push_back(cmd[i]);
+            ++i;
+        } else if (!cmd[i].starts_with("-")) {
+            // Positional argument — source directory in cmake configure mode
+            project_dir = cmd[i];
+            ++i;
+        } else {
+            // Unknown flag — skip
+            ++i;
+        }
+    }
+
+    // Rebuild as kiln command
+    std::vector<std::string> new_cmd;
+    new_cmd.push_back(cmd[0]);
+
+    if (!project_dir.empty()) {
+        new_cmd.push_back("-C");
+        new_cmd.push_back(project_dir);
+    }
+    if (!build_dir.empty()) {
+        new_cmd.push_back("-B");
+        new_cmd.push_back(build_dir);
+    }
+    if (!config.empty()) {
+        new_cmd.push_back("--config");
+        new_cmd.push_back(config);
+    }
+    for (const auto& def : definitions) {
+        new_cmd.push_back(def);
+    }
+    for (const auto& target : targets) {
+        new_cmd.push_back(target);
+    }
+
+    cmd = std::move(new_cmd);
+    return true;
+}
+
 void register_process_builtins(Interpreter& interp) {
     interp.add_builtin("execute_process", [](Interpreter& interp, const std::vector<std::string>& args) {
         CommandParser parser("execute_process");
@@ -577,6 +682,12 @@ void register_process_builtins(Interpreter& interp) {
         if (commands.empty()) {
             interp.set_fatal_error("execute_process requires at least one COMMAND");
             return;
+        }
+
+        // Translate cmake-style self-invocations to kiln semantics
+        // e.g. execute_process(COMMAND ${CMAKE_COMMAND} -G "..." .) → kiln -C .
+        if (commands.size() == 1 && !commands[0].empty()) {
+            translate_cmake_self_invocation(commands[0], interp);
         }
 
         int64_t profile_start = 0;
