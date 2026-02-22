@@ -293,7 +293,10 @@ void register_project_builtins(Interpreter& interp) {
         }
         interp.get_global_properties()["ENABLED_LANGUAGES"] = enabled_langs;
 
-        // Process VERSION if provided
+        // Process VERSION - CMake always sets version variables, even when
+        // VERSION is not provided (in which case they are set to empty string)
+        bool is_top_level = (interp.get_variable("CMAKE_PROJECT_NAME") == project_name);
+
         if (!version.empty()) {
             // Parse version components: major[.minor[.patch[.tweak]]]
             std::vector<std::string> components;
@@ -319,7 +322,6 @@ void register_project_builtins(Interpreter& interp) {
             }
 
             // Set version variables
-            bool is_top_level = (interp.get_variable("CMAKE_PROJECT_NAME") == project_name);
             interp.set_variable("PROJECT_VERSION", version);
             interp.set_variable(project_name + "_VERSION", version);
             if (is_top_level) {
@@ -333,6 +335,22 @@ void register_project_builtins(Interpreter& interp) {
                 interp.set_variable(project_name + "_VERSION" + std::string(suffixes[i]), value);
                 if (is_top_level) {
                     interp.set_variable("CMAKE_PROJECT_VERSION" + std::string(suffixes[i]), value);
+                }
+            }
+        } else {
+            // No VERSION provided - set all version variables to empty string
+            interp.set_variable("PROJECT_VERSION", "");
+            interp.set_variable(project_name + "_VERSION", "");
+            if (is_top_level) {
+                interp.set_variable("CMAKE_PROJECT_VERSION", "");
+            }
+
+            const char* suffixes[] = {"_MAJOR", "_MINOR", "_PATCH", "_TWEAK"};
+            for (size_t i = 0; i < 4; ++i) {
+                interp.set_variable("PROJECT_VERSION" + std::string(suffixes[i]), "");
+                interp.set_variable(project_name + "_VERSION" + std::string(suffixes[i]), "");
+                if (is_top_level) {
+                    interp.set_variable("CMAKE_PROJECT_VERSION" + std::string(suffixes[i]), "");
                 }
             }
         }
