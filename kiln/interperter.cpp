@@ -449,173 +449,16 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
 
     // No longer needed - no child interpreters anymore
 
-    // Determine which targets to build
-    std::set<std::string> targets_to_build;
-
-    // Phase A: Determine initial targets (before resolution)
-    std::vector<std::string> initial_targets;
-    if (requested_targets.empty()) {
-        for (const auto& [name, target] : targets_) {
-            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-            if (custom) {
-                // Custom targets only build by default if they have ALL flag
-                if (custom->is_build_by_default()) {
-                    initial_targets.push_back(name);
-                }
-            } else {
-                // Executables and libraries are "ALL" by default unless EXCLUDE_FROM_ALL is set
-                std::string exclude = target->get_property("EXCLUDE_FROM_ALL");
-                if (exclude.empty() || is_falsy(exclude)) {
-                    initial_targets.push_back(name);
-                }
-            }
-        }
-    } else {
-        for (const auto& t : requested_targets) {
-            // Resolve aliases to real target names
-            std::string resolved = resolve_target_alias(t);
-            if (!targets_.count(resolved)) {
-                return std::unexpected(BuildError{current_file_, "Unknown target: " + t});
-            }
-            initial_targets.push_back(resolved);
-        }
-    }
-
-    // Phase B: Resolve all initial targets (recursive — resolves entire dep graph
-    // via resolve()'s transitive dependency walking)
-    {
-        ProfileScope scope("resolve dependencies", "graph");
-        for (const auto& name : initial_targets) {
-            targets_[name]->resolve(targets_, *this);
-        }
-    }
-
-    // Phase C: Collect targets to build using resolved dependency data.
-    // resolve() already decoded genex + aliases, so get_resolved_target_deps()
-    // returns canonical target names — no raw property walking needed.
-    {
-        ProfileScope scope("collect targets", "graph");
-        std::function<void(const std::string&)> collect = [&](const std::string& name) {
-            if (targets_to_build.count(name)) return;
-            if (!targets_.count(name)) return;
-            targets_to_build.insert(name);
-            auto target = targets_[name];
-
-            // Use resolved dependency data — correct by construction
-            for (const auto& dep : target->get_resolved_target_deps()) {
-                collect(dep);
-            }
-
-            // Custom target deps (already plain names, not genex)
-            auto custom = std::dynamic_pointer_cast<CustomTarget>(target);
-            if (custom) {
-                for (const auto& dep : custom->get_custom_dependencies()) {
-                    collect(dep);
-                }
-            }
-
-            // Manually added dependencies (from add_dependencies command)
-            for (const auto& dep : target->get_manually_added_dependencies()) {
-                collect(dep);
-            }
-        };
-
-        for (const auto& name : initial_targets) {
-            collect(name);
-        }
-    }
-
-    std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
-    std::filesystem::create_directories(root_binary_dir);
-
     print_message("STATUS", "Generating build graph...");
     auto graph_start = std::chrono::steady_clock::now();
-    BuildGraph graph;
 
-    // 1. (Redundant property propagation removed - handled by Target::resolve)
-
-    // 2. Generate tasks for selected targets
-    // Build linker flags from CMAKE variables
-    std::vector<std::string> exe_linker_flags;
-    std::vector<std::string> shared_linker_flags;
-
-    // Handle CMAKE_LINKER_TYPE (convert to -fuse-ld=<type>)
-    std::string linker_type = get_variable("CMAKE_LINKER_TYPE");
-    if (!linker_type.empty()) {
-        if (ci_equals(linker_type, "BFD") || ci_equals(linker_type, "GOLD") ||
-            ci_equals(linker_type, "MOLD") || ci_equals(linker_type, "LLD")) {
-            std::string linker_type_lower = to_lower(linker_type);
-            std::string flag = "-fuse-ld=" + linker_type_lower;
-            exe_linker_flags.push_back(flag);
-            shared_linker_flags.push_back(flag);
-        } else {
-            return std::unexpected(BuildError{current_file_, "Invalid CMAKE_LINKER_TYPE: " + linker_type + ". Must be one of: BFD, GOLD, MOLD, LLD"});
-        }
+    ProfileScope graph_scope("generate build graph", "graph");
+    auto graph_result = generate_build_graph(requested_targets);
+    if (!graph_result) {
+        return std::unexpected(graph_result.error());
     }
-
-    // Handle CMAKE_EXE_LINKER_FLAGS (space-separated, not semicolon-separated)
-    {
-        std::istringstream iss(get_variable("CMAKE_EXE_LINKER_FLAGS"));
-        std::string flag;
-        while (iss >> flag) {
-            exe_linker_flags.push_back(flag);
-        }
-    }
-
-    // Handle CMAKE_SHARED_LINKER_FLAGS (space-separated, not semicolon-separated)
-    {
-        std::istringstream iss(get_variable("CMAKE_SHARED_LINKER_FLAGS"));
-        std::string flag;
-        while (iss >> flag) {
-            shared_linker_flags.push_back(flag);
-        }
-    }
-
-    {
-        ProfileScope scope("generate tasks", "graph");
-        auto txn = graph.begin();
-        for (const auto& name : targets_to_build) {
-            targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
-        }
-
-        // Resolve missing dependencies: tasks may reference targets (e.g.
-        // custom commands invoking llvm-min-tblgen) that weren't in the
-        // initial targets_to_build set. Find them and generate their tasks.
-        // Also index custom target byproducts so file dependencies on them
-        // trigger the owning target's task generation.
-        std::unordered_map<std::string, std::string> output_to_target;
-        for (const auto& [name, target] : targets_) {
-            auto path = target->get_output_path();
-            if (!path.empty()) output_to_target[path] = name;
-            if (auto* ct = dynamic_cast<CustomTarget*>(target.get())) {
-                for (const auto& bp : ct->get_byproducts()) {
-                    output_to_target[bp] = name;
-                }
-            }
-        }
-
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (const auto& missing : graph.get_missing_dependencies()) {
-                auto it = output_to_target.find(missing);
-                if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
-                    targets_to_build.insert(it->second);
-                    targets_[it->second]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
-                    changed = true;
-                }
-            }
-        }
-        auto commit_result = txn.commit();
-        if (!commit_result) {
-            return std::unexpected(BuildError{current_file_, commit_result.error()});
-        }
-    }
-
-    // Second pass: resolve circular dependency properties now that all targets are resolved
-    for (auto& [name, target] : targets_) {
-        target->resolve_deferred_circular_deps(targets_);
-    }
+    auto& graph = *graph_result;
+    graph_scope.stop();
 
     // Print deferred target dumps (AT_BUILD) - targets are now resolved
     for (const auto& dump_target_name : get_targets_to_dump_at_build()) {
@@ -624,55 +467,14 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
         }
     }
 
-    // Link dependency resolution (adding inputs to link tasks)
-    // Static libraries are just .o archives — they don't link against other libs,
-    // so adding link-library inputs would create spurious (and circular) dependencies.
-    // Uses resolved LINK_LIBRARIES (output paths + system libs) — no raw property walking.
-    {
-        ProfileScope scope("wire link deps", "graph");
-        for (const auto& name : targets_to_build) {
-            auto target = targets_[name];
-            if (target->get_type() == TargetType::STATIC_LIBRARY)
-                continue;
-
-            std::string out_path = target->get_output_path();
-
-            // For custom targets, out_path might be empty or same as name
-            std::string task_id = out_path.empty() ? target->get_name() : out_path;
-
-            if (graph.has_task(task_id)) {
-                auto& task = graph.get_task(task_id);
-
-                // Resolved LINK_LIBRARIES already contains the flattened link line
-                // (output paths for target deps, raw names for system libs).
-                // Just check which ones are build graph tasks to wire dependencies.
-                for (const auto& lib : target->get_resolved_property("LINK_LIBRARIES")) {
-                    if (graph.has_task(lib)) {
-                        task.inputs.push_back(lib);
-                    }
-                }
-            }
-        }
+    // Apply compat deps and validate
+    graph.apply_cmake_compat_deps();
+    auto validate_result = graph.validate();
+    if (!validate_result) {
+        return std::unexpected(BuildError{current_file_, validate_result.error()});
     }
 
-    // 2b. Post-transaction: evaluate genex, resolve inferred file deps, apply compat deps, validate
-    {
-        ProfileScope scope("finalize graph", "graph");
-        auto genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
-
-        process_file_generates(genex_ctx);
-
-        auto genex_result = graph.evaluate_genex(genex_ctx);
-        if (!genex_result) {
-            return std::unexpected(BuildError{current_file_, genex_result.error()});
-        }
-        graph.resolve_inferred_file_deps();
-        graph.apply_cmake_compat_deps();
-        auto validate_result = graph.validate();
-        if (!validate_result) {
-            return std::unexpected(BuildError{current_file_, validate_result.error()});
-        }
-    }
+    std::string root_binary_dir = get_variable("CMAKE_BINARY_DIR");
 
     // 3. Generate compile_commands.json (on by default)
     std::string export_cmds = get_variable("CMAKE_EXPORT_COMPILE_COMMANDS");
