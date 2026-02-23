@@ -838,7 +838,8 @@ static void resolve_command_target_references(
 static void generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
                                          const TargetMap& all_targets,
                                          const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
-                                         std::set<std::string>& generated) {
+                                         std::set<std::string>& generated,
+                                         const std::unordered_map<std::string, std::string>& target_aliases) {
     if (generated.count(rule.outputs[0]) || txn.has_task(rule.outputs[0]))
         return;
     generated.insert(rule.outputs[0]);
@@ -859,7 +860,10 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
     }
 
     for (const auto& dep : rule.depends) {
-        auto dep_it = all_targets.find(dep);
+        // Resolve target aliases (e.g. unicode::ucd -> unicode)
+        auto alias_it = target_aliases.find(dep);
+        const std::string& resolved_dep = (alias_it != target_aliases.end()) ? alias_it->second : dep;
+        auto dep_it = all_targets.find(resolved_dep);
         if (dep_it != all_targets.end()) {
             std::string dep_out = dep_it->second->get_output_path();
             if (!dep_out.empty()) {
@@ -889,7 +893,7 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
                 }
             }
             if (cc_it != custom_rules.end()) {
-                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated);
+                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated, target_aliases);
                 task.explicit_deps.push_back(cc_it->second->outputs[0]);
             }
             task.inputs.push_back(normalized);
@@ -1058,7 +1062,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         if (cc_it == custom_rules.end()) cc_it = custom_rules.find(norm_bin);
         if (cc_it != custom_rules.end()) {
             if (!generated_custom_tasks.count(cc_it->second->outputs[0])) {
-                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_custom_tasks);
+                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_custom_tasks, interp.get_target_aliases());
             }
             resolved_manual_deps.push_back({cc_it->second->outputs[0]});
         }
@@ -1323,7 +1327,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                     auto od_cc_it = custom_rules.find(dep_normalized);
                     if (od_cc_it != custom_rules.end()) {
                         if (!generated_custom_tasks.count(od_cc_it->second->outputs[0])) {
-                            generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules, generated_custom_tasks);
+                            generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules, generated_custom_tasks, interp.get_target_aliases());
                         }
                         task.explicit_deps.push_back(od_cc_it->second->outputs[0]);
                     }
@@ -1994,7 +1998,7 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
                 }
             }
             if (cc_it != custom_rules.end()) {
-                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_cc_tasks);
+                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_cc_tasks, interp.get_target_aliases());
                 task.explicit_deps.push_back(cc_it->second->outputs[0]);
             }
             task.inputs.push_back(normalized);
