@@ -10,6 +10,7 @@ namespace kiln {
 
 enum class CMakePolicy : uint8_t {
     CMP0126,  // 3.21: set(CACHE) removes local variables
+    CMP0148,  // 3.27: FindPythonInterp/FindPythonLibs removed
     CMP0167,  // 3.30: Boost find_package config-first
     COUNT
 };
@@ -39,6 +40,7 @@ struct PolicyStack {
         ps.current_.fill(PolicyState::NEW);
         // Known OLD defaults — grep KILN_POLICY_OLD to find usage sites
         ps.current_[size_t(CMakePolicy::CMP0126)] = PolicyState::OLD;
+        ps.current_[size_t(CMakePolicy::CMP0148)] = PolicyState::OLD;
         return ps;
     }
 };
@@ -46,6 +48,7 @@ struct PolicyStack {
 // Parse "CMP0126" → enum. Returns nullopt for unknown policies.
 inline std::optional<CMakePolicy> parse_cmake_policy(std::string_view name) {
     if (name == "CMP0126") return CMakePolicy::CMP0126;
+    if (name == "CMP0148") return CMakePolicy::CMP0148;
     if (name == "CMP0167") return CMakePolicy::CMP0167;
     return std::nullopt;
 }
