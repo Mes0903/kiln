@@ -51,6 +51,7 @@ struct GlobalOptions {
     bool no_sys_init = false;   // Skip compiler detection (for benchmarking)
     bool fresh = false;         // Skip loading persistent cache (fresh configure)
     std::string break_on_message;
+    std::string log_level;       // --log-level (sets CMAKE_MESSAGE_LOG_LEVEL)
 };
 
 void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<kiln::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
@@ -178,6 +179,10 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
         // Set BUILD_TESTING before user definitions (user can override with -D)
         interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
         apply_definitions(*interpreter, opt.definitions);
+
+        if (!opt.log_level.empty()) {
+            interpreter->set_variable("CMAKE_MESSAGE_LOG_LEVEL", opt.log_level);
+        }
 
         if (interpreter->get_variable("CMAKE_BUILD_TYPE").empty()) {
             interpreter->set_variable("CMAKE_BUILD_TYPE", to_cmake_case(opt.config));
@@ -648,6 +653,7 @@ int main(int argc, char* argv[]) {
         target->add_flag("--config-only", opt.config_only, "[debug] Interpret CMakeLists.txt and save cache, then exit without building");
         target->add_flag("--no-sys-init", opt.no_sys_init, "[benchmark] Skip compiler detection and system init");
         target->add_flag("--fresh", opt.fresh, "Skip loading persistent cache (fresh configure)");
+        target->add_option("--log-level", opt.log_level, "Set message log level (ERROR, WARNING, NOTICE, STATUS, VERBOSE, DEBUG, TRACE)");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
            ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {
@@ -806,6 +812,9 @@ Examples:
             interpreter.set_variable("CMAKE_CURRENT_LIST_FILE", script_name);
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
+            if (!opt.log_level.empty()) {
+                interpreter.set_variable("CMAKE_MESSAGE_LOG_LEVEL", opt.log_level);
+            }
 
             auto result = interpreter.interpret(ast_or_error.value());
             if (!result) {

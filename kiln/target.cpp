@@ -340,6 +340,35 @@ void merge_dedup(std::vector<std::string>& target,
         }
     }
 }
+// Detect if a string contains $<TARGET_PROPERTY:X> where X has no comma
+// at the top genex depth (i.e., single-arg form that resolves against the
+// consuming target, not a specific named target).
+bool contains_consumer_target_property_genex(const std::string& s) {
+    static constexpr std::string_view marker = "$<TARGET_PROPERTY:";
+    size_t pos = 0;
+    while ((pos = s.find(marker, pos)) != std::string::npos) {
+        size_t content_start = pos + marker.size();
+        // Scan for the matching '>' counting nested $< >
+        int depth = 1;
+        bool found_comma_at_depth1 = false;
+        for (size_t i = content_start; i < s.size() && depth > 0; ++i) {
+            if (s[i] == '$' && i + 1 < s.size() && s[i + 1] == '<') {
+                depth++;
+                i++; // skip '<'
+            } else if (s[i] == '>') {
+                depth--;
+                if (depth == 0) break;
+            } else if (s[i] == ',' && depth == 1) {
+                found_comma_at_depth1 = true;
+                break;
+            }
+        }
+        if (!found_comma_at_depth1) return true;
+        pos = content_start;
+    }
+    return false;
+}
+
 } // anonymous namespace
 
 const std::vector<Target::PropInfo>& Target::build_props_to_resolve() {
@@ -399,8 +428,32 @@ void Target::initialize_local_properties(
         process_local(PropertyVisibility::PUBLIC, res);
 
         // Interface properties: PUBLIC + INTERFACE
-        process_local(PropertyVisibility::PUBLIC, res_iface);
-        process_local(PropertyVisibility::INTERFACE, res_iface);
+        // Check for single-arg $<TARGET_PROPERTY:prop> that needs deferred
+        // evaluation per consumer (the property refers to the consuming target).
+        auto process_interface = [&](PropertyVisibility vis) {
+            const auto& val = get_property_list(info.name, vis);
+            if (val.empty()) return;
+
+            // Check if any value contains consumer-dependent genex
+            bool has_deferred = false;
+            for (const auto& v : val) {
+                if (contains_consumer_target_property_genex(v)) {
+                    has_deferred = true;
+                    break;
+                }
+            }
+
+            if (has_deferred) {
+                // Store raw values for re-evaluation per consumer
+                auto& deferred = deferred_interface_genex_[info.name];
+                deferred.insert(deferred.end(), val.begin(), val.end());
+            } else {
+                process_local(vis, res_iface);
+            }
+        };
+
+        process_interface(PropertyVisibility::PUBLIC);
+        process_interface(PropertyVisibility::INTERFACE);
     }
 }
 
@@ -415,18 +468,36 @@ void Target::propagate_from_dependency(
     const Target& dep,
     const std::vector<PropInfo>& props_to_resolve,
     std::map<std::string, std::vector<std::string>>& output_props,
-    bool skip_non_link)
+    bool skip_non_link,
+    GenexEvaluator& evaluator)
 {
     // 1. Append non-link interface properties (includes, definitions, options, etc.)
     // Deduplication is deferred to Phase 3 of resolve() via remove_duplicates().
     if (!skip_non_link) {
         for (const auto& info : props_to_resolve) {
-            const auto& dep_iface = dep.get_resolved_interface_property(info.name);
-            if (dep_iface.empty()) continue;
             auto& dest = (dep.is_imported() && info.name == "INCLUDE_DIRECTORIES")
                 ? output_props["SYSTEM_INCLUDE_DIRECTORIES"]
                 : output_props[info.name];
-            dest.insert(dest.end(), dep_iface.begin(), dep_iface.end());
+
+            // Re-evaluate deferred genex with the consumer's context
+            auto deferred_it = dep.deferred_interface_genex_.find(info.name);
+            if (deferred_it != dep.deferred_interface_genex_.end()) {
+                auto eval_result = evaluator.evaluate_property_list(deferred_it->second);
+                if (eval_result) {
+                    if (info.is_path) {
+                        for (const auto& p : *eval_result) {
+                            if (!p.empty()) dest.push_back(resolve_to_absolute_path(p));
+                        }
+                    } else {
+                        dest.insert(dest.end(), eval_result->begin(), eval_result->end());
+                    }
+                }
+            }
+
+            const auto& dep_iface = dep.get_resolved_interface_property(info.name);
+            if (!dep_iface.empty()) {
+                dest.insert(dest.end(), dep_iface.begin(), dep_iface.end());
+            }
         }
     }
 
@@ -544,7 +615,7 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
         // For building THIS target (PRIVATE or PUBLIC dep)
         if (!is_interface_only) {
             propagate_from_dependency(*dep, props_to_resolve,
-                resolved_properties_, /*skip_non_link=*/link_only);
+                resolved_properties_, /*skip_non_link=*/link_only, evaluator);
             // CMake 3.21+: OBJECT libraries on the right side of
             // target_link_libraries() have "their object files included in
             // the link too" (cmake.org docs).  But OBJECT libraries on the
@@ -564,7 +635,7 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
         // For propagating to OUR dependents (PUBLIC or INTERFACE dep)
         if (is_public || is_interface_only) {
             propagate_from_dependency(*dep, props_to_resolve,
-                resolved_interface_properties_, /*skip_non_link=*/link_only);
+                resolved_interface_properties_, /*skip_non_link=*/link_only, evaluator);
         }
     };
 
@@ -772,15 +843,22 @@ std::string get_obj_path(const std::string& binary_dir, const std::string& targe
 static void resolve_command_target_references(
     std::vector<std::vector<std::string>>& commands,
     BuildTask& task,
-    const TargetMap& all_targets)
+    const TargetMap& all_targets,
+    const std::unordered_map<std::string, std::string>& target_aliases = {})
 {
     for (auto& cmd : commands) {
         if (cmd.empty()) continue;
 
         std::shared_ptr<Target> resolved;
 
+        // Resolve alias first (e.g. Qt6::syncqt -> syncqt)
+        const std::string& cmd_name = [&]() -> const std::string& {
+            auto alias_it = target_aliases.find(cmd[0]);
+            return (alias_it != target_aliases.end()) ? alias_it->second : cmd[0];
+        }();
+
         // Direct target name lookup (executables only)
-        auto it = all_targets.find(cmd[0]);
+        auto it = all_targets.find(cmd_name);
         if (it != all_targets.end() && it->second->get_type() == TargetType::EXECUTABLE) {
             resolved = it->second;
         }
@@ -842,7 +920,7 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
         task.commands.push_back(cmd);
     }
 
-    resolve_command_target_references(task.commands, task, all_targets);
+    resolve_command_target_references(task.commands, task, all_targets, target_aliases);
 
     for (const auto& out : rule.outputs) {
         task.outputs.push_back(out);
@@ -1584,7 +1662,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             }
         }
 
-        resolve_command_target_references(pre_build.commands, pre_build, all_targets);
+        resolve_command_target_references(pre_build.commands, pre_build, all_targets, interp.get_target_aliases());
 
         txn.add(std::move(pre_build));
     }
@@ -1966,7 +2044,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             link.commands.push_back(cmd.command);
         }
 
-        resolve_command_target_references(link.commands, link, all_targets);
+        resolve_command_target_references(link.commands, link, all_targets, interp.get_target_aliases());
 
         // Then add the actual link command(s)
         for (auto& cmd : link_cmds) {
@@ -1994,7 +2072,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             }
         }
 
-        resolve_command_target_references(post_build.commands, post_build, all_targets);
+        resolve_command_target_references(post_build.commands, post_build, all_targets, interp.get_target_aliases());
 
         // POST_BUILD depends on the link task completing
         post_build.explicit_deps.push_back(output_path);
@@ -2022,7 +2100,7 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
         }
     }
 
-    resolve_command_target_references(task.commands, task, all_targets);
+    resolve_command_target_references(task.commands, task, all_targets, interp.get_target_aliases());
 
     // Handle DEPENDS from add_custom_target
     const auto& target_aliases = interp.get_target_aliases();

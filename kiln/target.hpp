@@ -219,11 +219,14 @@ protected:
     static const std::vector<std::string>& collect_link_deps(const Target& dep);
 
     // Merge a resolved dependency's INTERFACE properties into an output property map.
+    // If the dependency has deferred genex (single-arg $<TARGET_PROPERTY:>), re-evaluates
+    // them with the provided evaluator (which has the consumer as current_target).
     void propagate_from_dependency(
         const Target& dep,
         const std::vector<PropInfo>& props_to_resolve,
         std::map<std::string, std::vector<std::string>>& output_props,
-        bool skip_non_link);
+        bool skip_non_link,
+        class GenexEvaluator& evaluator);
 
     // Handle a circular dependency detected during resolve().
     void handle_circular_dep(
@@ -290,6 +293,11 @@ protected:
 
     // Resolved Interface Properties Cache (usage requirements propagated to dependents)
     std::map<std::string, std::vector<std::string>> resolved_interface_properties_;
+
+    // Raw INTERFACE property values containing single-arg $<TARGET_PROPERTY:prop> genex.
+    // These must be re-evaluated per consumer with the consumer as current_target.
+    // Map<PropertyName, vector<RawValue>>
+    std::map<std::string, std::vector<std::string>> deferred_interface_genex_;
 
     // OBJECT library dependencies discovered during resolve() (target names, not aliases).
     // Used by generate_tasks() to inject .o files into the link command.

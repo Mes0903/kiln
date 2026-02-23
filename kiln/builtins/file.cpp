@@ -350,8 +350,13 @@ void register_file_builtins(Interpreter& interp) {
         } else if (ci_equals(operation, "READ")) {
             CommandParser parser("file", "READ");
             std::string filename, var;
+            std::string offset_str, limit_str;
+            bool hex = false;
             parser.positional(filename, "filename");
             parser.positional(var, "variable");
+            parser.flag("HEX", hex);
+            parser.value("OFFSET", offset_str);
+            parser.value("LIMIT", limit_str);
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             std::filesystem::path path = filename;
@@ -359,12 +364,37 @@ void register_file_builtins(Interpreter& interp) {
                 path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
             }
 
-            std::ifstream file(path);
+            std::ifstream file(path, std::ios::binary);
             if (!file) {
                 interp.set_fatal_error("file(READ) could not open file: " + path.string());
                 return;
             }
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+            if (!offset_str.empty()) {
+                file.seekg(std::stoll(offset_str));
+            }
+
+            std::string content;
+            if (!limit_str.empty()) {
+                auto limit = std::stoll(limit_str);
+                content.resize(limit);
+                file.read(content.data(), limit);
+                content.resize(file.gcount());
+            } else {
+                content.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+            }
+
+            if (hex) {
+                static constexpr char hex_chars[] = "0123456789abcdef";
+                std::string hex_str;
+                hex_str.reserve(content.size() * 2);
+                for (unsigned char c : content) {
+                    hex_str.push_back(hex_chars[c >> 4]);
+                    hex_str.push_back(hex_chars[c & 0x0f]);
+                }
+                content = std::move(hex_str);
+            }
+
             interp.set_variable(var, content);
         } else if (ci_equals(operation, "GLOB") || ci_equals(operation, "GLOB_RECURSE")) {
             // Profiling handled inside perform_glob per-pattern
