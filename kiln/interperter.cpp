@@ -12,6 +12,8 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
+#include <iomanip>
 #include <array>
 #include "regex.hpp"
 #include "builtins/registry.hpp"
@@ -449,6 +451,7 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
     std::filesystem::create_directories(root_binary_dir);
 
     print_message("STATUS", "Generating build graph...");
+    auto graph_start = std::chrono::steady_clock::now();
     BuildGraph graph;
 
     // 1. (Redundant property propagation removed - handled by Target::resolve)
@@ -601,6 +604,13 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
         if (!result) {
             return std::unexpected(BuildError{current_file_, result.error()});
         }
+    }
+
+    {
+        double graph_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - graph_start).count();
+        std::ostringstream timing_msg;
+        timing_msg << "Generating done (" << std::fixed << std::setprecision(1) << graph_s << "s)";
+        print_message("STATUS", timing_msg.str());
     }
 
     // 4. Execute the build graph

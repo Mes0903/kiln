@@ -201,6 +201,7 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
         };
 
         {
+            auto config_start = std::chrono::steady_clock::now();
             kiln::ProfileScope scope("interpret " + cmake_lists.filename().string(), "interpret");
             auto interpret_result = interpreter->interpret(ast_or_error.value());
             if (!interpret_result) {
@@ -212,6 +213,12 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
             // Execute deferred calls and apply retroactive directory properties
             interpreter->execute_deferred_calls();
             interpreter->finalize_directory_targets();
+            scope.stop();
+
+            double config_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - config_start).count();
+            std::ostringstream timing_msg;
+            timing_msg << "Configuring done (" << std::fixed << std::setprecision(1) << config_s << "s)";
+            kiln::print_message(std::cout, "STATUS", timing_msg.str());
         }
 
         if (opt.config_only) {
