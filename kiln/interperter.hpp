@@ -23,6 +23,7 @@
 #include "printing.hpp"
 #include "ast_cache.hpp"
 #include "debugger.hpp"
+#include "policies.hpp"
 
 namespace kiln {
 
@@ -282,6 +283,12 @@ public:
     // Returns nullptr if directory doesn't exist or can't be read
     const TransparentStringSet* get_directory_subdirs(std::string_view dir);
 
+
+    // Policy system
+    PolicyState get_policy(CMakePolicy p) const { return policies_.get(p); }
+    void set_policy(CMakePolicy p, PolicyState s) { policies_.set(p, s); }
+    void push_policies() { policies_.push(); }
+    void pop_policies() { policies_.pop(); }
 
     int get_loop_depth() const { return loop_depth_; }
     void set_loop_control(LoopControl control) { loop_control_ = control; }
@@ -578,6 +585,9 @@ private:
     std::optional<InterpreterError> fatal_error_;
     size_t current_cmd_row_ = 0;
     size_t current_cmd_col_ = 0;
+
+    // Policy stack (per-interpreter, scoped by include/add_subdirectory)
+    PolicyStack policies_ = PolicyStack::make_defaults();
 
     // Loop control state (local to current script/function scope)
     int loop_depth_ = 0;

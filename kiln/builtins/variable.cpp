@@ -1,5 +1,6 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../policies.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
 #include "../parse_number.hpp"
@@ -58,17 +59,48 @@ void register_variable_builtins(Interpreter& interp) {
             return;
         }
 
-        // Handle: set(VAR value CACHE TYPE "doc")
+        // Handle: set(VAR value CACHE TYPE "doc" [FORCE])
         if (cache_it != args.end()) {
             // Value is everything between var_name and CACHE keyword
             std::vector<std::string> value_args(args.begin() + 1, cache_it);
             CMakeArray value_list(value_args);
             std::string value = value_list.to_string();
 
-            // Set in cache namespace only - CACHE variables are globally accessible
-            // via get_variable()'s cache lookup, not via local scope
+            // Parse TYPE and docstring after CACHE
+            auto type_it = cache_it + 1;
+            std::string cache_type;
+            if (type_it != args.end()) {
+                cache_type = *type_it;
+            }
+
+            // Check for FORCE keyword
+            bool force = false;
+            for (auto it = cache_it + 1; it != args.end(); ++it) {
+                if (ci_equals(*it, "FORCE")) {
+                    force = true;
+                    break;
+                }
+            }
+
+            // INTERNAL type always implies FORCE
+            if (ci_equals(cache_type, "INTERNAL")) {
+                force = true;
+            }
+
             auto* root = interp.get_root();
-            root->cache_variables_[var_name] = value;
+
+            // Only set cache if entry doesn't exist or FORCE is given
+            if (force || root->cache_variables_.find(var_name) == root->cache_variables_.end()) {
+                root->cache_variables_[var_name] = value;
+            }
+
+            // CMP0126 OLD behavior: remove any normal variable of the
+            // same name so that subsequent reads see the cache value.
+            KILN_POLICY_OLD(CMP0126);
+            if (interp.get_policy(CMakePolicy::CMP0126) == PolicyState::OLD) {
+                interp.unset_variable(var_name);
+            }
+
             return;
         }
 

@@ -1270,6 +1270,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
             if (interp.get_debugger()) interp.get_debugger()->push_call_depth();
 
+            // Auto-scope policies around subdirectories (CMake behavior)
+            interp.push_policies();
+
             {
                 // return() in subdirectory shouldn't propagate to parent
                 ReturnGuard rg(interp);
@@ -1288,6 +1291,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                     interp.set_fatal_error(InterpreterError{cmake_file_str, ast.error().row, ast.error().col, ast.error().offset, ast.error().length, ast.error().reason, {}});
                 }
             }
+
+            interp.pop_policies();
 
             if (interp.get_debugger()) interp.get_debugger()->pop_call_depth();
 
@@ -1710,6 +1715,9 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     if (debugger_) debugger_->push_call_depth();
 
+    // Auto-scope policies around included files (CMake behavior)
+    push_policies();
+
     std::expected<void, InterpreterError> res;
     {
         // return() in included file shouldn't propagate to caller
@@ -1719,6 +1727,8 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
         res = interpret(*ast_to_use);
         interpret_profile.stop();
     }
+
+    pop_policies();
 
     if (debugger_) debugger_->pop_call_depth();
 

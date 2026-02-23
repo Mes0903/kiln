@@ -1,5 +1,6 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../policies.hpp"
 #include "../command_parser.hpp"
 #include "../CMakeArray.hpp"
 #include "../utils.hpp"
@@ -294,7 +295,8 @@ void register_find_package_builtins(Interpreter& interp) {
         // --- Determine search mode ---
         // CMP0167: Boost uses config-first (BoostConfig.cmake) instead of
         // the legacy FindBoost.cmake module. All other packages use module-first.
-        bool prefer_config = (package_name == "Boost");
+        bool prefer_config = (package_name == "Boost"
+            && interp.get_policy(CMakePolicy::CMP0167) == PolicyState::NEW);
 
         // CMAKE_FIND_PACKAGE_PREFER_CONFIG overrides for all packages
         std::string prefer_config_var = interp.get_variable("CMAKE_FIND_PACKAGE_PREFER_CONFIG");

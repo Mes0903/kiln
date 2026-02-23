@@ -1,5 +1,6 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../policies.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
 #include "../language.hpp"
@@ -378,14 +379,42 @@ void register_project_builtins(Interpreter& interp) {
     });
 
     interp.add_builtin("cmake_policy", [](Interpreter& interp, const std::vector<std::string>& args) {
-        // kiln always uses modern (NEW) behavior for all policies.
-        // Handle GET requests so modules can query policy status.
-        if (args.size() >= 2 && args[0] == "GET") {
-            if (args.size() >= 3) {
-                interp.set_variable(args[2], "NEW");
-            }
+        if (args.empty()) {
+            interp.set_fatal_error("cmake_policy() requires at least one argument");
+            return;
         }
-        // SET, PUSH, POP, VERSION are silently accepted as no-ops
+
+        if (args[0] == "SET") {
+            if (args.size() < 3) {
+                interp.set_fatal_error("cmake_policy(SET) requires CMP#### and OLD|NEW");
+                return;
+            }
+            auto policy = parse_cmake_policy(args[1]);
+            if (!policy) return;  // Unknown policies silently ignored
+            if (args[2] == "OLD") {
+                interp.set_policy(*policy, PolicyState::OLD);
+            } else if (args[2] == "NEW") {
+                interp.set_policy(*policy, PolicyState::NEW);
+            }
+        } else if (args[0] == "GET") {
+            if (args.size() < 3) {
+                interp.set_fatal_error("cmake_policy(GET) requires CMP#### and <variable>");
+                return;
+            }
+            auto policy = parse_cmake_policy(args[1]);
+            if (policy) {
+                interp.set_variable(args[2],
+                    interp.get_policy(*policy) == PolicyState::NEW ? "NEW" : "OLD");
+            } else {
+                // Unknown policy: return empty string (UNSET behavior)
+                interp.set_variable(args[2], "");
+            }
+        } else if (args[0] == "PUSH") {
+            interp.push_policies();
+        } else if (args[0] == "POP") {
+            interp.pop_policies();
+        }
+        // VERSION is silently accepted as no-op
     });
     interp.add_builtin("mark_as_advanced", [](Interpreter&, const std::vector<std::string>&) {});
     interp.add_builtin("include_regular_expression", [](Interpreter&, const std::vector<std::string>& args) {

@@ -6176,8 +6176,9 @@ TEST_CASE("Cache variables don't create local scope variables", "[interpreter][s
         message("After function - CACHE_VAR=${CACHE_VAR} LOCAL_VAR=${LOCAL_VAR}")
     )");
 
-    // CACHE_VAR should be updated globally, but LOCAL_VAR should remain in root scope
-    REQUIRE(output == "Before function - CACHE_VAR=root_cache LOCAL_VAR=root_local\nAfter function - CACHE_VAR=function_local LOCAL_VAR=root_local\n");
+    // CACHE_VAR should remain "root_cache" because set(... CACHE STRING ...) without
+    // FORCE doesn't overwrite existing cache entries. LOCAL_VAR remains in root scope.
+    REQUIRE(output == "Before function - CACHE_VAR=root_cache LOCAL_VAR=root_local\nAfter function - CACHE_VAR=root_cache LOCAL_VAR=root_local\n");
 }
 
 TEST_CASE("Cache variables vs local variables precedence", "[interpreter][scoping][cache]") {
@@ -7718,4 +7719,75 @@ TEST_CASE("cmake_minimum_required version check uses numeric comparison", "[inte
         endif()
     )");
     REQUIRE(output == "OK\n");
+}
+
+TEST_CASE("cmake_policy SET and GET", "[interpreter][policy]") {
+    SECTION("CMP0126 defaults to OLD") {
+        auto output = run_script(R"(
+            cmake_policy(GET CMP0126 result)
+            message("${result}")
+        )");
+        REQUIRE(output == "OLD\n");
+    }
+
+    SECTION("CMP0167 defaults to NEW") {
+        auto output = run_script(R"(
+            cmake_policy(GET CMP0167 result)
+            message("${result}")
+        )");
+        REQUIRE(output == "NEW\n");
+    }
+
+    SECTION("SET changes policy state") {
+        auto output = run_script(R"(
+            cmake_policy(SET CMP0126 NEW)
+            cmake_policy(GET CMP0126 result)
+            message("${result}")
+        )");
+        REQUIRE(output == "NEW\n");
+    }
+
+    SECTION("Unknown policy GET returns empty") {
+        auto output = run_script(R"(
+            cmake_policy(GET CMP9999 result)
+            message("[${result}]")
+        )");
+        REQUIRE(output == "[]\n");
+    }
+}
+
+TEST_CASE("cmake_policy PUSH/POP", "[interpreter][policy]") {
+    auto output = run_script(R"(
+        cmake_policy(GET CMP0126 before)
+        message("before=${before}")
+
+        cmake_policy(PUSH)
+        cmake_policy(SET CMP0126 NEW)
+        cmake_policy(GET CMP0126 during)
+        message("during=${during}")
+        cmake_policy(POP)
+
+        cmake_policy(GET CMP0126 after)
+        message("after=${after}")
+    )");
+    REQUIRE(output == "before=OLD\nduring=NEW\nafter=OLD\n");
+}
+
+TEST_CASE("CMP0126 OLD: set(CACHE) removes local variable", "[interpreter][policy]") {
+    auto output = run_script(R"(
+        set(MY_VAR "local_value")
+        set(MY_VAR "cache_value" CACHE STRING "doc")
+        message("${MY_VAR}")
+    )");
+    REQUIRE(output == "cache_value\n");
+}
+
+TEST_CASE("CMP0126 NEW: set(CACHE) does not remove local variable", "[interpreter][policy]") {
+    auto output = run_script(R"(
+        cmake_policy(SET CMP0126 NEW)
+        set(MY_VAR "local_value")
+        set(MY_VAR "cache_value" CACHE STRING "doc")
+        message("${MY_VAR}")
+    )");
+    REQUIRE(output == "local_value\n");
 }
