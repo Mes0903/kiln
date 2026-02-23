@@ -2025,6 +2025,7 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
     resolve_command_target_references(task.commands, task, all_targets);
 
     // Handle DEPENDS from add_custom_target
+    const auto& target_aliases = interp.get_target_aliases();
     for (const auto& dep_name : custom_depends_) {
         // Skip self-dependencies (CMake silently ignores these)
         if (dep_name == name_) {
@@ -2034,7 +2035,10 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
             continue;
         }
 
-        auto dep_it = all_targets.find(dep_name);
+        // Resolve target aliases (e.g. Qt6::cmake_automoc_parser -> cmake_automoc_parser)
+        auto alias_it = target_aliases.find(dep_name);
+        const std::string& resolved_dep = (alias_it != target_aliases.end()) ? alias_it->second : dep_name;
+        auto dep_it = all_targets.find(resolved_dep);
         if (dep_it != all_targets.end()) {
             std::string dep_out = dep_it->second->get_output_path();
             if (!dep_out.empty()) {
@@ -2081,6 +2085,11 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
                 task.explicit_deps.push_back(dep_name);
             }
         }
+    }
+
+    // Register byproducts as outputs so the build graph knows this target produces them
+    for (const auto& bp : byproducts_) {
+        task.outputs.push_back(bp);
     }
 
     // Support SOURCES in custom targets just in case

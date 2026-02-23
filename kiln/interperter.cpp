@@ -581,10 +581,17 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
         // Resolve missing dependencies: tasks may reference targets (e.g.
         // custom commands invoking llvm-min-tblgen) that weren't in the
         // initial targets_to_build set. Find them and generate their tasks.
+        // Also index custom target byproducts so file dependencies on them
+        // trigger the owning target's task generation.
         std::unordered_map<std::string, std::string> output_to_target;
         for (const auto& [name, target] : targets_) {
             auto path = target->get_output_path();
             if (!path.empty()) output_to_target[path] = name;
+            if (auto* ct = dynamic_cast<CustomTarget*>(target.get())) {
+                for (const auto& bp : ct->get_byproducts()) {
+                    output_to_target[bp] = name;
+                }
+            }
         }
 
         bool changed = true;
@@ -798,11 +805,16 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
             targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
         }
 
-        // Resolve missing dependencies
+        // Resolve missing dependencies (including custom target byproducts)
         std::unordered_map<std::string, std::string> output_to_target;
         for (const auto& [name, target] : targets_) {
             auto path = target->get_output_path();
             if (!path.empty()) output_to_target[path] = name;
+            if (auto* ct = dynamic_cast<CustomTarget*>(target.get())) {
+                for (const auto& bp : ct->get_byproducts()) {
+                    output_to_target[bp] = name;
+                }
+            }
         }
 
         bool changed = true;

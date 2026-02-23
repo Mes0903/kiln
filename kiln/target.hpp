@@ -320,6 +320,8 @@ public:
     void add_custom_command(CustomCommand cmd) { custom_commands_.push_back(std::move(cmd)); }
     void add_custom_dependency(std::string dep) { custom_depends_.push_back(std::move(dep)); }
     const std::vector<std::string>& get_custom_dependencies() const { return custom_depends_; }
+    void add_byproduct(std::string path) { byproducts_.push_back(std::move(path)); }
+    const std::vector<std::string>& get_byproducts() const { return byproducts_; }
     void set_build_by_default(bool b) { build_by_default_ = b; }
     bool is_build_by_default() const { return build_by_default_; }
 
@@ -328,6 +330,7 @@ public:
 private:
     std::vector<CustomCommand> custom_commands_;
     std::vector<std::string> custom_depends_;
+    std::vector<std::string> byproducts_;
     bool build_by_default_ = false;
 };
 

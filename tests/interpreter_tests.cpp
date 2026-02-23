@@ -9,9 +9,10 @@
 
 std::string run_script(std::string src) {
     std::stringstream output;
-    kiln::Interpreter interpreter("", &output);
+    // Heap-allocate: Interpreter is too large for the stack (ASAN stack-buffer-overflow)
+    auto interpreter = std::make_unique<kiln::Interpreter>("", &output);
 
-    interpreter.add_builtin("message", [&](kiln::Interpreter& interp, const std::vector<std::string>& args) {
+    interpreter->add_builtin("message", [&](kiln::Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {
             throw std::runtime_error("message called with incorrect number of arguments");
         }
@@ -22,8 +23,6 @@ std::string run_script(std::string src) {
         output << std::endl;
     });
 
-
-
     kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
@@ -31,13 +30,13 @@ std::string run_script(std::string src) {
         throw std::runtime_error("Failed to parse script - " + error.reason + " on line " + std::to_string(error.row));
     }
 
-    auto result = interpreter.interpret(ast_or_error.value());
+    auto result = interpreter->interpret(ast_or_error.value());
     if (!result) {
         throw std::runtime_error(result.error().message);
     }
 
-    interpreter.execute_deferred_calls();
-    if (auto err = interpreter.get_fatal_error()) {
+    interpreter->execute_deferred_calls();
+    if (auto err = interpreter->get_fatal_error()) {
         throw std::runtime_error(err->message);
     }
 

@@ -631,21 +631,26 @@ void register_target_builtins(Interpreter& interp) {
         bool command_expand_lists = false;
         std::vector<std::vector<std::string>> commands;
         std::vector<std::string> depends;
+        std::vector<std::string> byproducts;
         std::string working_dir;
         std::vector<std::string> comment_parts;
         std::vector<std::string> sources;
         bool verbatim = false;
+        bool uses_terminal = false;
+        std::string job_pool;
 
         parser.positional(name, "target name");
         parser.flag("ALL", all);
         parser.flag("COMMAND_EXPAND_LISTS", command_expand_lists);
         parser.multi_list("COMMAND", commands);
         parser.list("DEPENDS", depends);
+        parser.list("BYPRODUCTS", byproducts);
         parser.value("WORKING_DIRECTORY", working_dir);
         parser.list("COMMENT", comment_parts);
         parser.list("SOURCES", sources);
-        // Note: VERBATIM is ignored as we currently use shell execution via popen
         parser.flag("VERBATIM", verbatim);
+        parser.flag("USES_TERMINAL", uses_terminal);
+        parser.value("JOB_POOL", job_pool);
         PARSE_OR_RETURN(parser, interp, normalized_args);
 
         if (is_banned_target_name(name)) {
@@ -693,6 +698,10 @@ void register_target_builtins(Interpreter& interp) {
 
         for (const auto& dep : depends) {
             target->add_custom_dependency(dep);
+        }
+
+        for (const auto& bp : byproducts) {
+            target->add_byproduct(Path::make_absolute_and_normal(bin_dir, bp));
         }
 
         if (!sources.empty()) {

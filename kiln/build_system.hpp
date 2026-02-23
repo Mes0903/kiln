@@ -205,6 +205,12 @@ public:
                     missing.push_back(dep);
                 }
             }
+            // Also report file inputs not yet produced by any task
+            for (const auto& in : task_ptr->inputs) {
+                if (!output_to_task_.count(in)) {
+                    missing.push_back(in);
+                }
+            }
         }
         return missing;
     }
