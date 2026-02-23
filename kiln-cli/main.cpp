@@ -354,21 +354,33 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
 
     // Parse DEPENDS for each test, warn on unknown deps (supported for compat, but wrong)
     std::map<std::string, std::vector<std::string>> deps_map;
+    // Parse RESOURCE_LOCK for each test
+    std::map<std::string, std::vector<std::string>> resource_locks_map;
     for (auto* test : selected_tests) {
         auto it = test->properties.find("DEPENDS");
-        if (it == test->properties.end()) continue;
+        if (it != test->properties.end()) {
+            auto& deps = deps_map[test->name];
+            for (auto dep_it = kiln::CMakeArrayIterator::iterator(it->second);
+                 dep_it != kiln::CMakeArrayIterator::sentinel{}; ++dep_it) {
+                std::string dep(*dep_it);
+                if (selected_names.find(dep) == selected_names.end()) {
+                    std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW)
+                              << "Warning: " << kiln::c(std::cerr, kiln::colors::RESET)
+                              << "Test '" << test->name << "' DEPENDS on unknown test '" << dep
+                              << "' (ignored)" << std::endl;
+                } else {
+                    deps.push_back(dep);
+                }
+            }
+        }
 
-        auto& deps = deps_map[test->name];
-        for (auto dep_it = kiln::CMakeArrayIterator::iterator(it->second);
-             dep_it != kiln::CMakeArrayIterator::sentinel{}; ++dep_it) {
-            std::string dep(*dep_it);
-            if (selected_names.find(dep) == selected_names.end()) {
-                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW)
-                          << "Warning: " << kiln::c(std::cerr, kiln::colors::RESET)
-                          << "Test '" << test->name << "' DEPENDS on unknown test '" << dep
-                          << "' (ignored)" << std::endl;
-            } else {
-                deps.push_back(dep);
+        auto lock_it = test->properties.find("RESOURCE_LOCK");
+        if (lock_it != test->properties.end()) {
+            auto& locks = resource_locks_map[test->name];
+            for (auto l_it = kiln::CMakeArrayIterator::iterator(lock_it->second);
+                 l_it != kiln::CMakeArrayIterator::sentinel{}; ++l_it) {
+                std::string lock(*l_it);
+                if (!lock.empty()) locks.push_back(lock);
             }
         }
     }
@@ -524,35 +536,74 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
         }
     };
 
+    // Track resource locks held by in-flight tests
+    std::set<std::string> held_locks;
+
+    auto get_locks = [&](size_t idx) -> const std::vector<std::string>& {
+        static const std::vector<std::string> empty;
+        auto it = resource_locks_map.find(selected_tests[idx]->name);
+        return (it != resource_locks_map.end()) ? it->second : empty;
+    };
+
+    auto has_lock_conflict = [&](size_t idx) -> bool {
+        for (const auto& lock : get_locks(idx)) {
+            if (held_locks.count(lock)) return true;
+        }
+        return false;
+    };
+
     while (!pending.empty()) {
-        // Find tests whose deps are all completed
+        // Find tests whose deps are all completed and resource locks are available
         std::vector<size_t> ready;
         for (auto idx : pending) {
+            // Check DEPENDS
             auto dit = deps_map.find(selected_tests[idx]->name);
-            if (dit == deps_map.end()) {
-                ready.push_back(idx);
-                continue;
-            }
-            bool all_met = true;
-            for (const auto& dep : dit->second) {
-                if (completed.find(dep) == completed.end()) {
-                    all_met = false;
-                    break;
+            if (dit != deps_map.end()) {
+                bool all_met = true;
+                for (const auto& dep : dit->second) {
+                    if (completed.find(dep) == completed.end()) {
+                        all_met = false;
+                        break;
+                    }
                 }
+                if (!all_met) continue;
             }
-            if (all_met) ready.push_back(idx);
+            // Check RESOURCE_LOCK conflicts with in-flight tests
+            if (has_lock_conflict(idx)) continue;
+            ready.push_back(idx);
         }
 
-        // Launch all ready tests in parallel
+        // If nothing is ready but tests are pending, we must have in-flight tests
+        // holding locks. This shouldn't happen since we collect results below,
+        // but guard against deadlock.
+        if (ready.empty() && !pending.empty()) {
+            // This can happen when all pending tests are blocked on resource locks
+            // held by other pending (not yet launched) tests — shouldn't happen in
+            // practice since we only block on in-flight locks. But if we somehow
+            // get here with no in-flight tests, break to avoid infinite loop.
+            break;
+        }
+
+        // Launch ready tests in parallel, acquiring locks as we go to prevent
+        // two tests in the same wave from claiming the same lock
         std::vector<std::pair<size_t, std::future<TestResult>>> in_flight;
         for (auto idx : ready) {
+            // Re-check lock conflict — a prior test in this wave may have claimed it
+            if (has_lock_conflict(idx)) continue;
             pending.erase(idx);
+            for (const auto& lock : get_locks(idx)) {
+                held_locks.insert(lock);
+            }
             in_flight.emplace_back(idx, std::async(std::launch::async, run_one_test, selected_tests[idx]));
         }
 
-        // Collect results from this wave
+        // Collect results from this wave, releasing locks as tests complete
         for (auto& [idx, fut] : in_flight) {
             auto res = fut.get();
+            // Release resource locks
+            for (const auto& lock : get_locks(idx)) {
+                held_locks.erase(lock);
+            }
             completed.insert(res.name);
             results.push_back(res);
             print_result(res);
