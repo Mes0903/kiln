@@ -130,7 +130,9 @@ struct MocScanResult {
 static MocScanResult scan_file_for_moc(const std::string& path, const std::vector<std::string>& macro_names) {
     MocScanResult result;
     std::ifstream file(path);
-    if (!file) return result;
+    if (!file) {
+        return result;
+    }
 
     bool in_block_comment = false;
     std::string line;
@@ -183,10 +185,18 @@ static MocScanResult scan_file_for_moc(const std::string& path, const std::vecto
         }
 
         // Check for #include "*.moc" or #include "moc_*.cpp"
+        // Note: C/C++ allows whitespace between # and include (e.g. "# include")
         {
-            auto pos = line.find("#include");
+            auto hash_pos = line.find('#');
+            size_t pos = std::string::npos;
+            if (hash_pos != std::string::npos) {
+                auto after_hash = line.find_first_not_of(" \t", hash_pos + 1);
+                if (after_hash != std::string::npos && line.compare(after_hash, 7, "include") == 0) {
+                    pos = after_hash + 7;
+                }
+            }
             if (pos != std::string::npos) {
-                auto quote_start = line.find('"', pos + 8);
+                auto quote_start = line.find('"', pos);
                 if (quote_start != std::string::npos) {
                     auto quote_end = line.find('"', quote_start + 1);
                     if (quote_end != std::string::npos) {
@@ -397,15 +407,22 @@ void generate_autogen_tasks(
         fs::create_directories(include_dir, ec);
     }
 
-    // Get macro names for moc scanning
-    std::vector<std::string> moc_macro_names = {"Q_OBJECT", "Q_GADGET", "Q_NAMESPACE"};
+    // Get macro names for moc scanning.
+    // CMake default for CMAKE_AUTOMOC_MACRO_NAMES is Q_OBJECT;Q_GADGET;Q_NAMESPACE;Q_NAMESPACE_EXPORT.
+    // Per-target AUTOMOC_MACRO_NAMES overrides (Qt appends Q_ENUM_NS;Q_GADGET_EXPORT to it).
+    std::vector<std::string> moc_macro_names;
     {
         std::string custom_macros = target.get_property("AUTOMOC_MACRO_NAMES");
+        if (custom_macros.empty()) {
+            custom_macros = interp.get_variable("CMAKE_AUTOMOC_MACRO_NAMES");
+        }
         if (!custom_macros.empty()) {
-            moc_macro_names.clear();
             for (auto sv : CMakeArrayIterator(custom_macros)) {
-                moc_macro_names.emplace_back(sv);
+                if (!sv.empty()) moc_macro_names.emplace_back(sv);
             }
+        }
+        if (moc_macro_names.empty()) {
+            moc_macro_names = {"Q_OBJECT", "Q_GADGET", "Q_NAMESPACE", "Q_NAMESPACE_EXPORT"};
         }
     }
 

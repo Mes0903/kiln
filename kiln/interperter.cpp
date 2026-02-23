@@ -769,6 +769,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
     variables_.set("CMAKE_COMMAND", get_executable_path());
     variables_.set("CMAKE_GENERATOR", "kiln");
+    variables_.set("CMAKE_AUTOMOC_MACRO_NAMES", "Q_OBJECT;Q_GADGET;Q_NAMESPACE;Q_NAMESPACE_EXPORT");
     variables_.set("CMAKE_MAKE_PROGRAM", get_executable_path());
     {
         auto& extra = cmake_extra_modules_root();

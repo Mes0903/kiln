@@ -123,7 +123,15 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 }
                 return is_truthy(*value_result) ? "1" : "0";
             }
-            // No children, use raw_content directly
+            // No children - raw_content may still contain unevaluated genex
+            if (GenexParser::contains_genex(node.raw_content)) {
+                auto eval_result = evaluate(node.raw_content);
+                if (!eval_result) {
+                    return eval_result;
+                }
+                return is_truthy(*eval_result) ? "1" : "0";
+            }
+            // Plain string
             return is_truthy(node.raw_content) ? "1" : "0";
         }
 
@@ -301,6 +309,12 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return std::unexpected("TARGET_EXISTS requires all_targets context");
             }
             return find_target(node.raw_content) ? "1" : "0";
+        }
+
+        case GenexNodeType::TARGET_NAME: {
+            // $<TARGET_NAME:target> returns the target name (resolves aliases)
+            // For now, just pass through the name since kiln doesn't have alias resolution
+            return node.raw_content;
         }
 
         case GenexNodeType::TARGET_NAME_IF_EXISTS: {

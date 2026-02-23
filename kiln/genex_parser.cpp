@@ -30,6 +30,7 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "VERSION_LESS_EQUAL") return GenexNodeType::VERSION_LESS_EQUAL;
     if (keyword == "VERSION_GREATER_EQUAL") return GenexNodeType::VERSION_GREATER_EQUAL;
     if (keyword == "TARGET_EXISTS") return GenexNodeType::TARGET_EXISTS;
+    if (keyword == "TARGET_NAME") return GenexNodeType::TARGET_NAME;
     if (keyword == "TARGET_NAME_IF_EXISTS") return GenexNodeType::TARGET_NAME_IF_EXISTS;
     if (keyword == "TARGET_FILE") return GenexNodeType::TARGET_FILE;
     if (keyword == "TARGET_FILE_NAME") return GenexNodeType::TARGET_FILE_NAME;

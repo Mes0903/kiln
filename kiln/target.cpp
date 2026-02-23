@@ -479,17 +479,30 @@ void Target::propagate_from_dependency(
                 ? output_props["SYSTEM_INCLUDE_DIRECTORIES"]
                 : output_props[info.name];
 
-            // Re-evaluate deferred genex with the consumer's context
+            // Re-evaluate deferred genex with the consumer's context.
+            // If *this* target is also just an interface library propagating
+            // onward, re-defer instead of evaluating — the genex refers to
+            // properties of the ultimate consuming target, not intermediaries.
             auto deferred_it = dep.deferred_interface_genex_.find(info.name);
             if (deferred_it != dep.deferred_interface_genex_.end()) {
-                auto eval_result = evaluator.evaluate_property_list(deferred_it->second);
-                if (eval_result) {
-                    if (info.is_path) {
-                        for (const auto& p : *eval_result) {
-                            if (!p.empty()) dest.push_back(resolve_to_absolute_path(p));
+                bool is_interface_passthrough =
+                    (type_ == TargetType::INTERFACE_LIBRARY);
+                if (is_interface_passthrough) {
+                    // Forward raw genex to our own deferred set
+                    auto& our_deferred = deferred_interface_genex_[info.name];
+                    our_deferred.insert(our_deferred.end(),
+                                        deferred_it->second.begin(),
+                                        deferred_it->second.end());
+                } else {
+                    auto eval_result = evaluator.evaluate_property_list(deferred_it->second);
+                    if (eval_result) {
+                        if (info.is_path) {
+                            for (const auto& p : *eval_result) {
+                                if (!p.empty()) dest.push_back(resolve_to_absolute_path(p));
+                            }
+                        } else {
+                            dest.insert(dest.end(), eval_result->begin(), eval_result->end());
                         }
-                    } else {
-                        dest.insert(dest.end(), eval_result->begin(), eval_result->end());
                     }
                 }
             }
