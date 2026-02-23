@@ -319,6 +319,42 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return std::string(Path(target->get_output_path()).parent_path());
         }
 
+        case GenexNodeType::TARGET_LINKER_FILE: {
+            // $<TARGET_LINKER_FILE:target> - full path to linker file (same as output on Linux)
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_LINKER_FILE requires all_targets context");
+            }
+            auto* target = find_target(node.raw_content);
+            if (!target) {
+                return std::unexpected("TARGET_LINKER_FILE: target '" + node.raw_content + "' not found");
+            }
+            return target->get_output_path();
+        }
+
+        case GenexNodeType::TARGET_LINKER_FILE_NAME: {
+            // $<TARGET_LINKER_FILE_NAME:target> - filename of linker file
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_LINKER_FILE_NAME requires all_targets context");
+            }
+            auto* target = find_target(node.raw_content);
+            if (!target) {
+                return std::unexpected("TARGET_LINKER_FILE_NAME: target '" + node.raw_content + "' not found");
+            }
+            return std::string(Path(target->get_output_path()).filename());
+        }
+
+        case GenexNodeType::TARGET_LINKER_FILE_DIR: {
+            // $<TARGET_LINKER_FILE_DIR:target> - directory of linker file
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_LINKER_FILE_DIR requires all_targets context");
+            }
+            auto* target = find_target(node.raw_content);
+            if (!target) {
+                return std::unexpected("TARGET_LINKER_FILE_DIR: target '" + node.raw_content + "' not found");
+            }
+            return std::string(Path(target->get_output_path()).parent_path());
+        }
+
         case GenexNodeType::TARGET_OBJECTS: {
             // $<TARGET_OBJECTS:target> returns object files from OBJECT_LIBRARY
             if (!ctx_.all_targets) {

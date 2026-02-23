@@ -31,6 +31,9 @@ enum class GenexNodeType {
     TARGET_FILE,          // $<TARGET_FILE:target> - full path to target output
     TARGET_FILE_NAME,     // $<TARGET_FILE_NAME:target> - filename of target output
     TARGET_FILE_DIR,      // $<TARGET_FILE_DIR:target> - directory of target output
+    TARGET_LINKER_FILE,   // $<TARGET_LINKER_FILE:target> - full path to linker file
+    TARGET_LINKER_FILE_NAME, // $<TARGET_LINKER_FILE_NAME:target> - filename of linker file
+    TARGET_LINKER_FILE_DIR,  // $<TARGET_LINKER_FILE_DIR:target> - directory of linker file
     TARGET_OBJECTS,       // $<TARGET_OBJECTS:target> - object files from OBJECT_LIBRARY
     TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>

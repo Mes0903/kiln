@@ -735,7 +735,8 @@ Examples:
                 std::ifstream file(script_abs);
                 content.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
                 script_name = script_abs.string();
-                working_dir = script_abs.parent_path().string();
+                // CMake script mode: CMAKE_CURRENT_SOURCE_DIR = CWD (not script dir)
+                working_dir = std::filesystem::current_path().string();
             }
 
             kiln::Parser parser(content, script_name);
@@ -748,6 +749,10 @@ Examples:
             kiln::Interpreter interpreter(working_dir, &std::cout, &std::cerr, std::nullopt, opt.no_sys_init, /*skip_cache_load=*/true);
             interpreter.set_current_file(script_name);
             interpreter.set_variable("CMAKE_SCRIPT_MODE_FILE", script_name);
+            // In script mode, CMAKE_CURRENT_LIST_DIR/FILE point to the script location
+            std::string script_dir = std::filesystem::path(script_name).parent_path().string();
+            interpreter.set_variable("CMAKE_CURRENT_LIST_DIR", script_dir);
+            interpreter.set_variable("CMAKE_CURRENT_LIST_FILE", script_name);
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
 

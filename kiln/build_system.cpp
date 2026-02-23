@@ -1234,12 +1234,9 @@ std::optional<std::filesystem::file_time_type> BuildGraph::get_file_time_if_exis
     }
 
     std::optional<std::filesystem::file_time_type> result;
-    try {
-        result = std::filesystem::last_write_time(path);
-    } catch (...) {
-        // File doesn't exist or not accessible
-        result = std::nullopt;
-    }
+    std::error_code ec;
+    auto mtime = std::filesystem::last_write_time(path, ec);
+    if (!ec) result = mtime;
 
     std::lock_guard<std::mutex> lock(state_mutex_);
     stat_cache_[path] = result;

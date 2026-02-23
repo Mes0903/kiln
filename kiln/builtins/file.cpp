@@ -757,7 +757,7 @@ void register_file_builtins(Interpreter& interp) {
                 if (!result_var.empty()) {
                     interp.set_variable(result_var, ec.message());
                 } else {
-                    interp.set_fatal_error("file(RENAME) failed: " + ec.message());
+                    interp.set_fatal_error("file(RENAME) failed to rename\n  " + old_path.string() + "\nto\n  " + new_path.string() + "\n" + ec.message());
                 }
                 return;
             }

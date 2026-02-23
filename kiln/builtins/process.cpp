@@ -556,6 +556,11 @@ static bool translate_cmake_self_invocation(std::vector<std::string>& cmd, const
     std::vector<std::string> definitions;
     std::vector<std::string> targets;
 
+    // Don't translate tool mode (-E) or script mode (-P) invocations
+    for (size_t j = 1; j < cmd.size(); ++j) {
+        if (cmd[j] == "-E" || cmd[j] == "-P") return false;
+    }
+
     size_t i = 1;
     while (i < cmd.size()) {
         if (cmd[i] == "--build") {
