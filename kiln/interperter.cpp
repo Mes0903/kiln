@@ -862,6 +862,8 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
     variables_.set("CMAKE_SHARED_LIBRARY_PREFIX", "lib");
     variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
+    variables_.set("CMAKE_SHARED_MODULE_PREFIX", "");
+    variables_.set("CMAKE_SHARED_MODULE_SUFFIX", ".so");
     variables_.set("CMAKE_STATIC_LIBRARY_PREFIX", "lib");
     variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
     variables_.set("CMAKE_SHARED_LIBRARY_C_FLAGS", "-fPIC");

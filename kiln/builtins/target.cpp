@@ -316,8 +316,10 @@ void register_target_builtins(Interpreter& interp) {
             }
         }
 
-        // Detect which form based on first keyword
-        if ((*parse_args)[0] == "OUTPUT") {
+        // Detect which form based on first keyword.
+        // TARGET form requires TARGET as first keyword.
+        // OUTPUT form accepts keywords in any order (DEPENDS, OUTPUT, COMMAND, etc.)
+        if ((*parse_args)[0] != "TARGET") {
             // OUTPUT form - generates files
             // Strip deprecated ARGS keyword - in CMake it's a no-op that means
             // "the following are arguments to the preceding COMMAND". We remove it
@@ -462,7 +464,7 @@ void register_target_builtins(Interpreter& interp) {
                     rules[out] = rule;
                 }
             }
-        } else if ((*parse_args)[0] == "TARGET") {
+        } else {
             // TARGET form - build events
             // Syntax: add_custom_command(TARGET <target>
             //           [PRE_BUILD | PRE_LINK | POST_BUILD]
@@ -568,9 +570,6 @@ void register_target_builtins(Interpreter& interp) {
                     target->add_post_build_command(std::move(cmd));
                 }
             }
-        } else {
-            interp.set_fatal_error("add_custom_command() first argument must be OUTPUT or TARGET, got: " + (*parse_args)[0]);
-            return;
         }
     });
 
