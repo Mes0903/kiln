@@ -262,6 +262,8 @@ void register_project_builtins(Interpreter& interp) {
 
         std::vector<std::string> languages;
         std::string version;
+        std::string description;
+        std::string homepage_url;
 
         // Parse arguments
         for (size_t i = 1; i < args.size(); ++i) {
@@ -279,10 +281,13 @@ void register_project_builtins(Interpreter& interp) {
                     languages.push_back(args[i++]);
                 }
                 --i; // Adjust for loop increment
-            } else if (args[i] == "DESCRIPTION" || args[i] == "HOMEPAGE_URL") {
-                // Skip these keywords and their values
+            } else if (args[i] == "DESCRIPTION") {
                 if (i + 1 < args.size()) {
-                    ++i; // Skip the value
+                    description = args[++i];
+                }
+            } else if (args[i] == "HOMEPAGE_URL") {
+                if (i + 1 < args.size()) {
+                    homepage_url = args[++i];
                 }
             }
             // If no keyword, treat as language (for backward compatibility)
@@ -379,6 +384,20 @@ void register_project_builtins(Interpreter& interp) {
                     interp.set_variable("CMAKE_PROJECT_VERSION" + std::string(suffixes[i]), "");
                 }
             }
+        }
+
+        // Set DESCRIPTION variables
+        interp.set_variable("PROJECT_DESCRIPTION", description);
+        interp.set_variable(project_name + "_DESCRIPTION", description);
+        if (is_top_level) {
+            interp.set_variable("CMAKE_PROJECT_DESCRIPTION", description);
+        }
+
+        // Set HOMEPAGE_URL variables
+        interp.set_variable("PROJECT_HOMEPAGE_URL", homepage_url);
+        interp.set_variable(project_name + "_HOMEPAGE_URL", homepage_url);
+        if (is_top_level) {
+            interp.set_variable("CMAKE_PROJECT_HOMEPAGE_URL", homepage_url);
         }
     });
 

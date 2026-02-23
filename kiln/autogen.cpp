@@ -629,13 +629,16 @@ void generate_autogen_tasks(
 
         // Generate mocs_compilation.cpp
         // Contains #include for all header moc outputs that are NOT explicitly included
+        std::set<std::string> moc_output_seen;
         std::vector<std::string> mocs_for_compilation;
         for (const auto& entry : moc_entries) {
             if (!entry.is_source_moc) {
                 std::string basename = fs::path(entry.input_file).stem().string();
                 std::string moc_filename = "moc_" + basename + ".cpp";
                 if (explicitly_included_mocs.count(moc_filename) == 0) {
-                    mocs_for_compilation.push_back(entry.output_file);
+                    if (moc_output_seen.insert(entry.output_file).second) {
+                        mocs_for_compilation.push_back(entry.output_file);
+                    }
                 }
             }
         }
