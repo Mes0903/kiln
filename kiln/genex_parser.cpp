@@ -68,17 +68,22 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
 }
 
 std::expected<std::string, std::string> GenexParser::parse_genex_content() {
-    // Parse content until we hit the matching '>', balancing angle brackets
+    // Parse content until we hit the matching '>', balancing only $< ... > pairs.
+    // Bare '<' is NOT special — only '$<' opens a nesting level, matching CMake's
+    // lexer which tokenizes '$<' as BeginExpression but treats bare '<' as text.
     std::string content;
-    int depth = 1;  // We're already inside one '<'
+    int depth = 1;  // We're already inside one '$<'
     size_t start_pos = pos_;
 
     while (!at_end() && depth > 0) {
         char c = peek();
 
-        if (c == '<') {
+        if (c == '$' && pos_ + 1 < input_.size() && input_[pos_ + 1] == '<') {
+            // $< opens a new nesting level
             ++depth;
-            content += c;
+            content += '$';
+            advance();
+            content += '<';
             advance();
         } else if (c == '>') {
             --depth;
@@ -93,21 +98,27 @@ std::expected<std::string, std::string> GenexParser::parse_genex_content() {
     }
 
     if (depth != 0) {
-        return std::unexpected("Unmatched '<' in generator expression at position " + std::to_string(start_pos));
+        return std::unexpected("Unmatched '$<' in generator expression at position " + std::to_string(start_pos));
     }
 
     return content;
 }
 
 std::vector<std::string> GenexParser::split_genex_args(const std::string& content) {
+    // Split on commas, but only at depth 0.  Only '$<' opens a nesting level
+    // (bare '<' is plain text), matching CMake's tokenizer behaviour.
     std::vector<std::string> args;
     std::string current;
     int depth = 0;
 
-    for (char c : content) {
-        if (c == '<') {
+    for (size_t i = 0; i < content.size(); ++i) {
+        char c = content[i];
+
+        if (c == '$' && i + 1 < content.size() && content[i + 1] == '<') {
             ++depth;
-            current += c;
+            current += '$';
+            current += '<';
+            ++i;  // skip the '<'
         } else if (c == '>') {
             --depth;
             current += c;
@@ -139,14 +150,17 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
     }
     advance();
 
-    // Parse until we find ':' or '>' (but balance angle brackets for nested genex)
+    // Parse until we find ':' or '>' (but balance $<...> pairs for nested genex).
+    // Only '$<' opens a nesting level — bare '<' is plain text, matching CMake.
     std::string keyword;
     int depth = 0;
     while (!at_end()) {
         char c = peek();
-        if (c == '<') {
+        if (c == '$' && pos_ + 1 < input_.size() && input_[pos_ + 1] == '<') {
             depth++;
-            keyword += c;
+            keyword += '$';
+            advance();
+            keyword += '<';
             advance();
         } else if (c == '>') {
             if (depth > 0) {

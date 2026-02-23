@@ -1015,6 +1015,158 @@ TEST_CASE("GenexParser - new types classification", "[genex][parser]") {
 }
 
 // ============================================================================
+// CMake-verified edge cases: bare '<', escapes, ANGLE-R, COMMA, SEMICOLON
+// Reference values captured from CMake 4.0.1 with file(GENERATE)
+// ============================================================================
+
+TEST_CASE("GenexEvaluator - constant literal escapes", "[genex][evaluator][escapes]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: ">"
+    REQUIRE(eval.evaluate("$<ANGLE-R>").value() == ">");
+    // CMake ref: ","
+    REQUIRE(eval.evaluate("$<COMMA>").value() == ",");
+    // CMake ref: ";"
+    REQUIRE(eval.evaluate("$<SEMICOLON>").value() == ";");
+    // CMake ref: "\""
+    REQUIRE(eval.evaluate("$<QUOTE>").value() == "\"");
+    // CMake ref: ">>>"
+    REQUIRE(eval.evaluate("$<ANGLE-R>$<ANGLE-R>$<ANGLE-R>").value() == ">>>");
+}
+
+TEST_CASE("GenexEvaluator - STREQUAL with escape genexes", "[genex][evaluator][escapes]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "1"
+    REQUIRE(eval.evaluate("$<STREQUAL:$<ANGLE-R>,$<ANGLE-R>>").value() == "1");
+    // CMake ref: "0"
+    REQUIRE(eval.evaluate("$<STREQUAL:$<ANGLE-R>,x>").value() == "0");
+    // CMake ref: "1"
+    REQUIRE(eval.evaluate("$<STREQUAL:$<COMMA>,$<COMMA>>").value() == "1");
+    // CMake ref: "0"
+    REQUIRE(eval.evaluate("$<STREQUAL:$<COMMA>,x>").value() == "0");
+}
+
+TEST_CASE("GenexEvaluator - bare < in genex content", "[genex][evaluator][bare-angle]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // Bare '<' is just text — does NOT affect nesting depth.
+    // CMake ref: "1" ($<STREQUAL:a<b,a<b>)
+    REQUIRE(eval.evaluate("$<STREQUAL:a<b,a<b>").value() == "1");
+    // CMake ref: "0" ($<STREQUAL:a<b,a>)
+    REQUIRE(eval.evaluate("$<STREQUAL:a<b,a>").value() == "0");
+    // CMake ref: "a<b" ($<LOWER_CASE:A<B>)
+    REQUIRE(eval.evaluate("$<LOWER_CASE:A<B>").value() == "a<b");
+    // CMake ref: "A<B" ($<UPPER_CASE:a<b>)
+    REQUIRE(eval.evaluate("$<UPPER_CASE:a<b>").value() == "A<B");
+    // CMake ref: "a<b<c" ($<LOWER_CASE:A<B<C>)
+    REQUIRE(eval.evaluate("$<LOWER_CASE:A<B<C>").value() == "a<b<c");
+    // CMake ref: "1" ($<BOOL:a<b>)
+    REQUIRE(eval.evaluate("$<BOOL:a<b>").value() == "1");
+}
+
+TEST_CASE("GenexEvaluator - bare < in IF/conditional", "[genex][evaluator][bare-angle]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "a<b" ($<IF:1,a<b,c>)
+    REQUIRE(eval.evaluate("$<IF:1,a<b,c>").value() == "a<b");
+    // CMake ref: "c" ($<IF:0,a<b,c>)
+    REQUIRE(eval.evaluate("$<IF:0,a<b,c>").value() == "c");
+}
+
+TEST_CASE("GenexEvaluator - ANGLE-R in nested contexts", "[genex][evaluator][escapes]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: ">" ($<IF:1,$<ANGLE-R>,no>)
+    REQUIRE(eval.evaluate("$<IF:1,$<ANGLE-R>,no>").value() == ">");
+    // CMake ref: "," ($<IF:1,$<COMMA>,no>)
+    REQUIRE(eval.evaluate("$<IF:1,$<COMMA>,no>").value() == ",");
+    // CMake ref: ">" ($<$<BOOL:ON>:$<ANGLE-R>>)
+    REQUIRE(eval.evaluate("$<$<BOOL:ON>:$<ANGLE-R>>").value() == ">");
+    // CMake ref: "a,b" ($<$<BOOL:ON>:a$<COMMA>b>)
+    REQUIRE(eval.evaluate("$<$<BOOL:ON>:a$<COMMA>b>").value() == "a,b");
+    // CMake ref: "a;b" ($<$<BOOL:ON>:a$<SEMICOLON>b>)
+    REQUIRE(eval.evaluate("$<$<BOOL:ON>:a$<SEMICOLON>b>").value() == "a;b");
+    // CMake ref: "before>" ($<$<BOOL:ON>:before$<ANGLE-R>>)
+    REQUIRE(eval.evaluate("$<$<BOOL:ON>:before$<ANGLE-R>>").value() == "before>");
+}
+
+TEST_CASE("GenexEvaluator - STREQUAL bare > closes genex early (CMake compat)", "[genex][evaluator][escapes]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // In CMake: $<STREQUAL:a$<ANGLE-R>b,a>b> evaluates as:
+    //   STREQUAL("a>b", "a") => "0", then literal "b>" appended
+    // CMake ref: "0b>"
+    REQUIRE(eval.evaluate("$<STREQUAL:a$<ANGLE-R>b,a>b>").value() == "0b>");
+}
+
+TEST_CASE("GenexParser - bare < does not break parsing", "[genex][parser][bare-angle]") {
+    GenexParser parser;
+
+    SECTION("bare < in STREQUAL content") {
+        auto result = parser.parse("$<STREQUAL:a<b,a<b>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->has_genex == true);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::STREQUAL);
+    }
+
+    SECTION("bare < in LOWER_CASE") {
+        auto result = parser.parse("$<LOWER_CASE:A<B>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->has_genex == true);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::LOWER_CASE);
+    }
+
+    SECTION("multiple bare < in content") {
+        auto result = parser.parse("$<LOWER_CASE:A<B<C>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->has_genex == true);
+    }
+
+    SECTION("bare < in IF args") {
+        auto result = parser.parse("$<IF:1,a<b,c>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->has_genex == true);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::IF);
+    }
+
+    SECTION("bare < in BOOL") {
+        auto result = parser.parse("$<BOOL:a<b>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->has_genex == true);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::BOOL);
+    }
+}
+
+TEST_CASE("GenexParser - split_genex_args with bare <", "[genex][parser][bare-angle]") {
+    GenexParser parser;
+
+    // Bare '<' should NOT prevent comma splitting
+    auto args = parser.split_genex_args("a<b,c");
+    REQUIRE(args.size() == 2);
+    REQUIRE(args[0] == "a<b");
+    REQUIRE(args[1] == "c");
+
+    // But $< ... > should still protect commas
+    args = parser.split_genex_args("$<COMMA>,c");
+    REQUIRE(args.size() == 2);
+    REQUIRE(args[0] == "$<COMMA>");
+    REQUIRE(args[1] == "c");
+
+    // Nested genex protects commas
+    args = parser.split_genex_args("$<IF:1,a,b>,c");
+    REQUIRE(args.size() == 2);
+    REQUIRE(args[0] == "$<IF:1,a,b>");
+    REQUIRE(args[1] == "c");
+}
+
+// ============================================================================
 // BuildGraph::evaluate_genex() Tests
 // ============================================================================
 
