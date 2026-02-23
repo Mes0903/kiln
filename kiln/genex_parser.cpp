@@ -39,6 +39,15 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "TARGET_LINKER_FILE_DIR") return GenexNodeType::TARGET_LINKER_FILE_DIR;
     if (keyword == "TARGET_OBJECTS") return GenexNodeType::TARGET_OBJECTS;
     if (keyword == "TARGET_PROPERTY") return GenexNodeType::TARGET_PROPERTY;
+    if (keyword == "TARGET_FILE_BASE_NAME") return GenexNodeType::TARGET_FILE_BASE_NAME;
+    if (keyword == "GENEX_EVAL") return GenexNodeType::GENEX_EVAL;
+    if (keyword == "TARGET_GENEX_EVAL") return GenexNodeType::TARGET_GENEX_EVAL;
+    if (keyword == "JOIN") return GenexNodeType::JOIN;
+    if (keyword == "REMOVE_DUPLICATES") return GenexNodeType::REMOVE_DUPLICATES;
+    if (keyword == "FILTER") return GenexNodeType::FILTER;
+    if (keyword == "IN_LIST") return GenexNodeType::IN_LIST;
+    if (keyword == "LOWER_CASE") return GenexNodeType::LOWER_CASE;
+    if (keyword == "UPPER_CASE") return GenexNodeType::UPPER_CASE;
     if (keyword == "COMPILE_LANGUAGE") return GenexNodeType::COMPILE_LANGUAGE;
     if (keyword == "COMPILE_LANG_AND_ID") return GenexNodeType::COMPILE_LANG_AND_ID;
     if (keyword == "PLATFORM_ID") return GenexNodeType::PLATFORM_ID;
@@ -223,6 +232,34 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
         }
     }
 
+    // If it's UNSUPPORTED but has a ':', treat as CONDITIONAL with literal condition
+    // This handles patterns like $<1:text> and $<0:text> (literal boolean conditionals)
+    if (type == GenexNodeType::UNSUPPORTED && peek() == ':') {
+        node->type = GenexNodeType::CONDITIONAL;
+        // Store the keyword as a literal condition child
+        auto cond_node = std::make_shared<GenexNode>(GenexNodeType::LITERAL, keyword);
+        node->children.push_back(cond_node);
+
+        advance(); // consume ':'
+        auto content_result = parse_genex_content();
+        if (!content_result) {
+            return std::unexpected(content_result.error());
+        }
+
+        // Parse the value part
+        GenexParser value_parser;
+        auto value_result = value_parser.parse(*content_result);
+        if (!value_result) {
+            return std::unexpected(value_result.error());
+        }
+        node->children.insert(node->children.end(),
+                            value_result->nodes.begin(),
+                            value_result->nodes.end());
+        node->raw_content = *content_result;
+        node->end_pos = pos_;
+        return node;
+    }
+
     // If it's UNSUPPORTED, store the original string for error reporting
     if (type == GenexNodeType::UNSUPPORTED) {
         // Need to capture the full genex string
@@ -332,6 +369,32 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
                 return std::unexpected("$<TARGET_PROPERTY:...> requires 1 or 2 arguments");
             }
 
+            for (const auto& arg : args) {
+                GenexParser inner_parser;
+                auto inner_result = inner_parser.parse(arg);
+                if (!inner_result) {
+                    return std::unexpected(inner_result.error());
+                }
+                node->children.insert(node->children.end(),
+                                    inner_result->nodes.begin(),
+                                    inner_result->nodes.end());
+            }
+        } else if (type == GenexNodeType::GENEX_EVAL ||
+                   type == GenexNodeType::REMOVE_DUPLICATES ||
+                   type == GenexNodeType::LOWER_CASE ||
+                   type == GenexNodeType::UPPER_CASE) {
+            // Single argument that may contain nested genex
+            GenexParser inner_parser;
+            auto inner_result = inner_parser.parse(content);
+            if (!inner_result) {
+                return std::unexpected(inner_result.error());
+            }
+            node->children = inner_result->nodes;
+        } else if (type == GenexNodeType::TARGET_GENEX_EVAL ||
+                   type == GenexNodeType::JOIN ||
+                   type == GenexNodeType::IN_LIST) {
+            // Two comma-separated arguments
+            auto args = split_genex_args(content);
             for (const auto& arg : args) {
                 GenexParser inner_parser;
                 auto inner_result = inner_parser.parse(arg);

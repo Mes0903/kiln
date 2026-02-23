@@ -7778,7 +7778,7 @@ TEST_CASE("cmake_policy SET and GET", "[interpreter][policy]") {
             cmake_policy(GET CMP9999 result)
             message("[${result}]")
         )");
-        REQUIRE(output == "[]\n");
+        REQUIRE(output == "[NEW]\n");
     }
 }
 

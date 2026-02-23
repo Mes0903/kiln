@@ -230,6 +230,48 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
             }
         }
 
+        // Evaluate inputs (dependency paths) that contain genex
+        {
+            std::vector<std::string> new_inputs;
+            for (auto& input : task.inputs) {
+                if (!GenexParser::contains_genex(input)) {
+                    new_inputs.push_back(std::move(input));
+                    continue;
+                }
+                auto eval = evaluator.evaluate(input);
+                if (!eval || eval->empty()) {
+                    continue;  // Drop unevaluable dependency
+                }
+                // Result may be a semicolon-separated CMake list — split into individual inputs
+                for (auto sv : CMakeArrayIterator(*eval)) {
+                    if (sv.empty()) continue;
+                    std::string item(sv);
+                    // Check if the evaluated result is a target name → resolve to output or explicit dep
+                    if (ctx.all_targets) {
+                        auto it = ctx.all_targets->find(item);
+                        if (it == ctx.all_targets->end() && ctx.target_aliases) {
+                            auto alias_it = ctx.target_aliases->find(item);
+                            if (alias_it != ctx.target_aliases->end()) {
+                                it = ctx.all_targets->find(alias_it->second);
+                            }
+                        }
+                        if (it != ctx.all_targets->end()) {
+                            std::string out = it->second->get_output_path();
+                            if (!out.empty()) {
+                                new_inputs.push_back(std::move(out));
+                            } else {
+                                // Custom target with no output — add as explicit dep for task-level dependency
+                                task.explicit_deps.push_back(item);
+                            }
+                            continue;
+                        }
+                    }
+                    new_inputs.push_back(std::move(item));
+                }
+            }
+            task.inputs = std::move(new_inputs);
+        }
+
         // Evaluate working_dir if it contains genex
         if (!task.working_dir.empty() && GenexParser::contains_genex(task.working_dir)) {
             auto result = evaluator.evaluate(task.working_dir);

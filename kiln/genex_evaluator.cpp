@@ -9,6 +9,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <regex>
 #include <sstream>
 
 namespace kiln {
@@ -79,7 +80,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return ctx_.install_prefix.empty() ? "/usr/local" : ctx_.install_prefix;
 
         case GenexNodeType::CONFIG: {
+            // $<CONFIG> (no argument) returns CMAKE_BUILD_TYPE
             // $<CONFIG:cfg> returns 1 if CMAKE_BUILD_TYPE matches (case-insensitive), 0 otherwise
+            if (node.raw_content.empty() && node.children.empty()) {
+                return ctx_.build_type;
+            }
             std::string config = to_lower(node.raw_content);
             std::string build_type = to_lower(ctx_.build_type);
             return (config == build_type) ? "1" : "0";
@@ -491,6 +496,187 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return result;
             }
             return prop_value;
+        }
+
+        case GenexNodeType::TARGET_FILE_BASE_NAME: {
+            // $<TARGET_FILE_BASE_NAME:target> - OUTPUT_NAME or target name
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_FILE_BASE_NAME requires all_targets context");
+            }
+            auto* target = find_target(node.raw_content);
+            if (!target) {
+                return std::unexpected("TARGET_FILE_BASE_NAME: target '" + node.raw_content + "' not found");
+            }
+            std::string base = target->get_property("OUTPUT_NAME");
+            if (base.empty()) {
+                base = target->get_name();
+            }
+            return base;
+        }
+
+        case GenexNodeType::GENEX_EVAL: {
+            // $<GENEX_EVAL:expr> - evaluate the argument, then re-evaluate as genex
+            auto inner = evaluate_nodes(node.children);
+            if (!inner) return inner;
+            // Re-evaluate the result as a genex expression
+            return evaluate(*inner);
+        }
+
+        case GenexNodeType::TARGET_GENEX_EVAL: {
+            // $<TARGET_GENEX_EVAL:target,expr> - evaluate expr with target context
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 2) {
+                return std::unexpected("$<TARGET_GENEX_EVAL:...> requires exactly 2 arguments");
+            }
+
+            // Evaluate target name
+            GenexParser parser;
+            auto tgt_parsed = parser.parse(args[0]);
+            if (!tgt_parsed) return std::unexpected(tgt_parsed.error());
+            auto tgt_name = evaluate_nodes(tgt_parsed->nodes);
+            if (!tgt_name) return tgt_name;
+
+            if (!ctx_.all_targets) {
+                return std::unexpected("TARGET_GENEX_EVAL requires all_targets context");
+            }
+            auto* target = find_target(*tgt_name);
+            if (!target) {
+                return std::unexpected("TARGET_GENEX_EVAL: target '" + *tgt_name + "' not found");
+            }
+
+            // Evaluate the expression
+            auto expr_parsed = parser.parse(args[1]);
+            if (!expr_parsed) return std::unexpected(expr_parsed.error());
+            auto expr_val = evaluate_nodes(expr_parsed->nodes);
+            if (!expr_val) return expr_val;
+
+            // Re-evaluate with target context
+            GenexEvaluationContext target_ctx = ctx_;
+            target_ctx.current_target = target;
+            GenexEvaluator target_evaluator(target_ctx);
+            return target_evaluator.evaluate(*expr_val);
+        }
+
+        case GenexNodeType::JOIN: {
+            // $<JOIN:list,glue> - join semicolon-separated list with glue
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 2) {
+                return std::unexpected("$<JOIN:...> requires exactly 2 arguments");
+            }
+
+            GenexParser parser;
+            auto list_parsed = parser.parse(args[0]);
+            if (!list_parsed) return std::unexpected(list_parsed.error());
+            auto list_val = evaluate_nodes(list_parsed->nodes);
+            if (!list_val) return list_val;
+
+            auto glue_parsed = parser.parse(args[1]);
+            if (!glue_parsed) return std::unexpected(glue_parsed.error());
+            auto glue_val = evaluate_nodes(glue_parsed->nodes);
+            if (!glue_val) return glue_val;
+
+            // Split by semicolons and rejoin with glue
+            std::string result;
+            bool first = true;
+            for (auto sv : CMakeArrayIterator(*list_val)) {
+                if (sv.empty()) continue;
+                if (!first) result += *glue_val;
+                result += sv;
+                first = false;
+            }
+            return result;
+        }
+
+        case GenexNodeType::REMOVE_DUPLICATES: {
+            // $<REMOVE_DUPLICATES:list> - remove duplicate entries
+            auto inner = evaluate_nodes(node.children);
+            if (!inner) return inner;
+
+            std::vector<std::string> seen;
+            std::string result;
+            for (auto sv : CMakeArrayIterator(*inner)) {
+                std::string item(sv);
+                if (std::find(seen.begin(), seen.end(), item) == seen.end()) {
+                    seen.push_back(item);
+                    if (!result.empty()) result += ';';
+                    result += item;
+                }
+            }
+            return result;
+        }
+
+        case GenexNodeType::FILTER: {
+            // $<FILTER:list,INCLUDE|EXCLUDE,regex>
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 3) {
+                return std::unexpected("$<FILTER:...> requires exactly 3 arguments");
+            }
+
+            GenexParser parser;
+            auto list_parsed = parser.parse(args[0]);
+            if (!list_parsed) return std::unexpected(list_parsed.error());
+            auto list_val = evaluate_nodes(list_parsed->nodes);
+            if (!list_val) return list_val;
+
+            bool include = (args[1] == "INCLUDE");
+
+            auto regex_parsed = parser.parse(args[2]);
+            if (!regex_parsed) return std::unexpected(regex_parsed.error());
+            auto regex_val = evaluate_nodes(regex_parsed->nodes);
+            if (!regex_val) return regex_val;
+
+            std::regex re(*regex_val);
+            std::string result;
+            for (auto sv : CMakeArrayIterator(*list_val)) {
+                std::string item(sv);
+                bool matches = std::regex_search(item, re);
+                if (matches == include) {
+                    if (!result.empty()) result += ';';
+                    result += item;
+                }
+            }
+            return result;
+        }
+
+        case GenexNodeType::IN_LIST: {
+            // $<IN_LIST:value,list> - returns 1 if value is in semicolon-separated list
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 2) {
+                return std::unexpected("$<IN_LIST:...> requires exactly 2 arguments");
+            }
+
+            GenexParser parser;
+            auto val_parsed = parser.parse(args[0]);
+            if (!val_parsed) return std::unexpected(val_parsed.error());
+            auto val_result = evaluate_nodes(val_parsed->nodes);
+            if (!val_result) return val_result;
+
+            auto list_parsed = parser.parse(args[1]);
+            if (!list_parsed) return std::unexpected(list_parsed.error());
+            auto list_val = evaluate_nodes(list_parsed->nodes);
+            if (!list_val) return list_val;
+
+            for (auto sv : CMakeArrayIterator(*list_val)) {
+                if (sv == *val_result) return "1";
+            }
+            return "0";
+        }
+
+        case GenexNodeType::LOWER_CASE: {
+            // $<LOWER_CASE:string>
+            auto inner = evaluate_nodes(node.children);
+            if (!inner) return inner;
+            return to_lower(*inner);
+        }
+
+        case GenexNodeType::UPPER_CASE: {
+            // $<UPPER_CASE:string>
+            auto inner = evaluate_nodes(node.children);
+            if (!inner) return inner;
+            std::string result = *inner;
+            std::transform(result.begin(), result.end(), result.begin(),
+                         [](unsigned char c) { return std::toupper(c); });
+            return result;
         }
 
         case GenexNodeType::COMPILE_LANGUAGE: {

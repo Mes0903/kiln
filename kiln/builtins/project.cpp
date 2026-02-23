@@ -442,8 +442,9 @@ void register_project_builtins(Interpreter& interp) {
                 interp.set_variable(args[2],
                     interp.get_policy(*policy) == PolicyState::NEW ? "NEW" : "OLD");
             } else {
-                // Unknown policy: return empty string (UNSET behavior)
-                interp.set_variable(args[2], "");
+                // Unknown policy: default to NEW (kiln defaults all policies to NEW
+                // except ones explicitly known to need OLD behavior)
+                interp.set_variable(args[2], "NEW");
             }
         } else if (args[0] == "PUSH") {
             interp.push_policies();

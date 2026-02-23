@@ -1149,8 +1149,13 @@ void register_property_builtins(Interpreter& interp) {
             return;
         }
 
-        // Return the value (or empty if not found)
-        interp.set_variable(var_name, value);
+        // Return the value, or unset the variable if property was not found
+        // (CMake leaves the variable undefined when the property doesn't exist)
+        if (value_found) {
+            interp.set_variable(var_name, value);
+        } else {
+            interp.unset_variable(var_name);
+        }
     });
 }
 

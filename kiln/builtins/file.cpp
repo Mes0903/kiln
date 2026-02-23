@@ -1345,7 +1345,7 @@ void register_file_builtins(Interpreter& interp) {
             out << result;
         } else if (ci_equals(operation, "GENERATE")) {
             // file(GENERATE OUTPUT <output-file> [INPUT <input-file>|CONTENT <content>] ...)
-            // Simplified implementation - doesn't support all generator expressions
+            // Deferred to graph generation time so generator expressions can be evaluated
             CommandParser parser("file", "GENERATE");
             std::string output_file, input_file, content, condition, target_name, newline_style;
             parser.value("OUTPUT", output_file);
@@ -1361,6 +1361,7 @@ void register_file_builtins(Interpreter& interp) {
                 return;
             }
 
+            // Read INPUT file now (it's a static file), but defer genex evaluation and writing
             std::string file_content;
             if (!input_file.empty()) {
                 std::filesystem::path in_path = input_file;
@@ -1377,24 +1378,13 @@ void register_file_builtins(Interpreter& interp) {
                 file_content = content;
             }
 
-            // Note: Full generator expression support would require build-time evaluation
-            // For now, we do basic variable substitution
-            std::filesystem::path out_path = output_file;
-            if (!out_path.is_absolute()) {
-                out_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_BINARY_DIR")) / out_path;
-            }
-
-            if (out_path.has_parent_path()) {
-                std::error_code ec;
-                std::filesystem::create_directories(out_path.parent_path(), ec);
-            }
-
-            std::ofstream out(out_path);
-            if (!out) {
-                interp.set_fatal_error("file(GENERATE) could not write to: " + out_path.string());
-                return;
-            }
-            out << file_content;
+            interp.get_pending_file_generates().push_back(PendingFileGenerate{
+                .output = output_file,
+                .content = std::move(file_content),
+                .condition = condition,
+                .newline_style = newline_style,
+                .binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR"),
+            });
         } else if (ci_equals(operation, "LOCK")) {
             // file(LOCK <path> [DIRECTORY] [RELEASE] [GUARD <scope>] [RESULT_VARIABLE <var>] [TIMEOUT <sec>])
             // Simplified implementation - advisory locking is platform-specific
@@ -1657,6 +1647,183 @@ void register_file_builtins(Interpreter& interp) {
             if (!status_var.empty()) {
                 interp.set_variable(status_var, "0;\"No error\"");
             }
+        } else if (ci_equals(operation, "ARCHIVE_CREATE")) {
+            // file(ARCHIVE_CREATE OUTPUT <archive> PATHS <paths>...
+            //      [FORMAT <format>] [COMPRESSION <type> [COMPRESSION_LEVEL <level>]]
+            //      [MTIME <mtime>] [VERBOSE])
+            CommandParser parser("file", "ARCHIVE_CREATE");
+            std::string output_file, format_str, compression_str, compression_level_str, mtime_str;
+            std::vector<std::string> paths;
+            bool verbose = false;
+
+            parser.value("OUTPUT", output_file);
+            parser.list("PATHS", paths);
+            parser.value("FORMAT", format_str);
+            parser.value("COMPRESSION", compression_str);
+            parser.value("COMPRESSION_LEVEL", compression_level_str);
+            parser.value("MTIME", mtime_str);
+            parser.flag("VERBOSE", verbose);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            if (output_file.empty()) {
+                interp.set_fatal_error("file(ARCHIVE_CREATE) requires OUTPUT");
+                return;
+            }
+            if (paths.empty()) {
+                interp.set_fatal_error("file(ARCHIVE_CREATE) requires PATHS");
+                return;
+            }
+
+            // Resolve output path relative to binary dir
+            std::filesystem::path out_path = output_file;
+            if (!out_path.is_absolute()) {
+                out_path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_BINARY_DIR")) / out_path;
+            }
+            std::filesystem::create_directories(out_path.parent_path());
+
+            // Determine archive format
+            // CMake formats: 7zip, gnutar, pax, paxr (default), raw, zip
+            auto a = archive_write_new();
+            if (format_str.empty()) format_str = "paxr";
+
+            auto ci_eq = [](std::string_view a, std::string_view b) {
+                if (a.size() != b.size()) return false;
+                for (size_t i = 0; i < a.size(); ++i)
+                    if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i])) return false;
+                return true;
+            };
+
+            if (ci_eq(format_str, "7zip")) {
+                archive_write_set_format_7zip(a);
+            } else if (ci_eq(format_str, "gnutar")) {
+                archive_write_set_format_gnutar(a);
+            } else if (ci_eq(format_str, "pax") || ci_eq(format_str, "paxr")) {
+                archive_write_set_format_pax_restricted(a);
+            } else if (ci_eq(format_str, "raw")) {
+                archive_write_set_format_raw(a);
+            } else if (ci_eq(format_str, "zip")) {
+                archive_write_set_format_zip(a);
+            } else {
+                archive_write_free(a);
+                interp.set_fatal_error("file(ARCHIVE_CREATE) unknown FORMAT: " + format_str);
+                return;
+            }
+
+            // Determine compression
+            if (!compression_str.empty()) {
+                std::string comp_lower = compression_str;
+                for (auto& c : comp_lower) c = std::tolower((unsigned char)c);
+
+                if (comp_lower == "zstd") {
+                    archive_write_add_filter_zstd(a);
+                } else if (comp_lower == "gzip" || comp_lower == "gz") {
+                    archive_write_add_filter_gzip(a);
+                } else if (comp_lower == "bzip2" || comp_lower == "bz2") {
+                    archive_write_add_filter_bzip2(a);
+                } else if (comp_lower == "xz") {
+                    archive_write_add_filter_xz(a);
+                } else if (comp_lower == "none") {
+                    archive_write_add_filter_none(a);
+                } else {
+                    archive_write_free(a);
+                    interp.set_fatal_error("file(ARCHIVE_CREATE) unknown COMPRESSION: " + compression_str);
+                    return;
+                }
+            } else {
+                archive_write_add_filter_none(a);
+            }
+
+            // Set compression level if specified
+            if (!compression_level_str.empty()) {
+                std::string opt = "compression-level=" + compression_level_str;
+                archive_write_set_options(a, opt.c_str());
+            }
+
+            int r = archive_write_open_filename(a, out_path.string().c_str());
+            if (r != ARCHIVE_OK) {
+                std::string err = archive_error_string(a);
+                archive_write_free(a);
+                interp.set_fatal_error("file(ARCHIVE_CREATE) could not create archive: " + out_path.string() + ": " + err);
+                return;
+            }
+
+            // Working directory for relative path computation
+            std::filesystem::path work_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+
+            for (const auto& p : paths) {
+                std::filesystem::path file_path = p;
+                if (!file_path.is_absolute()) {
+                    file_path = work_dir / file_path;
+                }
+
+                if (!std::filesystem::exists(file_path)) {
+                    archive_write_close(a);
+                    archive_write_free(a);
+                    interp.set_fatal_error("file(ARCHIVE_CREATE) path does not exist: " + file_path.string());
+                    return;
+                }
+
+                // Collect all files (recurse into directories)
+                std::vector<std::filesystem::path> file_list;
+                if (std::filesystem::is_directory(file_path)) {
+                    for (auto& entry : std::filesystem::recursive_directory_iterator(file_path)) {
+                        file_list.push_back(entry.path());
+                    }
+                } else {
+                    file_list.push_back(file_path);
+                }
+
+                for (const auto& fp : file_list) {
+                    // Compute archive entry name relative to work_dir
+                    std::string entry_name = std::filesystem::relative(fp, work_dir).string();
+
+                    if (verbose) {
+                        std::cerr << entry_name << "\n";
+                    }
+
+                    auto* entry = archive_entry_new();
+                    archive_entry_set_pathname(entry, entry_name.c_str());
+
+                    if (std::filesystem::is_directory(fp)) {
+                        archive_entry_set_filetype(entry, AE_IFDIR);
+                        archive_entry_set_perm(entry, 0755);
+                        archive_write_header(a, entry);
+                    } else if (std::filesystem::is_regular_file(fp)) {
+                        auto fsize = std::filesystem::file_size(fp);
+                        archive_entry_set_filetype(entry, AE_IFREG);
+                        archive_entry_set_size(entry, static_cast<la_int64_t>(fsize));
+                        archive_entry_set_perm(entry, 0644);
+
+                        // Set mtime from file or override
+                        auto ftime = std::filesystem::last_write_time(fp);
+                        auto sys_time = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
+                        auto epoch = std::chrono::duration_cast<std::chrono::seconds>(
+                            sys_time.time_since_epoch()).count();
+                        archive_entry_set_mtime(entry, epoch, 0);
+
+                        archive_write_header(a, entry);
+
+                        // Write file data
+                        std::ifstream ifs(fp, std::ios::binary);
+                        char buf[16384];
+                        while (ifs.read(buf, sizeof(buf)) || ifs.gcount() > 0) {
+                            archive_write_data(a, buf, static_cast<size_t>(ifs.gcount()));
+                            if (!ifs) break;
+                        }
+                    } else if (std::filesystem::is_symlink(fp)) {
+                        archive_entry_set_filetype(entry, AE_IFLNK);
+                        auto target = std::filesystem::read_symlink(fp);
+                        archive_entry_set_symlink(entry, target.string().c_str());
+                        archive_write_header(a, entry);
+                    }
+
+                    archive_entry_free(entry);
+                }
+            }
+
+            archive_write_close(a);
+            archive_write_free(a);
+
         } else if (ci_equals(operation, "ARCHIVE_EXTRACT")) {
             // file(ARCHIVE_EXTRACT INPUT <archive> [DESTINATION <dir>]
             //      [PATTERNS <pat>...] [LIST_ONLY] [VERBOSE] [TOUCH])

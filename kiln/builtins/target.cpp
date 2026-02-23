@@ -1315,7 +1315,12 @@ void register_target_builtins(Interpreter& interp) {
             if (!vals.empty()) {
                 result = CMakeArray(vals).to_string();
             } else {
-                result = property_name + "-NOTFOUND";
+                // Fall back to generic scalar properties (custom INTERFACE_ properties
+                // set via set_target_properties are stored under the full name)
+                result = target->get_property(property_name);
+                if (result.empty()) {
+                    result = property_name + "-NOTFOUND";
+                }
             }
         } else {
             // Try generic property (combined across all visibilities)

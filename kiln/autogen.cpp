@@ -41,6 +41,7 @@ static bool is_word_boundary(char c) {
 
 // Check if `haystack` contains `needle` as a whole word (not part of a larger identifier)
 static bool contains_word(const std::string& haystack, const std::string& needle) {
+    if (needle.empty()) return false;
     size_t pos = 0;
     while ((pos = haystack.find(needle, pos)) != std::string::npos) {
         bool left_ok = (pos == 0) || is_word_boundary(haystack[pos - 1]);

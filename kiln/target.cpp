@@ -860,6 +860,12 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
     }
 
     for (const auto& dep : rule.depends) {
+        // If dependency contains genex, store raw for evaluation at graph gen time
+        if (GenexParser::contains_genex(dep)) {
+            task.inputs.push_back(dep);
+            continue;
+        }
+
         // Resolve target aliases (e.g. unicode::ucd -> unicode)
         auto alias_it = target_aliases.find(dep);
         const std::string& resolved_dep = (alias_it != target_aliases.end()) ? alias_it->second : dep;

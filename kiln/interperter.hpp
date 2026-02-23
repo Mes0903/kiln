@@ -63,6 +63,15 @@ struct CustomCommandRule {
     std::string binary_dir;                     // Binary directory where command was defined
 };
 
+// Deferred file(GENERATE) — evaluated at graph generation time when genex context is available
+struct PendingFileGenerate {
+    std::string output;        // Raw OUTPUT path (may contain genex)
+    std::string content;       // Content (from CONTENT or read from INPUT)
+    std::string condition;     // CONDITION genex (empty = unconditional)
+    std::string newline_style; // NEWLINE_STYLE keyword
+    std::string binary_dir;    // CMAKE_CURRENT_BINARY_DIR at call time
+};
+
 // Install system structures
 enum class InstallRuleType {
     TARGETS,
@@ -341,6 +350,9 @@ public:
     std::vector<TestDefinition>& get_tests() { return get_root()->tests_; }
     bool is_testing_enabled() const { return !is_falsy(get_variable("BUILD_TESTING")); }
 
+    // Deferred file(GENERATE) entries
+    std::vector<PendingFileGenerate>& get_pending_file_generates() { return get_root()->pending_file_generates_; }
+
     // Deferred target dump (for kiln_dump_target_info AT_BUILD)
     void add_target_to_dump_at_build(const std::string& name) { get_root()->targets_to_dump_at_build_.insert(name); }
     const std::set<std::string>& get_targets_to_dump_at_build() const { return get_root()->targets_to_dump_at_build_; }
@@ -470,6 +482,7 @@ public:
 private:
     std::expected<void, InterpreterError> execute_command(const CommandInvocation& cmd);
     std::expected<void, InterpreterError> execute_command_with_args(const std::string& identifier, const std::vector<std::string>& args);
+    void process_file_generates(const GenexEvaluationContext& genex_ctx);
     std::expected<void, InterpreterError> execute_if_block(const IfBlock& if_block);
     std::expected<void, InterpreterError> execute_function_block(const FunctionBlock& function_block);
     std::expected<void, InterpreterError> execute_macro_block(const MacroBlock& macro_block);
@@ -499,6 +512,7 @@ private:
     std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
     std::set<std::string> targets_to_dump_at_build_;  // For kiln_dump_target_info AT_BUILD
+    std::vector<PendingFileGenerate> pending_file_generates_;
 
     // Custom command rules (OUTPUT form of add_custom_command)
     // Maps output file path -> rule that generates it

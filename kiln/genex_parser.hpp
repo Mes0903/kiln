@@ -36,6 +36,15 @@ enum class GenexNodeType {
     TARGET_LINKER_FILE_DIR,  // $<TARGET_LINKER_FILE_DIR:target> - directory of linker file
     TARGET_OBJECTS,       // $<TARGET_OBJECTS:target> - object files from OBJECT_LIBRARY
     TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
+    TARGET_FILE_BASE_NAME, // $<TARGET_FILE_BASE_NAME:target> - base name without prefix/suffix
+    GENEX_EVAL,           // $<GENEX_EVAL:expr> - evaluate string as genex
+    TARGET_GENEX_EVAL,    // $<TARGET_GENEX_EVAL:target,expr> - evaluate with target context
+    JOIN,                 // $<JOIN:list,glue> - join list with separator
+    REMOVE_DUPLICATES,    // $<REMOVE_DUPLICATES:list> - remove duplicate entries
+    FILTER,               // $<FILTER:list,INCLUDE|EXCLUDE,regex> - filter list
+    IN_LIST,              // $<IN_LIST:value,list> - check if value is in list
+    LOWER_CASE,           // $<LOWER_CASE:string> - convert to lowercase
+    UPPER_CASE,           // $<UPPER_CASE:string> - convert to uppercase
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>
     COMPILE_LANG_AND_ID,  // $<COMPILE_LANG_AND_ID:lang,id1,id2,...>
     PLATFORM_ID,          // $<PLATFORM_ID:platform>

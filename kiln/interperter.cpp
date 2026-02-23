@@ -360,6 +360,77 @@ void Interpreter::execute_deferred_calls() {
 }
 
 
+void kiln::Interpreter::process_file_generates(const GenexEvaluationContext& genex_ctx) {
+    GenexEvaluator evaluator(genex_ctx);
+
+    for (auto& entry : pending_file_generates_) {
+        // Evaluate CONDITION — skip if falsy
+        if (!entry.condition.empty()) {
+            auto cond_result = evaluator.evaluate(entry.condition);
+            if (!cond_result || cond_result->empty() || *cond_result == "0") {
+                continue;
+            }
+        }
+
+        // Evaluate OUTPUT path
+        auto output_result = evaluator.evaluate(entry.output);
+        if (!output_result) {
+            print_message("WARNING", "file(GENERATE) failed to evaluate OUTPUT '" + entry.output + "': " + output_result.error());
+            continue;
+        }
+        std::filesystem::path out_path = *output_result;
+        if (!out_path.is_absolute()) {
+            out_path = std::filesystem::path(entry.binary_dir) / out_path;
+        }
+
+        // Evaluate CONTENT
+        auto content_result = evaluator.evaluate(entry.content);
+        if (!content_result) {
+            print_message("WARNING", "file(GENERATE) failed to evaluate CONTENT for '" + out_path.string() + "': " + content_result.error());
+            continue;
+        }
+        std::string file_content = std::move(*content_result);
+
+        // Apply NEWLINE_STYLE
+        if (!entry.newline_style.empty()) {
+            std::string nl;
+            if (entry.newline_style == "DOS" || entry.newline_style == "WIN32" || entry.newline_style == "CRLF") {
+                nl = "\r\n";
+            }
+            if (!nl.empty()) {
+                std::string converted;
+                converted.reserve(file_content.size());
+                for (size_t j = 0; j < file_content.size(); ++j) {
+                    if (file_content[j] == '\r' && j + 1 < file_content.size() && file_content[j + 1] == '\n') {
+                        converted += nl;
+                        ++j;
+                    } else if (file_content[j] == '\n') {
+                        converted += nl;
+                    } else {
+                        converted += file_content[j];
+                    }
+                }
+                file_content = std::move(converted);
+            }
+        }
+
+        // Create parent directories and write
+        if (out_path.has_parent_path()) {
+            std::error_code ec;
+            std::filesystem::create_directories(out_path.parent_path(), ec);
+        }
+
+        std::ofstream out(out_path);
+        if (!out) {
+            print_message("WARNING", "file(GENERATE) could not write to: " + out_path.string());
+            continue;
+        }
+        out << file_content;
+    }
+
+    pending_file_generates_.clear();
+}
+
 std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build(int jobs, const std::vector<std::string>& requested_targets) {
     // Sanity check CMAKE_BUILD_TYPE
     std::array<std::string, 4> stanard_build_types_lower = {"debug", "release", "minsize", "relwithdebinfo"};
@@ -585,6 +656,8 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
         genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
         genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
 
+        process_file_generates(genex_ctx);
+
         auto genex_result = graph.evaluate_genex(genex_ctx);
         if (!genex_result) {
             return std::unexpected(BuildError{current_file_, genex_result.error()});
@@ -789,6 +862,8 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     genex_ctx.target_aliases = &target_aliases_;
     genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
     genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+    process_file_generates(genex_ctx);
 
     auto finalize_result = graph.evaluate_genex(genex_ctx);
     if (!finalize_result) {
@@ -1568,6 +1643,13 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  } else {
                      interp.set_fatal_error("cmake_language(DEFER): unknown subcommand: " + subcmd);
                  }
+            } else if (args[0] == "GET_MESSAGE_LOG_LEVEL") {
+                 if (args.size() < 2) {
+                     interp.set_fatal_error("cmake_language(GET_MESSAGE_LOG_LEVEL) requires a variable name");
+                     return;
+                 }
+                 std::string level = interp.get_variable("CMAKE_MESSAGE_LOG_LEVEL");
+                 interp.set_variable(args[1], level.empty() ? "STATUS" : level);
             } else {
                 interp.set_fatal_error("Unknown cmake_language mode: " + args[0]);
             }
