@@ -250,6 +250,28 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
 
 // Must insure build is up to date before running tests
 int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, const std::string& pattern) {
+    // Process TEST_INCLUDE_FILES from all directory contexts (for gtest_discover_tests etc.)
+    for (const auto& [dir, ctx] : interpreter->get_all_directory_contexts()) {
+        auto it = ctx.properties.find("TEST_INCLUDE_FILES");
+        if (it == ctx.properties.end()) continue;
+        for (auto file_it = kiln::CMakeArrayIterator::iterator(it->second);
+             file_it != kiln::CMakeArrayIterator::sentinel{}; ++file_it) {
+            std::string include_path(*file_it);
+            if (include_path.empty()) continue;
+            if (!std::filesystem::exists(include_path)) {
+                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW)
+                          << "Warning: " << kiln::c(std::cerr, kiln::colors::RESET)
+                          << "TEST_INCLUDE_FILES entry not found: " << include_path << std::endl;
+                continue;
+            }
+            auto result = interpreter->include_file(include_path);
+            if (!result) {
+                print_error_context(result.error());
+                return 1;
+            }
+        }
+    }
+
     auto& tests = interpreter->get_tests();
     auto& targets_map = interpreter->get_targets();
 
@@ -693,6 +715,7 @@ Examples:
 
             kiln::Interpreter interpreter(working_dir, &std::cout, &std::cerr, std::nullopt, opt.no_sys_init, /*skip_cache_load=*/true);
             interpreter.set_current_file(script_name);
+            interpreter.set_variable("CMAKE_SCRIPT_MODE_FILE", script_name);
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
 

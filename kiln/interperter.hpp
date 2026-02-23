@@ -394,6 +394,9 @@ public:
     // Directory context accessors (scope-based approach)
     DirectoryContext& get_current_directory_context();
     DirectoryContext* get_directory_context(const std::string& dir);
+    const std::map<std::string, DirectoryContext>& get_all_directory_contexts() const {
+        return get_root()->directory_contexts_;
+    }
     void push_directory(const std::string& source_dir, const std::string& binary_dir);
     void pop_directory();
     void execute_deferred_calls();

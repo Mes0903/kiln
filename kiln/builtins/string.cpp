@@ -14,6 +14,9 @@
 #include <chrono>
 #include <sys/stat.h>
 #include <filesystem>
+#include <glaze/json/read.hpp>
+#include <glaze/json/write.hpp>
+#include <glaze/json/generic.hpp>
 
 namespace kiln {
 
@@ -988,6 +991,258 @@ void register_string_builtins(Interpreter& interp) {
 
             PARSE_OR_RETURN(parser, interp, sub_args);
             interp.set_variable(out_var, blake2b(input, key).to_string());
+
+        } else if (ci_equals(operation, "JSON")) {
+            // string(JSON <out> [ERROR_VARIABLE <err>] GET|TYPE|LENGTH|MEMBER|EQUAL|SET|REMOVE <json> <path>...)
+            if (sub_args.size() < 3) {
+                interp.set_fatal_error("string(JSON) requires at least 3 arguments");
+                return;
+            }
+
+            std::string out_var = std::string(sub_args[0]);
+            size_t idx = 1;
+
+            // Check for ERROR_VARIABLE
+            std::string error_var;
+            if (idx < sub_args.size() && ci_equals(sub_args[idx], "ERROR_VARIABLE")) {
+                idx++;
+                if (idx >= sub_args.size()) {
+                    interp.set_fatal_error("string(JSON) ERROR_VARIABLE requires a variable name");
+                    return;
+                }
+                error_var = std::string(sub_args[idx]);
+                idx++;
+            }
+
+            if (idx >= sub_args.size()) {
+                interp.set_fatal_error("string(JSON) missing subcommand (GET, LENGTH, TYPE, MEMBER, SET, REMOVE, EQUAL)");
+                return;
+            }
+
+            std::string subcmd = std::string(sub_args[idx]);
+            idx++;
+
+            // Helper to report errors: either set error_var or fatal error
+            auto report_error = [&](const std::string& msg) {
+                if (!error_var.empty()) {
+                    interp.set_variable(error_var, msg);
+                    interp.set_variable(out_var, "NOTFOUND");
+                } else {
+                    interp.set_fatal_error("string(JSON) " + msg);
+                }
+            };
+
+            auto clear_error = [&]() {
+                if (!error_var.empty()) {
+                    interp.set_variable(error_var, "NOTFOUND");
+                }
+            };
+
+            if (idx >= sub_args.size()) {
+                interp.set_fatal_error("string(JSON) missing JSON string argument");
+                return;
+            }
+
+            std::string json_str = std::string(sub_args[idx]);
+            idx++;
+
+            // Parse the JSON string
+            glz::generic json;
+            auto ec = glz::read_json(json, json_str);
+            if (ec) {
+                report_error("parse error: " + glz::format_error(ec, json_str));
+                return;
+            }
+
+            // Navigate to the target element using remaining path components
+            auto navigate = [&](glz::generic& root, size_t path_start) -> glz::generic* {
+                glz::generic* current = &root;
+                for (size_t i = path_start; i < sub_args.size(); ++i) {
+                    const auto& key = sub_args[i];
+                    if (current->is_object()) {
+                        auto& obj = current->get<glz::generic::object_t>();
+                        auto it = obj.find(std::string(key));
+                        if (it == obj.end()) {
+                            report_error("member '" + std::string(key) + "' not found");
+                            return nullptr;
+                        }
+                        current = &it->second;
+                    } else if (current->is_array()) {
+                        auto num = parse_number<size_t>(key);
+                        if (!num) {
+                            report_error("expected array index, got '" + std::string(key) + "'");
+                            return nullptr;
+                        }
+                        auto& arr = current->get<glz::generic::array_t>();
+                        if (*num >= arr.size()) {
+                            report_error("array index " + std::string(key) + " out of range (size " + std::to_string(arr.size()) + ")");
+                            return nullptr;
+                        }
+                        current = &arr[*num];
+                    } else {
+                        report_error("cannot index into non-container value");
+                        return nullptr;
+                    }
+                }
+                return current;
+            };
+
+            // Convert a json_t value to a CMake string
+            auto to_cmake_string = [](const glz::generic& val) -> std::string {
+                if (val.is_string()) {
+                    return val.get<std::string>();
+                } else if (val.is_number()) {
+                    std::string buf;
+                    if (auto wec = glz::write_json(val, buf); wec) return "";
+                    return buf;
+                } else if (val.holds<bool>()) {
+                    return val.get<bool>() ? "true" : "false";
+                } else if (val.holds<std::nullptr_t>()) {
+                    return "null";
+                } else {
+                    // Array or object: serialize as JSON
+                    std::string buf;
+                    if (auto wec = glz::write_json(val, buf); wec) return "";
+                    return buf;
+                }
+            };
+
+            if (ci_equals(subcmd, "GET")) {
+                auto* target = navigate(json, idx);
+                if (!target) return;
+                clear_error();
+                interp.set_variable(out_var, to_cmake_string(*target));
+
+            } else if (ci_equals(subcmd, "LENGTH")) {
+                auto* target = navigate(json, idx);
+                if (!target) return;
+                size_t len = 0;
+                if (target->is_array()) {
+                    len = target->get<glz::generic::array_t>().size();
+                } else if (target->is_object()) {
+                    len = target->get<glz::generic::object_t>().size();
+                } else {
+                    report_error("LENGTH requires an array or object");
+                    return;
+                }
+                clear_error();
+                interp.set_variable(out_var, std::to_string(len));
+
+            } else if (ci_equals(subcmd, "TYPE")) {
+                auto* target = navigate(json, idx);
+                if (!target) return;
+                std::string type;
+                if (target->holds<std::nullptr_t>()) type = "NULL";
+                else if (target->holds<bool>()) type = "BOOLEAN";
+                else if (target->is_number()) type = "NUMBER";
+                else if (target->is_string()) type = "STRING";
+                else if (target->is_array()) type = "ARRAY";
+                else if (target->is_object()) type = "OBJECT";
+                else type = "NULL";
+                clear_error();
+                interp.set_variable(out_var, type);
+
+            } else if (ci_equals(subcmd, "MEMBER")) {
+                // Navigate to container, then get the Nth key name
+                if (sub_args.size() < idx + 1) {
+                    interp.set_fatal_error("string(JSON MEMBER) requires at least an index argument");
+                    return;
+                }
+                // Last arg is the index, rest are path
+                size_t member_idx_arg = sub_args.size() - 1;
+                auto member_idx = parse_number<size_t>(sub_args[member_idx_arg]);
+                if (!member_idx) {
+                    report_error("MEMBER index must be a number");
+                    return;
+                }
+                auto* target = navigate(json, idx);
+                // If we navigated with the index as part of the path, back up
+                // Actually: path is everything between json_str and the last arg
+                // Re-navigate without the last arg
+                glz::generic* container = &json;
+                for (size_t i = idx; i < member_idx_arg; ++i) {
+                    const auto& key = sub_args[i];
+                    if (container->is_object()) {
+                        auto& obj = container->get<glz::generic::object_t>();
+                        auto it = obj.find(std::string(key));
+                        if (it == obj.end()) {
+                            report_error("member '" + std::string(key) + "' not found");
+                            return;
+                        }
+                        container = &it->second;
+                    } else if (container->is_array()) {
+                        auto num = parse_number<size_t>(key);
+                        if (!num) {
+                            report_error("expected array index, got '" + std::string(key) + "'");
+                            return;
+                        }
+                        auto& arr = container->get<glz::generic::array_t>();
+                        if (*num >= arr.size()) {
+                            report_error("array index out of range");
+                            return;
+                        }
+                        container = &arr[*num];
+                    } else {
+                        report_error("cannot index into non-container");
+                        return;
+                    }
+                }
+
+                if (!container->is_object()) {
+                    report_error("MEMBER requires an object");
+                    return;
+                }
+                auto& obj = container->get<glz::generic::object_t>();
+                if (*member_idx >= obj.size()) {
+                    report_error("MEMBER index " + std::to_string(*member_idx) + " out of range (size " + std::to_string(obj.size()) + ")");
+                    return;
+                }
+                auto it = obj.begin();
+                std::advance(it, *member_idx);
+                clear_error();
+                interp.set_variable(out_var, it->first);
+
+            } else if (ci_equals(subcmd, "EQUAL")) {
+                // string(JSON <out> EQUAL <json1> <json2>)
+                // Compare two JSON values
+                if (sub_args.size() < idx + 1) {
+                    interp.set_fatal_error("string(JSON EQUAL) requires two JSON strings");
+                    return;
+                }
+                std::string json_str2 = std::string(sub_args[idx]);
+                glz::generic json2;
+                auto ec2 = glz::read_json(json2, json_str2);
+                if (ec2) {
+                    report_error("EQUAL: parse error in second JSON: " + glz::format_error(ec2, json_str2));
+                    return;
+                }
+                clear_error();
+                // Serialize both and compare (simple deep equality)
+                std::string s1, s2;
+                if (auto wec = glz::write_json(json, s1); wec) {
+                    report_error("EQUAL: failed to serialize first JSON");
+                    return;
+                }
+                if (auto wec = glz::write_json(json2, s2); wec) {
+                    report_error("EQUAL: failed to serialize second JSON");
+                    return;
+                }
+                interp.set_variable(out_var, s1 == s2 ? "TRUE" : "FALSE");
+
+            } else if (ci_equals(subcmd, "SET")) {
+                // string(JSON <out> SET <json> <path>... <new_value>)
+                // Not commonly needed for gtest, but implement for completeness
+                report_error("string(JSON SET) is not yet implemented");
+                return;
+
+            } else if (ci_equals(subcmd, "REMOVE")) {
+                report_error("string(JSON REMOVE) is not yet implemented");
+                return;
+
+            } else {
+                interp.set_fatal_error("string(JSON) unknown subcommand: " + subcmd);
+                return;
+            }
 
         } else {
             interp.set_fatal_error("string() unknown operation: " + operation);

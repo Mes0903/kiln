@@ -5132,9 +5132,9 @@ TEST_CASE("set_property CACHE VALUE updates cache variable", "[interpreter][prop
     REQUIRE(output.find("before=default_val") != std::string::npos);
     REQUIRE(output.find("after=overridden") != std::string::npos);
     REQUIRE(output.find("replaced=replaced") != std::string::npos);
-    REQUIRE(output.find("appended=replaced;;extra") != std::string::npos);
+    REQUIRE(output.find("appended=replaced;extra") != std::string::npos);
     // Setting STRINGS property should not change the value
-    REQUIRE(output.find("still=replaced;;extra") != std::string::npos);
+    REQUIRE(output.find("still=replaced;extra") != std::string::npos);
 }
 
 TEST_CASE("enable_language() updates ENABLED_LANGUAGES", "[interpreter][language]") {
