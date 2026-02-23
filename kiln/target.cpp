@@ -1068,6 +1068,76 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         }
     }
 
+    // Ninja-style: compile tasks depend on custom command outputs from linked library targets.
+    // When target A links target B (transitively), A's compilations must wait for B's custom
+    // commands that produce generated files (e.g. headers from mktables.py), but NOT for B's
+    // full build. Uses get_resolved_property("LINK_LIBRARIES") which includes transitive deps.
+    {
+        // Cached maps: output_path → Target*, and Target* → custom command primary outputs.
+        // Rebuilt when all_targets changes. Precomputation is O(T + S_total), lookup is O(1).
+        static const TargetMap* cached_cc_map_source = nullptr;
+        static std::unordered_map<std::string, Target*> lib_to_target;
+        static std::unordered_map<Target*, std::vector<std::string>> target_cc_outputs;
+
+        if (&all_targets != cached_cc_map_source) {
+            cached_cc_map_source = &all_targets;
+            lib_to_target.clear();
+            target_cc_outputs.clear();
+
+            for (const auto& [name, target] : all_targets) {
+                if (target->is_imported()) continue;
+                std::string out = target->get_output_path();
+                if (!out.empty()) lib_to_target[out] = target.get();
+
+                // Precompute custom command outputs for this target's sources
+                std::vector<std::string> cc_keys;
+                for (const auto& src : target->get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
+                    if (src.empty()) continue;
+                    Path src_path(src);
+                    std::string norm;
+                    if (src_path.is_absolute()) {
+                        norm = src_path.lexically_normal().str();
+                    } else {
+                        norm = Path::make_absolute_and_normal(target->get_source_dir(), src);
+                    }
+                    auto cc_it = custom_rules.find(norm);
+                    if (cc_it == custom_rules.end() && !src_path.is_absolute()) {
+                        norm = Path::make_absolute_and_normal(target->get_binary_dir(), src);
+                        cc_it = custom_rules.find(norm);
+                    }
+                    if (cc_it != custom_rules.end()) {
+                        cc_keys.push_back(cc_it->second->outputs[0]);
+                    }
+                }
+                if (!cc_keys.empty()) {
+                    target_cc_outputs[target.get()] = std::move(cc_keys);
+                }
+            }
+        }
+
+        // For each transitively linked library, add its custom command deps — O(L) per target
+        std::unordered_set<Target*> visited;
+        for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
+            auto tt = lib_to_target.find(lib);
+            if (tt == lib_to_target.end()) continue;
+            if (!visited.insert(tt->second).second) continue;
+
+            auto cc_it = target_cc_outputs.find(tt->second);
+            if (cc_it == target_cc_outputs.end()) continue;
+            for (const auto& key : cc_it->second) {
+                if (!generated_custom_tasks.count(key)) {
+                    // Look up the rule by its primary output to generate the task
+                    auto rule_it = custom_rules.find(key);
+                    if (rule_it != custom_rules.end()) {
+                        generate_custom_command_task(txn, *rule_it->second, all_targets,
+                            custom_rules, generated_custom_tasks, interp.get_target_aliases());
+                    }
+                }
+                resolved_manual_deps.push_back({key});
+            }
+        }
+    }
+
     std::unordered_set<std::string> seen_sources;
     for (const auto& src : *evaluated_sources_result) {
         if (src.empty()) continue;
