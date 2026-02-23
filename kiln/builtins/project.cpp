@@ -266,13 +266,18 @@ void register_project_builtins(Interpreter& interp) {
         std::string homepage_url;
 
         // Parse arguments
+        // NOTE: CMake docs say VERSION/DESCRIPTION/HOMEPAGE_URL require values,
+        // but in practice CMake only warns when a keyword's value expands to
+        // nothing (e.g. VERSION ${SOME_EMPTY_VAR}). We match that behavior.
         for (size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "VERSION") {
-                if (i + 1 >= args.size()) {
-                    interp.set_fatal_error("project() VERSION keyword requires a value");
-                    return;
+                if (i + 1 < args.size() && args[i + 1] != "LANGUAGES" &&
+                    args[i + 1] != "DESCRIPTION" && args[i + 1] != "HOMEPAGE_URL") {
+                    version = args[++i];
+                } else {
+                    interp.print_message("WARNING",
+                        "VERSION keyword not followed by a value or was followed by a value that expanded to nothing.");
                 }
-                version = args[++i];
             } else if (args[i] == "LANGUAGES") {
                 // Collect all languages until next keyword
                 ++i;
@@ -282,12 +287,20 @@ void register_project_builtins(Interpreter& interp) {
                 }
                 --i; // Adjust for loop increment
             } else if (args[i] == "DESCRIPTION") {
-                if (i + 1 < args.size()) {
+                if (i + 1 < args.size() && args[i + 1] != "LANGUAGES" &&
+                    args[i + 1] != "VERSION" && args[i + 1] != "HOMEPAGE_URL") {
                     description = args[++i];
+                } else {
+                    interp.print_message("WARNING",
+                        "DESCRIPTION keyword not followed by a value or was followed by a value that expanded to nothing.");
                 }
             } else if (args[i] == "HOMEPAGE_URL") {
-                if (i + 1 < args.size()) {
+                if (i + 1 < args.size() && args[i + 1] != "LANGUAGES" &&
+                    args[i + 1] != "VERSION" && args[i + 1] != "DESCRIPTION") {
                     homepage_url = args[++i];
+                } else {
+                    interp.print_message("WARNING",
+                        "HOMEPAGE_URL keyword not followed by a value or was followed by a value that expanded to nothing.");
                 }
             }
             // If no keyword, treat as language (for backward compatibility)
