@@ -1889,6 +1889,83 @@ TEST_CASE("if condition: quoted values not treated as keywords", "[interpreter][
     REQUIRE(output == "pass\n");
 }
 
+TEST_CASE("if condition: quoted keyword values in compound conditions", "[interpreter][if][bugfix]") {
+    // Regression: quoted variable expanding to "IN_LIST" in a compound NOT...IN_LIST...AND condition
+    // was incorrectly treated as an operator, breaking the parse.
+    // Real-world trigger: Qt's _qt_internal_remove_args function.
+    SECTION("quoted IN_LIST value with NOT and AND") {
+        auto output = run_script(R"(
+            set(arg_ALL_ARGS "LABEL;PURPOSE")
+            set(find_result 0)
+            set(result_len 4)
+            set(arg_current "IN_LIST")
+            if(NOT "${arg_current}" IN_LIST arg_ALL_ARGS AND find_result LESS result_len)
+                message("true")
+            else()
+                message("false")
+            endif()
+        )");
+        REQUIRE(output == "true\n");
+    }
+
+    SECTION("quoted LESS value with NOT and AND") {
+        auto output = run_script(R"(
+            set(mylist "LESS;GREATER")
+            set(val "LESS")
+            set(x 1)
+            set(y 2)
+            if(NOT "${val}" IN_LIST mylist AND x LESS y)
+                message("true")
+            else()
+                message("false")
+            endif()
+        )");
+        // "LESS" IS in mylist, so NOT ... is false; AND short-circuits to false
+        REQUIRE(output == "false\n");
+    }
+
+    SECTION("quoted AND value as operand to NOT") {
+        auto output = run_script(R"(
+            set(mylist "foo;bar")
+            set(val "AND")
+            if(NOT "${val}" IN_LIST mylist)
+                message("true")
+            else()
+                message("false")
+            endif()
+        )");
+        REQUIRE(output == "true\n");
+    }
+
+    SECTION("quoted NOT value as operand in compound condition") {
+        auto output = run_script(R"(
+            set(mylist "foo;bar")
+            set(val "NOT")
+            set(cnt 0)
+            set(limit 4)
+            if(NOT "${val}" IN_LIST mylist AND cnt LESS limit)
+                message("true")
+            else()
+                message("false")
+            endif()
+        )");
+        REQUIRE(output == "true\n");
+    }
+
+    SECTION("while loop with quoted keyword value") {
+        auto output = run_script(R"(
+            set(arg_ALL_ARGS "LABEL;PURPOSE")
+            set(arg_current "IN_LIST")
+            set(iter 0)
+            while(NOT "${arg_current}" IN_LIST arg_ALL_ARGS AND iter LESS 3)
+                math(EXPR iter "${iter} + 1")
+            endwhile()
+            message("${iter}")
+        )");
+        REQUIRE(output == "3\n");
+    }
+}
+
 TEST_CASE("if condition: true constants (case-insensitive)", "[interpreter][if]") {
     auto output = run_script(R"(
         set(T1 "TRUE")

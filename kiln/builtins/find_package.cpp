@@ -451,6 +451,14 @@ void register_find_package_builtins(Interpreter& interp) {
             auto expand_prefix = [&](const std::filesystem::path& prefix) {
                 for (const auto& name : search_names) {
                     std::string lower = kiln::to_lower(name);
+                    // <prefix>/<name> (direct subdirectory)
+                    add_with_suffixes(prefix / name);
+                    if (lower != name)
+                        add_with_suffixes(prefix / lower);
+                    // <prefix>/<name>/cmake
+                    add_with_suffixes(prefix / name / "cmake");
+                    if (lower != name)
+                        add_with_suffixes(prefix / lower / "cmake");
                     // <prefix>/lib/cmake/<name>
                     add_with_suffixes(prefix / "lib" / "cmake" / name);
                     if (lower != name)

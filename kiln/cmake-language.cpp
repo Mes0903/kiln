@@ -463,9 +463,7 @@ std::expected<ForeachBlock, ParseError> Parser::parse_foreach_block(const Comman
             }
         }
 
-        if (in_params.lists.empty() && in_params.items.empty()) {
-            return std::unexpected(ParseError{foreach_command.row, foreach_command.col, foreach_command.offset, foreach_command.length, "foreach(IN) requires at least one LISTS or ITEMS argument"});
-        }
+        // Empty ITEMS/LISTS is valid in CMake - results in zero iterations
 
         foreach_block.params = in_params;
 

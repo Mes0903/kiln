@@ -435,11 +435,19 @@ private:
 
         if (peek_bare() == "NOT") {
             if (pos_ + 1 < condition_.size()) {
-                const std::string& next_token = parser_get_token_string(condition_[pos_ + 1]);
-                if (is_binary_operator(next_token)) {
+                // Only check bare unquoted literals as potential operators/keywords.
+                // Quoted arguments are never operators regardless of their expanded value.
+                auto next_bare = std::string_view{};
+                const auto& next_arg = condition_[pos_ + 1];
+                if (!next_arg.quoted && next_arg.parts.size() == 1 &&
+                    std::holds_alternative<std::string>(next_arg.parts[0])) {
+                    next_bare = std::get<std::string>(next_arg.parts[0]);
+                }
+                if (!next_bare.empty() && is_binary_operator(next_bare)) {
+                    // NOT followed by a binary operator keyword — treat NOT as a plain value
                     return parse_comparison();
                 }
-                if (next_token != "AND" && next_token != "OR") {
+                if (next_bare != "AND" && next_bare != "OR") {
                     pos_++;
                     return !parse_not();
                 }
@@ -471,7 +479,9 @@ private:
             return unary_result;
         }
 
-        std::string op = parser_get_token_string(condition_[pos_]);
+        // Only bare unquoted literals can be operators
+        auto op_bare = peek_bare();
+        std::string op(op_bare);
 
         if (op == "EQUAL" || op == "LESS" || op == "GREATER" ||
             op == "LESS_EQUAL" || op == "GREATER_EQUAL" || op == "NOT_EQUAL") {

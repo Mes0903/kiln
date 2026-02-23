@@ -356,7 +356,16 @@ void register_project_builtins(Interpreter& interp) {
         }
     });
 
-    interp.add_builtin("cmake_policy", [](Interpreter&, const std::vector<std::string>&) {});
+    interp.add_builtin("cmake_policy", [](Interpreter& interp, const std::vector<std::string>& args) {
+        // kiln always uses modern (NEW) behavior for all policies.
+        // Handle GET requests so modules can query policy status.
+        if (args.size() >= 2 && args[0] == "GET") {
+            if (args.size() >= 3) {
+                interp.set_variable(args[2], "NEW");
+            }
+        }
+        // SET, PUSH, POP, VERSION are silently accepted as no-ops
+    });
     interp.add_builtin("mark_as_advanced", [](Interpreter&, const std::vector<std::string>&) {});
     interp.add_builtin("include_regular_expression", [](Interpreter&, const std::vector<std::string>& args) {
         if (args.empty()) throw std::runtime_error("include_regular_expression requires at least 1 argument");
