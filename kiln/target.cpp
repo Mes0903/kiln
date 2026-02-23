@@ -1023,13 +1023,26 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     };
 
     // Pre-resolve manual dependencies (same for every source)
+    // Include our own manual deps plus those from linked dependencies.
+    // In CMake/Ninja, add_dependencies(A, X) makes A's compile tasks depend on X.
+    // When B links to A, B's compiles may use A's public include dirs which can
+    // contain generated headers, so B's compiles also need to wait for X.
     struct ResolvedDep { std::string id; };
     std::vector<ResolvedDep> resolved_manual_deps;
-    for (const auto& dep_name : manually_added_dependencies_) {
+    auto add_manual_deps = [&](const std::vector<std::string>& deps) {
+        for (const auto& dep_name : deps) {
+            auto it = all_targets.find(dep_name);
+            if (it != all_targets.end()) {
+                std::string dep_out = it->second->get_output_path();
+                resolved_manual_deps.push_back({dep_out.empty() ? dep_name : std::move(dep_out)});
+            }
+        }
+    };
+    add_manual_deps(manually_added_dependencies_);
+    for (const auto& dep_name : resolved_target_deps_) {
         auto it = all_targets.find(dep_name);
         if (it != all_targets.end()) {
-            std::string dep_out = it->second->get_output_path();
-            resolved_manual_deps.push_back({dep_out.empty() ? dep_name : std::move(dep_out)});
+            add_manual_deps(it->second->get_manually_added_dependencies());
         }
     }
 
