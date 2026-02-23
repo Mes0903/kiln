@@ -215,7 +215,28 @@ std::string convert_newlines(const std::string& content, const std::string& styl
 } // anonymous namespace
 
 void register_project_builtins(Interpreter& interp) {
-    interp.add_builtin("cmake_minimum_required", [](Interpreter&, const std::vector<std::string>&) {});
+    interp.add_builtin("cmake_minimum_required", [](Interpreter& interp, const std::vector<std::string>& args) {
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i] == "VERSION" && i + 1 < args.size()) {
+                std::string version = args[i + 1];
+                // Handle VERSION x...y range syntax — use the minimum
+                if (auto dots = version.find("..."); dots != std::string::npos) {
+                    version = version.substr(0, dots);
+                }
+                interp.set_variable("CMAKE_MINIMUM_REQUIRED_VERSION", version);
+
+                // Check that the requested version doesn't exceed what we support
+                auto our_version = interp.get_variable("CMAKE_VERSION");
+                if (!our_version.empty() && compare_versions(version, our_version) > 0) {
+                    interp.set_fatal_error("CMake " + version +
+                        " or higher is required.  You are running version " +
+                        std::string(our_version));
+                    return;
+                }
+                break;
+            }
+        }
+    });
     interp.add_builtin("source_group", [](Interpreter&, const std::vector<std::string>&) {});
 
     interp.add_builtin("project", [](Interpreter& interp, const std::vector<std::string>& args) {

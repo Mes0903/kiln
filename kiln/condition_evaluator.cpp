@@ -4,6 +4,7 @@
 #include "clock_cache.hpp"
 #include "CMakeArray.hpp"
 #include "parse_number.hpp"
+#include "utils.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -15,40 +16,6 @@
 namespace kiln {
 
 namespace {
-
-// Compare version strings component-wise (CMake behavior)
-// Returns: -1 if a < b, 0 if a == b, 1 if a > b
-// CMake behavior: split by '.', parse each component as integer (non-numeric suffix stripped),
-// missing components treated as 0
-int compare_versions(const std::string& a, const std::string& b) {
-    std::vector<int> parts_a, parts_b;
-
-    // Parse version a - split by '.' and parse each component
-    std::istringstream iss_a(a);
-    std::string component;
-    while (std::getline(iss_a, component, '.')) {
-        // CMake strips non-numeric suffixes: "1a" -> 1, "1-suffix" -> 1
-        parts_a.push_back(parse_number_partial<int>(component, 0));
-    }
-
-    // Parse version b
-    std::istringstream iss_b(b);
-    while (std::getline(iss_b, component, '.')) {
-        parts_b.push_back(parse_number_partial<int>(component, 0));
-    }
-
-    // Pad shorter vector with zeros (missing components = 0)
-    size_t max_len = std::max(parts_a.size(), parts_b.size());
-    parts_a.resize(max_len, 0);
-    parts_b.resize(max_len, 0);
-
-    // Compare component by component
-    for (size_t i = 0; i < max_len; ++i) {
-        if (parts_a[i] < parts_b[i]) return -1;
-        if (parts_a[i] > parts_b[i]) return 1;
-    }
-    return 0;
-}
 
 // Set of keywords that should not be dereferenced as variables
 // All keywords are in uppercase; comparisons are done case-insensitively

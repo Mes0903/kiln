@@ -4,6 +4,7 @@
 #include "CMakeArray.hpp"
 #include "language.hpp"
 #include "path.hpp"
+#include "utils.hpp"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -19,14 +20,6 @@ std::string GenexEvaluator::to_lower(const std::string& str) const {
     return result;
 }
 
-// Helper function for version comparison
-// Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
-// Note: This uses simplified lexicographic comparison
-// Real CMake splits on '.' and compares components numerically
-int GenexEvaluator::compare_versions(const std::string& v1, const std::string& v2) const {
-    if (v1 == v2) return 0;
-    return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end()) ? -1 : 1;
-}
 
 Target* GenexEvaluator::find_target(const std::string& name) const {
     auto it = ctx_.all_targets->find(name);

@@ -7655,3 +7655,67 @@ TEST_CASE("build_command()", "[interpreter][build_command]") {
         REQUIRE(output.find("kiln myapp") != std::string::npos);
     }
 }
+
+TEST_CASE("cmake_minimum_required sets CMAKE_MINIMUM_REQUIRED_VERSION", "[interpreter][cmake_minimum_required]") {
+    auto output = run_script(R"(
+        cmake_minimum_required(VERSION 3.16)
+        message("${CMAKE_MINIMUM_REQUIRED_VERSION}")
+    )");
+    REQUIRE(output == "3.16\n");
+}
+
+TEST_CASE("cmake_minimum_required with range syntax uses minimum", "[interpreter][cmake_minimum_required]") {
+    auto output = run_script(R"(
+        cmake_minimum_required(VERSION 3.16...3.27)
+        message("${CMAKE_MINIMUM_REQUIRED_VERSION}")
+    )");
+    REQUIRE(output == "3.16\n");
+}
+
+TEST_CASE("cmake_minimum_required accepts low version", "[interpreter][cmake_minimum_required]") {
+    auto output = run_script(R"(
+        cmake_minimum_required(VERSION 2.8)
+        message("OK")
+    )");
+    REQUIRE(output == "OK\n");
+}
+
+TEST_CASE("cmake_minimum_required accepts exact version", "[interpreter][cmake_minimum_required]") {
+    auto output = run_script(R"(
+        cmake_minimum_required(VERSION ${CMAKE_VERSION})
+        message("OK")
+    )");
+    REQUIRE(output == "OK\n");
+}
+
+TEST_CASE("cmake_minimum_required rejects version higher than supported", "[interpreter][cmake_minimum_required]") {
+    REQUIRE_THROWS_WITH(run_script(R"(
+        cmake_minimum_required(VERSION 99.0)
+    )"), Catch::Matchers::ContainsSubstring("or higher is required"));
+}
+
+TEST_CASE("cmake_minimum_required range with high minimum rejects", "[interpreter][cmake_minimum_required]") {
+    REQUIRE_THROWS_WITH(run_script(R"(
+        cmake_minimum_required(VERSION 99.0...100.0)
+    )"), Catch::Matchers::ContainsSubstring("or higher is required"));
+}
+
+TEST_CASE("cmake_minimum_required with FATAL_ERROR keyword", "[interpreter][cmake_minimum_required]") {
+    // FATAL_ERROR is accepted but ignored (same as CMake 2.6+)
+    auto output = run_script(R"(
+        cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
+        message("${CMAKE_MINIMUM_REQUIRED_VERSION}")
+    )");
+    REQUIRE(output == "3.16\n");
+}
+
+TEST_CASE("cmake_minimum_required version check uses numeric comparison", "[interpreter][cmake_minimum_required]") {
+    // VERSION 9 should be accepted (less than any double-digit major we'd claim)
+    auto output = run_script(R"(
+        cmake_minimum_required(VERSION 1.0)
+        if(CMAKE_MINIMUM_REQUIRED_VERSION VERSION_LESS "2.0")
+            message("OK")
+        endif()
+    )");
+    REQUIRE(output == "OK\n");
+}

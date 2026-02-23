@@ -1,5 +1,6 @@
 #pragma once
 
+#include "parse_number.hpp"
 #include <cctype>
 #include <cstddef>
 #include <unistd.h>
@@ -185,5 +186,46 @@ const std::string& gnu_arch_triplet();
  * Result is cached after the first call.
  */
 const std::string& cmake_extra_modules_root();
+
+/**
+ * @brief Compare CMake version strings component-wise.
+ * @return -1 if a < b, 0 if a == b, 1 if a > b
+ * Split by '.', each component parsed as integer (non-numeric suffix stripped),
+ * missing components treated as 0.
+ */
+inline int compare_versions(std::string_view a, std::string_view b) {
+    // Parse version component as unsigned leading digits only.
+    // CMake treats non-digit leading chars (including '-') as 0.
+    auto parse_component = [](std::string_view s) -> unsigned {
+        unsigned val = 0;
+        for (char c : s) {
+            if (c < '0' || c > '9') break;
+            val = val * 10 + static_cast<unsigned>(c - '0');
+        }
+        return val;
+    };
+
+    auto parse_parts = [&](std::string_view v) {
+        std::vector<unsigned> parts;
+        while (!v.empty()) {
+            auto dot = v.find('.');
+            parts.push_back(parse_component(v.substr(0, dot)));
+            v = (dot == std::string_view::npos) ? std::string_view{} : v.substr(dot + 1);
+        }
+        return parts;
+    };
+
+    auto pa = parse_parts(a);
+    auto pb = parse_parts(b);
+    size_t len = std::max(pa.size(), pb.size());
+    pa.resize(len, 0u);
+    pb.resize(len, 0u);
+
+    for (size_t i = 0; i < len; ++i) {
+        if (pa[i] < pb[i]) return -1;
+        if (pa[i] > pb[i]) return 1;
+    }
+    return 0;
+}
 
 }
