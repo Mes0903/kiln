@@ -339,8 +339,7 @@ public:
     void finalize_directory_targets();
 
     std::vector<TestDefinition>& get_tests() { return get_root()->tests_; }
-    void enable_testing_globally() { get_root()->testing_enabled_ = true; }
-    bool is_testing_enabled() const { return get_root()->get_root()->testing_enabled_; }
+    bool is_testing_enabled() const { return !is_falsy(get_variable("BUILD_TESTING")); }
 
     // Deferred target dump (for kiln_dump_target_info AT_BUILD)
     void add_target_to_dump_at_build(const std::string& name) { get_root()->targets_to_dump_at_build_.insert(name); }
@@ -496,7 +495,6 @@ private:
     TargetMap targets_;
     std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
-    bool testing_enabled_ = false;
     std::set<std::string> targets_to_dump_at_build_;  // For kiln_dump_target_info AT_BUILD
 
     // Custom command rules (OUTPUT form of add_custom_command)

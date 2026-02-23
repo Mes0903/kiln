@@ -1004,23 +1004,18 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             if (!args.empty()) {
                 interp.print_message("WARN", "enable_testing() expects no arguments");
             }
-            interp.enable_testing_globally();
+            interp.set_variable("BUILD_TESTING", "ON");
         });
 
         add_builtin("add_test", [](Interpreter& interp, const std::vector<std::string>& args) {
             if (!interp.is_testing_enabled()) {
+                interp.print_message("WARNING", "add_test() called but BUILD_TESTING is OFF. Tests will not be registered. Use -DBUILD_TESTING=ON or `kiln test`");
                 return;
             }
 
             if (args.empty()) {
                 interp.set_fatal_error("add_test requires arguments");
                 return;
-            }
-
-            // Warn if BUILD_TESTING is OFF but add_test is being called
-            auto build_testing = interp.get_variable("BUILD_TESTING");
-            if (Interpreter::is_falsy(build_testing)) {
-                interp.print_message("WARNING", "add_test() called but BUILD_TESTING is OFF. Tests may not have been built. Use -DBUILD_TESTING=ON");
             }
 
             std::string name;
