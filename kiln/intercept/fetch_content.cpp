@@ -207,7 +207,7 @@ static void do_populate(Interpreter& interp, const std::string& name) {
                 archive_path = (download_dir / filename).string();
 
                 interp.print_message("STATUS", "Fetching " + name + " from " + url + "...");
-                auto dl_result = download_url(url, archive_path, hash_algo, hash_value);
+                auto dl_result = download_url(url, archive_path, hash_algo, hash_value, interp.error_stream());
                 if (!dl_result) {
                     interp.set_fatal_error("FetchContent: download failed for " + name + ": " + dl_result.error());
                     return;

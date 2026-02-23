@@ -410,7 +410,7 @@ void register_external_project_builtins(Interpreter& interp) {
                     archive_path = download_dir + "/" + filename;
 
                     interp.print_message("STATUS", "  Downloading " + name + " from " + url + "...");
-                    auto dl_result = download_url(url, archive_path, hash_algo, hash_value);
+                    auto dl_result = download_url(url, archive_path, hash_algo, hash_value, interp.error_stream());
                     if (!dl_result) {
                         interp.set_fatal_error("ExternalProject_Add(" + name + ") download failed: " + dl_result.error());
                         return;

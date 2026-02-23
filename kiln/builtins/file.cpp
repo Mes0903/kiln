@@ -1,5 +1,6 @@
 #include "registry.hpp"
 #include "../interperter.hpp"
+#include "../intercept/download_utils.hpp"
 #include "../profiler.hpp"
 #include "../command_parser.hpp"
 #include "../cache_store.hpp"
@@ -1502,15 +1503,6 @@ void register_file_builtins(Interpreter& interp) {
                 return total;
             };
 
-            auto progress_callback = +[](void* /*clientp*/, curl_off_t dltotal, curl_off_t dlnow,
-                                          curl_off_t /*ultotal*/, curl_off_t /*ulnow*/) -> int {
-                if (dltotal > 0) {
-                    int pct = static_cast<int>(dlnow * 100 / dltotal);
-                    std::cerr << "\r[download] " << pct << "% (" << dlnow << "/" << dltotal << " bytes)" << std::flush;
-                }
-                return 0;
-            };
-
             CURL* curl = curl_easy_init();
             if (!curl) {
                 if (!status_var.empty()) {
@@ -1571,15 +1563,13 @@ void register_file_builtins(Interpreter& interp) {
                 curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers_list);
             }
 
-            if (show_progress) {
-                curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-                curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-            }
+            DownloadProgress progress(show_progress ? interp.err_ : nullptr);
+            progress.apply(curl);
 
             CURLcode res = curl_easy_perform(curl);
 
-            if (show_progress && res == CURLE_OK) {
-                std::cerr << "\n";  // newline after progress
+            if (res == CURLE_OK) {
+                progress.finish();
             }
 
             long http_code = 0;

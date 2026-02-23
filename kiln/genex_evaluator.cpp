@@ -904,6 +904,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate(const std::stri
     }
 
     GenexParser parser;
+    parser.set_recovery(true);
     auto parse_result = parser.parse(input);
     if (!parse_result) {
         return std::unexpected(parse_result.error());
@@ -964,6 +965,7 @@ std::expected<std::vector<std::string>, std::string> GenexEvaluator::evaluate_pr
 
         // Parse once — reuse for both genex classification and evaluation
         GenexParser parser;
+        parser.set_recovery(true);
         auto parse_result = parser.parse(value);
         if (!parse_result) {
             return std::unexpected(parse_result.error());
@@ -1018,6 +1020,7 @@ std::expected<LinkLibraryResult, std::string> GenexEvaluator::evaluate_link_libr
     }
 
     GenexParser parser;
+    parser.set_recovery(true);
     auto parse_result = parser.parse(input);
     if (!parse_result) {
         return std::unexpected(parse_result.error());

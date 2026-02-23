@@ -262,6 +262,7 @@ public:
     void set_cache_variable(const std::string& var_name, const std::string& value);
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
+    std::ostream* error_stream() const { return err_; }
 
     // CHECK_* message support
     void check_start(const std::string& message);

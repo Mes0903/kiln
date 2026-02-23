@@ -459,8 +459,16 @@ std::expected<GenexParseResult, std::string> GenexParser::parse(const std::strin
             }
 
             // Parse genex
+            size_t saved_pos = pos_;
             auto genex_result = parse_genex();
             if (!genex_result) {
+                if (allow_recovery_) {
+                    // Recovery mode: unmatched $< degrades to literal "$<" text
+                    // (matches CMake behaviour for structurally-unbalanced expressions)
+                    pos_ = saved_pos + 1;  // skip past '$', re-parse '<' as text
+                    literal += '$';
+                    continue;
+                }
                 return std::unexpected(genex_result.error());
             }
 

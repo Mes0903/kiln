@@ -1167,6 +1167,81 @@ TEST_CASE("GenexParser - split_genex_args with bare <", "[genex][parser][bare-an
 }
 
 // ============================================================================
+// Recovery mode: unmatched $< degrades to literal text (CMake compat)
+// CMake handles structurally-unbalanced $</$> (e.g. from $<ANGLE-R>) via
+// recovery: the unmatched $< becomes literal "$<" while inner genex evaluate.
+// ============================================================================
+
+TEST_CASE("GenexParser - recovery mode degrades unmatched $< to literal", "[genex][parser][recovery]") {
+    SECTION("strict mode (default) errors on unmatched $<") {
+        GenexParser parser;
+        auto result = parser.parse("$<CONFIG:Debug");
+        REQUIRE(!result.has_value());
+    }
+
+    SECTION("recovery mode treats unmatched $< as literal") {
+        GenexParser parser;
+        parser.set_recovery(true);
+        auto result = parser.parse("$<CONFIG:Debug");
+        REQUIRE(result.has_value());
+        REQUIRE(result->has_genex == false);
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::LITERAL);
+        REQUIRE(result->nodes[0]->raw_content == "$<CONFIG:Debug");
+    }
+
+    SECTION("recovery: $<SEMICOLON$<ANGLE-R>rest") {
+        // $< starts, SEMICOLON is not a valid keyword with content "$<ANGLE-R>rest",
+        // but parse_genex sees "SEMICOLON$<ANGLE-R" as keyword (up to first >),
+        // the outer $< is unbalanced → recovers to literal "$<", then SEMICOLON is text,
+        // then $<ANGLE-R> evaluates to ">", then "rest" is literal
+        GenexParser parser;
+        parser.set_recovery(true);
+        auto result = parser.parse("$<SEMICOLON$<ANGLE-R>rest");
+        REQUIRE(result.has_value());
+    }
+}
+
+TEST_CASE("GenexEvaluator - recovery: unmatched $< with ANGLE-R", "[genex][evaluator][recovery]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    SECTION("R1: $<SEMICOLON$<ANGLE-R>rest → $<SEMICOLON>rest") {
+        // Outer $< fails (SEMICOLON$<ANGLE-R is not a valid genex keyword with balanced content)
+        // → "$<" literal, then "SEMICOLON" text, then $<ANGLE-R>→">" , then "rest"
+        auto result = eval.evaluate("$<SEMICOLON$<ANGLE-R>rest");
+        REQUIRE(result.has_value());
+        REQUIRE(*result == "$<SEMICOLON>rest");
+    }
+
+    SECTION("R2: $<$<BOOL:1$<ANGLE-R>:yes$<ANGLE-R> → $<$<BOOL:1>:yes>") {
+        // Both outer $< recover to literal, ANGLE-R genexes evaluate to >
+        auto result = eval.evaluate("$<$<BOOL:1$<ANGLE-R>:yes$<ANGLE-R>");
+        REQUIRE(result.has_value());
+        REQUIRE(*result == "$<$<BOOL:1>:yes>");
+    }
+
+    SECTION("constant literals with ANGLE-R still work normally") {
+        // $<ANGLE-R> → ">"
+        REQUIRE(eval.evaluate("a$<SEMICOLON>b$<COMMA>c$<ANGLE-R>d").value() == "a;b,c>d");
+    }
+
+    SECTION("normal nested genex still evaluates") {
+        REQUIRE(eval.evaluate("$<$<BOOL:1>:yes>").value() == "yes");
+        REQUIRE(eval.evaluate("$<$<BOOL:0>:no>").value() == "");
+        REQUIRE(eval.evaluate("$<$<BOOL:>:no>").value() == "");
+        REQUIRE(eval.evaluate("$<IF:$<BOOL:1>,yes,no>").value() == "yes");
+        REQUIRE(eval.evaluate("$<$<NOT:$<BOOL:>>:empty_is_false>").value() == "empty_is_false");
+    }
+
+    SECTION("ANGLE-R in evaluated content") {
+        REQUIRE(eval.evaluate("$<$<BOOL:1>:a$<ANGLE-R>b>").value() == "a>b");
+        REQUIRE(eval.evaluate("$<JOIN:a;b;c,$<COMMA>>").value() == "a,b,c");
+        REQUIRE(eval.evaluate("$<1:included>$<0:excluded>").value() == "included");
+    }
+}
+
+// ============================================================================
 // BuildGraph::evaluate_genex() Tests
 // ============================================================================
 

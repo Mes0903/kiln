@@ -33,7 +33,8 @@ private:
     size_t pos_;
 
     void skip_whitespace() {
-        while (pos_ < expr_.size() && expr_[pos_] == ' ') ++pos_;
+        while (pos_ < expr_.size() && (expr_[pos_] == ' ' || expr_[pos_] == '\t' ||
+               expr_[pos_] == '\n' || expr_[pos_] == '\r')) ++pos_;
     }
 
     char peek() const {

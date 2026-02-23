@@ -85,6 +85,12 @@ class GenexParser {
 public:
     GenexParser() = default;
 
+    // Enable recovery mode: unmatched $< degrades to literal "$<" text
+    // instead of returning an error. Use this when evaluating expressions
+    // that may contain structurally-unbalanced $< (e.g. Qt's $<ANGLE-R>
+    // patterns create $</$> imbalances that CMake handles via recovery).
+    void set_recovery(bool enabled) { allow_recovery_ = enabled; }
+
     // Quick check if string contains any generator expression (without parsing)
     // Use this to skip validation/processing for strings that can't contain genex
     static bool contains_genex(const std::string& input) {
@@ -107,6 +113,7 @@ public:
 private:
     std::string input_;
     size_t pos_ = 0;
+    bool allow_recovery_ = false;
 
     // Parse a single genex starting at current position (expects to be at '$<')
     std::expected<std::shared_ptr<GenexNode>, std::string> parse_genex();

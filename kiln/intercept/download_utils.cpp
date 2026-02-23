@@ -1,4 +1,5 @@
 #include "download_utils.hpp"
+#include "../printing.hpp"
 #include "../utils.hpp"
 #include <filesystem>
 #include <fstream>
@@ -10,11 +11,58 @@
 
 namespace kiln {
 
+// ── DownloadProgress ──────────────────────────────────────────────────
+
+DownloadProgress::DownloadProgress(std::ostream* stream)
+    : stream_(stream)
+    , is_tty_(stream && is_color_enabled(*stream))
+{}
+
+void DownloadProgress::apply(void* curl) {
+    if (!stream_) return;
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &DownloadProgress::curl_callback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
+    if (!is_tty_) {
+        *stream_ << "  0        10        20        30        40        50        60        70        80        90        100\n"
+                 << "  |----+----|----+----|----+----|----+----|----+----|----+----|----+----|----+----|----+----|----+----|\n"
+                 << "  " << std::flush;
+    }
+}
+
+void DownloadProgress::finish() {
+    if (!stream_) return;
+    *stream_ << "\n";
+}
+
+int DownloadProgress::curl_callback(void* clientp, long long dltotal, long long dlnow,
+                                     long long /*ultotal*/, long long /*ulnow*/) {
+    auto* self = static_cast<DownloadProgress*>(clientp);
+    if (dltotal > 0) {
+        int pct = static_cast<int>(dlnow * 100 / dltotal);
+        if (pct != self->last_pct_) {
+            if (self->is_tty_) {
+                *self->stream_ << "\r[download] " << pct << "% (" << dlnow << "/" << dltotal << " bytes)" << std::flush;
+            } else {
+                for (int p = self->last_pct_ + 1; p <= pct; ++p) {
+                    *self->stream_ << '*';
+                }
+                self->stream_->flush();
+            }
+            self->last_pct_ = pct;
+        }
+    }
+    return 0;
+}
+
+// ── download_url ──────────────────────────────────────────────────────
+
 std::expected<void, std::string> download_url(
     const std::string& url,
     const std::string& dest_file,
     const std::string& hash_algo,
-    const std::string& hash_value)
+    const std::string& hash_value,
+    std::ostream* progress_stream)
 {
     // If we have a hash and the file exists, check if it already matches
     if (!hash_algo.empty() && !hash_value.empty() && std::filesystem::exists(dest_file)) {
@@ -49,15 +97,6 @@ std::expected<void, std::string> download_url(
         return total;
     };
 
-    auto progress_callback = +[](void*, curl_off_t dltotal, curl_off_t dlnow,
-                                  curl_off_t, curl_off_t) -> int {
-        if (dltotal > 0) {
-            int pct = static_cast<int>(dlnow * 100 / dltotal);
-            std::cerr << "\r[download] " << pct << "% (" << dlnow << "/" << dltotal << " bytes)" << std::flush;
-        }
-        return 0;
-    };
-
     CURL* curl = curl_easy_init();
     if (!curl) {
         return std::unexpected<std::string>("Failed to initialize curl");
@@ -72,13 +111,14 @@ std::expected<void, std::string> download_url(
     curl_version_info_data* cv = curl_version_info(CURLVERSION_FIRST);
     std::string ua = std::string("curl/") + (cv ? cv->version : LIBCURL_VERSION);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, ua.c_str());
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+
+    DownloadProgress progress(progress_stream);
+    progress.apply(curl);
 
     CURLcode res = curl_easy_perform(curl);
 
     if (res == CURLE_OK) {
-        std::cerr << "\n";
+        progress.finish();
     }
 
     curl_easy_cleanup(curl);

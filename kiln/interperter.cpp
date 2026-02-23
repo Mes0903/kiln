@@ -386,7 +386,7 @@ void kiln::Interpreter::process_file_generates(const GenexEvaluationContext& gen
         // Evaluate CONTENT
         auto content_result = evaluator.evaluate(entry.content);
         if (!content_result) {
-            print_message("WARNING", "file(GENERATE) failed to evaluate CONTENT for '" + out_path.string() + "': " + content_result.error());
+            print_message("WARNING", "file(GENERATE) failed to evaluate CONTENT for '" + out_path.string() + "': " + content_result.error() + "\n  CONTENT: " + entry.content);
             continue;
         }
         std::string file_content = std::move(*content_result);
