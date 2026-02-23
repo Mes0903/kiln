@@ -2901,7 +2901,8 @@ std::expected<bool, InterpreterError> Interpreter::evaluate_condition(const std:
 
 bool Interpreter::has_user_function(const std::string& name) const {
     std::string lower_name = to_lower(name);
-    return get_root()->user_functions_.contains(lower_name);
+    return get_root()->user_functions_.contains(lower_name) ||
+           builtins_.contains(lower_name);
 }
 
 std::string Interpreter::evaluate_variable_reference(const VariableReference& ref) {

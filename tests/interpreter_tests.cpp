@@ -7817,3 +7817,216 @@ TEST_CASE("CMP0126 NEW: set(CACHE) does not remove local variable", "[interprete
     )");
     REQUIRE(output == "local_value\n");
 }
+
+// ---- Legacy / ancient CMake syntax ----
+
+TEST_CASE("legacy endif with condition", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        set(MY_VAR TRUE)
+        if(MY_VAR)
+            message("yes")
+        endif(MY_VAR)
+    )");
+    REQUIRE(output == "yes\n");
+
+    output = run_script(R"(
+        set(X FALSE)
+        if(X)
+            message("if")
+        else(X)
+            message("else")
+        endif(X)
+    )");
+    REQUIRE(output == "else\n");
+}
+
+TEST_CASE("legacy elseif/else/endif with conditions", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        set(VAL "B")
+        if(VAL STREQUAL "A")
+            message("A")
+        elseif(VAL STREQUAL "B")
+            message("B")
+        else(VAL STREQUAL "B")
+            message("else")
+        endif(VAL STREQUAL "A")
+    )");
+    REQUIRE(output == "B\n");
+}
+
+TEST_CASE("legacy endfunction with name", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        function(greet name)
+            message("Hello ${name}")
+        endfunction(greet)
+
+        greet("World")
+    )");
+    REQUIRE(output == "Hello World\n");
+}
+
+TEST_CASE("legacy endmacro with name", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        macro(shout msg)
+            message("${msg}!")
+        endmacro(shout)
+
+        shout("Hey")
+    )");
+    REQUIRE(output == "Hey!\n");
+}
+
+TEST_CASE("legacy endforeach with variable", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        foreach(i 1 2 3)
+            message("${i}")
+        endforeach(i)
+    )");
+    REQUIRE(output == "1\n2\n3\n");
+}
+
+TEST_CASE("legacy endwhile with condition", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        set(COUNT 0)
+        while(COUNT LESS 3)
+            message("${COUNT}")
+            math(EXPR COUNT "${COUNT} + 1")
+        endwhile(COUNT LESS 3)
+    )");
+    REQUIRE(output == "0\n1\n2\n");
+}
+
+TEST_CASE("uppercase command names", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        SET(MY_VAR "hello")
+        MESSAGE("${MY_VAR}")
+    )");
+    REQUIRE(output == "hello\n");
+
+    output = run_script(R"(
+        SET(ITEMS "a;b;c")
+        FOREACH(i ${ITEMS})
+            MESSAGE("${i}")
+        ENDFOREACH()
+    )");
+    REQUIRE(output == "a\nb\nc\n");
+
+    output = run_script(R"(
+        FUNCTION(greet name)
+            MESSAGE("Hi ${name}")
+        ENDFUNCTION()
+        greet("Bob")
+    )");
+    REQUIRE(output == "Hi Bob\n");
+}
+
+TEST_CASE("mixed case command names", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        Set(X "1")
+        If(X)
+            Message("yes")
+        Else()
+            Message("no")
+        EndIf()
+    )");
+    REQUIRE(output == "yes\n");
+
+    output = run_script(R"(
+        ForEach(i RANGE 2)
+            Message("${i}")
+        EndForEach()
+    )");
+    REQUIRE(output == "0\n1\n2\n");
+}
+
+TEST_CASE("if(COMMAND) with user function", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        function(my_func)
+            message("called")
+        endfunction()
+
+        if(COMMAND my_func)
+            message("exists")
+        else()
+            message("missing")
+        endif()
+    )");
+    REQUIRE(output == "exists\n");
+
+    output = run_script(R"(
+        if(COMMAND nonexistent_func)
+            message("exists")
+        else()
+            message("missing")
+        endif()
+    )");
+    REQUIRE(output == "missing\n");
+}
+
+TEST_CASE("if(COMMAND) with builtin command", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        if(COMMAND message)
+            message("builtin exists")
+        else()
+            message("builtin missing")
+        endif()
+    )");
+    REQUIRE(output == "builtin exists\n");
+
+    output = run_script(R"(
+        if(COMMAND set)
+            message("set exists")
+        else()
+            message("set missing")
+        endif()
+    )");
+    REQUIRE(output == "set exists\n");
+}
+
+TEST_CASE("if(DEFINED) legacy pattern", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        set(FOO "bar")
+        if(DEFINED FOO)
+            message("defined")
+        else()
+            message("undefined")
+        endif()
+    )");
+    REQUIRE(output == "defined\n");
+
+    output = run_script(R"(
+        if(DEFINED NONEXISTENT)
+            message("defined")
+        else()
+            message("undefined")
+        endif()
+    )");
+    REQUIRE(output == "undefined\n");
+}
+
+TEST_CASE("legacy combined: uppercase with repeated args", "[interpreter][legacy]") {
+    auto output = run_script(R"(
+        SET(MY_VAR TRUE)
+        IF(MY_VAR)
+            MESSAGE("yes")
+        ELSE(MY_VAR)
+            MESSAGE("no")
+        ENDIF(MY_VAR)
+    )");
+    REQUIRE(output == "yes\n");
+
+    output = run_script(R"(
+        FUNCTION(greet name)
+            MESSAGE("Hi ${name}")
+        ENDFUNCTION(greet)
+        greet("Alice")
+    )");
+    REQUIRE(output == "Hi Alice\n");
+
+    output = run_script(R"(
+        FOREACH(i 1 2 3)
+            MESSAGE("${i}")
+        ENDFOREACH(i)
+    )");
+    REQUIRE(output == "1\n2\n3\n");
+}
