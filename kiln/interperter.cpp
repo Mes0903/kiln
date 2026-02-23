@@ -644,17 +644,7 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
     // 2b. Post-transaction: evaluate genex, resolve inferred file deps, apply compat deps, validate
     {
         ProfileScope scope("finalize graph", "graph");
-        GenexEvaluationContext genex_ctx;
-        genex_ctx.build_type = get_variable("CMAKE_BUILD_TYPE");
-        genex_ctx.system_name = get_variable("CMAKE_SYSTEM_NAME");
-        genex_ctx.cxx_compiler_id = get_variable("CMAKE_CXX_COMPILER_ID");
-        genex_ctx.c_compiler_id = get_variable("CMAKE_C_COMPILER_ID");
-        genex_ctx.cxx_compiler_version = get_variable("CMAKE_CXX_COMPILER_VERSION");
-        genex_ctx.c_compiler_version = get_variable("CMAKE_C_COMPILER_VERSION");
-        genex_ctx.all_targets = &targets_;
-        genex_ctx.target_aliases = &target_aliases_;
-        genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
-        genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+        auto genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
 
         process_file_generates(genex_ctx);
 
@@ -851,17 +841,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     }
 
     // Post-transaction: evaluate genex, resolve inferred file deps
-    GenexEvaluationContext genex_ctx;
-    genex_ctx.build_type = get_variable("CMAKE_BUILD_TYPE");
-    genex_ctx.system_name = get_variable("CMAKE_SYSTEM_NAME");
-    genex_ctx.cxx_compiler_id = get_variable("CMAKE_CXX_COMPILER_ID");
-    genex_ctx.c_compiler_id = get_variable("CMAKE_C_COMPILER_ID");
-    genex_ctx.cxx_compiler_version = get_variable("CMAKE_CXX_COMPILER_VERSION");
-    genex_ctx.c_compiler_version = get_variable("CMAKE_C_COMPILER_VERSION");
-    genex_ctx.all_targets = &targets_;
-    genex_ctx.target_aliases = &target_aliases_;
-    genex_ctx.install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
-    genex_ctx.phase = GenexEvaluationContext::Phase::BUILD;
+    auto genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
 
     process_file_generates(genex_ctx);
 

@@ -12,6 +12,8 @@
 
 namespace kiln {
 
+class Interpreter;
+
 // Result of evaluating a link library entry
 // Carries semantic metadata alongside the evaluated value
 struct LinkLibraryResult {
@@ -34,9 +36,20 @@ struct GenexEvaluationContext {
     const std::unordered_map<std::string, std::string>* target_aliases = nullptr;
     const Target* current_target = nullptr;     // For error messages
     std::string install_prefix;       // CMAKE_INSTALL_PREFIX (for $<INSTALL_PREFIX>)
+    std::string static_library_prefix; // CMAKE_STATIC_LIBRARY_PREFIX
+    std::string static_library_suffix; // CMAKE_STATIC_LIBRARY_SUFFIX
+    std::string shared_library_prefix; // CMAKE_SHARED_LIBRARY_PREFIX
+    std::string shared_library_suffix; // CMAKE_SHARED_LIBRARY_SUFFIX
+    std::string executable_suffix;     // CMAKE_EXECUTABLE_SUFFIX
     enum class Phase { BUILD, INSTALL } phase = Phase::BUILD;
     bool allow_deferred_compile_language = false;  // For deferred evaluation
     const std::map<std::string, std::map<std::string, std::string>>* source_properties = nullptr;
+
+    // Factory: populate interpreter-derived fields (build_type, compiler IDs, etc.)
+    // Callers set optional fields after: current_target, compile_language, allow_deferred, phase.
+    static GenexEvaluationContext from_interpreter(
+        const Interpreter& interp,
+        const TargetMap& all_targets);
 };
 
 // Evaluator for generator expressions

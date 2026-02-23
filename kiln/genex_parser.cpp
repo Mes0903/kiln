@@ -40,6 +40,11 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "TARGET_OBJECTS") return GenexNodeType::TARGET_OBJECTS;
     if (keyword == "TARGET_PROPERTY") return GenexNodeType::TARGET_PROPERTY;
     if (keyword == "TARGET_FILE_BASE_NAME") return GenexNodeType::TARGET_FILE_BASE_NAME;
+    if (keyword == "TARGET_FILE_PREFIX") return GenexNodeType::TARGET_FILE_PREFIX;
+    if (keyword == "TARGET_FILE_SUFFIX") return GenexNodeType::TARGET_FILE_SUFFIX;
+    if (keyword == "TARGET_LINKER_FILE_BASE_NAME") return GenexNodeType::TARGET_LINKER_FILE_BASE_NAME;
+    if (keyword == "TARGET_LINKER_FILE_PREFIX") return GenexNodeType::TARGET_LINKER_FILE_PREFIX;
+    if (keyword == "TARGET_LINKER_FILE_SUFFIX") return GenexNodeType::TARGET_LINKER_FILE_SUFFIX;
     if (keyword == "GENEX_EVAL") return GenexNodeType::GENEX_EVAL;
     if (keyword == "TARGET_GENEX_EVAL") return GenexNodeType::TARGET_GENEX_EVAL;
     if (keyword == "JOIN") return GenexNodeType::JOIN;
@@ -232,9 +237,13 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
         }
     }
 
-    // If it's UNSUPPORTED but has a ':', treat as CONDITIONAL with literal condition
-    // This handles patterns like $<1:text> and $<0:text> (literal boolean conditionals)
-    if (type == GenexNodeType::UNSUPPORTED && peek() == ':') {
+    // If it's UNSUPPORTED but the keyword is a simple literal boolean (0/1),
+    // treat as CONDITIONAL. This handles $<1:text> and $<0:text>.
+    // Other unknown keywords with ':' remain UNSUPPORTED for proper error reporting.
+    auto is_literal_bool = [](const std::string& kw) {
+        return kw == "0" || kw == "1";
+    };
+    if (type == GenexNodeType::UNSUPPORTED && peek() == ':' && is_literal_bool(keyword)) {
         node->type = GenexNodeType::CONDITIONAL;
         // Store the keyword as a literal condition child
         auto cond_node = std::make_shared<GenexNode>(GenexNodeType::LITERAL, keyword);

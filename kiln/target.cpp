@@ -321,21 +321,10 @@ GenexEvaluationContext Target::make_genex_context(
     std::optional<Language> compile_language,
     bool allow_deferred)
 {
-    GenexEvaluationContext ctx;
-    ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
-    ctx.system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
-    ctx.cxx_compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
-    ctx.c_compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
-    ctx.cxx_compiler_version = interp.get_variable("CMAKE_CXX_COMPILER_VERSION");
-    ctx.c_compiler_version = interp.get_variable("CMAKE_C_COMPILER_VERSION");
-    ctx.all_targets = &all_targets;
-    ctx.target_aliases = &interp.get_target_aliases();
+    auto ctx = GenexEvaluationContext::from_interpreter(interp, all_targets);
     ctx.current_target = current_target;
-    ctx.install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
-    ctx.phase = GenexEvaluationContext::Phase::BUILD;
     ctx.compile_language = compile_language;
     ctx.allow_deferred_compile_language = allow_deferred;
-    ctx.source_properties = &interp.get_source_properties();
     return ctx;
 }
 

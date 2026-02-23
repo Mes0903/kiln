@@ -640,6 +640,384 @@ TEST_CASE("GenexEvaluator - Pure genex whitespace splitting", "[genex][evaluator
 // BuildGraph::evaluate_genex() Tests
 // ============================================================================
 
+// ============================================================================
+// CMake-verified genex evaluation tests
+// Reference values captured from CMake 4.2.3 with file(GENERATE)
+// ============================================================================
+
+TEST_CASE("GenexEvaluator - bare CONFIG", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "Debug"
+    REQUIRE(eval.evaluate("$<CONFIG>").value() == "Debug");
+}
+
+TEST_CASE("GenexEvaluator - LOWER_CASE", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "hello"
+    REQUIRE(eval.evaluate("$<LOWER_CASE:HeLLo>").value() == "hello");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<LOWER_CASE:>").value() == "");
+}
+
+TEST_CASE("GenexEvaluator - UPPER_CASE", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "HELLO"
+    REQUIRE(eval.evaluate("$<UPPER_CASE:HeLLo>").value() == "HELLO");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<UPPER_CASE:>").value() == "");
+}
+
+TEST_CASE("GenexEvaluator - JOIN", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "a-b-c"
+    REQUIRE(eval.evaluate("$<JOIN:a;b;c,->").value() == "a-b-c");
+    // CMake ref: "single"
+    REQUIRE(eval.evaluate("$<JOIN:single,->").value() == "single");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<JOIN:,->").value() == "");
+}
+
+TEST_CASE("GenexEvaluator - REMOVE_DUPLICATES", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "a;b;c"
+    REQUIRE(eval.evaluate("$<REMOVE_DUPLICATES:a;b;a;c;b>").value() == "a;b;c");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<REMOVE_DUPLICATES:>").value() == "");
+    // CMake ref: "x"
+    REQUIRE(eval.evaluate("$<REMOVE_DUPLICATES:x>").value() == "x");
+}
+
+TEST_CASE("GenexEvaluator - FILTER", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "apple;apricot"
+    REQUIRE(eval.evaluate("$<FILTER:apple;banana;apricot,INCLUDE,^ap>").value() == "apple;apricot");
+    // CMake ref: "banana"
+    REQUIRE(eval.evaluate("$<FILTER:apple;banana;apricot,EXCLUDE,^ap>").value() == "banana");
+    // CMake ref: "a;b;c"
+    REQUIRE(eval.evaluate("$<FILTER:a;b;c,INCLUDE,.*>").value() == "a;b;c");
+}
+
+TEST_CASE("GenexEvaluator - IN_LIST", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "1"
+    REQUIRE(eval.evaluate("$<IN_LIST:b,a;b;c>").value() == "1");
+    // CMake ref: "0"
+    REQUIRE(eval.evaluate("$<IN_LIST:x,a;b;c>").value() == "0");
+    // CMake ref: "1"
+    REQUIRE(eval.evaluate("$<IN_LIST:a,a>").value() == "1");
+}
+
+TEST_CASE("GenexEvaluator - GENEX_EVAL", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "hello"
+    REQUIRE(eval.evaluate("$<GENEX_EVAL:$<LOWER_CASE:HELLO>>").value() == "hello");
+    // CMake ref: "Debug"
+    REQUIRE(eval.evaluate("$<GENEX_EVAL:$<CONFIG>>").value() == "Debug");
+    // CMake ref: "no-genex-here"
+    REQUIRE(eval.evaluate("$<GENEX_EVAL:no-genex-here>").value() == "no-genex-here");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_GENEX_EVAL", "[genex][evaluator]") {
+    TargetMap targets;
+    targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    ctx.all_targets = &targets;
+    GenexEvaluator eval(ctx);
+
+    // Evaluate expression in target context
+    REQUIRE(eval.evaluate("$<TARGET_GENEX_EVAL:mylib,$<LOWER_CASE:HELLO>>").value() == "hello");
+
+    // Error for non-existent target
+    auto bad = eval.evaluate("$<TARGET_GENEX_EVAL:nonexist,$<CONFIG>>");
+    REQUIRE(!bad.has_value());
+    REQUIRE(bad.error().find("not found") != std::string::npos);
+}
+
+TEST_CASE("GenexEvaluator - TARGET_FILE_BASE_NAME", "[genex][evaluator]") {
+    TargetMap targets;
+    auto mylib = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    mylib->set_property("OUTPUT_NAME", "custom_mylib");
+    targets["mylib"] = mylib;
+
+    auto plain = std::make_shared<Target>("plain", TargetType::STATIC_LIBRARY, "/src", "/build");
+    targets["plain"] = plain;
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "custom_mylib"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:mylib>").value() == "custom_mylib");
+    // No OUTPUT_NAME — falls back to target name
+    REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:plain>").value() == "plain");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_FILE_PREFIX", "[genex][evaluator]") {
+    TargetMap targets;
+    targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    targets["myshared"] = std::make_shared<Target>("myshared", TargetType::SHARED_LIBRARY, "/src", "/build");
+    targets["myexe"] = std::make_shared<Target>("myexe", TargetType::EXECUTABLE, "/src", "/build");
+    auto custom = std::make_shared<Target>("custom", TargetType::STATIC_LIBRARY, "/src", "/build");
+    custom->set_property("PREFIX", "pfx_");
+    targets["custom"] = custom;
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.static_library_prefix = "lib";
+    ctx.static_library_suffix = ".a";
+    ctx.shared_library_prefix = "lib";
+    ctx.shared_library_suffix = ".so";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "lib"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_PREFIX:mylib>").value() == "lib");
+    // CMake ref: "lib"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_PREFIX:myshared>").value() == "lib");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<TARGET_FILE_PREFIX:myexe>").value() == "");
+    // CMake ref: "pfx_" (per-target PREFIX property)
+    REQUIRE(eval.evaluate("$<TARGET_FILE_PREFIX:custom>").value() == "pfx_");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_FILE_SUFFIX", "[genex][evaluator]") {
+    TargetMap targets;
+    targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    targets["myshared"] = std::make_shared<Target>("myshared", TargetType::SHARED_LIBRARY, "/src", "/build");
+    targets["myexe"] = std::make_shared<Target>("myexe", TargetType::EXECUTABLE, "/src", "/build");
+    auto custom = std::make_shared<Target>("custom", TargetType::STATIC_LIBRARY, "/src", "/build");
+    custom->set_property("SUFFIX", ".custom");
+    targets["custom"] = custom;
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.static_library_prefix = "lib";
+    ctx.static_library_suffix = ".a";
+    ctx.shared_library_prefix = "lib";
+    ctx.shared_library_suffix = ".so";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: ".a"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_SUFFIX:mylib>").value() == ".a");
+    // CMake ref: ".so"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_SUFFIX:myshared>").value() == ".so");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<TARGET_FILE_SUFFIX:myexe>").value() == "");
+    // CMake ref: ".custom" (per-target SUFFIX property)
+    REQUIRE(eval.evaluate("$<TARGET_FILE_SUFFIX:custom>").value() == ".custom");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_FILE_PREFIX respects CMAKE variables", "[genex][evaluator]") {
+    TargetMap targets;
+    targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    targets["myshared"] = std::make_shared<Target>("myshared", TargetType::SHARED_LIBRARY, "/src", "/build");
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.static_library_prefix = "xxx_";
+    ctx.static_library_suffix = ".yyy";
+    ctx.shared_library_prefix = "shared_";
+    ctx.shared_library_suffix = ".dyn";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref (with CMAKE_STATIC_LIBRARY_PREFIX=xxx_): "xxx_"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_PREFIX:mylib>").value() == "xxx_");
+    // CMake ref (with CMAKE_STATIC_LIBRARY_SUFFIX=.yyy): ".yyy"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_SUFFIX:mylib>").value() == ".yyy");
+    // CMake ref (with CMAKE_SHARED_LIBRARY_PREFIX=shared_): "shared_"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_PREFIX:myshared>").value() == "shared_");
+    // CMake ref (with CMAKE_SHARED_LIBRARY_SUFFIX=.dyn): ".dyn"
+    REQUIRE(eval.evaluate("$<TARGET_FILE_SUFFIX:myshared>").value() == ".dyn");
+    // Linker variants should match
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_PREFIX:myshared>").value() == "shared_");
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_SUFFIX:myshared>").value() == ".dyn");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_LINKER_FILE_PREFIX/SUFFIX", "[genex][evaluator]") {
+    TargetMap targets;
+    targets["mylib"] = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    targets["myshared"] = std::make_shared<Target>("myshared", TargetType::SHARED_LIBRARY, "/src", "/build");
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.static_library_prefix = "lib";
+    ctx.static_library_suffix = ".a";
+    ctx.shared_library_prefix = "lib";
+    ctx.shared_library_suffix = ".so";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "lib"
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_PREFIX:mylib>").value() == "lib");
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_PREFIX:myshared>").value() == "lib");
+    // CMake ref: ".a"
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_SUFFIX:mylib>").value() == ".a");
+    // CMake ref: ".so"
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_SUFFIX:myshared>").value() == ".so");
+}
+
+TEST_CASE("GenexEvaluator - literal boolean conditionals", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "visible"
+    REQUIRE(eval.evaluate("$<1:visible>").value() == "visible");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<0:hidden>").value() == "");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<1:>").value() == "");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<0:>").value() == "");
+}
+
+TEST_CASE("GenexEvaluator - nested composition", "[genex][evaluator]") {
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    GenexEvaluator eval(ctx);
+
+    // CMake ref: "hello"
+    REQUIRE(eval.evaluate("$<$<BOOL:ON>:$<LOWER_CASE:HELLO>>").value() == "hello");
+    // CMake ref: "found"
+    REQUIRE(eval.evaluate("$<$<IN_LIST:b,a;b;c>:found>").value() == "found");
+    // CMake ref: ""
+    REQUIRE(eval.evaluate("$<$<IN_LIST:x,a;b;c>:found>").value() == "");
+    // CMake ref: "YES"
+    REQUIRE(eval.evaluate("$<IF:1,$<UPPER_CASE:yes>,$<UPPER_CASE:no>>").value() == "YES");
+    // CMake ref: "a b"
+    REQUIRE(eval.evaluate("$<JOIN:$<REMOVE_DUPLICATES:a;b;a>, >").value() == "a b");
+}
+
+TEST_CASE("GenexParser - new types classification", "[genex][parser]") {
+    GenexParser parser;
+
+    SECTION("LOWER_CASE") {
+        auto result = parser.parse("$<LOWER_CASE:Hello>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::LOWER_CASE);
+    }
+
+    SECTION("UPPER_CASE") {
+        auto result = parser.parse("$<UPPER_CASE:Hello>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::UPPER_CASE);
+    }
+
+    SECTION("JOIN") {
+        auto result = parser.parse("$<JOIN:a;b,->");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::JOIN);
+    }
+
+    SECTION("REMOVE_DUPLICATES") {
+        auto result = parser.parse("$<REMOVE_DUPLICATES:a;b;a>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::REMOVE_DUPLICATES);
+    }
+
+    SECTION("FILTER") {
+        auto result = parser.parse("$<FILTER:a;b;c,INCLUDE,.*>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::FILTER);
+    }
+
+    SECTION("IN_LIST") {
+        auto result = parser.parse("$<IN_LIST:x,a;b>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::IN_LIST);
+    }
+
+    SECTION("GENEX_EVAL") {
+        auto result = parser.parse("$<GENEX_EVAL:hello>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::GENEX_EVAL);
+    }
+
+    SECTION("TARGET_GENEX_EVAL") {
+        auto result = parser.parse("$<TARGET_GENEX_EVAL:tgt,expr>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_GENEX_EVAL);
+    }
+
+    SECTION("TARGET_FILE_BASE_NAME") {
+        auto result = parser.parse("$<TARGET_FILE_BASE_NAME:tgt>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_FILE_BASE_NAME);
+    }
+
+    SECTION("TARGET_FILE_PREFIX") {
+        auto result = parser.parse("$<TARGET_FILE_PREFIX:tgt>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_FILE_PREFIX);
+    }
+
+    SECTION("TARGET_FILE_SUFFIX") {
+        auto result = parser.parse("$<TARGET_FILE_SUFFIX:tgt>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_FILE_SUFFIX);
+    }
+
+    SECTION("TARGET_LINKER_FILE_PREFIX") {
+        auto result = parser.parse("$<TARGET_LINKER_FILE_PREFIX:tgt>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_LINKER_FILE_PREFIX);
+    }
+
+    SECTION("TARGET_LINKER_FILE_SUFFIX") {
+        auto result = parser.parse("$<TARGET_LINKER_FILE_SUFFIX:tgt>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_LINKER_FILE_SUFFIX);
+    }
+
+    SECTION("TARGET_LINKER_FILE_BASE_NAME") {
+        auto result = parser.parse("$<TARGET_LINKER_FILE_BASE_NAME:tgt>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::TARGET_LINKER_FILE_BASE_NAME);
+    }
+
+    SECTION("INSTALL_PREFIX") {
+        auto result = parser.parse("$<INSTALL_PREFIX>");
+        REQUIRE(result.has_value());
+        REQUIRE(result->nodes.size() == 1);
+        REQUIRE(result->nodes[0]->type == GenexNodeType::INSTALL_PREFIX);
+    }
+}
+
+// ============================================================================
+// BuildGraph::evaluate_genex() Tests
+// ============================================================================
+
 TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][evaluate_genex]") {
     BuildGraph graph;
 
@@ -775,5 +1153,50 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         REQUIRE(finalized.commands.size() == 2);
         REQUIRE(finalized.commands[0][1] == "cmd1");
         REQUIRE(finalized.commands[1][1] == "cmd2");
+    }
+
+    SECTION("inputs with genex are evaluated") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"echo", "hello"}};
+        task.inputs = {"$<$<CONFIG:Debug>:/path/to/debug_dep>", "/always_dep"};
+
+        auto txn = graph.begin();
+        txn.add(std::move(task));
+        txn.commit();
+
+        GenexEvaluationContext ctx;
+        ctx.build_type = "Debug";
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.evaluate_genex(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.inputs.size() == 2);
+        REQUIRE(finalized.inputs[0] == "/path/to/debug_dep");
+        REQUIRE(finalized.inputs[1] == "/always_dep");
+    }
+
+    SECTION("inputs - empty genex results are dropped") {
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"echo", "hello"}};
+        task.inputs = {"$<$<CONFIG:Release>:/release_dep>", "/always_dep"};
+
+        auto txn = graph.begin();
+        txn.add(std::move(task));
+        txn.commit();
+
+        GenexEvaluationContext ctx;
+        ctx.build_type = "Debug";
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.evaluate_genex(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.inputs.size() == 1);
+        REQUIRE(finalized.inputs[0] == "/always_dep");
     }
 }

@@ -37,6 +37,11 @@ enum class GenexNodeType {
     TARGET_OBJECTS,       // $<TARGET_OBJECTS:target> - object files from OBJECT_LIBRARY
     TARGET_PROPERTY,      // $<TARGET_PROPERTY:tgt,prop> or $<TARGET_PROPERTY:prop>
     TARGET_FILE_BASE_NAME, // $<TARGET_FILE_BASE_NAME:target> - base name without prefix/suffix
+    TARGET_FILE_PREFIX,   // $<TARGET_FILE_PREFIX:target> - prefix (e.g. "lib")
+    TARGET_FILE_SUFFIX,   // $<TARGET_FILE_SUFFIX:target> - suffix (e.g. ".a", ".so")
+    TARGET_LINKER_FILE_BASE_NAME, // $<TARGET_LINKER_FILE_BASE_NAME:target>
+    TARGET_LINKER_FILE_PREFIX, // $<TARGET_LINKER_FILE_PREFIX:target>
+    TARGET_LINKER_FILE_SUFFIX, // $<TARGET_LINKER_FILE_SUFFIX:target>
     GENEX_EVAL,           // $<GENEX_EVAL:expr> - evaluate string as genex
     TARGET_GENEX_EVAL,    // $<TARGET_GENEX_EVAL:target,expr> - evaluate with target context
     JOIN,                 // $<JOIN:list,glue> - join list with separator
