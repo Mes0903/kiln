@@ -141,7 +141,7 @@ void handle_has(Interpreter& interp, const std::vector<std::string>& args) {
 
 // IS_ABSOLUTE, IS_RELATIVE, IS_PREFIX
 // cmake_path(IS_ABSOLUTE <path-var> <out-var>)
-// cmake_path(IS_PREFIX <path-var> <out-var> <input>)
+// cmake_path(IS_PREFIX <path-var> <input> <out-var> [NORMALIZE])
 void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
     if (args.size() < 3) {
         interp.set_fatal_error("cmake_path(IS_*) requires at least 3 arguments");
@@ -160,13 +160,29 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
     } else if (ci_equals(subcommand, "IS_RELATIVE")) {
         result = Path(interp.get_variable(args[1])).is_relative();
     } else if (ci_equals(subcommand, "IS_PREFIX")) {
+        // cmake_path(IS_PREFIX <path-var> <input> <out-var> [NORMALIZE])
         if (args.size() < 4) {
             interp.set_fatal_error("cmake_path(IS_PREFIX) requires 4 arguments");
             return;
         }
-        // Need fs::path iterators for component-wise prefix check
-        std::filesystem::path prefix_path(interp.get_variable(args[1]));
-        std::filesystem::path other(interp.get_variable(args[3]));
+        // args[1] = path variable name, args[2] = input path, args[3] = output variable
+        std::string input = args[2];
+        out_var = args[3];
+
+        // CMake's IS_PREFIX uses logical path prefix matching.
+        // Strip trailing separators that confuse std::filesystem::path iteration
+        // (trailing '/' adds an empty component).
+        auto strip_trailing_sep = [](std::string_view p) -> std::string {
+            while (p.size() > 1 && p.back() == '/') p.remove_suffix(1);
+            return std::string(p);
+        };
+        bool normalize = (args.size() > 4 && ci_equals(args[4], "NORMALIZE"));
+        std::filesystem::path prefix_path(strip_trailing_sep(interp.get_variable(args[1])));
+        std::filesystem::path other(strip_trailing_sep(input));
+        if (normalize) {
+            prefix_path = prefix_path.lexically_normal();
+            other = other.lexically_normal();
+        }
 
         auto path_it = prefix_path.begin();
         auto other_it = other.begin();

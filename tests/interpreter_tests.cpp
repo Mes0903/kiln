@@ -5501,7 +5501,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
         auto output = run_script(R"(
             cmake_path(SET prefix "/usr/local")
             cmake_path(SET fullpath "/usr/local/bin/app")
-            cmake_path(IS_PREFIX prefix result fullpath)
+            cmake_path(IS_PREFIX prefix "${fullpath}" result)
             message("${result}")
         )");
         REQUIRE(output == "ON\n");
@@ -5772,7 +5772,7 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
         auto output = run_script(R"(
             cmake_path(SET prefix "/usr/local")
             cmake_path(SET fullpath "/home/user/file")
-            cmake_path(IS_PREFIX prefix result fullpath)
+            cmake_path(IS_PREFIX prefix "${fullpath}" result)
             message("${result}")
         )");
         REQUIRE(output == "OFF\n");
@@ -5782,8 +5782,35 @@ TEST_CASE("cmake_path command", "[interpreter][cmake_path]") {
         auto output = run_script(R"(
             cmake_path(SET prefix "/usr/local")
             cmake_path(SET fullpath "/usr/local")
-            cmake_path(IS_PREFIX prefix result fullpath)
+            cmake_path(IS_PREFIX prefix "${fullpath}" result)
             message("${result}")
+        )");
+        REQUIRE(output == "ON\n");
+    }
+
+    SECTION("IS_PREFIX with trailing slashes") {
+        auto output = run_script(R"(
+            set(source_dir "/usr/local/src/corelib/")
+            cmake_path(IS_PREFIX source_dir "/usr/local/src/corelib/global/file.h/" result)
+            message("${result}")
+        )");
+        REQUIRE(output == "ON\n");
+    }
+
+    SECTION("IS_PREFIX via wrapper function with trailing slashes") {
+        auto output = run_script(R"(
+            function(test_prefix path_var input out_var)
+                if(NOT ${path_var} MATCHES "/$")
+                    set(${path_var} "${${path_var}}/")
+                endif()
+                set(input "${input}/")
+                cmake_path(IS_PREFIX ${path_var} ${input} ${out_var})
+                set(${out_var} "${${out_var}}" PARENT_SCOPE)
+            endfunction()
+
+            set(source_dir "/usr/local/src/corelib")
+            test_prefix(source_dir "/usr/local/src/corelib/global/file.h" is_inside)
+            message("${is_inside}")
         )");
         REQUIRE(output == "ON\n");
     }
