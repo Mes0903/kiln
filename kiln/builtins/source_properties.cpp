@@ -120,11 +120,29 @@ void register_source_properties_builtins(Interpreter& interp) {
         // Apply properties to each file in each base directory
         auto& source_properties = interp.get_source_properties();
 
+        // CMP0118 (CMake 3.20+): When GENERATED TRUE is being set, relative
+        // paths resolve against CMAKE_CURRENT_BINARY_DIR instead of SOURCE_DIR.
+        // The GENERATED property is then globally visible (which we get for free
+        // since source_properties is a flat map keyed by absolute path).
+        bool setting_generated = false;
+        for (const auto& [prop_name, prop_value] : properties) {
+            if (prop_name == "GENERATED" && !Interpreter::is_falsy(prop_value)) {
+                setting_generated = true;
+                break;
+            }
+        }
+
         for (const auto& base_dir : base_dirs) {
             for (const auto& file : files) {
-                std::string abs_path = Path::make_absolute_and_normal(base_dir, file);
+                std::string abs_path;
+                if (setting_generated && !Path(file).is_absolute()) {
+                    // CMP0118: generated files resolve against binary dir
+                    std::string binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+                    abs_path = Path::make_absolute_and_normal(binary_dir, file);
+                } else {
+                    abs_path = Path::make_absolute_and_normal(base_dir, file);
+                }
 
-                // Set each property
                 for (const auto& [prop_name, prop_value] : properties) {
                     source_properties[abs_path][prop_name] = prop_value;
                 }
@@ -196,6 +214,23 @@ void register_source_properties_builtins(Interpreter& interp) {
             if (prop_it != source_it->second.end()) {
                 interp.set_variable(variable, prop_it->second);
                 return;
+            }
+        }
+
+        // CMP0118: GENERATED is globally visible and stored under binary-dir paths.
+        // If source-dir lookup missed and path is relative, try binary dir.
+        if (property_name == "GENERATED" && !Path(file).is_absolute()) {
+            std::string binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
+            std::string binary_abs = Path::make_absolute_and_normal(binary_dir, file);
+            if (binary_abs != abs_path) {
+                auto bin_it = source_properties.find(binary_abs);
+                if (bin_it != source_properties.end()) {
+                    auto prop_it = bin_it->second.find(property_name);
+                    if (prop_it != bin_it->second.end()) {
+                        interp.set_variable(variable, prop_it->second);
+                        return;
+                    }
+                }
             }
         }
 

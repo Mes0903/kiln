@@ -5,16 +5,32 @@
 #include "genex_evaluator.hpp"
 #include "CMakeArray.hpp"
 #include "printing.hpp"
+#include <glaze/glaze.hpp>
 #include <pugixml.hpp>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <set>
-#include <unordered_set>
 #include <cctype>
 
 namespace kiln {
+
+// Schema for CMake's AutogenInfo.json, consumed by Qt's cmake_automoc_parser.
+// HEADERS entries: [path, flags, moc_output_relative, null]
+// SOURCES entries: [path, flags, null]
+using AutogenHeaderEntry = std::tuple<std::string, std::string, std::string, std::nullptr_t>;
+using AutogenSourceEntry = std::tuple<std::string, std::string, std::nullptr_t>;
+
+struct AutogenInfo {
+    std::string BUILD_DIR;
+    std::string INCLUDE_DIR;
+    std::string QT_MOC_EXECUTABLE;
+    bool MULTI_CONFIG = false;
+    std::vector<AutogenHeaderEntry> HEADERS;
+    std::vector<AutogenSourceEntry> SOURCES;
+    std::vector<std::string> HEADER_EXTENSIONS = {"h", "hh", "h++", "hm", "hpp", "hxx", "in", "txx"};
+};
 
 namespace fs = std::filesystem;
 
@@ -683,6 +699,57 @@ void generate_autogen_tasks(
                 deps_value += moc_file;
             }
             interp.get_source_properties()[mocs_comp_path]["OBJECT_DEPENDS"] = deps_value;
+        }
+
+        // Generate AutogenInfo.json for Qt's cmake_automoc_parser.
+        // Qt's metatype extraction uses this file to locate moc JSON output.
+        {
+            std::string autogen_info_dir = (fs::path(target.get_binary_dir()) /
+                "CMakeFiles" / (target.get_name() + "_autogen.dir")).string();
+            fs::create_directories(autogen_info_dir);
+            std::string info_path = (fs::path(autogen_info_dir) / "AutogenInfo.json").string();
+
+            AutogenInfo info;
+            info.BUILD_DIR = autogen_dir;
+            info.INCLUDE_DIR = include_dir;
+            info.QT_MOC_EXECUTABLE = moc_path;
+
+            for (const auto& entry : moc_entries) {
+                if (entry.is_source_moc) continue;
+                std::string rel = fs::relative(fs::path(entry.output_file), fs::path(autogen_dir)).string();
+                info.HEADERS.push_back({entry.input_file, "Mu", rel, nullptr});
+            }
+
+            for (const auto& src : cpp_sources) {
+                info.SOURCES.push_back({src, "Mu", nullptr});
+            }
+
+            std::string content;
+            if (auto ec = glz::write<glz::opts{.prettify = true}>(info, content); ec) {
+                kiln::print_message(std::cerr, "FATAL_ERROR",
+                    "Failed to serialize AutogenInfo.json for target '" +
+                    target.get_name() + "': " + glz::format_error(ec));
+                return;
+            }
+
+            bool needs_write = true;
+            if (fs::exists(info_path)) {
+                std::ifstream existing(info_path);
+                std::string old_content((std::istreambuf_iterator<char>(existing)),
+                                         std::istreambuf_iterator<char>());
+                if (old_content == content) needs_write = false;
+            }
+            if (needs_write) {
+                std::ofstream out(info_path);
+                if (out) out << content;
+            }
+
+            // Create empty ParseCache.txt — cmake_automoc_parser expects it.
+            // kiln handles moc directly, so there's no CMake automoc parse cache.
+            std::string parse_cache_path = (fs::path(autogen_info_dir) / "ParseCache.txt").string();
+            if (!fs::exists(parse_cache_path)) {
+                std::ofstream pc(parse_cache_path);
+            }
         }
     }
 
