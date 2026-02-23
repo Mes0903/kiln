@@ -961,6 +961,16 @@ void register_string_builtins(Interpreter& interp) {
             interp.set_fatal_error("string(UUID) is not implemented (requires hashing support)");
             return;
 
+        } else if (ci_equals(operation, "SHA1")) {
+            CommandParser parser("string", "SHA1");
+            std::string input, out_var;
+
+            parser.positional(out_var, "output variable");
+            parser.positional(input, "input string");
+
+            PARSE_OR_RETURN(parser, interp, sub_args);
+            interp.set_variable(out_var, sha1(input).to_string());
+
         } else if (ci_equals(operation, "SHA256")) {
             CommandParser parser("string", "SHA256");
             std::string input, out_var;

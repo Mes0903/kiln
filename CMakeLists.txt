@@ -32,6 +32,7 @@ add_library(kiln SHARED
     kiln/inner/blake2b.c
     kiln/inner/sha256.cpp
     kiln/inner/md5.cpp
+    kiln/inner/sha1.cpp
     kiln/builtins/message.cpp
     kiln/builtins/variable.cpp
     kiln/builtins/list.cpp

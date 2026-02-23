@@ -16,6 +16,13 @@ struct Hash256
     std::string to_string() const;
 };
 
+struct Hash160
+{
+    unsigned char bytes[20];
+
+    std::string to_string() const;
+};
+
 struct Hash128
 {
     unsigned char bytes[16];
@@ -42,6 +49,15 @@ Hash256 sha256(const void* data, size_t len);
 inline Hash256 sha256(std::string_view str)
 {
     return sha256(str.data(), str.size());
+}
+
+/**
+ * @brief Compute the SHA1 hash of the given data
+ */
+Hash160 sha1(const void* data, size_t len);
+inline Hash160 sha1(std::string_view str)
+{
+    return sha1(str.data(), str.size());
 }
 
 Hash128 md5(const void* data, size_t len);

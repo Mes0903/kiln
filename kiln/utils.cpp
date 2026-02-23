@@ -3,6 +3,7 @@
 #include "inner/blake2b.h"
 #include "inner/sha256.h"
 #include "inner/md5.h"
+#include "inner/sha1.h"
 #ifdef __linux__
 #include <linux/limits.h>
 #include <sys/utsname.h>
@@ -37,6 +38,16 @@ kiln::Hash256 kiln::sha256(const void* data, size_t len)
     return hash;
 }
 
+kiln::Hash160 kiln::sha1(const void* data, size_t len)
+{
+    Hash160 hash;
+    SHA1_CTX ctx;
+    kiln_sha1_init(&ctx);
+    kiln_sha1_update(&ctx, (const unsigned char*)data, len);
+    kiln_sha1_final((unsigned char*)&hash, &ctx);
+    return hash;
+}
+
 kiln::Hash128 kiln::md5(const void* data, size_t len)
 {
     Hash128 hash;
@@ -48,6 +59,18 @@ kiln::Hash128 kiln::md5(const void* data, size_t len)
 }
 
 std::string kiln::Hash256::to_string() const
+{
+    std::string result;
+    result.reserve(2 * sizeof(bytes));
+    for (unsigned char byte : bytes)
+    {
+        result += "0123456789abcdef"[byte >> 4];
+        result += "0123456789abcdef"[byte & 0xf];
+    }
+    return result;
+}
+
+std::string kiln::Hash160::to_string() const
 {
     std::string result;
     result.reserve(2 * sizeof(bytes));
