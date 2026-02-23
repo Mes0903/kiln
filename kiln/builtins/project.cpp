@@ -307,13 +307,17 @@ void register_project_builtins(Interpreter& interp) {
             }
         }
 
-        // Store enabled languages
-        std::string enabled_langs;
-        for (size_t i = 0; i < languages.size(); ++i) {
-            if (i > 0) enabled_langs += ";";
-            enabled_langs += languages[i];
+        // Merge newly enabled languages into the global property
+        // (a child project() must not remove languages enabled by the parent)
+        {
+            CMakeArray enabled_langs(interp.get_global_properties()["ENABLED_LANGUAGES"]);
+            for (const auto& lang : languages) {
+                if (!enabled_langs.contains(lang)) {
+                    enabled_langs.append(lang);
+                }
+            }
+            interp.get_global_properties()["ENABLED_LANGUAGES"] = enabled_langs.to_string();
         }
-        interp.get_global_properties()["ENABLED_LANGUAGES"] = enabled_langs;
 
         // Process VERSION - CMake always sets version variables, even when
         // VERSION is not provided (in which case they are set to empty string)

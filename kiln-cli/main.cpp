@@ -413,9 +413,16 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
             skip_code = *v;
         }
 
+        // WORKING_DIRECTORY property overrides the add_test() working directory
+        std::string working_dir = test->working_dir;
+        auto wd_it = test->properties.find("WORKING_DIRECTORY");
+        if (wd_it != test->properties.end() && !wd_it->second.empty()) {
+            working_dir = wd_it->second;
+        }
+
         // Execute the command with timeout handling
         std::future<kiln::CommandResult> cmd_future = std::async(std::launch::async, [&]() {
-            return kiln::run_command(command_vec, test->working_dir);
+            return kiln::run_command(command_vec, working_dir);
         });
 
         kiln::CommandResult result;
@@ -436,11 +443,29 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
 
         res.output = result.output;
 
-        if (skip_code.has_value() && result.exit_code == skip_code.value()) {
-            res.skipped = true;
-            res.passed = true;
-        } else {
-            res.passed = (result.exit_code == 0);
+        // Check SKIP_REGULAR_EXPRESSION — skip if output matches any pattern
+        auto skip_re_it = test->properties.find("SKIP_REGULAR_EXPRESSION");
+        if (skip_re_it != test->properties.end()) {
+            for (auto pat_it = kiln::CMakeArrayIterator::iterator(skip_re_it->second);
+                 pat_it != kiln::CMakeArrayIterator::sentinel{}; ++pat_it) {
+                std::string pat(*pat_it);
+                if (pat.empty()) continue;
+                auto re = kiln::Regex::compile(pat);
+                if (re && (*re).search(result.output)) {
+                    res.skipped = true;
+                    res.passed = true;
+                    break;
+                }
+            }
+        }
+
+        if (!res.skipped) {
+            if (skip_code.has_value() && result.exit_code == skip_code.value()) {
+                res.skipped = true;
+                res.passed = true;
+            } else {
+                res.passed = (result.exit_code == 0);
+            }
         }
 
         auto end = std::chrono::high_resolution_clock::now();

@@ -1107,14 +1107,18 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 return;
             }
 
-            // Supported test properties (explicitly tracked)
-            static const std::unordered_set<std::string> SUPPORTED_PROPERTIES = {
-                "TIMEOUT",
-                "SKIP_RETURN_CODE",
-                "DEPENDS",
-                // Future properties can be added here:
-                // "WILL_FAIL", "PASS_REGULAR_EXPRESSION", "FAIL_REGULAR_EXPRESSION",
-                // "WORKING_DIRECTORY", "ENVIRONMENT", "LABELS", etc.
+            // Known test properties (stored silently; unrecognized ones still stored but warn)
+            static const std::unordered_set<std::string> KNOWN_PROPERTIES = {
+                "TIMEOUT", "SKIP_RETURN_CODE", "DEPENDS",
+                "WORKING_DIRECTORY", "SKIP_REGULAR_EXPRESSION",
+                "WILL_FAIL", "PASS_REGULAR_EXPRESSION", "FAIL_REGULAR_EXPRESSION",
+                "ENVIRONMENT", "ENVIRONMENT_MODIFICATION", "LABELS",
+                "FIXTURES_SETUP", "FIXTURES_CLEANUP", "FIXTURES_REQUIRED",
+                "DISABLED", "COST", "PROCESSORS", "RESOURCE_LOCK",
+                "RUN_SERIAL", "MEASUREMENT", "ATTACHED_FILES",
+                "ATTACHED_FILES_ON_FAIL", "REQUIRED_FILES",
+                // Metadata-only properties (no runtime behavior needed)
+                "DEF_SOURCE_LINE", "_BACKTRACE_TRIPLES",
             };
 
             // Parse: set_tests_properties(test1 [test2...] PROPERTIES prop1 val1 [prop2 val2...])
@@ -1150,9 +1154,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 std::string prop_name = prop_args[i];
                 std::string prop_value = prop_args[i + 1];
 
-                // Warn if property is not supported (but still set it)
-                if (SUPPORTED_PROPERTIES.find(prop_name) == SUPPORTED_PROPERTIES.end()) {
-                    interp.print_message("WARN", "Test property '" + prop_name + "' is not yet supported by kiln");
+                // Warn if property is completely unrecognized (but still set it)
+                if (KNOWN_PROPERTIES.find(prop_name) == KNOWN_PROPERTIES.end()) {
+                    interp.print_message("WARN", "Unknown test property '" + prop_name + "'");
                 }
 
                 properties[prop_name] = prop_value;
