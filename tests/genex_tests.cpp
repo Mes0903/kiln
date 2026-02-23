@@ -1427,3 +1427,58 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         REQUIRE(finalized.inputs[0] == "/always_dep");
     }
 }
+
+TEST_CASE("GenexEvaluator - TARGET_PROPERTY 1-arg with current_target", "[genex][evaluator]") {
+    TargetMap targets;
+    auto mylib = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    mylib->set_property("MY_CUSTOM_PROP", "hello_world");
+    targets["mylib"] = mylib;
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.current_target = mylib.get();
+    GenexEvaluator eval(ctx);
+
+    // 1-arg form uses current_target
+    auto result = eval.evaluate("$<TARGET_PROPERTY:MY_CUSTOM_PROP>");
+    REQUIRE(result.has_value());
+    REQUIRE(*result == "hello_world");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_PROPERTY 1-arg without current_target errors", "[genex][evaluator]") {
+    TargetMap targets;
+    auto mylib = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    targets["mylib"] = mylib;
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    // current_target deliberately not set
+    GenexEvaluator eval(ctx);
+
+    auto result = eval.evaluate("$<TARGET_PROPERTY:MY_CUSTOM_PROP>");
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().find("current_target") != std::string::npos);
+}
+
+TEST_CASE("GenexEvaluator - TARGET_PROPERTY built-in pseudo-properties", "[genex][evaluator]") {
+    TargetMap targets;
+    auto mylib = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/mysrc", "/mybuild");
+    targets["mylib"] = mylib;
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.current_target = mylib.get();
+    GenexEvaluator eval(ctx);
+
+    // 1-arg form for built-in properties
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:NAME>").value() == "mylib");
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:SOURCE_DIR>").value() == "/mysrc");
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:BINARY_DIR>").value() == "/mybuild");
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:IMPORTED>").value() == "FALSE");
+
+    // 2-arg form for built-in properties
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,NAME>").value() == "mylib");
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,SOURCE_DIR>").value() == "/mysrc");
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,BINARY_DIR>").value() == "/mybuild");
+    REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,IMPORTED>").value() == "FALSE");
+}

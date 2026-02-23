@@ -853,6 +853,24 @@ TEST_CASE("list(FILTER) EXCLUDE filters list", "[interpreter][list]") {
     REQUIRE(output == "banana;cherry\n");
 }
 
+TEST_CASE("list(FILTER) uses substring matching not full match", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "abc123def" "xyz" "123")
+        list(FILTER MY_LIST EXCLUDE REGEX "123")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "xyz\n");
+}
+
+TEST_CASE("list(FILTER) INCLUDE substring matching", "[interpreter][list]") {
+    auto output = run_script(R"(
+        set(MY_LIST "hello_world" "goodbye" "hello")
+        list(FILTER MY_LIST INCLUDE REGEX "hello")
+        message("${MY_LIST}")
+    )");
+    REQUIRE(output == "hello_world;hello\n");
+}
+
 TEST_CASE("list(TRANSFORM) APPEND appends to each element", "[interpreter][list]") {
     auto output = run_script(R"(
         set(MY_LIST "file1" "file2" "file3")
