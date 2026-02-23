@@ -361,9 +361,16 @@ void Interpreter::execute_deferred_calls() {
 
 
 void kiln::Interpreter::process_file_generates(const GenexEvaluationContext& genex_ctx) {
-    GenexEvaluator evaluator(genex_ctx);
-
     for (auto& entry : pending_file_generates_) {
+        // Set up per-entry genex context with the TARGET if specified
+        auto entry_ctx = genex_ctx;
+        if (!entry.target_name.empty()) {
+            if (auto it = targets_.find(entry.target_name); it != targets_.end()) {
+                entry_ctx.current_target = it->second.get();
+            }
+        }
+        GenexEvaluator evaluator(entry_ctx);
+
         // Evaluate CONDITION — skip if falsy
         if (!entry.condition.empty()) {
             auto cond_result = evaluator.evaluate(entry.condition);

@@ -516,7 +516,7 @@ void register_list_builtins(Interpreter& interp) {
             }
 
             thread_local ClockCache<std::string, Regex> cache(8, [](const std::string& p) {
-                return Regex::from_cmake_regex_match(p);
+                return Regex::from_cmake_regex(p);
             });
             auto rx = cache.get(pattern);
             if (!rx) {
@@ -529,7 +529,7 @@ void register_list_builtins(Interpreter& interp) {
             bool include = (mode == "INCLUDE");
             std::string result_str;
             for (auto item : CMakeArrayIterator(list_str)) {
-                bool matches = (*rx)->match(item);
+                bool matches = (*rx)->search(item);
                 if ((include && matches) || (!include && !matches)) {
                     if (!result_str.empty()) result_str += ';';
                     result_str += item;

@@ -70,6 +70,7 @@ struct PendingFileGenerate {
     std::string condition;     // CONDITION genex (empty = unconditional)
     std::string newline_style; // NEWLINE_STYLE keyword
     std::string binary_dir;    // CMAKE_CURRENT_BINARY_DIR at call time
+    std::string target_name;   // TARGET keyword — sets current_target for genex
 };
 
 // Install system structures

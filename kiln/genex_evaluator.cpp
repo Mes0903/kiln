@@ -502,8 +502,22 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return std::unexpected("TARGET_PROPERTY: target '" + target_name + "' not found");
             }
 
-            // Get the property value (checks list properties then generic)
-            std::string prop_value = target->get_property_combined(property_name);
+            // Handle built-in pseudo-properties first
+            std::string prop_value;
+            if (property_name == "NAME") {
+                prop_value = target->get_name();
+            } else if (property_name == "SOURCE_DIR") {
+                prop_value = target->get_source_dir();
+            } else if (property_name == "BINARY_DIR") {
+                prop_value = target->get_binary_dir();
+            } else if (property_name == "IMPORTED") {
+                prop_value = target->is_imported() ? "TRUE" : "FALSE";
+            } else if (property_name == "IMPORTED_LOCATION") {
+                prop_value = target->get_imported_location();
+            } else {
+                // Check list properties then generic
+                prop_value = target->get_property_combined(property_name);
+            }
 
             // Recursively evaluate any nested genex in individual list elements
             if (prop_value.find("$<") != std::string::npos) {

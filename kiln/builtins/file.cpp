@@ -1385,6 +1385,7 @@ void register_file_builtins(Interpreter& interp) {
                 .condition = condition,
                 .newline_style = newline_style,
                 .binary_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR"),
+                .target_name = target_name,
             });
         } else if (ci_equals(operation, "LOCK")) {
             // file(LOCK <path> [DIRECTORY] [RELEASE] [GUARD <scope>] [RESULT_VARIABLE <var>] [TIMEOUT <sec>])
