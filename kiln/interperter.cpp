@@ -859,6 +859,15 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("LINUX", "1");
 #endif
 
+    // Byte order detection
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    variables_.set("CMAKE_C_BYTE_ORDER", "LITTLE_ENDIAN");
+    variables_.set("CMAKE_CXX_BYTE_ORDER", "LITTLE_ENDIAN");
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    variables_.set("CMAKE_C_BYTE_ORDER", "BIG_ENDIAN");
+    variables_.set("CMAKE_CXX_BYTE_ORDER", "BIG_ENDIAN");
+#endif
+
     variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
     variables_.set("CMAKE_SHARED_LIBRARY_PREFIX", "lib");
     variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");

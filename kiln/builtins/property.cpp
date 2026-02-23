@@ -555,23 +555,40 @@ void register_property_builtins(Interpreter& interp) {
                 }
 
                 for (const auto& entry_name : items) {
-                    // For cache properties, we store them in a special way
-                    // Since we don't have a separate cache property storage, we'll use a naming convention
-                    std::string cache_prop_key = entry_name + ".__property__." + property_name;
-
-                    if (append || append_string) {
-                        std::string old_val = cache_variables[cache_prop_key];
-                        if (!old_val.empty() && !value.empty()) {
-                            if (append_string) {
-                                cache_variables[cache_prop_key] = old_val + value;
-                            } else {
-                                cache_variables[cache_prop_key] = old_val + ";" + value;
+                    // Setting the VALUE property updates the actual cache variable
+                    if (property_name == "VALUE") {
+                        if (append || append_string) {
+                            std::string old_val = cache_variables[entry_name];
+                            if (!old_val.empty() && !value.empty()) {
+                                if (append_string) {
+                                    cache_variables[entry_name] = old_val + value;
+                                } else {
+                                    cache_variables[entry_name] = old_val + ";" + value;
+                                }
+                            } else if (!value.empty()) {
+                                cache_variables[entry_name] = value;
                             }
-                        } else if (!value.empty()) {
-                            cache_variables[cache_prop_key] = value;
+                        } else {
+                            cache_variables[entry_name] = value;
                         }
                     } else {
-                        cache_variables[cache_prop_key] = value;
+                        // Other properties (TYPE, STRINGS, etc.) use metadata storage
+                        std::string cache_prop_key = entry_name + ".__property__." + property_name;
+
+                        if (append || append_string) {
+                            std::string old_val = cache_variables[cache_prop_key];
+                            if (!old_val.empty() && !value.empty()) {
+                                if (append_string) {
+                                    cache_variables[cache_prop_key] = old_val + value;
+                                } else {
+                                    cache_variables[cache_prop_key] = old_val + ";" + value;
+                                }
+                            } else if (!value.empty()) {
+                                cache_variables[cache_prop_key] = value;
+                            }
+                        } else {
+                            cache_variables[cache_prop_key] = value;
+                        }
                     }
                 }
                 break;
