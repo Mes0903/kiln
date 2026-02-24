@@ -301,11 +301,12 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
 }
 
 void BuildGraph::resolve_inferred_file_deps() {
-    // After genex evaluation, tasks may have gained new inputs.
-    // Wire file-based dependencies for all tasks.
+    // After genex evaluation, tasks may have gained new inputs and explicit_deps.
+    // Resolve both explicit deps (from genex-evaluated target names) and file deps.
     std::vector<BuildTask*> all;
     all.reserve(tasks_.size());
     for (auto& t : tasks_) all.push_back(t.get());
+    resolve_explicit_deps(all);
     resolve_file_deps(all);
 }
 
@@ -415,13 +416,16 @@ std::expected<BuildTask*, std::string> BuildGraph::add_task_internal(std::unique
 
 void BuildGraph::resolve_explicit_deps(std::span<BuildTask*> batch) {
     for (auto* task : batch) {
+        std::vector<std::string> unresolved;
         for (const auto& dep_id : task->explicit_deps) {
             auto it = task_by_id_.find(dep_id);
             if (it != task_by_id_.end()) {
                 add_dependency(task, it->second);
+            } else {
+                unresolved.push_back(dep_id);
             }
         }
-        task->explicit_deps.clear();
+        task->explicit_deps = std::move(unresolved);
         // Deduplicate
         std::sort(task->dependencies.begin(), task->dependencies.end());
         task->dependencies.erase(

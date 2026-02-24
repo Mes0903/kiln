@@ -249,7 +249,8 @@ protected:
                                const std::string& module_mapper_path,
                                std::set<std::string>& generated_custom_tasks,
                                const std::set<std::string>& implicit_includes,
-                               const std::set<Language>& pch_languages);
+                               const std::set<Language>& pch_languages,
+                               std::vector<struct ResolvedDep> resolved_manual_deps);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected

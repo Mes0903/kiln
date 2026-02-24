@@ -677,10 +677,19 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
         while (changed) {
             changed = false;
             for (const auto& missing : graph.get_missing_dependencies()) {
+                // Check if missing dep is an output file of a known target
                 auto it = output_to_target.find(missing);
                 if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
                     targets_to_build.insert(it->second);
                     targets_[it->second]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    changed = true;
+                    continue;
+                }
+                // Check if missing dep is a target name (e.g. custom targets with no output path)
+                auto tgt_it = targets_.find(missing);
+                if (tgt_it != targets_.end() && !targets_to_build.count(missing)) {
+                    targets_to_build.insert(missing);
+                    tgt_it->second->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
                     changed = true;
                 }
             }
@@ -690,6 +699,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
             return std::unexpected(BuildError{current_file_, commit_result.error()});
         }
     }
+
 
     // Resolve circular deps
     for (auto& [name, target] : targets_) {
@@ -723,6 +733,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
         return std::unexpected(BuildError{current_file_, finalize_result.error()});
     }
     graph.resolve_inferred_file_deps();
+
 
     // Return full graph (not just dirty tasks)
     return std::move(graph);

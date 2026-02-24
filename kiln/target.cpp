@@ -1026,6 +1026,8 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
     txn.add(std::move(task));
 }
 
+struct ResolvedDep { std::string id; };
+
 void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::string& pch_gch_path, const std::string& pch_include_arg,
                                       bool is_shared, bool is_pie, const TargetMap& all_targets,
@@ -1034,7 +1036,8 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                                       const std::string& module_mapper_path,
                                       std::set<std::string>& generated_custom_tasks,
                                       const std::set<std::string>& implicit_includes,
-                                      const std::set<Language>& pch_languages) {
+                                      const std::set<Language>& pch_languages,
+                                      std::vector<ResolvedDep> resolved_manual_deps) {
     // --- Hoist all loop-invariant computations ---
 
     bool target_has_modules = has_module_sources();
@@ -1073,29 +1076,6 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         return compute_effective_standard(get_language_standard(lang), required, compiler_default);
     };
 
-    // Pre-resolve manual dependencies (same for every source)
-    // Include our own manual deps plus those from linked dependencies.
-    // In CMake/Ninja, add_dependencies(A, X) makes A's compile tasks depend on X.
-    // When B links to A, B's compiles may use A's public include dirs which can
-    // contain generated headers, so B's compiles also need to wait for X.
-    struct ResolvedDep { std::string id; };
-    std::vector<ResolvedDep> resolved_manual_deps;
-    auto add_manual_deps = [&](const std::vector<std::string>& deps) {
-        for (const auto& dep_name : deps) {
-            auto it = all_targets.find(dep_name);
-            if (it != all_targets.end()) {
-                std::string dep_out = it->second->get_output_path();
-                resolved_manual_deps.push_back({dep_out.empty() ? dep_name : std::move(dep_out)});
-            }
-        }
-    };
-    add_manual_deps(manually_added_dependencies_);
-    for (const auto& dep_name : resolved_target_deps_) {
-        auto it = all_targets.find(dep_name);
-        if (it != all_targets.end()) {
-            add_manual_deps(it->second->get_manually_added_dependencies());
-        }
-    }
 
     // Pre-build CXX_MODULES file set for O(1) lookups instead of O(N*M) per-source
     std::unordered_set<std::string> cxx_module_files;
@@ -1611,7 +1591,8 @@ static std::pair<std::string, std::string> generate_pch_task(
     const std::vector<std::string>& definitions,
     const std::vector<std::string>& options,
     int compiler_default_standard,
-    GenexEvaluator& evaluator) {
+    GenexEvaluator& evaluator,
+    const std::vector<ResolvedDep>& manual_deps = {}) {
 
     // Using PCH property name "PRECOMPILE_HEADERS"
     auto own_pchs_raw = target->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
@@ -1712,6 +1693,10 @@ static std::pair<std::string, std::string> generate_pch_task(
 
     pch_task.outputs.push_back(pch_gch_path);
 
+    for (const auto& dep : manual_deps) {
+        pch_task.explicit_deps.push_back(dep.id);
+    }
+
     txn.add(std::move(pch_task));
 
     return {pch_gch_path, pch_include_arg};
@@ -1799,6 +1784,27 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     bool has_modules = generate_module_scanner_tasks(txn, toolchain, cxx_default_std);
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
+    // Pre-resolve manual dependencies for PCH and compile tasks
+    std::vector<ResolvedDep> resolved_manual_deps;
+    {
+        auto add_manual_deps = [&](const std::vector<std::string>& deps) {
+            for (const auto& dep_name : deps) {
+                auto it = all_targets.find(dep_name);
+                if (it != all_targets.end()) {
+                    std::string dep_out = it->second->get_output_path();
+                    resolved_manual_deps.push_back({dep_out.empty() ? dep_name : std::move(dep_out)});
+                }
+            }
+        };
+        add_manual_deps(manually_added_dependencies_);
+        for (const auto& dep_name : resolved_target_deps_) {
+            auto it = all_targets.find(dep_name);
+            if (it != all_targets.end()) {
+                add_manual_deps(it->second->get_manually_added_dependencies());
+            }
+        }
+    }
+
     // PCH: either reuse from provider or generate own
     std::string pch_gch_path, pch_include_arg;
     std::string reuse_from = get_property("PRECOMPILE_HEADERS_REUSE_FROM");
@@ -1859,7 +1865,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
             evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
             evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
-            cxx_default_std, pch_evaluator);
+            cxx_default_std, pch_evaluator, resolved_manual_deps);
         pch_gch_path = std::move(gch);
         pch_include_arg = std::move(inc);
     }
@@ -1885,7 +1891,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     generate_object_tasks(txn, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, is_pie,
                           all_targets, evaluator, interp,
                           pre_build_task_id, module_mapper_path, generated_custom_tasks,
-                          implicit_includes, pch_languages);
+                          implicit_includes, pch_languages, resolved_manual_deps);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 
@@ -2217,6 +2223,7 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
 
     const auto& custom_rules = interp.get_custom_command_rules();
     std::set<std::string> generated_cc_tasks;
+
 
     for (const auto& custom_cmd : custom_commands_) {
         task.commands.push_back(custom_cmd.command);
