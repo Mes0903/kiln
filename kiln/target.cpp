@@ -137,6 +137,34 @@ std::string Target::get_property_combined(const std::string& name) const {
         }
         if (!result.empty()) return result;
     }
+
+    // CMake visibility-prefixed property access:
+    //   INTERFACE_X → X[PUBLIC] + X[INTERFACE]
+    // This is how CMake exposes visibility-scoped properties via genex like
+    // $<TARGET_PROPERTY:tgt,INTERFACE_INCLUDE_DIRECTORIES>
+    auto try_visibility_prefix = [&](std::string_view prefix,
+                                     std::initializer_list<PropertyVisibility> scopes) -> std::string {
+        if (!name.starts_with(prefix)) return {};
+        std::string base_name(name.substr(prefix.size()));
+        auto base_it = list_properties_.find(base_name);
+        if (base_it == list_properties_.end()) return {};
+        std::string result;
+        for (auto vis : scopes) {
+            auto vis_it = base_it->second.find(vis);
+            if (vis_it != base_it->second.end()) {
+                for (const auto& v : vis_it->second) {
+                    if (!result.empty()) result += ';';
+                    result += v;
+                }
+            }
+        }
+        return result;
+    };
+
+    if (auto r = try_visibility_prefix("INTERFACE_",
+            {PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE}); !r.empty())
+        return r;
+
     // Fall back to generic properties
     return get_property(name);
 }
