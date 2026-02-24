@@ -1602,6 +1602,7 @@ BuildGraph::attach_ep_graph(
     for (const auto& [ptr, ds] : state.dirty_state) {
         if (!ds.has_value() || !*ds) continue;  // Only check definitely-dirty
         if (state.completed.count(ptr)) continue;
+        if (state.running.count(ptr)) continue;      // already executing
         if (state.ready_set.count(ptr)) continue;
 
         bool all_deps_done = true;
