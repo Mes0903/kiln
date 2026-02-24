@@ -778,7 +778,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         }
 
         case GenexNodeType::COMPILE_LANGUAGE: {
-            // $<COMPILE_LANGUAGE:lang> returns 1 if compiling with specified language
+            // $<COMPILE_LANGUAGE:lang[,lang2,...]> returns 1 if compiling with any listed language
             if (ctx_.allow_deferred_compile_language && !ctx_.compile_language) {
                 // Return original expression for deferred evaluation
                 return "$<COMPILE_LANGUAGE:" + node.raw_content + ">";
@@ -788,10 +788,6 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 return std::unexpected("COMPILE_LANGUAGE requires compile_language context");
             }
 
-            std::string lang_upper = node.raw_content;
-            std::transform(lang_upper.begin(), lang_upper.end(), lang_upper.begin(),
-                         [](unsigned char c) { return std::toupper(c); });
-
             std::string current_lang;
             switch (*ctx_.compile_language) {
                 case Language::C: current_lang = "C"; break;
@@ -800,7 +796,15 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 default: current_lang = "UNKNOWN"; break;
             }
 
-            return (lang_upper == current_lang) ? "1" : "0";
+            // Support comma-separated language list: $<COMPILE_LANGUAGE:CXX,OBJCXX>
+            auto langs = GenexParser().split_genex_args(node.raw_content);
+            for (const auto& lang : langs) {
+                std::string lang_upper = lang;
+                std::transform(lang_upper.begin(), lang_upper.end(), lang_upper.begin(),
+                             [](unsigned char c) { return std::toupper(c); });
+                if (lang_upper == current_lang) return std::string("1");
+            }
+            return std::string("0");
         }
 
         case GenexNodeType::COMPILE_LANG_AND_ID: {

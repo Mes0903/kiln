@@ -1567,11 +1567,23 @@ static std::pair<std::string, std::string> generate_pch_task(
     const std::vector<std::string>& system_includes,
     const std::vector<std::string>& definitions,
     const std::vector<std::string>& options,
-    int compiler_default_standard) {
+    int compiler_default_standard,
+    GenexEvaluator& evaluator) {
 
     // Using PCH property name "PRECOMPILE_HEADERS"
-    auto own_pchs = target->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
+    auto own_pchs_raw = target->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
 
+    if (own_pchs_raw.empty()) {
+        return {"", ""};
+    }
+
+    // Evaluate genex in PCH headers (e.g. $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:header.h>)
+    auto eval_result = evaluator.evaluate_property_list(own_pchs_raw);
+    if (!eval_result) {
+        throw std::runtime_error("Error evaluating genex in PRECOMPILE_HEADERS for target '"
+            + target->get_name() + "': " + eval_result.error());
+    }
+    auto own_pchs = std::move(*eval_result);
     if (own_pchs.empty()) {
         return {"", ""};
     }
@@ -1804,7 +1816,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
             evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
             evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
-            cxx_default_std);
+            cxx_default_std, pch_evaluator);
         pch_gch_path = std::move(gch);
         pch_include_arg = std::move(inc);
     }
