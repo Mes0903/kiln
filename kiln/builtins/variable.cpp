@@ -226,8 +226,10 @@ void register_variable_builtins(Interpreter& interp) {
         PARSE_OR_RETURN(parser, interp, args);
 
         std::string value = Interpreter::is_truthy(initial_value) ? "ON" : "OFF";
-        if(!interp.is_variable_set(option_name)) {
-            interp.set_variable(option_name, value);
+        // option() creates a cache variable (BOOL type). Only set if not already
+        // defined — matching CMake's behavior where option() is a cache entry.
+        if (!interp.is_variable_set(option_name)) {
+            interp.set_cache_variable(option_name, value);
         }
     });
 

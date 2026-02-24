@@ -240,14 +240,33 @@ std::string_view eval_operand_sv(Interpreter& interp, const Argument& arg, std::
 bool try_numeric_compare(std::string_view left, std::string_view right, int& cmp) {
     // CMake parses only the leading numeric portion (e.g. "0;\"No error\"" → 0),
     // so we only require from_chars to succeed, not consume the entire string.
+    // However, we must prefer double over int when either operand has a fractional
+    // part (e.g. "3.31.0" should parse as 3.31, not truncate to int 3).
     int64_t li, ri;
     auto lr = std::from_chars(left.data(), left.data() + left.size(), li);
     auto rr = std::from_chars(right.data(), right.data() + right.size(), ri);
+
+    bool left_has_dot = lr.ec == std::errc{} && lr.ptr < left.data() + left.size() && *lr.ptr == '.';
+    bool right_has_dot = rr.ec == std::errc{} && rr.ptr < right.data() + right.size() && *rr.ptr == '.';
+
+    // Try double first if either side looks like it has a fractional part
+    if (left_has_dot || right_has_dot) {
+        double ld, rd;
+        auto lrd = std::from_chars(left.data(), left.data() + left.size(), ld);
+        auto rrd = std::from_chars(right.data(), right.data() + right.size(), rd);
+        if (lrd.ec == std::errc{} && rrd.ec == std::errc{}) {
+            cmp = (ld > rd) - (ld < rd);
+            return true;
+        }
+    }
+
+    // Use integer comparison when both parsed cleanly as integers
     if (lr.ec == std::errc{} && rr.ec == std::errc{}) {
         cmp = (li > ri) - (li < ri);
         return true;
     }
-    // Fall back to double
+
+    // Fall back to double for other cases
     double ld, rd;
     auto lrd = std::from_chars(left.data(), left.data() + left.size(), ld);
     auto rrd = std::from_chars(right.data(), right.data() + right.size(), rd);

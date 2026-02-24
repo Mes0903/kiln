@@ -770,7 +770,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
     }
 
-    variables_.set("CMAKE_VERSION", "3.301.0");
+    variables_.set("CMAKE_VERSION", "3.31.0");
     variables_.set("CMAKE_MAJOR_VERSION", "3");
     variables_.set("CMAKE_MINOR_VERSION", "31");
     variables_.set("CMAKE_PATCH_VERSION", "0");

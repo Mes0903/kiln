@@ -1671,6 +1671,103 @@ TEST_CASE("if condition: numeric comparison with list values", "[interpreter][if
         REQUIRE(output == "pass\n");
     }
 
+    // All numeric comparison tests verified against CMake 3.31
+    SECTION("version-like strings with LESS_EQUAL") {
+        // "3.31.0" parses as double 3.31, "3.19" as 3.19 → 3.31 > 3.19 → FALSE
+        auto output = run_script(R"(
+            if("3.31.0" LESS_EQUAL "3.19")
+                message("fail")
+            else()
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("version-like strings with LESS") {
+        auto output = run_script(R"(
+            if("3.31.0" LESS "3.19")
+                message("fail")
+            else()
+                message("pass")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("version-like strings with GREATER") {
+        auto output = run_script(R"(
+            if("3.31.0" GREATER "3.19")
+                message("pass")
+            else()
+                message("fail")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("dotted numeric EQUAL") {
+        auto output = run_script(R"(
+            if("3.19" EQUAL "3.19")
+                message("pass")
+            else()
+                message("fail")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("integer comparison still works") {
+        auto output = run_script(R"(
+            if(42 LESS_EQUAL 42)
+                message("le_pass")
+            endif()
+            if(41 LESS 42)
+                message("lt_pass")
+            endif()
+            if(43 GREATER 42)
+                message("gt_pass")
+            endif()
+            if(42 GREATER_EQUAL 42)
+                message("ge_pass")
+            endif()
+        )");
+        REQUIRE(output == "le_pass\nlt_pass\ngt_pass\nge_pass\n");
+    }
+
+    SECTION("mixed int and float comparison") {
+        auto output = run_script(R"(
+            if("3" LESS "3.1")
+                message("pass")
+            else()
+                message("fail")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("same major different minor LESS_EQUAL") {
+        auto output = run_script(R"(
+            if("3.19" LESS_EQUAL "3.31")
+                message("pass")
+            else()
+                message("fail")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
+    SECTION("negative number comparison") {
+        auto output = run_script(R"(
+            if("-5" LESS "3")
+                message("pass")
+            else()
+                message("fail")
+            endif()
+        )");
+        REQUIRE(output == "pass\n");
+    }
+
     SECTION("non-numeric leading value fails comparison") {
         auto output = run_script(R"(
             set(status "abc;123")
@@ -2223,6 +2320,49 @@ TEST_CASE("option", "[interpreter][option]") {
         message("${FOO}")
     )");
     REQUIRE(output == "ON\n");
+
+    // Verified against CMake 3.31: option() creates a cache variable,
+    // so it is visible outside the function scope that defined it.
+    SECTION("option inside function is visible outside") {
+        output = run_script(R"(
+            function(set_option_in_func)
+                option(MY_OPT "An option" ON)
+            endfunction()
+            set_option_in_func()
+            if(MY_OPT)
+                message("visible")
+            else()
+                message("not_visible")
+            endif()
+        )");
+        REQUIRE(output == "visible\n");
+    }
+
+    SECTION("option doesn't override existing variable") {
+        output = run_script(R"(
+            set(MY_OPT2 "OFF")
+            function(try_override_option)
+                option(MY_OPT2 "Another option" ON)
+            endfunction()
+            try_override_option()
+            message("${MY_OPT2}")
+        )");
+        REQUIRE(output == "OFF\n");
+    }
+
+    SECTION("option from one function visible in another") {
+        output = run_script(R"(
+            function(define_opt)
+                option(CROSS_FUNC_OPT "cross func" ON)
+            endfunction()
+            function(read_opt)
+                message("${CROSS_FUNC_OPT}")
+            endfunction()
+            define_opt()
+            read_opt()
+        )");
+        REQUIRE(output == "ON\n");
+    }
 }
 
 TEST_CASE("Multi-line if condition", "[interpreter][if]") {
