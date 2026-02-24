@@ -182,6 +182,25 @@ static size_t shell_redirect_prefix_len(const std::string& arg) {
     return 0;
 }
 
+// Find an embedded redirect operator within an argument (not at position 0).
+// Returns {position, operator_length} or {npos, 0} if none found.
+// Handles cases like "file.sql>" or "file.sql>output" where the redirect
+// is glued to the preceding text (common in CMake COMMAND arguments).
+static std::pair<size_t, size_t> find_embedded_redirect(const std::string& arg) {
+    for (size_t i = 1; i < arg.size(); ++i) {
+        if (arg[i] == '>') {
+            if (i + 1 < arg.size() && arg[i + 1] == '>') {
+                return {i, 2};  // >>
+            }
+            return {i, 1};  // >
+        }
+        if (arg[i] == '<') {
+            return {i, 1};  // <
+        }
+    }
+    return {std::string::npos, 0};
+}
+
 static bool is_shell_operator(const std::string& arg) {
     return arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1" ||
            arg == "(" || arg == ")";
@@ -197,6 +216,15 @@ std::string kiln::join_command(const std::vector<std::string>& args) {
             // Split redirection operator from path: ">file" → > + escaped(file)
             result += args[i].substr(0, pfx);
             std::string path = args[i].substr(pfx);
+            if (!path.empty()) {
+                result += escape_shell_arg(path);
+            }
+        } else if (auto [pos, len] = find_embedded_redirect(args[i]); pos != std::string::npos) {
+            // Split embedded redirect: "file.sql>" → escaped(file.sql) + " >" + escaped(path)
+            result += escape_shell_arg(args[i].substr(0, pos));
+            result += " ";
+            result += args[i].substr(pos, len);
+            std::string path = args[i].substr(pos + len);
             if (!path.empty()) {
                 result += escape_shell_arg(path);
             }
@@ -263,17 +291,18 @@ kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, c
 
     // Parse command vector: separate program+args from redirections.
     // This lets us handle redirects via dup2() without needing a shell.
-    //
-    // Shell-like tokenization: scan each arg for unquoted redirect operators
-    // anywhere in the string.  E.g. "foo>bar" → arg "foo", redirect ">", path "bar".
+    // Redirect operators can appear as standalone args (">"), prefixes (">file"),
+    // or embedded within args ("file>out", "file.sql>").
     std::vector<std::string> argv_strs;
     std::string stdin_file, stdout_file, stderr_file;
     bool stdout_append = false;
 
     // Process command vector: each element is already a distinct argument.
-    // Only check for redirect operators as whole arguments or argument prefixes
-    // (e.g. ">file", "< input"), NOT inside argument content.
-    // This is critical for execvp where arguments are passed directly.
+    // Check for redirect operators as whole arguments, argument prefixes
+    // (e.g. ">file", "< input"), or embedded within arguments (e.g. "file>out",
+    // "file.sql>"). The embedded case arises when CMake source glues a redirect
+    // to the preceding token (e.g. `mariadb_sys_schema.sql>` on one line,
+    // `output.sql` on the next).
     for (size_t i = 0; i < command.size(); ++i) {
         const auto& arg = command[i];
 
@@ -297,6 +326,21 @@ kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, c
             else if (op == ">" || op == "1>") stdout_file = path;
             else if (op == "2>") stderr_file = path;
             else if (op == "2>>") stderr_file = path;
+        } else if (auto [pos, len] = find_embedded_redirect(arg); pos != std::string::npos) {
+            // Embedded redirect: "file.sql>" or "file>out"
+            std::string pre = arg.substr(0, pos);
+            std::string op = arg.substr(pos, len);
+            std::string path = arg.substr(pos + len);
+            if (path.empty() && i + 1 < command.size()) {
+                path = command[++i];
+            }
+            path = strip_shell_quoting(path);
+
+            if (!pre.empty()) argv_strs.push_back(pre);
+
+            if (op == "<") stdin_file = path;
+            else if (op == ">>") { stdout_file = path; stdout_append = true; }
+            else if (op == ">") stdout_file = path;
         } else {
             argv_strs.push_back(arg);
         }

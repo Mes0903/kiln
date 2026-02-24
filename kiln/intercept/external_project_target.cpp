@@ -5,6 +5,8 @@
 
 namespace kiln {
 
+ExternalProjectTarget::~ExternalProjectTarget() = default;
+
 bool ExternalProjectTarget::is_cmake_based() const {
     // cmake-based if:
     // 1. No custom CONFIGURE_COMMAND (or empty)

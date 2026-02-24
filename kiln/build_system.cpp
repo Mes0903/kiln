@@ -900,7 +900,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 if (!install_rules.empty()) {
                                     std::string install_prefix = ep_target->get_ep_install_dir();
                                     std::string config = ep_target->get_pending_install_config();
-                                    auto install_result = execute_install_rules(nullptr, install_rules,
+                                    auto install_result = execute_install_rules(ep_target->get_ep_interpreter(),
+                                                                                install_rules,
                                                                                 install_prefix, config);
                                     if (!install_result) {
                                         task_error = "EP " + ep.ep_name + " install failed: " + install_result.error();
@@ -1805,7 +1806,7 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                 ep_target->set_pending_install_rules(install_rules, config);
 
                 // Compute install task inputs and pre-compute target destinations
-                // (MUST be done BEFORE moving targets to ep_target_owners_)
+                // (MUST be done BEFORE storing interpreter on ep_target)
                 auto install_inputs = compute_install_inputs(install_rules, ep_interp.get(),
                                                              install_prefix, ep_target);
 
@@ -1841,10 +1842,9 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             // Extra install commands will be run by install task (it has access to ep_target)
         }
 
-        // Keep child interpreter targets alive — injected tasks hold raw parent_target pointers
-        for (auto& [_, target] : ep_interp->get_targets()) {
-            ep_target_owners_.push_back(std::move(target));
-        }
+        // Keep EP interpreter alive — injected tasks hold raw parent_target pointers
+        // into its target map, and deferred install tasks need it for install(EXPORT).
+        ep_target->set_ep_interpreter(std::move(ep_interp));
 
     } else {
         // === CUSTOM COMMANDS EP ===

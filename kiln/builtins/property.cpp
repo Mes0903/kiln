@@ -936,11 +936,26 @@ void register_property_builtins(Interpreter& interp) {
                     target_ctx = &interp.get_current_directory_context();
                 }
 
-                // Check target directory properties
-                auto it = target_ctx->properties.find(property_name);
-                if (it != target_ctx->properties.end()) {
-                    value = it->second;
+                // Check accumulated properties first (INCLUDE_DIRECTORIES, etc.)
+                // These are the "live" values set by include_directories(), add_definitions(), etc.
+                // Must be checked before target_ctx->properties so that get_property(DIRECTORY)
+                // and get_directory_property() return the same values.
+                auto acc_it = target_ctx->accumulated.find(property_name);
+                if (acc_it != target_ctx->accumulated.end()) {
+                    for (size_t i = 0; i < acc_it->second.size(); ++i) {
+                        if (i > 0) value += ";";
+                        value += acc_it->second[i];
+                    }
                     value_found = true;
+                }
+
+                if (!value_found) {
+                    // Check directory properties map
+                    auto it = target_ctx->properties.find(property_name);
+                    if (it != target_ctx->properties.end()) {
+                        value = it->second;
+                        value_found = true;
+                    }
                 }
 
                 // If not found and property is inherited, check parent directories

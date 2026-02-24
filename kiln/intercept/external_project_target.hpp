@@ -41,6 +41,7 @@ class ExternalProjectTarget : public CustomTarget {
 public:
     ExternalProjectTarget(std::string name, std::string source_dir, std::string binary_dir)
         : CustomTarget(std::move(name), std::move(source_dir), std::move(binary_dir)) {}
+    ~ExternalProjectTarget() override;
 
     // Generate tasks creates TWO tasks: orchestrator and sentinel
     void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain,
@@ -112,6 +113,10 @@ public:
     const std::vector<std::shared_ptr<InstallRule>>& get_pending_install_rules() const { return pending_install_rules_; }
     const std::string& get_pending_install_config() const { return pending_install_config_; }
 
+    // Store EP interpreter for deferred install tasks (needed for install(EXPORT))
+    void set_ep_interpreter(std::unique_ptr<Interpreter> interp) { ep_interp_ = std::move(interp); }
+    Interpreter* get_ep_interpreter() const { return ep_interp_.get(); }
+
     // Pre-computed target installs (computed while interpreter is alive)
     void add_pending_target_install(PendingTargetInstall install) {
         pending_target_installs_.push_back(std::move(install));
@@ -146,6 +151,9 @@ private:
     // Pending install rules (for cmake-based EPs with build tasks)
     std::vector<std::shared_ptr<InstallRule>> pending_install_rules_;
     std::string pending_install_config_;
+
+    // EP interpreter (kept alive for deferred install tasks that need export sets)
+    std::unique_ptr<Interpreter> ep_interp_;
 
     // Pre-computed target installs (artifact_path -> dest_path)
     std::vector<PendingTargetInstall> pending_target_installs_;
