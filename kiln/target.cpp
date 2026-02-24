@@ -774,7 +774,7 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
 
 // --- Task Generation ---
 
-std::string Target::get_output_path() const {
+std::string Target::get_output_path(GenexEvaluator* evaluator) const {
     // Interface libraries have no linkable output - they only propagate properties
     if (type_ == TargetType::INTERFACE_LIBRARY) {
         return "";
@@ -784,23 +784,28 @@ std::string Target::get_output_path() const {
         return imported_location_;
     }
 
+    // Helper: read a property, evaluating genex if an evaluator is available
+    auto eval_prop = [&](const std::string& prop) -> std::string {
+        return evaluator ? evaluator->evaluate_target_property(*this, prop) : get_property(prop);
+    };
+
     std::string out_name = get_output_name();
 
     // Determine output directory: per-target property overrides binary_dir_.
     // CMake mapping: EXECUTABLE → RUNTIME, STATIC → ARCHIVE, SHARED → LIBRARY.
     std::string output_dir;
     if (type_ == TargetType::EXECUTABLE) {
-        output_dir = get_property("RUNTIME_OUTPUT_DIRECTORY");
+        output_dir = eval_prop("RUNTIME_OUTPUT_DIRECTORY");
     } else if (type_ == TargetType::STATIC_LIBRARY) {
-        output_dir = get_property("ARCHIVE_OUTPUT_DIRECTORY");
+        output_dir = eval_prop("ARCHIVE_OUTPUT_DIRECTORY");
     } else if (type_ == TargetType::SHARED_LIBRARY) {
-        output_dir = get_property("LIBRARY_OUTPUT_DIRECTORY");
+        output_dir = eval_prop("LIBRARY_OUTPUT_DIRECTORY");
     }
     const auto& dir = output_dir.empty() ? binary_dir_ : output_dir;
 
     // Determine prefix and suffix, respecting target properties
-    std::string prefix_prop = get_property("PREFIX");
-    std::string suffix_prop = get_property("SUFFIX");
+    std::string prefix_prop = eval_prop("PREFIX");
+    std::string suffix_prop = eval_prop("SUFFIX");
     bool has_prefix = !prefix_prop.empty() || properties_.count("PREFIX");
     bool has_suffix = !suffix_prop.empty() || properties_.count("SUFFIX");
 
@@ -1923,7 +1928,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         }
     }
 
-    std::string output_path = get_output_path();
+    std::string output_path = get_output_path(&evaluator);
     BuildTask link;
     link.id = output_path;
     link.kind = LinkTask{};

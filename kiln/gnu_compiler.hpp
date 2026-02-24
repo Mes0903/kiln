@@ -1,5 +1,6 @@
 #pragma once
 #include "compiler.hpp"
+#include "genex_parser.hpp"
 #include "language.hpp"
 #include "parse_number.hpp"
 #include <sstream>
@@ -126,6 +127,7 @@ public:
 
         cmd.push_back(ctx.source);
 
+        for (const auto& arg : cmd) assert_no_genex(arg, "compile command");
         return cmd;
     }
 
@@ -216,6 +218,7 @@ public:
             }
         }
 
+        for (const auto& arg : cmd) assert_no_genex(arg, "link command");
         return cmd;
     }
 

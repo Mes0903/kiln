@@ -3,10 +3,23 @@
 #include <expected>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace kiln {
+
+// Hard runtime gate: throws if a string that is about to leave the build system
+// (as a shell command, file path, or install output) still contains unevaluated
+// generator expressions.  This is always a bug — genex must be resolved before
+// they reach the shell.
+inline void assert_no_genex(std::string_view value, std::string_view context) {
+    if (value.find("$<") != std::string_view::npos) {
+        throw std::runtime_error(
+            std::string("Unevaluated generator expression in ") +
+            std::string(context) + ": " + std::string(value));
+    }
+}
 
 // Generator expression node types
 enum class GenexNodeType {

@@ -79,15 +79,16 @@ static std::string find_qt_tool(
     const Target& target,
     const Interpreter& interp,
     const TargetMap& all_targets,
+    GenexEvaluator& evaluator,
     const std::string& tool_name)  // "moc", "uic", or "rcc"
 {
     // Map tool name to property/variable names
     std::string upper_tool = tool_name;
     std::transform(upper_tool.begin(), upper_tool.end(), upper_tool.begin(), ::toupper);
 
-    // 1. Per-target override
+    // 1. Per-target override — evaluate genex (e.g. $<TARGET_FILE:Qt6::uic>)
     std::string override_prop = "AUTO" + upper_tool + "_EXECUTABLE";
-    std::string override_val = target.get_property(override_prop);
+    std::string override_val = evaluator.evaluate_target_property(target, override_prop);
     if (!override_val.empty()) return override_val;
 
     // 2. Imported targets: Qt6::<tool>, Qt5::<tool>
@@ -365,10 +366,14 @@ void generate_autogen_tasks(
 
     if (!do_moc && !do_uic && !do_rcc) return;
 
+    // Set up genex evaluator early — needed for tool discovery and option evaluation
+    auto genex_ctx = Target::make_genex_context(&target, interp, all_targets);
+    GenexEvaluator evaluator(genex_ctx);
+
     // Find Qt tools
     std::string moc_path, uic_path, rcc_path;
     if (do_moc) {
-        moc_path = find_qt_tool(target, interp, all_targets, "moc");
+        moc_path = find_qt_tool(target, interp, all_targets, evaluator, "moc");
         if (moc_path.empty()) {
             kiln::print_message(std::cerr, "WARNING",
                 "AUTOMOC enabled for target '" + target.get_name() +
@@ -377,7 +382,7 @@ void generate_autogen_tasks(
         }
     }
     if (do_uic) {
-        uic_path = find_qt_tool(target, interp, all_targets, "uic");
+        uic_path = find_qt_tool(target, interp, all_targets, evaluator, "uic");
         if (uic_path.empty()) {
             kiln::print_message(std::cerr, "WARNING",
                 "AUTOUIC enabled for target '" + target.get_name() +
@@ -386,7 +391,7 @@ void generate_autogen_tasks(
         }
     }
     if (do_rcc) {
-        rcc_path = find_qt_tool(target, interp, all_targets, "rcc");
+        rcc_path = find_qt_tool(target, interp, all_targets, evaluator, "rcc");
         if (rcc_path.empty()) {
             kiln::print_message(std::cerr, "WARNING",
                 "AUTORCC enabled for target '" + target.get_name() +
@@ -426,47 +431,24 @@ void generate_autogen_tasks(
         }
     }
 
+    // Helper: read a property (with genex evaluation) and split into list
+    auto read_option_list = [&](const std::string& prop) -> std::vector<std::string> {
+        std::vector<std::string> result;
+        std::string val = evaluator.evaluate_target_property(target, prop);
+        if (val.empty()) return result;
+        for (auto sv : CMakeArrayIterator(val)) {
+            result.emplace_back(sv);
+        }
+        return result;
+    };
+
     // Get moc/uic/rcc options
-    std::vector<std::string> moc_options;
-    {
-        std::string opts = target.get_property("AUTOMOC_MOC_OPTIONS");
-        if (!opts.empty()) {
-            for (auto sv : CMakeArrayIterator(opts)) {
-                moc_options.emplace_back(sv);
-            }
-        }
-    }
-
-    std::vector<std::string> target_uic_options;
-    {
-        std::string opts = target.get_property("AUTOUIC_OPTIONS");
-        if (!opts.empty()) {
-            for (auto sv : CMakeArrayIterator(opts)) {
-                target_uic_options.emplace_back(sv);
-            }
-        }
-    }
-
-    std::vector<std::string> target_rcc_options;
-    {
-        std::string opts = target.get_property("AUTORCC_OPTIONS");
-        if (!opts.empty()) {
-            for (auto sv : CMakeArrayIterator(opts)) {
-                target_rcc_options.emplace_back(sv);
-            }
-        }
-    }
+    std::vector<std::string> moc_options = read_option_list("AUTOMOC_MOC_OPTIONS");
+    std::vector<std::string> target_uic_options = read_option_list("AUTOUIC_OPTIONS");
+    std::vector<std::string> target_rcc_options = read_option_list("AUTORCC_OPTIONS");
 
     // AUTOUIC_SEARCH_PATHS
-    std::vector<std::string> uic_search_paths;
-    {
-        std::string paths = target.get_property("AUTOUIC_SEARCH_PATHS");
-        if (!paths.empty()) {
-            for (auto sv : CMakeArrayIterator(paths)) {
-                uic_search_paths.emplace_back(sv);
-            }
-        }
-    }
+    std::vector<std::string> uic_search_paths = read_option_list("AUTOUIC_SEARCH_PATHS");
 
     // Collect target's resolved includes and definitions for moc flags
     const auto& resolved_includes = target.get_resolved_property("INCLUDE_DIRECTORIES");
@@ -475,9 +457,7 @@ void generate_autogen_tasks(
     // Collect all sources and headers from the target
     auto own_sources = target.get_property_list("SOURCES", TargetPropertyScope::BUILD);
 
-    // Evaluate genex in sources
-    auto genex_ctx = Target::make_genex_context(&target, interp, all_targets);
-    GenexEvaluator evaluator(genex_ctx);
+    // Evaluate genex in sources (evaluator created earlier for tool discovery)
     auto eval_result = evaluator.evaluate_property_list(own_sources);
     if (!eval_result) return;  // silently fail on genex error
 

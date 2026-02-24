@@ -68,6 +68,17 @@ public:
     // Use this for LINK_LIBRARIES to properly handle $<LINK_ONLY:...>
     std::expected<LinkLibraryResult, std::string> evaluate_link_library(const std::string& input);
 
+    // Convenience: read a scalar target property and evaluate genex if present.
+    // Returns the raw value if no genex, evaluated value if genex, or "" on eval failure.
+    // Use this at output boundaries where properties flow into commands/paths/install.
+    std::string evaluate_target_property(const Target& target, const std::string& prop) {
+        std::string val = target.get_property(prop);
+        if (val.empty() || !GenexParser::contains_genex(val)) return val;
+        auto result = evaluate(val);
+        if (result && !result->empty()) return *result;
+        return "";
+    }
+
 private:
     GenexEvaluationContext ctx_;
 

@@ -1,6 +1,7 @@
 #include "install_executor.hpp"
 #include "interperter.hpp"
 #include "target.hpp"
+#include "genex_evaluator.hpp"
 #include "builtins/export_generator.hpp"
 #include <filesystem>
 #include <fstream>
@@ -227,6 +228,10 @@ std::expected<void, std::string> execute_targets_rule(
         return {};
     }
 
+    // Set up genex context for evaluating target properties (VERSION, SOVERSION, etc.)
+    auto genex_ctx = GenexEvaluationContext::from_interpreter(*interp, interp->get_targets());
+    genex_ctx.phase = GenexEvaluationContext::Phase::INSTALL;
+
     for (const auto& target_name : rule.targets) {
         auto* target = interp->find_target(target_name);
         if (!target) {
@@ -270,11 +275,16 @@ std::expected<void, std::string> execute_targets_rule(
         // Compute final destination
         std::filesystem::path final_dest = std::filesystem::path(install_prefix) / dest->destination;
 
+        // Per-target genex evaluator for property reads
+        auto target_ctx = genex_ctx;
+        target_ctx.current_target = target;
+        GenexEvaluator eval(target_ctx);
+
         // For shared libraries with VERSION/SOVERSION, install with versioned filename
         std::string version, soversion;
         if (target->get_type() == TargetType::SHARED_LIBRARY) {
-            version = target->get_property("VERSION");
-            soversion = target->get_property("SOVERSION");
+            version = eval.evaluate_target_property(*target, "VERSION");
+            soversion = eval.evaluate_target_property(*target, "SOVERSION");
 
             if (!version.empty()) {
                 final_dest /= "lib" + target->get_name() + ".so." + version;
@@ -309,7 +319,7 @@ std::expected<void, std::string> execute_targets_rule(
         // Install PUBLIC_HEADER files if destination specified
         if (!rule.public_header_dest.destination.empty()) {
             if (!should_skip_rule(rule.public_header_dest, current_config, component_filter)) {
-                std::string public_headers = target->get_property("PUBLIC_HEADER");
+                std::string public_headers = eval.evaluate_target_property(*target, "PUBLIC_HEADER");
                 if (!public_headers.empty()) {
                     std::filesystem::path header_dest_dir =
                         std::filesystem::path(install_prefix) / rule.public_header_dest.destination;

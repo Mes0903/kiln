@@ -459,9 +459,11 @@ void register_target_builtins(Interpreter& interp) {
                 rule->source_dir = src_dir;
                 rule->binary_dir = bin_dir;
 
-                // Register rule for each output
+                // Register rule for each output and mark as GENERATED
+                auto& source_props = interp.get_source_properties();
                 for (const auto& out : normalized_outputs) {
                     rules[out] = rule;
+                    source_props[out]["GENERATED"] = "TRUE";
                 }
             }
         } else {

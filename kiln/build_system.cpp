@@ -219,6 +219,13 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
         }
         task.commands = std::move(evaluated_commands);
 
+        // Hard gate: no unevaluated genex may survive into shell commands
+        for (const auto& cmd : task.commands) {
+            for (const auto& arg : cmd) {
+                assert_no_genex(arg, "task command for " + id);
+            }
+        }
+
         // Infer dependencies from command arguments that reference target outputs
         for (const auto& cmd : task.commands) {
             for (const auto& arg : cmd) {
@@ -272,6 +279,11 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
             task.inputs = std::move(new_inputs);
         }
 
+        // Hard gate: no unevaluated genex in inputs
+        for (const auto& input : task.inputs) {
+            assert_no_genex(input, "task input for " + id);
+        }
+
         // Evaluate working_dir if it contains genex
         if (!task.working_dir.empty() && GenexParser::contains_genex(task.working_dir)) {
             auto result = evaluator.evaluate(task.working_dir);
@@ -279,6 +291,9 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
                 return std::unexpected("Generator expression error in working_dir for task '" + id + "': " + result.error());
             }
             task.working_dir = *result;
+        }
+        if (!task.working_dir.empty()) {
+            assert_no_genex(task.working_dir, "working_dir for " + id);
         }
     }
 

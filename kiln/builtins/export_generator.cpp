@@ -427,6 +427,19 @@ std::string generate_config_export_content(
         ss << "\n";
     }
 
+    // Build genex evaluator from export context for evaluating target properties
+    GenexEvaluationContext genex_ctx;
+    genex_ctx.build_type = ctx.build_type;
+    genex_ctx.system_name = ctx.system_name;
+    genex_ctx.cxx_compiler_id = ctx.cxx_compiler_id;
+    genex_ctx.c_compiler_id = ctx.c_compiler_id;
+    genex_ctx.cxx_compiler_version = ctx.cxx_compiler_version;
+    genex_ctx.c_compiler_version = ctx.c_compiler_version;
+    genex_ctx.install_prefix = ctx.install_prefix;
+    genex_ctx.all_targets = ctx.all_targets;
+    genex_ctx.target_aliases = ctx.target_aliases;
+    genex_ctx.phase = GenexEvaluationContext::Phase::INSTALL;
+
     // For each target, set per-config properties
     for (const auto* target : targets) {
         if (!target) continue;
@@ -440,6 +453,11 @@ std::string generate_config_export_content(
             continue;
         }
 
+        // Per-target evaluator for property reads
+        auto target_ctx = genex_ctx;
+        target_ctx.current_target = target;
+        GenexEvaluator eval(target_ctx);
+
         // Set the imported location for this configuration
         std::string location;
         std::string prefix_var = "${_IMPORT_PREFIX}";
@@ -447,8 +465,8 @@ std::string generate_config_export_content(
         if (type == TargetType::EXECUTABLE) {
             location = prefix_var + "/bin/" + target->get_output_name();
         } else if (type == TargetType::SHARED_LIBRARY) {
-            std::string soversion = target->get_property("SOVERSION");
-            std::string version = target->get_property("VERSION");
+            std::string soversion = eval.evaluate_target_property(*target, "SOVERSION");
+            std::string version = eval.evaluate_target_property(*target, "VERSION");
             std::string lib_name = "lib" + target->get_output_name() + ".so";
             if (!version.empty()) {
                 lib_name += "." + version;
@@ -468,8 +486,8 @@ std::string generate_config_export_content(
 
             // For shared libs, set SONAME if applicable
             if (type == TargetType::SHARED_LIBRARY) {
-                std::string soversion = target->get_property("SOVERSION");
-                std::string version = target->get_property("VERSION");
+                std::string soversion = eval.evaluate_target_property(*target, "SOVERSION");
+                std::string version = eval.evaluate_target_property(*target, "VERSION");
                 if (!soversion.empty() || !version.empty()) {
                     std::string soname = "lib" + target->get_output_name() + ".so";
                     if (!soversion.empty()) {

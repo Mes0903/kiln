@@ -156,7 +156,7 @@ public:
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
 
-    virtual std::string get_output_path() const;
+    virtual std::string get_output_path(class GenexEvaluator* evaluator = nullptr) const;
 
     // The core task generation logic
     virtual void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
