@@ -515,6 +515,7 @@ private:
     std::vector<TestDefinition> tests_;
     std::set<std::string> targets_to_dump_at_build_;  // For kiln_dump_target_info AT_BUILD
     std::vector<PendingFileGenerate> pending_file_generates_;
+    std::set<std::string> file_generate_outputs_;  // Resolved paths from file(GENERATE)
 
     // Custom command rules (OUTPUT form of add_custom_command)
     // Maps output file path -> rule that generates it

@@ -557,28 +557,33 @@ void generate_autogen_tasks(
 
     if (do_moc) {
         // First pass: scan sources for #include "*.moc" and "moc_*.cpp" patterns
-        // This tells us which moc outputs should go to include_dir
+        // This tells us which moc outputs should go to include_dir.
+        // We always scan for moc includes (even with SKIP_AUTOMOC) so that
+        // explicitly-included moc outputs go to include_dir instead of mocs_compilation.
         std::map<std::string, std::vector<std::string>> source_moc_includes;  // source -> moc includes
         for (const auto& src : cpp_sources) {
             auto sp_it = source_props.find(src);
-            bool skip = false;
+            bool skip_moc = false;
             if (sp_it != source_props.end()) {
                 auto it = sp_it->second.find("SKIP_AUTOMOC");
-                if (it != sp_it->second.end() && !Interpreter::is_falsy(it->second)) skip = true;
-                if (!skip) {
+                if (it != sp_it->second.end() && !Interpreter::is_falsy(it->second)) skip_moc = true;
+                if (!skip_moc) {
                     it = sp_it->second.find("SKIP_AUTOGEN");
-                    if (it != sp_it->second.end() && !Interpreter::is_falsy(it->second)) skip = true;
+                    if (it != sp_it->second.end() && !Interpreter::is_falsy(it->second)) skip_moc = true;
                 }
             }
-            if (skip) continue;
 
             auto scan = scan_file_for_moc(src, moc_macro_names);
+
+            // Always record moc includes regardless of SKIP_AUTOMOC
             if (!scan.moc_includes.empty()) {
                 source_moc_includes[src] = scan.moc_includes;
                 for (const auto& inc : scan.moc_includes) {
                     explicitly_included_mocs.insert(inc);
                 }
             }
+
+            if (skip_moc) continue;
 
             // Source file with Q_OBJECT: needs "source.moc" include
             if (scan.has_macro) {
@@ -600,6 +605,18 @@ void generate_autogen_tasks(
         // Second pass: scan headers for Qt macros
         for (const auto& hdr : all_headers) {
             if (!fs::exists(hdr)) continue;
+
+            // Check SKIP_AUTOMOC / SKIP_AUTOGEN on the header
+            {
+                auto sp_it = source_props.find(hdr);
+                if (sp_it != source_props.end()) {
+                    auto check = [&](const std::string& prop) -> bool {
+                        auto it = sp_it->second.find(prop);
+                        return it != sp_it->second.end() && !Interpreter::is_falsy(it->second);
+                    };
+                    if (check("SKIP_AUTOMOC") || check("SKIP_AUTOGEN")) continue;
+                }
+            }
 
             auto scan = scan_file_for_moc(hdr, moc_macro_names);
             if (!scan.has_macro) continue;

@@ -427,12 +427,56 @@ void kiln::Interpreter::process_file_generates(const GenexEvaluationContext& gen
             std::filesystem::create_directories(out_path.parent_path(), ec);
         }
 
-        std::ofstream out(out_path);
-        if (!out) {
-            print_message("WARNING", "file(GENERATE) could not write to: " + out_path.string());
-            continue;
+        // Track this output for implicit dependency injection into custom commands
+        auto normalized_out = out_path.lexically_normal().string();
+        file_generate_outputs_.insert(normalized_out);
+
+        // Only write if content actually changed (avoid unnecessary mtime updates
+        // that would trigger downstream custom command rebuilds)
+        bool needs_write = true;
+        if (std::filesystem::exists(out_path)) {
+            std::ifstream existing(out_path, std::ios::binary);
+            if (existing) {
+                std::string existing_content((std::istreambuf_iterator<char>(existing)),
+                                             std::istreambuf_iterator<char>());
+                existing.close();
+                Hash256 existing_hash = blake2b(existing_content);
+                Hash256 new_hash = blake2b(file_content);
+                needs_write = (memcmp(existing_hash.bytes, new_hash.bytes, 32) != 0);
+            }
         }
-        out << file_content;
+
+        if (needs_write) {
+            std::ofstream out(out_path);
+            if (!out) {
+                print_message("WARNING", "file(GENERATE) could not write to: " + out_path.string());
+                continue;
+            }
+            out << file_content;
+        }
+    }
+
+    // Inject file(GENERATE) outputs as implicit dependencies of custom commands
+    // that reference them in their COMMAND arguments (e.g. -DIN_FILE=/path/to/generated.in).
+    // This ensures the custom command's signature includes the generated file's mtime,
+    // so it re-runs when the generated content changes.
+    if (!file_generate_outputs_.empty()) {
+        for (auto& [output_path, rule] : custom_command_rules_) {
+            for (const auto& cmd : rule->commands) {
+                for (const auto& arg : cmd) {
+                    // Extract path from arg: could be bare path or -DVAR=path
+                    std::string_view candidate = arg;
+                    auto eq = candidate.find('=');
+                    if (eq != std::string_view::npos) {
+                        candidate = candidate.substr(eq + 1);
+                    }
+                    auto norm = std::filesystem::path(candidate).lexically_normal().string();
+                    if (file_generate_outputs_.count(norm)) {
+                        rule->depends.push_back(norm);
+                    }
+                }
+            }
+        }
     }
 
     pending_file_generates_.clear();
@@ -600,6 +644,13 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
         while (iss >> flag) shared_linker_flags.push_back(flag);
     }
 
+    // Process file(GENERATE) entries before task generation so that
+    // implicit dependencies are injected into custom_command_rules_ in time.
+    {
+        auto genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
+        process_file_generates(genex_ctx);
+    }
+
     // Generate tasks via transaction
     {
         auto txn = graph.begin();
@@ -663,8 +714,6 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
 
     // Post-transaction: evaluate genex, resolve inferred file deps
     auto genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
-
-    process_file_generates(genex_ctx);
 
     auto finalize_result = graph.evaluate_genex(genex_ctx);
     if (!finalize_result) {
