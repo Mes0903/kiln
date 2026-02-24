@@ -12,6 +12,7 @@ enum class CMakePolicy : uint8_t {
     CMP0126,  // 3.21: set(CACHE) removes local variables
     CMP0148,  // 3.27: FindPythonInterp/FindPythonLibs removed
     CMP0167,  // 3.30: Boost find_package config-first
+    CMP0173,  // 3.31: CMakeFindFrameworks.cmake is deprcared
     COUNT
 };
 
@@ -41,6 +42,7 @@ struct PolicyStack {
         // Known OLD defaults — grep KILN_POLICY_OLD to find usage sites
         ps.current_[size_t(CMakePolicy::CMP0126)] = PolicyState::OLD;
         ps.current_[size_t(CMakePolicy::CMP0148)] = PolicyState::OLD;
+        ps.current_[size_t(CMakePolicy::CMP0173)] = PolicyState::OLD;
         return ps;
     }
 };
@@ -50,6 +52,7 @@ inline std::optional<CMakePolicy> parse_cmake_policy(std::string_view name) {
     if (name == "CMP0126") return CMakePolicy::CMP0126;
     if (name == "CMP0148") return CMakePolicy::CMP0148;
     if (name == "CMP0167") return CMakePolicy::CMP0167;
+    if (name == "CMP0173") return CMakePolicy::CMP0173;
     return std::nullopt;
 }
 
