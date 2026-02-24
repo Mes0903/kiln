@@ -17,6 +17,7 @@ void generate_autogen_tasks(
     GraphTransaction& txn,
     Interpreter& interp,
     const TargetMap& all_targets,
-    const std::string& pre_build_task_id);
+    const std::string& pre_build_task_id,
+    const std::vector<std::string>& manual_dep_ids);
 
 } // namespace kiln

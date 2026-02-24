@@ -1761,30 +1761,8 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         txn.add(std::move(pre_build));
     }
 
-    // Qt autogen: generate moc/uic/rcc tasks before compilation.
-    // This scans sources/headers for Qt macros, creates moc/uic/rcc tasks,
-    // injects generated sources into SOURCES, and adds the autogen include dir.
-    if (!Interpreter::is_falsy(get_property("AUTOMOC")) ||
-        !Interpreter::is_falsy(get_property("AUTOUIC")) ||
-        !Interpreter::is_falsy(get_property("AUTORCC"))) {
-        generate_autogen_tasks(*this, txn, const_cast<Interpreter&>(interp), all_targets, pre_build_task_id);
-    }
-
-    // Read compiler default standards (for suppressing unnecessary -std= flags)
-    int cxx_default_std = 0;
-    int c_default_std = 0;
-    {
-        const std::string& cxx_def = interp.get_variable("CMAKE_CXX_STANDARD_DEFAULT");
-        if (!cxx_def.empty()) cxx_default_std = parse_number<int>(cxx_def).value_or(0);
-        const std::string& c_def = interp.get_variable("CMAKE_C_STANDARD_DEFAULT");
-        if (!c_def.empty()) c_default_std = parse_number<int>(c_def).value_or(0);
-    }
-
-    // C++20 modules: generate scanner tasks first (they have no dependencies)
-    bool has_modules = generate_module_scanner_tasks(txn, toolchain, cxx_default_std);
-    std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
-
-    // Pre-resolve manual dependencies for PCH and compile tasks
+    // Pre-resolve manual dependencies for autogen, PCH, and compile tasks.
+    // Moved early so autogen (MOC/UIC/RCC) tasks can also depend on these.
     std::vector<ResolvedDep> resolved_manual_deps;
     {
         auto add_manual_deps = [&](const std::vector<std::string>& deps) {
@@ -1804,6 +1782,32 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             }
         }
     }
+
+    // Qt autogen: generate moc/uic/rcc tasks before compilation.
+    // This scans sources/headers for Qt macros, creates moc/uic/rcc tasks,
+    // injects generated sources into SOURCES, and adds the autogen include dir.
+    if (!Interpreter::is_falsy(get_property("AUTOMOC")) ||
+        !Interpreter::is_falsy(get_property("AUTOUIC")) ||
+        !Interpreter::is_falsy(get_property("AUTORCC"))) {
+        std::vector<std::string> manual_dep_ids;
+        manual_dep_ids.reserve(resolved_manual_deps.size());
+        for (const auto& d : resolved_manual_deps) manual_dep_ids.push_back(d.id);
+        generate_autogen_tasks(*this, txn, const_cast<Interpreter&>(interp), all_targets, pre_build_task_id, manual_dep_ids);
+    }
+
+    // Read compiler default standards (for suppressing unnecessary -std= flags)
+    int cxx_default_std = 0;
+    int c_default_std = 0;
+    {
+        const std::string& cxx_def = interp.get_variable("CMAKE_CXX_STANDARD_DEFAULT");
+        if (!cxx_def.empty()) cxx_default_std = parse_number<int>(cxx_def).value_or(0);
+        const std::string& c_def = interp.get_variable("CMAKE_C_STANDARD_DEFAULT");
+        if (!c_def.empty()) c_default_std = parse_number<int>(c_def).value_or(0);
+    }
+
+    // C++20 modules: generate scanner tasks first (they have no dependencies)
+    bool has_modules = generate_module_scanner_tasks(txn, toolchain, cxx_default_std);
+    std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // PCH: either reuse from provider or generate own
     std::string pch_gch_path, pch_include_arg;

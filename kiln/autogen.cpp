@@ -197,15 +197,19 @@ static MocScanResult scan_file_for_moc(const std::string& path, const std::vecto
                 }
             }
             if (pos != std::string::npos) {
-                auto quote_start = line.find('"', pos);
-                if (quote_start != std::string::npos) {
-                    auto quote_end = line.find('"', quote_start + 1);
-                    if (quote_end != std::string::npos) {
-                        std::string inc = line.substr(quote_start + 1, quote_end - quote_start - 1);
-                        if (inc.ends_with(".moc") || inc.starts_with("moc_")) {
-                            result.moc_includes.push_back(inc);
-                        }
-                    }
+                // Match both #include "moc_foo.cpp" and #include <moc_foo.cpp>
+                std::string inc;
+                auto q1 = line.find('"', pos);
+                auto a1 = line.find('<', pos);
+                if (q1 != std::string::npos) {
+                    auto q2 = line.find('"', q1 + 1);
+                    if (q2 != std::string::npos) inc = line.substr(q1 + 1, q2 - q1 - 1);
+                } else if (a1 != std::string::npos) {
+                    auto a2 = line.find('>', a1 + 1);
+                    if (a2 != std::string::npos) inc = line.substr(a1 + 1, a2 - a1 - 1);
+                }
+                if (!inc.empty() && (inc.ends_with(".moc") || inc.starts_with("moc_"))) {
+                    result.moc_includes.push_back(inc);
                 }
             }
         }
@@ -247,12 +251,19 @@ static std::vector<UicInclude> scan_file_for_uic(const std::string& path) {
         auto pos = line.find("#include");
         if (pos == std::string::npos) continue;
 
-        auto q1 = line.find('"', pos + 8);
-        if (q1 == std::string::npos) continue;
-        auto q2 = line.find('"', q1 + 1);
-        if (q2 == std::string::npos) continue;
-
-        std::string inc = line.substr(q1 + 1, q2 - q1 - 1);
+        // Match both #include "ui_foo.h" and #include <ui_foo.h>
+        std::string inc;
+        auto after = pos + 8;
+        auto q1 = line.find('"', after);
+        auto a1 = line.find('<', after);
+        if (q1 != std::string::npos) {
+            auto q2 = line.find('"', q1 + 1);
+            if (q2 != std::string::npos) inc = line.substr(q1 + 1, q2 - q1 - 1);
+        } else if (a1 != std::string::npos) {
+            auto a2 = line.find('>', a1 + 1);
+            if (a2 != std::string::npos) inc = line.substr(a1 + 1, a2 - a1 - 1);
+        }
+        if (inc.empty()) continue;
         fs::path inc_path(inc);
         std::string filename = inc_path.filename().string();
 
@@ -358,7 +369,8 @@ void generate_autogen_tasks(
     GraphTransaction& txn,
     Interpreter& interp,
     const TargetMap& all_targets,
-    const std::string& pre_build_task_id)
+    const std::string& pre_build_task_id,
+    const std::vector<std::string>& manual_dep_ids)
 {
     bool do_moc = !Interpreter::is_falsy(target.get_property("AUTOMOC"));
     bool do_uic = !Interpreter::is_falsy(target.get_property("AUTOUIC"));
@@ -444,11 +456,34 @@ void generate_autogen_tasks(
 
     // Get moc/uic/rcc options
     std::vector<std::string> moc_options = read_option_list("AUTOMOC_MOC_OPTIONS");
+    bool moc_output_json = std::find(moc_options.begin(), moc_options.end(), "--output-json") != moc_options.end();
     std::vector<std::string> target_uic_options = read_option_list("AUTOUIC_OPTIONS");
     std::vector<std::string> target_rcc_options = read_option_list("AUTORCC_OPTIONS");
 
     // AUTOUIC_SEARCH_PATHS
     std::vector<std::string> uic_search_paths = read_option_list("AUTOUIC_SEARCH_PATHS");
+
+    // AUTOGEN_TARGET_DEPENDS: targets/files that all autogen tasks must depend on.
+    // Qt uses this to ensure syncqt runs before moc (so framework-style includes resolve).
+    std::vector<std::string> autogen_target_deps;
+    {
+        std::string deps_str = target.get_property_combined("AUTOGEN_TARGET_DEPENDS");
+        if (!deps_str.empty()) {
+            for (auto sv : CMakeArrayIterator(deps_str)) {
+                if (sv.empty()) continue;
+                std::string dep(sv);
+                // If it's a target name, resolve to its output path (or use name for custom targets)
+                auto it = all_targets.find(dep);
+                if (it != all_targets.end()) {
+                    std::string out = it->second->get_output_path();
+                    autogen_target_deps.push_back(out.empty() ? dep : std::move(out));
+                } else {
+                    // Might be a file path
+                    autogen_target_deps.push_back(std::move(dep));
+                }
+            }
+        }
+    }
 
     // Collect target's resolved includes and definitions for moc flags
     const auto& resolved_includes = target.get_resolved_property("INCLUDE_DIRECTORIES");
@@ -642,12 +677,26 @@ void generate_autogen_tasks(
                 task.inputs.push_back(json);
             }
             task.outputs.push_back(entry.output_file);
+            if (moc_output_json) {
+                task.outputs.push_back(entry.output_file + ".json");
+            }
 
             if (!pre_build_task_id.empty()) {
                 task.explicit_deps.push_back(pre_build_task_id);
             }
+            for (const auto& dep : autogen_target_deps) {
+                task.explicit_deps.push_back(dep);
+            }
+            for (const auto& dep : manual_dep_ids) {
+                task.explicit_deps.push_back(dep);
+            }
 
             txn.add(std::move(task));
+
+            // All compile tasks must wait for MOC outputs (same as UIC).
+            // On clean builds there are no .d files, so file dep resolution can't
+            // discover the #include "moc_*.cpp" / #include "*.moc" dependency.
+            target.inject_autogen_dep(entry.output_file);
 
             // Register as custom command rule so compile tasks wire dependencies
             auto rule = std::make_shared<CustomCommandRule>();
@@ -873,6 +922,12 @@ void generate_autogen_tasks(
                 if (!pre_build_task_id.empty()) {
                     task.explicit_deps.push_back(pre_build_task_id);
                 }
+                for (const auto& dep : autogen_target_deps) {
+                    task.explicit_deps.push_back(dep);
+                }
+                for (const auto& dep : manual_dep_ids) {
+                    task.explicit_deps.push_back(dep);
+                }
 
                 txn.add(std::move(task));
 
@@ -919,6 +974,19 @@ void generate_autogen_tasks(
             // Parse .qrc to find resource files (for incremental build tracking)
             auto resource_files = parse_qrc_resources(qrc_file);
 
+            // Check if any resource files are generated by custom commands.
+            // If so, add those commands as explicit deps so RCC waits for them.
+            std::vector<std::string> generated_resource_deps;
+            {
+                const auto& rules = interp.get_custom_command_rules();
+                for (const auto& res : resource_files) {
+                    auto it = rules.find(res);
+                    if (it != rules.end()) {
+                        generated_resource_deps.push_back(res);
+                    }
+                }
+            }
+
             // Get per-source RCC options
             std::vector<std::string> rcc_options = target_rcc_options;
             auto sp_it = source_props.find(qrc_file);
@@ -957,6 +1025,15 @@ void generate_autogen_tasks(
 
             if (!pre_build_task_id.empty()) {
                 task.explicit_deps.push_back(pre_build_task_id);
+            }
+            for (const auto& dep : autogen_target_deps) {
+                task.explicit_deps.push_back(dep);
+            }
+            for (const auto& dep : manual_dep_ids) {
+                task.explicit_deps.push_back(dep);
+            }
+            for (const auto& dep : generated_resource_deps) {
+                task.explicit_deps.push_back(dep);
             }
 
             txn.add(std::move(task));
