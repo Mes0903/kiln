@@ -393,8 +393,8 @@ void kiln::Interpreter::process_file_generates(const GenexEvaluationContext& gen
         // Evaluate CONTENT
         auto content_result = evaluator.evaluate(entry.content);
         if (!content_result) {
-            print_message("WARNING", "file(GENERATE) failed to evaluate CONTENT for '" + out_path.string() + "': " + content_result.error() + "\n  CONTENT: " + entry.content);
-            continue;
+            set_fatal_error("file(GENERATE) failed to evaluate CONTENT for '" + out_path.string() + "': " + content_result.error());
+            return;
         }
         std::string file_content = std::move(*content_result);
 
@@ -649,6 +649,9 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     {
         auto genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
         process_file_generates(genex_ctx);
+        if (fatal_error_) {
+            return std::unexpected(BuildError{fatal_error_->file, fatal_error_->message});
+        }
     }
 
     // Generate tasks via transaction
@@ -2980,8 +2983,9 @@ bool Interpreter::is_variable_set(std::string_view name) const {
         return true;
     }
 
-    // Check cache variables
-    return cache_variables_.find(name) != cache_variables_.end();
+    // Check cache variables (always on root — cache is global)
+    const auto* root = const_cast<Interpreter*>(this)->get_root();
+    return root->cache_variables_.find(name) != root->cache_variables_.end();
 }
 
 std::optional<std::string> Interpreter::get_optional_variable(std::string_view name) const {
@@ -3024,8 +3028,9 @@ std::optional<std::string> Interpreter::get_optional_variable(std::string_view n
         return std::string(*val);
     }
 
-    // Check cache variables (CACHE variables are globally accessible)
-    if (auto cache_it = cache_variables_.find(name); cache_it != cache_variables_.end()) {
+    // Check cache variables (always on root — cache is global)
+    const auto* root = const_cast<Interpreter*>(this)->get_root();
+    if (auto cache_it = root->cache_variables_.find(name); cache_it != root->cache_variables_.end()) {
         return cache_it->second;
     }
 
@@ -3057,9 +3062,12 @@ std::optional<std::string_view> Interpreter::get_variable_view(std::string_view 
     if (auto* val = variables_.try_get(name))
         return std::string_view(*val);
 
-    // Check cache variables
-    if (auto it = cache_variables_.find(name); it != cache_variables_.end())
-        return std::string_view(it->second);
+    // Check cache variables (always on root — cache is global)
+    {
+        const auto* root = const_cast<Interpreter*>(this)->get_root();
+        if (auto it = root->cache_variables_.find(name); it != root->cache_variables_.end())
+            return std::string_view(it->second);
+    }
 
     return std::nullopt;
 }

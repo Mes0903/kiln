@@ -1457,7 +1457,7 @@ TEST_CASE("GenexEvaluator - TARGET_PROPERTY 1-arg without current_target errors"
 
     auto result = eval.evaluate("$<TARGET_PROPERTY:MY_CUSTOM_PROP>");
     REQUIRE(!result.has_value());
-    REQUIRE(result.error().find("current_target") != std::string::npos);
+    REQUIRE(result.error().find("requires a target context") != std::string::npos);
 }
 
 TEST_CASE("GenexEvaluator - TARGET_PROPERTY built-in pseudo-properties", "[genex][evaluator]") {

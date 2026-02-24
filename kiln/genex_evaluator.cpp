@@ -474,7 +474,13 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (args.size() == 1) {
                 // Single argument: property name, use current target
                 if (!ctx_.current_target) {
-                    return std::unexpected("TARGET_PROPERTY with 1 argument requires current_target context");
+                    return std::unexpected(
+                        "$<TARGET_PROPERTY:" + args[0] + "> requires a target context. "
+                        "The single-argument form $<TARGET_PROPERTY:prop> may only be used "
+                        "with binary targets. Use the two-argument form "
+                        "$<TARGET_PROPERTY:tgt,prop> instead. If this appears in file(GENERATE), "
+                        "either add the TARGET keyword or ensure the surrounding code is guarded "
+                        "by a condition that prevents this path from being reached.");
                 }
                 target_name = ctx_.current_target->get_name();
 

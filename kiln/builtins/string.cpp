@@ -958,8 +958,87 @@ void register_string_builtins(Interpreter& interp) {
             interp.set_variable(out_var, std::string(buffer));
 
         } else if (ci_equals(operation, "UUID")) {
-            interp.set_fatal_error("string(UUID) is not implemented (requires hashing support)");
-            return;
+            // string(UUID <output_variable> NAMESPACE <namespace> NAME <name> TYPE <MD5|SHA1> [UPPER])
+            // Generates a UUID v3 (MD5) or v5 (SHA1) per RFC 4122.
+            CommandParser parser("string", "UUID");
+            std::string out_var, ns_uuid, name_str, type_str;
+            bool upper = false;
+
+            parser.positional(out_var, "output variable");
+            parser.value("NAMESPACE", ns_uuid);
+            parser.value("NAME", name_str);
+            parser.value("TYPE", type_str);
+            parser.flag("UPPER", upper);
+            PARSE_OR_RETURN(parser, interp, sub_args);
+
+            if (ns_uuid.empty() || name_str.empty() || type_str.empty()) {
+                interp.set_fatal_error("string(UUID) requires NAMESPACE, NAME, and TYPE arguments");
+                return;
+            }
+
+            // Parse the namespace UUID string into 16 bytes (RFC 4122 binary form)
+            // Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+            std::string ns_clean;
+            for (char c : ns_uuid) {
+                if (c != '-') ns_clean += c;
+            }
+            if (ns_clean.size() != 32) {
+                interp.set_fatal_error("string(UUID): NAMESPACE is not a valid UUID: " + ns_uuid);
+                return;
+            }
+            unsigned char ns_bytes[16];
+            for (int i = 0; i < 16; ++i) {
+                unsigned int byte;
+                if (std::sscanf(ns_clean.c_str() + i * 2, "%02x", &byte) != 1) {
+                    interp.set_fatal_error("string(UUID): NAMESPACE contains invalid hex: " + ns_uuid);
+                    return;
+                }
+                ns_bytes[i] = static_cast<unsigned char>(byte);
+            }
+
+            // Concatenate namespace bytes + name bytes
+            std::vector<unsigned char> input_data(ns_bytes, ns_bytes + 16);
+            input_data.insert(input_data.end(), name_str.begin(), name_str.end());
+
+            // Hash and build UUID
+            unsigned char hash_bytes[20]; // SHA1 is 20 bytes, MD5 is 16
+            int version;
+            if (ci_equals(type_str, "MD5")) {
+                auto h = md5(input_data.data(), input_data.size());
+                std::memcpy(hash_bytes, h.bytes, 16);
+                version = 3;
+            } else if (ci_equals(type_str, "SHA1")) {
+                auto h = sha1(input_data.data(), input_data.size());
+                std::memcpy(hash_bytes, h.bytes, 20);
+                version = 5;
+            } else {
+                interp.set_fatal_error("string(UUID): TYPE must be MD5 or SHA1, got: " + type_str);
+                return;
+            }
+
+            // Set version bits (4 bits in byte 6, high nibble)
+            hash_bytes[6] = static_cast<unsigned char>((hash_bytes[6] & 0x0F) | (version << 4));
+            // Set variant bits (2 bits in byte 8, high bits = 10)
+            hash_bytes[8] = static_cast<unsigned char>((hash_bytes[8] & 0x3F) | 0x80);
+
+            // Format as UUID: 8-4-4-4-12
+            char uuid_str[37];
+            std::snprintf(uuid_str, sizeof(uuid_str),
+                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3],
+                hash_bytes[4], hash_bytes[5],
+                hash_bytes[6], hash_bytes[7],
+                hash_bytes[8], hash_bytes[9],
+                hash_bytes[10], hash_bytes[11], hash_bytes[12], hash_bytes[13],
+                hash_bytes[14], hash_bytes[15]);
+
+            std::string result(uuid_str);
+            if (upper) {
+                std::transform(result.begin(), result.end(), result.begin(),
+                    [](unsigned char c) { return std::toupper(c); });
+            }
+
+            interp.set_variable(out_var, result);
 
         } else if (ci_equals(operation, "SHA1")) {
             CommandParser parser("string", "SHA1");

@@ -1317,11 +1317,22 @@ void register_target_builtins(Interpreter& interp) {
         } else if (property_name == "IMPORTED_LOCATION") {
             result = target->get_imported_location();
         } else if (property_name.starts_with("INTERFACE_")) {
-            // INTERFACE_<PROP> maps to the INTERFACE visibility of the base property
-            // e.g., INTERFACE_INCLUDE_DIRECTORIES -> INCLUDE_DIRECTORIES with INTERFACE visibility
+            // INTERFACE_<PROP> returns PUBLIC + INTERFACE visibilities of the base property.
+            // In CMake, PUBLIC items appear in both the target's own property and the
+            // INTERFACE property (they are visible to consumers).
             std::string base_prop = property_name.substr(10); // strlen("INTERFACE_")
-            const auto& vals = target->get_property_list(base_prop, PropertyVisibility::INTERFACE);
+            auto vals = target->get_property_list(base_prop,
+                {PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE});
             if (!vals.empty()) {
+                // CMake absolutifies source paths for INTERFACE_SOURCES
+                if (base_prop == "SOURCES") {
+                    std::string src_dir = target->get_source_dir();
+                    for (auto& v : vals) {
+                        if (!v.empty() && v[0] != '/' && v[0] != '$') {
+                            v = src_dir + "/" + v;
+                        }
+                    }
+                }
                 result = CMakeArray(vals).to_string();
             } else {
                 // Fall back to generic scalar properties (custom INTERFACE_ properties
@@ -1332,12 +1343,19 @@ void register_target_builtins(Interpreter& interp) {
                 }
             }
         } else {
-            // Try generic property (combined across all visibilities)
-            result = target->get_property_combined(property_name);
-
-            // If empty, set to <property>-NOTFOUND per CMake convention
-            if (result.empty()) {
-                result = property_name + "-NOTFOUND";
+            // Non-INTERFACE_ properties: return PUBLIC + PRIVATE only.
+            // INTERFACE visibility is only accessible via the INTERFACE_ prefix
+            // (handled above). This matches CMake's get_target_property behavior.
+            auto vals = target->get_property_list(property_name,
+                {PropertyVisibility::PRIVATE, PropertyVisibility::PUBLIC});
+            if (!vals.empty()) {
+                result = CMakeArray(vals).to_string();
+            } else {
+                // Fall back to scalar properties
+                result = target->get_property(property_name);
+                if (result.empty()) {
+                    result = property_name + "-NOTFOUND";
+                }
             }
         }
 
