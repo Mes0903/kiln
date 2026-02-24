@@ -1979,8 +1979,15 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     std::vector<std::string> full_link_libs;
     if (type_ != TargetType::STATIC_LIBRARY) {
         // Deduplicate while preserving order.
+        // Filter out NOTFOUND values — CMake errors on these at generate time,
+        // but we warn and skip to avoid passing garbage like -lFOO-NOTFOUND to ld.
         std::unordered_set<std::string> seen;
         for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
+            if (lib.ends_with("-NOTFOUND")) {
+                kiln::print_message(std::cerr, "WARNING",
+                    "target '" + name_ + "' links '" + lib + "' which was not found — skipping");
+                continue;
+            }
             if (seen.insert(lib).second) {
                 full_link_libs.push_back(lib);
             }

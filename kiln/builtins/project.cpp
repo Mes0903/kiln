@@ -234,6 +234,9 @@ void register_project_builtins(Interpreter& interp) {
                         std::string(our_version));
                     return;
                 }
+
+                // Set policy defaults based on the requested version.
+                interp.set_policies_for_version(version);
                 break;
             }
         }

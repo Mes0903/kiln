@@ -298,6 +298,7 @@ public:
     // Policy system
     PolicyState get_policy(CMakePolicy p) const { return policies_.get(p); }
     void set_policy(CMakePolicy p, PolicyState s) { policies_.set(p, s); }
+    void set_policies_for_version(std::string_view version) { policies_.set_defaults_for_version(version); }
     void push_policies() { policies_.push(); }
     void pop_policies() { policies_.pop(); }
 

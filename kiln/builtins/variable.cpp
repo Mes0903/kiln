@@ -90,15 +90,20 @@ void register_variable_builtins(Interpreter& interp) {
             auto* root = interp.get_root();
 
             // Only set cache if entry doesn't exist or FORCE is given
-            if (force || root->cache_variables_.find(var_name) == root->cache_variables_.end()) {
+            bool cache_existed = root->cache_variables_.find(var_name) != root->cache_variables_.end();
+            if (force || !cache_existed) {
                 root->cache_variables_[var_name] = value;
             }
 
-            // CMP0126 OLD behavior: remove any normal variable of the
-            // same name so that subsequent reads see the cache value.
+            // CMP0126 OLD behavior: remove the normal variable of the
+            // same name ONLY when the cache entry was just created, or
+            // FORCE/INTERNAL was used.  When the cache entry already
+            // existed (and no FORCE), the normal variable is preserved.
             KILN_POLICY_OLD(CMP0126);
             if (interp.get_policy(CMakePolicy::CMP0126) == PolicyState::OLD) {
-                interp.unset_variable(var_name);
+                if (force || !cache_existed) {
+                    interp.unset_variable(var_name);
+                }
             }
 
             return;

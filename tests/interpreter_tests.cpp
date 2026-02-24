@@ -7932,8 +7932,17 @@ TEST_CASE("cmake_minimum_required version check uses numeric comparison", "[inte
 }
 
 TEST_CASE("cmake_policy SET and GET", "[interpreter][policy]") {
-    SECTION("CMP0126 defaults to OLD") {
+    SECTION("CMP0126 defaults to NEW (kiln emulates 3.31)") {
         auto output = run_script(R"(
+            cmake_policy(GET CMP0126 result)
+            message("${result}")
+        )");
+        REQUIRE(output == "NEW\n");
+    }
+
+    SECTION("CMP0126 becomes OLD with cmake_minimum_required < 3.21") {
+        auto output = run_script(R"(
+            cmake_minimum_required(VERSION 3.12)
             cmake_policy(GET CMP0126 result)
             message("${result}")
         )");
@@ -7968,6 +7977,7 @@ TEST_CASE("cmake_policy SET and GET", "[interpreter][policy]") {
 
 TEST_CASE("cmake_policy PUSH/POP", "[interpreter][policy]") {
     auto output = run_script(R"(
+        cmake_minimum_required(VERSION 3.12)
         cmake_policy(GET CMP0126 before)
         message("before=${before}")
 
@@ -7985,6 +7995,7 @@ TEST_CASE("cmake_policy PUSH/POP", "[interpreter][policy]") {
 
 TEST_CASE("CMP0126 OLD: set(CACHE) removes local variable", "[interpreter][policy]") {
     auto output = run_script(R"(
+        cmake_minimum_required(VERSION 3.12)
         set(MY_VAR "local_value")
         set(MY_VAR "cache_value" CACHE STRING "doc")
         message("${MY_VAR}")

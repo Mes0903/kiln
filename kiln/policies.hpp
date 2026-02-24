@@ -6,15 +6,30 @@
 #include <string_view>
 #include <vector>
 
+#include "utils.hpp"
+
 namespace kiln {
+
+struct PolicyInfo {
+    std::string_view name;       // e.g. "CMP0126"
+    std::string_view introduced; // CMake version that introduced NEW behavior
+};
 
 enum class CMakePolicy : uint8_t {
     CMP0126,  // 3.21: set(CACHE) removes local variables
     CMP0148,  // 3.27: FindPythonInterp/FindPythonLibs removed
     CMP0167,  // 3.30: Boost find_package config-first
-    CMP0173,  // 3.31: CMakeFindFrameworks.cmake is deprcared
+    CMP0173,  // 3.31: CMakeFindFrameworks.cmake is deprecated
     COUNT
 };
+
+inline constexpr PolicyInfo policy_info[] = {
+    {"CMP0126", "3.21"},
+    {"CMP0148", "3.27"},
+    {"CMP0167", "3.30"},
+    {"CMP0173", "3.31"},
+};
+static_assert(std::size(policy_info) == size_t(CMakePolicy::COUNT));
 
 enum class PolicyState : uint8_t { OLD, NEW };
 
@@ -36,23 +51,33 @@ struct PolicyStack {
         }
     }
 
+    // Set all known policies based on cmake_minimum_required version.
+    // Policies introduced at or before the requested version → NEW,
+    // later ones → OLD.
+    void set_defaults_for_version(std::string_view version) {
+        for (size_t i = 0; i < size_t(CMakePolicy::COUNT); ++i) {
+            current_[i] = compare_versions(version, policy_info[i].introduced) >= 0
+                ? PolicyState::NEW : PolicyState::OLD;
+        }
+    }
+
+    // Defaults match the CMake version kiln emulates (3.31) — all
+    // known policies are NEW.  cmake_minimum_required() then
+    // downgrades to OLD for policies introduced after the requested
+    // version.
     static PolicyStack make_defaults() {
         PolicyStack ps;
-        ps.current_.fill(PolicyState::NEW);
-        // Known OLD defaults — grep KILN_POLICY_OLD to find usage sites
-        ps.current_[size_t(CMakePolicy::CMP0126)] = PolicyState::OLD;
-        ps.current_[size_t(CMakePolicy::CMP0148)] = PolicyState::OLD;
-        ps.current_[size_t(CMakePolicy::CMP0173)] = PolicyState::OLD;
+        ps.set_defaults_for_version("3.31");
         return ps;
     }
 };
 
 // Parse "CMP0126" → enum. Returns nullopt for unknown policies.
 inline std::optional<CMakePolicy> parse_cmake_policy(std::string_view name) {
-    if (name == "CMP0126") return CMakePolicy::CMP0126;
-    if (name == "CMP0148") return CMakePolicy::CMP0148;
-    if (name == "CMP0167") return CMakePolicy::CMP0167;
-    if (name == "CMP0173") return CMakePolicy::CMP0173;
+    for (size_t i = 0; i < size_t(CMakePolicy::COUNT); ++i) {
+        if (name == policy_info[i].name)
+            return static_cast<CMakePolicy>(i);
+    }
     return std::nullopt;
 }
 
