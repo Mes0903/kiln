@@ -1024,7 +1024,8 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                                       const std::string& pre_build_task_id,
                                       const std::string& module_mapper_path,
                                       std::set<std::string>& generated_custom_tasks,
-                                      const std::set<std::string>& implicit_includes) {
+                                      const std::set<std::string>& implicit_includes,
+                                      const std::set<Language>& pch_languages) {
     // --- Hoist all loop-invariant computations ---
 
     bool target_has_modules = has_module_sources();
@@ -1381,7 +1382,15 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         ctx.output = obj;
         ctx.is_shared = is_shared;
         ctx.is_pie = is_pie;
-        ctx.pch_include = (lang_info.lang == Language::ASM) ? "" : pch_include_arg;
+        // Apply PCH only for languages whose PRECOMPILE_HEADERS genex resolved non-empty,
+        // and not for sources with SKIP_PRECOMPILE_HEADERS property
+        bool skip_pch = !pch_languages.count(lang_info.lang);
+        if (!skip_pch && sp_it != source_props.end()) {
+            auto skip_it = sp_it->second.find("SKIP_PRECOMPILE_HEADERS");
+            if (skip_it != sp_it->second.end() && !Interpreter::is_falsy(skip_it->second))
+                skip_pch = true;
+        }
+        ctx.pch_include = skip_pch ? "" : pch_include_arg;
         ctx.standard = effective_standard(lang_info.lang);
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = color_diag;
@@ -1821,12 +1830,28 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         pch_include_arg = std::move(inc);
     }
 
+    // Determine which languages have PCH headers by evaluating the PRECOMPILE_HEADERS
+    // genex per language. E.g. $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:header> resolves to empty
+    // for C, so C sources should not get the PCH -include flag.
+    std::set<Language> pch_languages;
+    if (!pch_include_arg.empty()) {
+        auto own_pchs_raw = get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
+        for (Language lang : {Language::C, Language::CXX}) {
+            auto lang_ctx = make_genex_context(this, interp, all_targets, lang);
+            GenexEvaluator lang_eval(lang_ctx);
+            auto result = lang_eval.evaluate_property_list(own_pchs_raw);
+            if (result && !result->empty()) {
+                pch_languages.insert(lang);
+            }
+        }
+    }
+
     // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
     generate_object_tasks(txn, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, is_pie,
                           all_targets, evaluator, interp,
                           pre_build_task_id, module_mapper_path, generated_custom_tasks,
-                          implicit_includes);
+                          implicit_includes, pch_languages);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 

@@ -246,7 +246,8 @@ protected:
                                const std::string& pre_build_task_id,
                                const std::string& module_mapper_path,
                                std::set<std::string>& generated_custom_tasks,
-                               const std::set<std::string>& implicit_includes);
+                               const std::set<std::string>& implicit_includes,
+                               const std::set<Language>& pch_languages);
 
     // C++20 modules task generation
     // Returns true if any module sources were detected
