@@ -119,6 +119,7 @@ public:
         }
 
         if (!ctx.pch_include.empty()) {
+            cmd.push_back("-Winvalid-pch");
             // Split pch_include if it contains multiple arguments (e.g., "-include wrapper.hpp")
             std::stringstream ss(ctx.pch_include);
             std::string arg;

@@ -1170,6 +1170,23 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     // Module mapper path (computed once, used if target has modules)
     std::string module_mapper = target_has_modules ? get_module_mapper_path() : std::string{};
 
+    // CMake auto-defines <target>_EXPORTS for shared/module libraries.
+    // DEFINE_SYMBOL property overrides the default. Empty DEFINE_SYMBOL suppresses it.
+    std::string exports_define;
+    if (type_ == TargetType::SHARED_LIBRARY) {
+        std::string ds = get_property("DEFINE_SYMBOL");
+        if (ds.empty()) {
+            // Default: <name>_EXPORTS with non-alnum replaced by _
+            exports_define = name_;
+            for (auto& ch : exports_define) {
+                if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
+            }
+            exports_define += "_EXPORTS";
+        } else {
+            exports_define = std::move(ds);
+        }
+    }
+
     // --- Evaluate genex in source paths (single pass over sources) ---
     auto own_sources = get_property_list("SOURCES", TargetPropertyScope::BUILD);
     auto evaluated_sources_result = evaluator.evaluate_property_list(own_sources);
@@ -1442,6 +1459,9 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
             for (const auto& def : resolved_definitions) ctx.definitions.push_back(def);
             for (const auto& opt : resolved_options) ctx.options.push_back(opt);
         }
+
+        // CMake auto-defines <target>_EXPORTS for shared/module libraries
+        if (!exports_define.empty()) ctx.definitions.push_back(exports_define);
 
         // Apply target-level COMPILE_FLAGS property (deprecated but still used)
         {
