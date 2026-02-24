@@ -876,6 +876,10 @@ void generate_autogen_tasks(
 
                 txn.add(std::move(task));
 
+                // All compile tasks in this target must wait for UIC outputs,
+                // since ui_*.h headers can be included transitively via other headers.
+                target.inject_autogen_dep(output_header);
+
                 // Register as custom command rule
                 auto rule = std::make_shared<CustomCommandRule>();
                 rule->outputs.push_back(output_header);

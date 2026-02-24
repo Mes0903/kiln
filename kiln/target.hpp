@@ -187,6 +187,8 @@ public:
     // Qt autogen helpers — called by generate_autogen_tasks()
     void inject_autogen_include(const std::string& dir);
     void inject_autogen_source(const std::string& path);
+    void inject_autogen_dep(const std::string& task_id);
+    const std::vector<std::string>& get_autogen_deps() const { return autogen_deps_; }
     void remove_source(const std::string& path);
 
     // Factory for GenexEvaluationContext. Populates from interpreter variables.
@@ -314,6 +316,9 @@ protected:
 
     // Manually added dependencies (from add_dependencies command)
     std::vector<std::string> manually_added_dependencies_;
+
+    // Autogen (UIC/MOC/RCC) task IDs that all compile tasks must depend on
+    std::vector<std::string> autogen_deps_;
 
     // Build event commands (TARGET form of add_custom_command)
     std::vector<CustomCommand> pre_build_commands_;

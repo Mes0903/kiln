@@ -840,6 +840,10 @@ void Target::inject_autogen_include(const std::string& dir) {
     }
 }
 
+void Target::inject_autogen_dep(const std::string& task_id) {
+    autogen_deps_.push_back(task_id);
+}
+
 void Target::inject_autogen_source(const std::string& path) {
     append_property("SOURCES", {path}, PropertyVisibility::PRIVATE);
 }
@@ -1543,6 +1547,11 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         // Pre-resolved manual dependencies (hoisted)
         for (const auto& dep : resolved_manual_deps) {
             task.explicit_deps.push_back(dep.id);
+        }
+
+        // Autogen deps (UIC outputs): ui_*.h can be included transitively via headers
+        for (const auto& dep : autogen_deps_) {
+            task.explicit_deps.push_back(dep);
         }
 
         // OBJECT_DEPENDS
