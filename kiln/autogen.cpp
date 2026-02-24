@@ -306,8 +306,15 @@ static std::vector<std::string> parse_qrc_resources(const std::string& qrc_path)
     return resources;
 }
 
+// Check if a file exists on disk or is a known custom command output (will be generated).
+using CCRuleMap = std::map<std::string, std::shared_ptr<CustomCommandRule>>;
+static bool file_exists_or_generated(const std::string& path, const CCRuleMap& cc_rules) {
+    return fs::exists(path) || cc_rules.count(path);
+}
+
 // Find adjacent headers for a source file
-static std::vector<std::string> find_adjacent_headers(const std::string& source_path) {
+static std::vector<std::string> find_adjacent_headers(const std::string& source_path,
+                                                       const CCRuleMap& cc_rules) {
     std::vector<std::string> headers;
     fs::path src(source_path);
     fs::path dir = src.parent_path();
@@ -320,7 +327,7 @@ static std::vector<std::string> find_adjacent_headers(const std::string& source_
     for (const auto& suffix : suffixes) {
         for (const auto& ext : extensions) {
             fs::path candidate = dir / (stem + suffix + ext);
-            if (fs::exists(candidate)) {
+            if (file_exists_or_generated(candidate.lexically_normal().string(), cc_rules)) {
                 headers.push_back(candidate.lexically_normal().string());
             }
         }
@@ -533,7 +540,7 @@ void generate_autogen_tasks(
                 qrc_files.push_back(abs);  // existence checked later in AUTORCC section
             }
         } else if (ext == ".h" || ext == ".hpp" || ext == ".hxx" || ext == ".hh") {
-            if (!check_skip("SKIP_AUTOMOC") && fs::exists(abs)) {
+            if (!check_skip("SKIP_AUTOMOC") && file_exists_or_generated(abs, interp.get_custom_command_rules())) {
                 explicit_headers.push_back(abs);
                 all_headers_set.insert(abs);
             }
@@ -545,7 +552,7 @@ void generate_autogen_tasks(
     // Discover adjacent headers for each C++ source
     std::vector<std::string> discovered_headers;
     for (const auto& src : cpp_sources) {
-        for (const auto& hdr : find_adjacent_headers(src)) {
+        for (const auto& hdr : find_adjacent_headers(src, interp.get_custom_command_rules())) {
             if (all_headers_set.insert(hdr).second) {
                 discovered_headers.push_back(hdr);
             }
@@ -564,6 +571,7 @@ void generate_autogen_tasks(
         std::string output_file;
         std::vector<std::string> extra_inputs;  // JSON files
         bool is_source_moc;  // true = source .moc, false = header moc_*.cpp
+        bool is_generated = false;  // input is a custom command output (not yet on disk)
     };
     std::vector<MocEntry> moc_entries;
 
@@ -618,8 +626,10 @@ void generate_autogen_tasks(
         }
 
         // Second pass: scan headers for Qt macros
+        const auto& cc_rules = interp.get_custom_command_rules();
         for (const auto& hdr : all_headers) {
-            if (!fs::exists(hdr)) continue;
+            bool is_generated = !fs::exists(hdr);
+            if (is_generated && !cc_rules.count(hdr)) continue;
 
             // Check SKIP_AUTOMOC / SKIP_AUTOGEN on the header
             {
@@ -633,8 +643,13 @@ void generate_autogen_tasks(
                 }
             }
 
-            auto scan = scan_file_for_moc(hdr, moc_macro_names);
-            if (!scan.has_macro) continue;
+            // For generated headers that don't exist yet, assume they need MOC
+            // (we can't scan them). The MOC task will depend on the generating command.
+            MocScanResult scan;
+            if (!is_generated) {
+                scan = scan_file_for_moc(hdr, moc_macro_names);
+                if (!scan.has_macro) continue;
+            }
 
             std::string basename = fs::path(hdr).stem().string();
             std::string moc_filename = "moc_" + basename + ".cpp";
@@ -656,6 +671,7 @@ void generate_autogen_tasks(
             entry.input_file = hdr;
             entry.output_file = moc_output;
             entry.is_source_moc = false;
+            entry.is_generated = is_generated;
             for (const auto& json : scan.json_files) {
                 fs::path json_path = fs::path(hdr).parent_path() / json;
                 entry.extra_inputs.push_back(json_path.lexically_normal().string());
@@ -689,6 +705,10 @@ void generate_autogen_tasks(
             }
             for (const auto& dep : manual_dep_ids) {
                 task.explicit_deps.push_back(dep);
+            }
+            // Generated headers: MOC must wait for the custom command that creates the input
+            if (entry.is_generated) {
+                task.explicit_deps.push_back(entry.input_file);
             }
 
             txn.add(std::move(task));
