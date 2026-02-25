@@ -2230,7 +2230,6 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         post_build.id = post_build_task_id;
         post_build.kind = PostBuildTask{};
         post_build.parent_target = this;
-        post_build.always_run = true;
         post_build.working_dir = binary_dir_;
 
         for (const auto& cmd : post_build_commands_) {

@@ -648,6 +648,13 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
             }
         }
 
+        // POST_BUILD tasks have no outputs but should only run when their
+        // dependency (the link task) actually rebuilds. Skip direct marking —
+        // they'll become dirty via propagation from the link task if needed.
+        if (std::holds_alternative<PostBuildTask>(task.kind) && !outputs_exist) {
+            continue;
+        }
+
         if (!outputs_exist || task.always_run) {
             // EP sentinels and orchestrators are "maybe" - we can't know if EP will inject tasks
             // Their dependents should be re-checked at runtime
