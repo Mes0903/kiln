@@ -19,6 +19,12 @@ using TargetMap = std::unordered_map<std::string, std::shared_ptr<Target>,
                                      TransparentStringHash, TransparentStringEqual>;
 
 enum class TargetType { EXECUTABLE, SHARED_LIBRARY, STATIC_LIBRARY, OBJECT_LIBRARY, INTERFACE_LIBRARY, CUSTOM };
+
+// Per-language precompiled header info for task generation
+struct PchInfo {
+    std::string gch_path;
+    std::string include_arg;
+};
 enum class PropertyVisibility { PRIVATE, INTERFACE, PUBLIC };
 
 // Semantic scopes for querying properties. Maps to visibility combinations.
@@ -242,14 +248,13 @@ protected:
 
     // Helper methods for task generation
     void generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
-                               const std::string& pch_gch_path, const std::string& pch_include_arg,
+                               const std::map<Language, PchInfo>& pch_per_lang,
                                bool is_shared, bool is_pie, const TargetMap& all_targets,
                                class GenexEvaluator& evaluator, const class Interpreter& interp,
                                const std::string& pre_build_task_id,
                                const std::string& module_mapper_path,
                                std::set<std::string>& generated_custom_tasks,
                                const std::set<std::string>& implicit_includes,
-                               const std::set<Language>& pch_languages,
                                std::vector<struct ResolvedDep> resolved_manual_deps);
 
     // C++20 modules task generation

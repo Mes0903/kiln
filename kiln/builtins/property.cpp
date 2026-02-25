@@ -859,6 +859,13 @@ void register_property_builtins(Interpreter& interp) {
         }
         property_name = args[arg_idx++];
 
+        // CMake's state-machine parser allows PROPERTY to appear multiple times;
+        // the last PROPERTY <name> wins (e.g. SDL uses this pattern)
+        while (arg_idx + 1 < args.size() && args[arg_idx] == "PROPERTY") {
+            ++arg_idx;
+            property_name = args[arg_idx++];
+        }
+
         // Parse optional query mode
         if (arg_idx < args.size()) {
             std::string query_mode = args[arg_idx];

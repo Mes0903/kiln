@@ -1029,14 +1029,13 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
 struct ResolvedDep { std::string id; };
 
 void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
-                                      const std::string& pch_gch_path, const std::string& pch_include_arg,
+                                      const std::map<Language, PchInfo>& pch_per_lang,
                                       bool is_shared, bool is_pie, const TargetMap& all_targets,
                                       GenexEvaluator& evaluator, const Interpreter& interp,
                                       const std::string& pre_build_task_id,
                                       const std::string& module_mapper_path,
                                       std::set<std::string>& generated_custom_tasks,
                                       const std::set<std::string>& implicit_includes,
-                                      const std::set<Language>& pch_languages,
                                       std::vector<ResolvedDep> resolved_manual_deps) {
     // --- Hoist all loop-invariant computations ---
 
@@ -1388,15 +1387,16 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         ctx.output = obj;
         ctx.is_shared = is_shared;
         ctx.is_pie = is_pie;
-        // Apply PCH only for languages whose PRECOMPILE_HEADERS genex resolved non-empty,
+        // Apply PCH only for languages that have a PCH generated,
         // and not for sources with SKIP_PRECOMPILE_HEADERS property
-        bool skip_pch = !pch_languages.count(lang_info.lang);
+        auto pch_it = pch_per_lang.find(lang_info.lang);
+        bool skip_pch = (pch_it == pch_per_lang.end());
         if (!skip_pch && sp_it != source_props.end()) {
             auto skip_it = sp_it->second.find("SKIP_PRECOMPILE_HEADERS");
             if (skip_it != sp_it->second.end() && !Interpreter::is_falsy(skip_it->second))
                 skip_pch = true;
         }
-        ctx.pch_include = skip_pch ? "" : pch_include_arg;
+        ctx.pch_include = skip_pch ? "" : pch_it->second.include_arg;
         ctx.standard = effective_standard(lang_info.lang);
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
         ctx.color_diagnostics = color_diag;
@@ -1519,9 +1519,9 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
 
-        if (!pch_gch_path.empty()) {
-            task.explicit_deps.push_back(pch_gch_path);
-            task.inputs.push_back(pch_gch_path);
+        if (pch_it != pch_per_lang.end()) {
+            task.explicit_deps.push_back(pch_it->second.gch_path);
+            task.inputs.push_back(pch_it->second.gch_path);
         }
 
         // Pre-resolved manual dependencies (hoisted)
@@ -1581,50 +1581,37 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     }
 }
 
-static std::pair<std::string, std::string> generate_pch_task(
+static PchInfo generate_pch_task(
     GraphTransaction& txn,
     const Toolchain& toolchain,
     const Target* target,
+    Language pch_lang,
+    const std::vector<std::string>& pch_headers,
     bool is_shared,
     const std::vector<std::string>& includes,
     const std::vector<std::string>& system_includes,
     const std::vector<std::string>& definitions,
     const std::vector<std::string>& options,
     int compiler_default_standard,
-    GenexEvaluator& evaluator,
     const std::vector<ResolvedDep>& manual_deps = {}) {
 
-    // Using PCH property name "PRECOMPILE_HEADERS"
-    auto own_pchs_raw = target->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
-
-    if (own_pchs_raw.empty()) {
-        return {"", ""};
-    }
-
-    // Evaluate genex in PCH headers (e.g. $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:header.h>)
-    auto eval_result = evaluator.evaluate_property_list(own_pchs_raw);
-    if (!eval_result) {
-        throw std::runtime_error("Error evaluating genex in PRECOMPILE_HEADERS for target '"
-            + target->get_name() + "': " + eval_result.error());
-    }
-    auto own_pchs = std::move(*eval_result);
-    if (own_pchs.empty()) {
-        return {"", ""};
-    }
-
-    Language pch_lang = Language::CXX;
     const Compiler* compiler = toolchain.get_compiler_ptr(pch_lang);
     if (!compiler) {
-        throw std::runtime_error("No compiler available for PCH generation in target '" + target->get_name() + "'");
+        std::string lang_name = (pch_lang == Language::C) ? "C" : "CXX";
+        throw std::runtime_error("No " + lang_name + " compiler available for PCH generation in target '"
+            + target->get_name() + "' (target has PRECOMPILE_HEADERS for " + lang_name
+            + " but project() does not enable that language)");
     }
 
-    Path pch_path = (Path(target->get_binary_dir()) / "objs") / (target->get_name() + "_pch.hpp");
+    // CMake uses cmake_pch.h for C and cmake_pch.hxx for CXX; we use similar naming
+    std::string ext = (pch_lang == Language::C) ? "_pch.h" : "_pch.hxx";
+    Path pch_path = (Path(target->get_binary_dir()) / "objs") / (target->get_name() + ext);
     std::string pch_wrapper = target->get_binary_dir().empty() ? pch_path.str() : pch_path.lexically_normal().str();
     std::string pch_gch_path = pch_wrapper + ".gch";
     std::string pch_include_arg = " -include " + pch_wrapper;
 
     std::ostringstream wrapper_content;
-    for (const auto& hdr : own_pchs) wrapper_content << "#include \"" << hdr << "\"\n";
+    for (const auto& hdr : pch_headers) wrapper_content << "#include \"" << hdr << "\"\n";
     std::string content = wrapper_content.str();
 
     bool needs_write = true;
@@ -1670,7 +1657,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     ctx.extensions_enabled = target->get_language_extensions(pch_lang);
     ctx.color_diagnostics = isatty(STDOUT_FILENO);
     ctx.options.push_back("-x");
-    ctx.options.push_back("c++-header");
+    ctx.options.push_back(pch_lang == Language::C ? "c-header" : "c++-header");
 
     for (const auto& opt : target->get_language_flags(pch_lang)) ctx.options.push_back(opt);
     for (const auto& opt : options) ctx.options.push_back(opt);
@@ -1687,7 +1674,7 @@ static std::pair<std::string, std::string> generate_pch_task(
     pch_task.commands.push_back(compiler->get_compile_command(ctx));
     pch_task.inputs.push_back(pch_wrapper);
 
-    for (const auto& hdr : own_pchs) {
+    for (const auto& hdr : pch_headers) {
         pch_task.inputs.push_back(Path::make_absolute_and_normal(target->get_source_dir(), hdr));
     }
 
@@ -1809,8 +1796,8 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     bool has_modules = generate_module_scanner_tasks(txn, toolchain, cxx_default_std);
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
-    // PCH: either reuse from provider or generate own
-    std::string pch_gch_path, pch_include_arg;
+    // PCH: generate per-language precompiled headers (C gets _pch.h, CXX gets _pch.hxx)
+    std::map<Language, PchInfo> pch_per_lang;
     std::string reuse_from = get_property("PRECOMPILE_HEADERS_REUSE_FROM");
     if (!reuse_from.empty()) {
         // REUSE_FROM mode: use provider's PCH artifact
@@ -1825,77 +1812,78 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         if (!provider->get_property("PRECOMPILE_HEADERS_REUSE_FROM").empty()) {
             throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' itself uses REUSE_FROM (chaining not allowed)");
         }
-        // Compute provider's PCH paths (same formula as generate_pch_task)
-        Path provider_pch_path = (Path(provider->get_binary_dir()) / "objs") / (provider->get_name() + "_pch.hpp");
-        std::string pch_wrapper = provider->get_binary_dir().empty() ? provider_pch_path.str() : provider_pch_path.lexically_normal().str();
-        pch_gch_path = pch_wrapper + ".gch";
-        pch_include_arg = " -include " + pch_wrapper;
-    } else {
-        // Standard PCH generation
-        // Create CXX-specific evaluator for PCH (PCH is always C++)
-        auto pch_genex_ctx = make_genex_context(this, interp, all_targets, Language::CXX);
-        GenexEvaluator pch_evaluator(pch_genex_ctx);
-
-        // Helper to evaluate deferred COMPILE_LANGUAGE genex for PCH
-        auto evaluate_for_pch = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
-            std::vector<std::string> result;
-            for (const auto& val : values) {
-                if (val.find("$<COMPILE_LANG") != std::string::npos) {
-                    auto eval_result = pch_evaluator.evaluate(val);
-                    if (eval_result && !eval_result->empty()) {
-                        // Genex may produce semicolon-separated lists
-                        for (auto sv : CMakeArrayIterator(*eval_result)) {
-                            result.emplace_back(sv);
-                        }
-                    }
-                } else {
-                    result.push_back(val);
-                }
-            }
-            return result;
-        };
-
-        // Filter out implicit includes for PCH
-        auto filter_implicit = [&](const std::vector<std::string>& dirs) {
-            std::vector<std::string> result;
-            for (const auto& dir : dirs) {
-                if (!implicit_includes.contains(normalize_include(dir))) result.push_back(dir);
-            }
-            return result;
-        };
-
-        auto [gch, inc] = generate_pch_task(txn, toolchain, this, is_shared,
-            filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
-            filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
-            evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
-            evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
-            cxx_default_std, pch_evaluator, resolved_manual_deps);
-        pch_gch_path = std::move(gch);
-        pch_include_arg = std::move(inc);
-    }
-
-    // Determine which languages have PCH headers by evaluating the PRECOMPILE_HEADERS
-    // genex per language. E.g. $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:header> resolves to empty
-    // for C, so C sources should not get the PCH -include flag.
-    std::set<Language> pch_languages;
-    if (!pch_include_arg.empty()) {
-        auto own_pchs_raw = get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
+        // Compute provider's PCH paths per language (same formula as generate_pch_task)
+        auto own_pchs_raw = provider->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
         for (Language lang : {Language::C, Language::CXX}) {
-            auto lang_ctx = make_genex_context(this, interp, all_targets, lang);
+            auto lang_ctx = make_genex_context(provider.get(), interp, all_targets, lang);
             GenexEvaluator lang_eval(lang_ctx);
             auto result = lang_eval.evaluate_property_list(own_pchs_raw);
             if (result && !result->empty()) {
-                pch_languages.insert(lang);
+                std::string ext = (lang == Language::C) ? "_pch.h" : "_pch.hxx";
+                Path provider_pch_path = (Path(provider->get_binary_dir()) / "objs") / (provider->get_name() + ext);
+                std::string pch_wrapper = provider->get_binary_dir().empty() ? provider_pch_path.str() : provider_pch_path.lexically_normal().str();
+                pch_per_lang[lang] = {pch_wrapper + ".gch", " -include " + pch_wrapper};
+            }
+        }
+    } else {
+        // Standard PCH generation: generate one PCH task per language that has headers
+        auto own_pchs_raw = get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
+        if (!own_pchs_raw.empty()) {
+            // Filter out implicit includes for PCH
+            auto filter_implicit = [&](const std::vector<std::string>& dirs) {
+                std::vector<std::string> result;
+                for (const auto& dir : dirs) {
+                    if (!implicit_includes.contains(normalize_include(dir))) result.push_back(dir);
+                }
+                return result;
+            };
+
+            for (Language lang : {Language::C, Language::CXX}) {
+                // Skip languages where no compiler is available
+                if (!toolchain.get_compiler_ptr(lang)) continue;
+
+                // Evaluate genex with this language's context
+                auto lang_ctx = make_genex_context(this, interp, all_targets, lang);
+                GenexEvaluator lang_eval(lang_ctx);
+                auto result = lang_eval.evaluate_property_list(own_pchs_raw);
+                if (!result || result->empty()) continue;
+
+                // Helper to evaluate deferred COMPILE_LANGUAGE genex for this language's PCH
+                auto evaluate_for_pch = [&](const std::vector<std::string>& values) -> std::vector<std::string> {
+                    std::vector<std::string> out;
+                    for (const auto& val : values) {
+                        if (val.find("$<COMPILE_LANG") != std::string::npos) {
+                            auto eval_result = lang_eval.evaluate(val);
+                            if (eval_result && !eval_result->empty()) {
+                                for (auto sv : CMakeArrayIterator(*eval_result)) {
+                                    out.emplace_back(sv);
+                                }
+                            }
+                        } else {
+                            out.push_back(val);
+                        }
+                    }
+                    return out;
+                };
+
+                int default_std = (lang == Language::C) ? c_default_std : cxx_default_std;
+                auto info = generate_pch_task(txn, toolchain, this, lang, *result, is_shared,
+                    filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
+                    filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
+                    evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
+                    evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
+                    default_std, resolved_manual_deps);
+                pch_per_lang[lang] = std::move(info);
             }
         }
     }
 
     // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
-    generate_object_tasks(txn, toolchain, obj_files, pch_gch_path, pch_include_arg, is_shared, is_pie,
+    generate_object_tasks(txn, toolchain, obj_files, pch_per_lang, is_shared, is_pie,
                           all_targets, evaluator, interp,
                           pre_build_task_id, module_mapper_path, generated_custom_tasks,
-                          implicit_includes, pch_languages, resolved_manual_deps);
+                          implicit_includes, resolved_manual_deps);
 
     if (type_ == TargetType::OBJECT_LIBRARY) return;
 

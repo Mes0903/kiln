@@ -68,7 +68,7 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
     std::string build_dir_abs = std::filesystem::absolute(temp_dir).lexically_normal().string();
 
     // Check if PCH task was generated
-    std::string pch_wrapper_expected = std::filesystem::path(build_dir_abs) / "objs" / "my_lib_pch.hpp";
+    std::string pch_wrapper_expected = std::filesystem::path(build_dir_abs) / "objs" / "my_lib_pch.hxx";
     pch_wrapper_expected = std::filesystem::path(pch_wrapper_expected).lexically_normal().string();
     std::string pch_gch_expected = pch_wrapper_expected + ".gch";
 
