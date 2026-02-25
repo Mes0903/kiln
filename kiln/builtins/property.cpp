@@ -294,6 +294,11 @@ void register_property_builtins(Interpreter& interp) {
                     interp.set_fatal_error("set_property(GLOBAL ...) does not accept item names");
                     return;
                 }
+                // Read-only global properties
+                if (property_name == "GENERATOR_IS_MULTI_CONFIG") {
+                    interp.set_fatal_error("set_property: GENERATOR_IS_MULTI_CONFIG is a read-only property");
+                    return;
+                }
                 if (append || append_string) {
                     std::string old_val = global_properties[property_name];
                     if (!old_val.empty() && !value.empty()) {
