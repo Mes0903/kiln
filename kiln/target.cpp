@@ -135,6 +135,25 @@ std::string Target::get_property_combined(const std::string& name) const {
                 }
             }
         }
+
+        // In CMake, INCLUDE_DIRECTORIES contains ALL includes (both regular and SYSTEM).
+        // kiln stores SYSTEM includes separately, so merge them here for correctness
+        // when queried via $<TARGET_PROPERTY:tgt,INCLUDE_DIRECTORIES> or get_property().
+        if (name == "INCLUDE_DIRECTORIES") {
+            auto sys_it = list_properties_.find("SYSTEM_INCLUDE_DIRECTORIES");
+            if (sys_it != list_properties_.end()) {
+                for (auto vis : {PropertyVisibility::PUBLIC, PropertyVisibility::PRIVATE, PropertyVisibility::INTERFACE}) {
+                    auto vis_it = sys_it->second.find(vis);
+                    if (vis_it != sys_it->second.end()) {
+                        for (const auto& v : vis_it->second) {
+                            if (!result.empty()) result += ';';
+                            result += v;
+                        }
+                    }
+                }
+            }
+        }
+
         if (!result.empty()) return result;
     }
 
@@ -1827,6 +1846,21 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         }
     } else {
         // Standard PCH generation: generate one PCH task per language that has headers
+        // Compute exports define here so it's included in PCH compilation (must match sources)
+        std::string pch_exports_define;
+        if (type_ == TargetType::SHARED_LIBRARY) {
+            std::string ds = get_property("DEFINE_SYMBOL");
+            if (ds.empty()) {
+                pch_exports_define = name_;
+                for (auto& ch : pch_exports_define) {
+                    if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
+                }
+                pch_exports_define += "_EXPORTS";
+            } else {
+                pch_exports_define = std::move(ds);
+            }
+        }
+
         auto own_pchs_raw = get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
         if (!own_pchs_raw.empty()) {
             // Filter out implicit includes for PCH
@@ -1867,10 +1901,14 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
                 };
 
                 int default_std = (lang == Language::C) ? c_default_std : cxx_default_std;
+                auto pch_defs = evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS"));
+                if (!pch_exports_define.empty()) {
+                    pch_defs.push_back(pch_exports_define);
+                }
                 auto info = generate_pch_task(txn, toolchain, this, lang, *result, is_shared,
                     filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
                     filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
-                    evaluate_for_pch(get_resolved_property("COMPILE_DEFINITIONS")),
+                    pch_defs,
                     evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
                     default_std, resolved_manual_deps);
                 pch_per_lang[lang] = std::move(info);

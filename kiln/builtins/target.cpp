@@ -699,7 +699,10 @@ void register_target_builtins(Interpreter& interp) {
         }
 
         for (const auto& dep : depends) {
-            target->add_custom_dependency(dep);
+            // DEPENDS items may contain semicolon-separated lists (e.g. from "${LIST_VAR}")
+            for (auto item : CMakeArrayIterator(dep)) {
+                target->add_custom_dependency(std::string(item));
+            }
         }
 
         for (const auto& bp : byproducts) {

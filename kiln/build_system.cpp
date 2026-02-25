@@ -279,6 +279,15 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
             task.inputs = std::move(new_inputs);
         }
 
+        // Evaluate explicit_deps that contain genex (they reference output paths)
+        for (auto& dep : task.explicit_deps) {
+            if (!GenexParser::contains_genex(dep)) continue;
+            auto eval = evaluator.evaluate(dep);
+            if (eval && !eval->empty()) {
+                dep = *eval;
+            }
+        }
+
         // Hard gate: no unevaluated genex in inputs
         for (const auto& input : task.inputs) {
             assert_no_genex(input, "task input for " + id);
@@ -294,6 +303,29 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
         }
         if (!task.working_dir.empty()) {
             assert_no_genex(task.working_dir, "working_dir for " + id);
+        }
+
+        // Evaluate outputs that contain genex and update output_to_task_ index
+        for (auto& output : task.outputs) {
+            if (!GenexParser::contains_genex(output)) continue;
+            // Remove old key from index
+            output_to_task_.erase(output);
+            auto eval = evaluator.evaluate(output);
+            if (eval && !eval->empty()) {
+                output = *eval;
+            }
+            // Re-register with evaluated path
+            output_to_task_[output] = task_ptr.get();
+        }
+
+        // Also evaluate the task ID if it contains genex (custom command task IDs are output paths)
+        if (GenexParser::contains_genex(task.id)) {
+            task_by_id_.erase(id);
+            auto eval = evaluator.evaluate(task.id);
+            if (eval && !eval->empty()) {
+                task.id = *eval;
+            }
+            task_by_id_[task.id] = task_ptr.get();
         }
     }
 
