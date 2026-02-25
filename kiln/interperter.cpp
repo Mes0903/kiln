@@ -214,6 +214,8 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             if (it != backup_vars.end() && !it->second.empty())
                 set_variable(var, it->second);
         }
+        if (backup_vars["CMAKE_C_COMPILER_ID"] == "GNU" || backup_vars["CMAKE_C_COMPILER_ID"] == "Clang")
+            set_variable("CMAKE_C_VERBOSE_FLAG", "-v");
         if (backup_vars["CMAKE_C_COMPILER_ID"] == "GNU")
             set_variable("CMAKE_COMPILER_IS_GNUCC", "1");
         set_variable("CMAKE_C_COMPILER_LOADED", "1");
@@ -225,6 +227,8 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             if (it != backup_vars.end() && !it->second.empty())
                 set_variable(var, it->second);
         }
+        if (backup_vars["CMAKE_CXX_COMPILER_ID"] == "GNU" || backup_vars["CMAKE_CXX_COMPILER_ID"] == "Clang")
+            set_variable("CMAKE_CXX_VERBOSE_FLAG", "-v");
         if (backup_vars["CMAKE_CXX_COMPILER_ID"] == "GNU")
             set_variable("CMAKE_COMPILER_IS_GNUCXX", "1");
         set_variable("CMAKE_CXX_COMPILER_LOADED", "1");
@@ -969,11 +973,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         });
 
         add_builtin("add_test", [](Interpreter& interp, const std::vector<std::string>& args) {
-            if (!interp.is_testing_enabled()) {
-                interp.print_message("WARNING", "add_test() called but BUILD_TESTING is OFF. Tests will not be registered. Use -DBUILD_TESTING=ON or `kiln test`");
-                return;
-            }
-
             if (args.empty()) {
                 interp.set_fatal_error("add_test requires arguments");
                 return;
@@ -1055,10 +1054,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         });
 
         add_builtin("set_tests_properties", [](Interpreter& interp, const std::vector<std::string>& args) {
-            if (!interp.is_testing_enabled()) {
-                return;
-            }
-
             // Known test properties (stored silently; unrecognized ones still stored but warn)
             static const std::unordered_set<std::string> KNOWN_PROPERTIES = {
                 "TIMEOUT", "SKIP_RETURN_CODE", "DEPENDS",

@@ -338,15 +338,33 @@ void register_file_builtins(Interpreter& interp) {
                 path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
             }
 
+            // Build the content string first
+            std::string new_content;
+            for (size_t i = 1; i < sub_args.size(); ++i) {
+                new_content += sub_args[i];
+            }
+
+            // For WRITE (not APPEND): skip if file already has identical content.
+            // This preserves mtime for generated files that don't change between
+            // configure runs, avoiding unnecessary rebuilds in no-configure-step
+            // build systems.
+            if (ci_equals(operation, "WRITE") && std::filesystem::exists(path)) {
+                std::ifstream existing(path, std::ios::binary);
+                if (existing) {
+                    std::string old_content((std::istreambuf_iterator<char>(existing)),
+                                             std::istreambuf_iterator<char>());
+                    if (old_content == new_content)
+                        return;
+                }
+            }
+
             std::filesystem::create_directories(path.parent_path());
             std::ofstream file(path, (ci_equals(operation, "APPEND")) ? std::ios::app : std::ios::trunc);
             if (!file) {
                 interp.set_fatal_error("file(" + operation + ") could not open file: " + path.string());
                 return;
             }
-            for (size_t i = 1; i < sub_args.size(); ++i) {
-                file << sub_args[i];
-            }
+            file << new_content;
         } else if (ci_equals(operation, "READ")) {
             CommandParser parser("file", "READ");
             std::string filename, var;

@@ -176,8 +176,11 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
         // This must be set before any FetchContent_Declare is parsed since args reference it
         interpreter->set_cache_variable("FETCHCONTENT_BASE_DIR", build_root_path.string() + "/_deps");
 
-        // Set BUILD_TESTING before user definitions (user can override with -D)
-        interpreter->set_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
+        // Set BUILD_TESTING as a cache variable (like CMake's -D does).
+        // option() only skips if a cache entry exists, so a normal variable
+        // would be invisible to it and projects using include(CTest) would
+        // have their option(BUILD_TESTING ... ON) override our default.
+        interpreter->set_cache_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
         apply_definitions(*interpreter, opt.definitions);
 
         if (!opt.log_level.empty()) {
