@@ -1816,6 +1816,19 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // PCH: generate per-language precompiled headers (C gets _pch.h, CXX gets _pch.hxx)
+    // CMake only generates PCH for languages the target actually uses in its sources.
+    // Determine which languages this target has source files for.
+    std::set<Language> target_source_languages;
+    {
+        auto srcs = get_property_list("SOURCES", TargetPropertyScope::BUILD);
+        for (const auto& src : srcs) {
+            auto info = LanguageClassifier::from_path(src);
+            if (info.lang != Language::UNKNOWN && !info.is_header) {
+                target_source_languages.insert(info.lang);
+            }
+        }
+    }
+
     std::map<Language, PchInfo> pch_per_lang;
     std::string reuse_from = get_property("PRECOMPILE_HEADERS_REUSE_FROM");
     if (!reuse_from.empty()) {
@@ -1834,6 +1847,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         // Compute provider's PCH paths per language (same formula as generate_pch_task)
         auto own_pchs_raw = provider->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
         for (Language lang : {Language::C, Language::CXX}) {
+            if (!target_source_languages.contains(lang)) continue;
             auto lang_ctx = make_genex_context(provider.get(), interp, all_targets, lang);
             GenexEvaluator lang_eval(lang_ctx);
             auto result = lang_eval.evaluate_property_list(own_pchs_raw);
@@ -1873,6 +1887,8 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             };
 
             for (Language lang : {Language::C, Language::CXX}) {
+                // Skip languages where the target has no source files
+                if (!target_source_languages.contains(lang)) continue;
                 // Skip languages where no compiler is available
                 if (!toolchain.get_compiler_ptr(lang)) continue;
 
