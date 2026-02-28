@@ -2006,6 +2006,12 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     Interpreter* root = get_root();
     root->trace_stack_.push_back({current_file_interned_, cmd.row, cmd.col, cmd.offset, cmd.length, cmd.identifier});
 
+    if (root->trace_stack_.size() > max_trace_depth_) {
+        pop_trace_stack();
+        return std::unexpected(InterpreterError{current_file_, cmd.row, cmd.col, cmd.offset, cmd.length,
+            "call stack depth limit exceeded (" + std::to_string(max_trace_depth_) + ")", {}});
+    }
+
     // Expand arguments once (reuse buffer to avoid per-call allocation)
     expanded_args_buf_.clear();
     expand_arguments_into(cmd.arguments, expanded_args_buf_);

@@ -598,6 +598,7 @@ private:
 
     std::vector<FrameMetadata> frame_stack_; // Metadata only (no variables)
     std::vector<TraceEntry> trace_stack_;   // For backtraces (lightweight, non-owning)
+    static constexpr size_t max_trace_depth_ = 2000;
     std::string current_file_;
     const std::string* current_file_interned_ = nullptr;  // Points into interned_files_
     std::unordered_set<std::string> interned_files_;       // Owns file path strings
