@@ -760,16 +760,18 @@ void register_file_builtins(Interpreter& interp) {
             // Recursively removes files and directories
             for (const auto& file_arg : sub_args) {
                 std::filesystem::path path = file_arg;
-                if(path.string() == "/") {
-                    interp.print_message("FATAL_ERRPR", "Trying to remove / (the root folder) is a terrible idea. kiln does not support this operation.");
-                }
                 if (!path.is_absolute()) {
                     path = std::filesystem::path(interp.get_variable("CMAKE_CURRENT_SOURCE_DIR")) / path;
                 }
+                path = std::filesystem::absolute(path);
+
+                if(path.string() == "/") {
+                    interp.print_message("FATAL_ERROR", "Trying to remove / (the root folder) is a terrible idea. kiln does not support this operation.");
+                    return;
+                }
 
                 std::error_code ec;
-                std::filesystem::remove_all(path, ec);
-                // CMake silently ignores errors for non-existent paths
+                std::filesystem::remove_all(path, ec);                // CMake silently ignores errors for non-existent paths
             }
         } else if (ci_equals(operation, "RENAME")) {
             // file(RENAME <oldname> <newname> [RESULT <result>] [NO_REPLACE])
@@ -1927,7 +1929,8 @@ void register_file_builtins(Interpreter& interp) {
             struct archive* ext = nullptr;
             if (!list_only) {
                 ext = archive_write_disk_new();
-                int flags = ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS;
+                int flags = ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS |
+                            ARCHIVE_EXTRACT_SECURE_NODOTDOT | ARCHIVE_EXTRACT_SECURE_SYMLINKS;
                 if (!touch) {
                     flags |= ARCHIVE_EXTRACT_TIME;
                 }
