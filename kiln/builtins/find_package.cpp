@@ -840,22 +840,21 @@ void register_find_package_builtins(Interpreter& interp) {
 
             // Nothing found
             interp.set_variable(found_var, "OFF");
+
+            auto build_not_found_message = [&]() -> std::string {
+                std::string msg = "Could not find \"" + package_name + "\"";
+                if (!version.empty())
+                    msg += " version " + version;
+                msg += ": no Find" + package_name + ".cmake under CMAKE_MODULE_PATH "
+                       "and no " + package_name + "Config.cmake found. "
+                       "Set " + dir_var + " or CMAKE_PREFIX_PATH accordingly.";
+                return msg;
+            };
+
             if (required) {
-                std::string error_msg = "Could not find package " + package_name;
-                if (!version.empty()) {
-                    error_msg += " with version " + version;
-                }
-                if (!components.empty()) {
-                    error_msg += " (required components:";
-                    for (size_t i = 0; i < components.size(); ++i) {
-                        error_msg += " " + components[i];
-                    }
-                    error_msg += ")";
-                }
-                error_msg += ".";
-                interp.set_fatal_error(error_msg);
+                interp.set_fatal_error(build_not_found_message());
             } else if (!quiet) {
-                interp.print_message("STATUS", "Could not find package " + package_name + " (optional)");
+                interp.print_warning_with_context(build_not_found_message());
             }
         }
     });

@@ -6,6 +6,7 @@
 #include "gnu_compiler.hpp"
 #include "genex_evaluator.hpp"
 #include "profiler.hpp"
+#include "printing.hpp"
 #include "parse_number.hpp"
 #include <iostream>
 #include <fstream>
@@ -3095,6 +3096,24 @@ void Interpreter::print_message(const std::string& mode, const std::string& msg,
     // Debugger hook for --break-on-message
     if (debugger_) {
         debugger_->on_message(msg);
+    }
+}
+
+void Interpreter::print_warning_with_context(const std::string& msg) {
+    Interpreter* root = get_root();
+    if (!root->trace_stack_.empty()) {
+        std::vector<CallLocation> backtrace;
+        for (size_t i = 0; i < root->trace_stack_.size() - 1; ++i) {
+            const auto& te = root->trace_stack_[i];
+            backtrace.push_back({te.file ? *te.file : std::string(), te.row, te.col, te.offset, te.length, std::string(te.command)});
+        }
+        const auto& current = root->trace_stack_.back();
+        print_diagnostic(*err_, DiagnosticSeverity::Warning, msg,
+                         current.file ? *current.file : std::string(),
+                         current.row, current.col, current.offset, current.length,
+                         backtrace);
+    } else {
+        print_message("WARNING", msg, true);
     }
 }
 
