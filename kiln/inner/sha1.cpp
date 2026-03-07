@@ -43,7 +43,7 @@ A million repetitions of "a"
     defined(BIT_ZERO_ON_RIGHT) || defined(__alpha__) || defined(__alpha) || \
     defined(__CYGWIN32__) || defined(_WIN64) || defined(_WIN32) ||          \
     defined(__arm64e__) || defined(__arm64__) || defined(__aarch64__) ||    \
-    defined(__riscv) || defined(_M_ARM6)
+    defined(__riscv) || defined(_M_ARM6) || defined(__amd64__)
 #define BYTE_ORDER LITTLE_ENDIAN
 #endif
 
