@@ -28,7 +28,8 @@ A million repetitions of "a"
 
 #ifndef BYTE_ORDER
 #if (BSD >= 199103)
-#include <machine/endian.h>
+#define __BSD_VISIBLE
+#include <sys/endian.h>
 #else
 #if defined(linux) || defined(__linux__)
 #include <endian.h>
@@ -42,7 +43,7 @@ A million repetitions of "a"
     defined(BIT_ZERO_ON_RIGHT) || defined(__alpha__) || defined(__alpha) || \
     defined(__CYGWIN32__) || defined(_WIN64) || defined(_WIN32) ||          \
     defined(__arm64e__) || defined(__arm64__) || defined(__aarch64__) ||    \
-    defined(__riscv) || defined(_M_ARM64)
+    defined(__riscv) || defined(_M_ARM6)
 #define BYTE_ORDER LITTLE_ENDIAN
 #endif
 
