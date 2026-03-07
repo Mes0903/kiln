@@ -814,6 +814,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 #ifdef __linux__
     variables_.set("LINUX", "1");
 #endif
+#ifdef __FreeBSD__
+    variables_.set("BSD", "FreeBSD");
+#endif
 
     // Byte order detection
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
