@@ -424,7 +424,7 @@ void register_try_compile_builtins(Interpreter& interp) {
         }
 
         if (project_mode) {
-            // Project mode: run cmake and make on the source directory
+            // Project mode: spawn an isolated interpreter to build the project
             std::filesystem::path srcdir(srcdir_or_srcfile);
             std::filesystem::path build_dir(bindir);
 
@@ -436,42 +436,100 @@ void register_try_compile_builtins(Interpreter& interp) {
                 return;
             }
 
-            // Build cmake command
-            std::vector<std::string> cmake_cmd = {"cmake"};
-            cmake_cmd.push_back(srcdir.string());
-
-            // Add CMAKE_FLAGS
-            for (const auto& flag : cmake_flags) {
-                cmake_cmd.push_back(flag);
-            }
-
-            // Run cmake
-            CommandResult cmake_result = run_command(cmake_cmd, build_dir.string());
-            std::string full_output = cmake_result.output;
-
-            if (cmake_result.exit_code != 0) {
+            // Find CMakeLists.txt in source directory
+            std::string cmake_file = (srcdir / "CMakeLists.txt").string();
+            if (!std::filesystem::exists(cmake_file)) {
                 interp.set_variable(result_var, "FALSE");
                 interp.set_cache_variable(result_var, "FALSE");
                 if (!output_variable.empty()) {
-                    interp.set_variable(output_variable, full_output);
+                    interp.set_variable(output_variable, "CMakeLists.txt not found in " + srcdir.string());
                 }
                 return;
             }
 
-            // Build make command
-            std::vector<std::string> make_cmd = {"make"};
-            if (!target_name.empty()) {
-                make_cmd.push_back(target_name);
+            // Create isolated child interpreter
+            std::stringstream child_output;
+            Interpreter child_interp(srcdir.string(), &child_output, &child_output, build_dir.string());
+
+            // Apply CMAKE_FLAGS as variables (same pattern as ExternalProject)
+            for (const auto& flag : cmake_flags) {
+                if (flag.size() >= 2 && flag.substr(0, 2) == "-D") {
+                    std::string def = flag.substr(2);
+                    size_t eq = def.find('=');
+                    if (eq != std::string::npos) {
+                        std::string var = def.substr(0, eq);
+                        std::string val = def.substr(eq + 1);
+                        // Strip type annotation (e.g., VAR:STRING -> VAR)
+                        size_t colon = var.find(':');
+                        if (colon != std::string::npos) var = var.substr(0, colon);
+                        child_interp.set_variable(var, val);
+                    }
+                }
             }
 
-            // Run make
-            CommandResult make_result = run_command(make_cmd, build_dir.string());
-            full_output += make_result.output;
+            // Suppress status messages in child interpreter
+            child_interp.set_variable("CMAKE_MESSAGE_LOG_LEVEL", "WARNING");
 
-            bool success = (make_result.exit_code == 0);
+            // Parse CMakeLists.txt
+            std::ifstream file(cmake_file);
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            Parser parser(content, cmake_file);
+            auto ast = parser.parse();
+            if (!ast) {
+                interp.set_variable(result_var, "FALSE");
+                interp.set_cache_variable(result_var, "FALSE");
+                if (!output_variable.empty()) {
+                    interp.set_variable(output_variable, "Parse error: " + ast.error().reason);
+                }
+                return;
+            }
+
+            child_interp.set_current_file(cmake_file);
+
+            // Interpret
+            auto interp_result = child_interp.interpret(*ast);
+            std::string full_output = child_output.str();
+            if (!interp_result) {
+                interp.set_variable(result_var, "FALSE");
+                interp.set_cache_variable(result_var, "FALSE");
+                if (!output_variable.empty()) {
+                    interp.set_variable(output_variable, full_output + "\n" + interp_result.error().message);
+                }
+                return;
+            }
+
+            // Finalize targets (apply directory properties)
+            child_interp.execute_deferred_calls();
+            child_interp.finalize_directory_targets();
+
+            // Generate build graph and execute
+            std::vector<std::string> build_targets;
+            if (!target_name.empty()) {
+                build_targets.push_back(target_name);
+            }
+
+            auto graph_result = child_interp.generate_build_graph(build_targets);
+            if (!graph_result) {
+                full_output += child_output.str();
+                interp.set_variable(result_var, "FALSE");
+                interp.set_cache_variable(result_var, "FALSE");
+                if (!output_variable.empty()) {
+                    interp.set_variable(output_variable, full_output + "\n" + graph_result.error().message);
+                }
+                return;
+            }
+
+            auto& graph = *graph_result;
+            graph.apply_cmake_compat_deps();
+
+            auto exec_result = graph.execute(build_dir.string(), 1);
+            full_output += child_output.str();
+
+            bool success = exec_result.has_value();
             interp.set_variable(result_var, success ? "TRUE" : "FALSE");
             interp.set_cache_variable(result_var, success ? "TRUE" : "FALSE");
             if (!output_variable.empty()) {
+                if (!success) full_output += "\n" + exec_result.error();
                 interp.set_variable(output_variable, full_output);
             }
             return;
