@@ -7,6 +7,8 @@
 #ifdef __linux__
 #include <linux/limits.h>
 #include <sys/utsname.h>
+#elif defined __FreeBSD__
+#include <sys/sysctl.h>
 #endif
 #include <type_traits>
 #include <fcntl.h>
@@ -426,12 +428,17 @@ kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, c
 }
 
 std::string kiln::get_executable_path() {
-#ifdef __linux__
     char result[PATH_MAX];
+#ifdef __linux__
     ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
     if (count != -1) {
         return std::string(result, count);
     }
+#elif defined __FreeBSD__
+    size_t len = sizeof(result);
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, getpid()};
+    if (sysctl(mib, 4, result, &len, NULL, 0) == 0)
+      return result;
 #endif
     // Fallback or other platforms
     return "kiln";
