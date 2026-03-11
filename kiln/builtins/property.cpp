@@ -4,6 +4,7 @@
 #include "../command_parser.hpp"
 #include "../container_utils.hpp"
 #include <filesystem>
+#include <sstream>
 #include <algorithm>
 
 namespace kiln {
