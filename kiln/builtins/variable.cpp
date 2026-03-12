@@ -451,7 +451,11 @@ void register_variable_builtins(Interpreter& interp) {
         std::string hostname;
 
         // Get hostname using gethostname()
+#ifdef __FreeBSD__
+        char buffer[_POSIX_HOST_NAME_MAX + 1];
+#else
         char buffer[HOST_NAME_MAX + 1];
+#endif
         if (gethostname(buffer, sizeof(buffer)) == 0) {
             hostname = buffer;
         } else {
