@@ -2244,7 +2244,12 @@ std::expected<void, InterpreterError> Interpreter::execute_if_block(const IfBloc
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_function_block(const FunctionBlock& block) {
-    std::string lower_name = to_lower(block.name);
+    // Resolve dynamic name (e.g., function("${VAR}" ...)) at registration time.
+    std::string resolved_name = block.name;
+    if (resolved_name.empty()) {
+        resolved_name = evaluate_argument(block.name_argument);
+    }
+    std::string lower_name = to_lower(resolved_name);
     // Store at root - CMake functions/macros are globally visible
     Interpreter* root = get_root();
 
@@ -2269,12 +2274,18 @@ std::expected<void, InterpreterError> Interpreter::execute_function_block(const 
     }
 
     it->second = std::make_unique<FunctionBlock>(block);
+    if (it->second->name.empty()) it->second->name = resolved_name;
     root->user_macros_.erase(lower_name);
     return {};
 }
 
 std::expected<void, InterpreterError> Interpreter::execute_macro_block(const MacroBlock& block) {
-    std::string lower_name = to_lower(block.name);
+    // Resolve dynamic name (e.g., macro("${VAR}" ...)) at registration time.
+    std::string resolved_name = block.name;
+    if (resolved_name.empty()) {
+        resolved_name = evaluate_argument(block.name_argument);
+    }
+    std::string lower_name = to_lower(resolved_name);
     // Store at root - CMake functions/macros are globally visible
     Interpreter* root = get_root();
 
@@ -2290,6 +2301,7 @@ std::expected<void, InterpreterError> Interpreter::execute_macro_block(const Mac
     }
 
     it->second = std::make_unique<MacroBlock>(block);
+    if (it->second->name.empty()) it->second->name = resolved_name;
     root->user_functions_.erase(lower_name);
     return {};
 }

@@ -420,6 +420,45 @@ TEST_CASE("Macro with multiple parameters", "[interpreter][macro]") {
     REQUIRE(output == "one two three\n");
 }
 
+TEST_CASE("Macro with dynamic name from variable", "[interpreter][macro]") {
+    // vcpkg.cmake uses macro("${VAR}" ...) to define a macro whose name
+    // comes from a variable. The name must be resolved at registration
+    // time, not parse time.
+    auto output = run_script(R"(
+        set(MY_NAME my_dynamic_macro)
+        macro("${MY_NAME}" arg)
+            message("called ${arg}")
+        endmacro()
+
+        my_dynamic_macro("hi")
+    )");
+    REQUIRE(output == "called hi\n");
+}
+
+TEST_CASE("Function with dynamic name from variable", "[interpreter][function]") {
+    auto output = run_script(R"(
+        set(FN_NAME my_dynamic_fn)
+        function("${FN_NAME}" arg)
+            message("fn ${arg}")
+        endfunction()
+
+        my_dynamic_fn("hi")
+    )");
+    REQUIRE(output == "fn hi\n");
+}
+
+TEST_CASE("Macro name with literal+variable concatenation", "[interpreter][macro]") {
+    auto output = run_script(R"(
+        set(SUFFIX _override)
+        macro("find_package${SUFFIX}" pkg)
+            message("override ${pkg}")
+        endmacro()
+
+        find_package_override("foo")
+    )");
+    REQUIRE(output == "override foo\n");
+}
+
 TEST_CASE("Function and macro scoping comparison", "[interpreter][function][macro]") {
     auto output = run_script(R"(
         set(VAR "original")

@@ -115,7 +115,8 @@ struct IfBlock {
 };
 
 struct FunctionBlock {
-    std::string name;
+    std::string name;                  // Empty when name is dynamic; resolved at registration
+    Argument name_argument;            // Unevaluated name (used when `name` is empty)
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
     std::string definition_file = "";  // File where function was defined
@@ -123,7 +124,8 @@ struct FunctionBlock {
 };
 
 struct MacroBlock {
-    std::string name;
+    std::string name;                  // Empty when name is dynamic; resolved at registration
+    Argument name_argument;            // Unevaluated name (used when `name` is empty)
     std::vector<std::string> parameters;
     std::vector<AstNode> body;
     std::string definition_file = "";  // File where macro was defined (for consistency)

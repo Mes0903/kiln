@@ -208,12 +208,22 @@ std::expected<FunctionBlock, ParseError> Parser::parse_function_block(const Comm
         return std::unexpected(ParseError{function_command.row, function_command.col, function_command.offset, function_command.length, "function() requires a name"});
     }
 
-    // First argument is the function name
-    if (!function_command.arguments[0].parts.empty() &&
-        std::holds_alternative<std::string>(function_command.arguments[0].parts[0])) {
-        function_block.name = std::get<std::string>(function_command.arguments[0].parts[0]);
-    } else {
-        return std::unexpected(ParseError{function_command.row, function_command.col, function_command.offset, function_command.length, "function() name must be a simple identifier"});
+    // First argument is the function name. If it's purely literal (no
+    // variable references), resolve it now; otherwise defer to registration
+    // time so e.g. function("${VAR}" ...) works.
+    {
+        const Argument& name_arg = function_command.arguments[0];
+        bool all_literal = !name_arg.parts.empty();
+        for (const auto& p : name_arg.parts) {
+            if (!std::holds_alternative<std::string>(p)) { all_literal = false; break; }
+        }
+        if (all_literal) {
+            std::string name;
+            for (const auto& p : name_arg.parts) name += std::get<std::string>(p);
+            function_block.name = std::move(name);
+        } else {
+            function_block.name_argument = name_arg;
+        }
     }
 
     // Remaining arguments are parameter names
@@ -259,12 +269,22 @@ std::expected<MacroBlock, ParseError> Parser::parse_macro_block(const CommandInv
         return std::unexpected(ParseError{macro_command.row, macro_command.col, macro_command.offset, macro_command.length, "macro() requires a name"});
     }
 
-    // First argument is the macro name
-    if (!macro_command.arguments[0].parts.empty() &&
-        std::holds_alternative<std::string>(macro_command.arguments[0].parts[0])) {
-        macro_block.name = std::get<std::string>(macro_command.arguments[0].parts[0]);
-    } else {
-        return std::unexpected(ParseError{macro_command.row, macro_command.col, macro_command.offset, macro_command.length, "macro() name must be a simple identifier"});
+    // First argument is the macro name. If it's purely literal (no
+    // variable references), resolve it now; otherwise defer to registration
+    // time so e.g. macro("${VAR}" ...) works.
+    {
+        const Argument& name_arg = macro_command.arguments[0];
+        bool all_literal = !name_arg.parts.empty();
+        for (const auto& p : name_arg.parts) {
+            if (!std::holds_alternative<std::string>(p)) { all_literal = false; break; }
+        }
+        if (all_literal) {
+            std::string name;
+            for (const auto& p : name_arg.parts) name += std::get<std::string>(p);
+            macro_block.name = std::move(name);
+        } else {
+            macro_block.name_argument = name_arg;
+        }
     }
 
     // Remaining arguments are parameter names

@@ -335,7 +335,7 @@ void register_project_builtins(Interpreter& interp) {
                 interp.mark_toolchain_file_loaded();
                 auto res = interp.include_file(tc_path.lexically_normal().string());
                 if (!res) {
-                    interp.set_fatal_error("project() failed to load CMAKE_TOOLCHAIN_FILE: " + tc);
+                    interp.set_fatal_error("project() failed to load CMAKE_TOOLCHAIN_FILE: " + tc + ": " + res.error().message);
                     return;
                 }
             } else {
