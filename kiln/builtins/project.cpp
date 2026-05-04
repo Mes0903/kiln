@@ -319,6 +319,20 @@ void register_project_builtins(Interpreter& interp) {
             languages = {"C", "CXX"};
         }
 
+        // CMAKE_PROJECT_<NAME>_INCLUDE_BEFORE: included after project name vars
+        // are set but before toolchain/language work. ladybird uses this to
+        // populate VCPKG_TARGET_TRIPLET (and pick the dynamic triplet on Linux)
+        // before vcpkg's toolchain file gets a chance to lock in a default.
+        auto include_hook = [&](const std::string& var) {
+            std::string file = interp.get_variable(var);
+            if (file.empty()) return;
+            auto res = interp.include_file(file);
+            if (!res) {
+                interp.set_fatal_error("project() failed to load " + var + ": " + file + ": " + res.error().message);
+            }
+        };
+        include_hook("CMAKE_PROJECT_" + project_name + "_INCLUDE_BEFORE");
+
         // Load CMAKE_TOOLCHAIN_FILE once, before any language enablement, so
         // it can set CMAKE_<LANG>_COMPILER, CMAKE_SYSROOT, etc. Relative
         // paths are resolved against CMAKE_SOURCE_DIR (top-level), matching
@@ -441,6 +455,11 @@ void register_project_builtins(Interpreter& interp) {
         if (is_top_level) {
             interp.set_variable("CMAKE_PROJECT_HOMEPAGE_URL", homepage_url);
         }
+
+        // CMAKE_PROJECT_<NAME>_INCLUDE / CMAKE_PROJECT_INCLUDE: late hooks,
+        // after languages and version vars are populated. Per-name first.
+        include_hook("CMAKE_PROJECT_" + project_name + "_INCLUDE");
+        include_hook("CMAKE_PROJECT_INCLUDE");
     });
 
     interp.add_builtin("cmake_policy", [](Interpreter& interp, const std::vector<std::string>& args) {

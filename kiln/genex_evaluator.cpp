@@ -34,6 +34,7 @@ GenexEvaluationContext GenexEvaluationContext::from_interpreter(
     ctx.executable_suffix = interp.get_variable("CMAKE_EXECUTABLE_SUFFIX");
     ctx.phase = Phase::BUILD;
     ctx.source_properties = &interp.get_source_properties();
+    ctx.interp = &interp;
     return ctx;
 }
 
@@ -811,6 +812,82 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 if (lang_upper == current_lang) return std::string("1");
             }
             return std::string("0");
+        }
+
+        case GenexNodeType::LINK_LANGUAGE: {
+            // $<LINK_LANGUAGE[:lang[,lang2,...]]>
+            // No-arg form returns the linker language; arg form returns
+            // 1 if any listed language matches, else 0.
+            // Determined by Target::get_linker_language() (LINKER_LANGUAGE
+            // property if set, else inferred from the target's own sources).
+            if (!ctx_.current_target) {
+                return std::unexpected("LINK_LANGUAGE requires a target context");
+            }
+            std::string current_lang;
+            switch (ctx_.current_target->get_linker_language()) {
+                case Language::C: current_lang = "C"; break;
+                case Language::CXX: current_lang = "CXX"; break;
+                case Language::CUDA: current_lang = "CUDA"; break;
+                case Language::ASM: current_lang = "ASM"; break;
+                default: current_lang = "CXX"; break;
+            }
+
+            if (node.raw_content.empty()) return current_lang;
+
+            for (const auto& lang : GenexParser().split_genex_args(node.raw_content)) {
+                std::string upper = lang;
+                std::transform(upper.begin(), upper.end(), upper.begin(),
+                               [](unsigned char c) { return std::toupper(c); });
+                if (upper == current_lang) return std::string("1");
+            }
+            return std::string("0");
+        }
+
+        case GenexNodeType::LINK_GROUP: {
+            // $<LINK_GROUP:feature,arg1,arg2,...>
+            // Wraps args with linker prologue/epilogue from
+            // CMAKE_LINK_GROUP_USING_<feature> (a list of typically two
+            // entries: the prologue and epilogue strings). Result is a
+            // CMake list so each item appears as a separate link argument.
+            if (!ctx_.interp) {
+                return std::unexpected("LINK_GROUP requires an interpreter context");
+            }
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.empty()) {
+                return std::unexpected("LINK_GROUP requires at least a feature name");
+            }
+            const std::string& feature = args[0];
+
+            // CMAKE_LINK_GROUP_USING_<feature> stores the wrapping (a list).
+            std::string wrapping = ctx_.interp->get_variable("CMAKE_LINK_GROUP_USING_" + feature);
+
+            std::vector<std::string> result;
+            std::string prologue, epilogue;
+
+            if (!wrapping.empty()) {
+                std::vector<std::string> parts;
+                for (auto sv : CMakeArrayIterator(wrapping)) parts.emplace_back(sv);
+                if (parts.size() == 1) {
+                    prologue = std::move(parts[0]);
+                } else if (parts.size() >= 2) {
+                    prologue = std::move(parts.front());
+                    epilogue = std::move(parts.back());
+                }
+            }
+            // If the feature isn't defined, emit the libs without wrapping.
+            // CMake errors in that case; we degrade gracefully — the link
+            // still happens, just without the requested grouping semantics.
+
+            if (!prologue.empty()) result.push_back(prologue);
+            for (size_t i = 1; i < args.size(); ++i) result.push_back(args[i]);
+            if (!epilogue.empty()) result.push_back(epilogue);
+
+            std::string joined;
+            for (size_t i = 0; i < result.size(); ++i) {
+                if (i > 0) joined += ";";
+                joined += result[i];
+            }
+            return joined;
         }
 
         case GenexNodeType::COMPILE_LANG_AND_ID: {

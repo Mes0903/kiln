@@ -341,6 +341,73 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             set_variable(lang == "C" ? "CMAKE_COMPILER_IS_GNUCC"
                                      : "CMAKE_COMPILER_IS_GNUCXX", "1");
         }
+
+        // Populate the prereq vars that CMake's Compiler/<id>-<lang>.cmake
+        // expects to find (CMAKE_<LANG>_STANDARD_COMPUTED_DEFAULT,
+        // CMAKE_<LANG>_EXTENSIONS_COMPUTED_DEFAULT). Real CMake derives these
+        // by probing the compiler; we approximate from id+version. Required
+        // whether or not we end up loading the upstream module — projects
+        // can read these directly too.
+        if ((id == "GNU" || id == "Clang") && lang == "CXX") {
+            std::string ver = get_variable("CMAKE_CXX_COMPILER_VERSION");
+            // gcc 11.1+ → C++17, 6.0+ → C++14, else C++98. Clang follows similar
+            // thresholds in practice; this default is only used when the project
+            // doesn't pin CXX_STANDARD explicitly.
+            std::string std_default = "98";
+            auto cmp = [&](const char* threshold) {
+                int a[3] = {0,0,0}, b[3] = {0,0,0};
+                std::sscanf(ver.c_str(), "%d.%d.%d", &a[0], &a[1], &a[2]);
+                std::sscanf(threshold, "%d.%d.%d", &b[0], &b[1], &b[2]);
+                for (int i = 0; i < 3; ++i) {
+                    if (a[i] != b[i]) return a[i] >= b[i];
+                }
+                return true;
+            };
+            if (cmp("11.1")) std_default = "17";
+            else if (cmp("6.0")) std_default = "14";
+            set_variable("CMAKE_CXX_STANDARD_COMPUTED_DEFAULT", std_default);
+            set_variable("CMAKE_CXX_EXTENSIONS_COMPUTED_DEFAULT", "ON");
+        } else if ((id == "GNU" || id == "Clang") && lang == "C") {
+            set_variable("CMAKE_C_STANDARD_COMPUTED_DEFAULT", "11");
+            set_variable("CMAKE_C_EXTENSIONS_COMPUTED_DEFAULT", "ON");
+        }
+
+        // Default path: include CMake's upstream Compiler/<id>-<lang>.cmake so
+        // downstream modules (CheckPIESupported, CheckLinkerFlag, …) find every
+        // var they expect — PIE, PIC, visibility, language standards, dep
+        // formats, module flags. Hardcoding a subset turns into endless
+        // whack-a-mole as projects exercise new flags.
+        //
+        // --fast-setup falls back to a hand-rolled subset that covers the most
+        // common needs without reading any external module. Faster, but breaks
+        // the moment a project touches something we didn't anticipate.
+        bool fast_setup = !get_variable("KILN_FAST_SETUP").empty();
+        if (fast_setup) {
+            if (id == "GNU" || id == "Clang") {
+                const std::string p = "CMAKE_" + lang + "_";
+                set_variable(p + "COMPILE_OPTIONS_PIC", "-fPIC");
+                set_variable(p + "COMPILE_OPTIONS_PIE", "-fPIE");
+                set_variable(p + "LINK_OPTIONS_PIE", "-fPIE;-pie");
+                set_variable(p + "LINK_OPTIONS_NO_PIE", "-no-pie");
+                set_variable("_CMAKE_" + lang + "_PIE_MAY_BE_SUPPORTED_BY_LINKER", "YES");
+                set_variable(p + "COMPILE_OPTIONS_VISIBILITY", "-fvisibility=");
+                set_variable(p + "COMPILE_OPTIONS_VISIBILITY_INLINES_HIDDEN", "-fvisibility-inlines-hidden");
+            }
+        } else if (id == "GNU" || id == "Clang") {
+            std::string module = "Compiler/" + id + "-" + lang;
+            std::string include_arg = module;
+            // include() with a bare module name searches CMAKE_MODULE_PATH and
+            // the system Modules dir.
+            auto res = execute_command_with_args("include", {include_arg});
+            if (!res) {
+                // If the module fails to load, surface it but don't abort —
+                // user can fall back to --fast-setup. Most projects will
+                // never reach this path.
+                print_message("WARNING",
+                    "enable_language(" + lang + "): failed to load " + module + ".cmake — "
+                    "consider --fast-setup. Error: " + res.error().message);
+            }
+        }
         set_variable("CMAKE_" + lang + "_COMPILER_LOADED", "1");
 
         auto compiler = std::make_unique<GnuCompiler>(
@@ -2181,6 +2248,19 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
     }
     const std::string& lower_identifier = is_lower ? identifier : (lower_buf_ = to_lower(identifier), lower_buf_);
 
+    // CMake dispatch order: user functions/macros override builtins.
+    // When a user defines `macro(find_package ...)`, calls to `find_package` go
+    // to the macro; the original builtin is reachable as `_find_package`.
+    // vcpkg.cmake relies on this to inject its toolchain logic.
+    auto fit = root->user_functions_.find(lower_identifier);
+    if (fit != root->user_functions_.end()) {
+        return invoke_user_function(*fit->second, args);
+    }
+    auto mit = root->user_macros_.find(lower_identifier);
+    if (mit != root->user_macros_.end()) {
+        return invoke_user_macro(*mit->second, args);
+    }
+
     auto bit = root->builtins_.find(lower_identifier);
     if (bit != root->builtins_.end()) {
         bit->second(*this, args);
@@ -2190,14 +2270,18 @@ std::expected<void, InterpreterError> Interpreter::execute_command_with_args(con
         return {};
     }
 
-    // Look up user functions/macros at root - CMake functions are globally visible
-    auto fit = root->user_functions_.find(lower_identifier);
-    if (fit != root->user_functions_.end()) {
-        return invoke_user_function(*fit->second, args);
-    }
-    auto mit = root->user_macros_.find(lower_identifier);
-    if (mit != root->user_macros_.end()) {
-        return invoke_user_macro(*mit->second, args);
+    // Underscore-prefixed name reaches past a user override to the original builtin.
+    // CMake actually maintains a per-name override stack; a single-level fallback
+    // covers the common case (one wrapper around a builtin) which is all vcpkg uses.
+    if (!lower_identifier.empty() && lower_identifier.front() == '_') {
+        auto bit_under = root->builtins_.find(lower_identifier.substr(1));
+        if (bit_under != root->builtins_.end()) {
+            bit_under->second(*this, args);
+            if (auto err = get_fatal_error()) {
+                return std::unexpected(*err);
+            }
+            return {};
+        }
     }
 
     set_fatal_error("Unknown command: " + identifier);
@@ -3026,8 +3110,18 @@ std::string Interpreter::evaluate_variable_reference(const VariableReference& re
 
     // Lookup based on namespace
     if (ref.namespace_prefix.empty()) {
-        // Regular variable lookup
-        return get_variable(name);
+        // Dynamically computed name: skip macro substitutions.
+        // CMake macros do textual substitution on the body before evaluation,
+        // so a nested form like ${${VAR}} that resolves the inner ${VAR} to the
+        // string "ARGC" hits the *variable* ARGC, not the macro's ARGC param.
+        // The simple-path branch above still consults macro substitutions for
+        // direct references like ${ARGC}.
+        if (auto* val = variables_.try_get(name))
+            return *val;
+        const auto* root = const_cast<Interpreter*>(this)->get_root();
+        if (auto cache_it = root->cache_variables_.find(name); cache_it != root->cache_variables_.end())
+            return cache_it->second;
+        return "";
     } else if (ref.namespace_prefix == "ENV") {
         const char* env_var = getenv(name.c_str());
         return env_var ? env_var : "";

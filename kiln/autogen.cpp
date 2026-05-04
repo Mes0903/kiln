@@ -354,11 +354,13 @@ static std::vector<std::string> build_moc_command(
     }
 
     for (const auto& def : definitions) {
+        if (def.empty()) continue;
         cmd.push_back("-D");
         cmd.push_back(def);
     }
 
     for (const auto& opt : moc_options) {
+        if (opt.empty()) continue;
         cmd.push_back(opt);
     }
 
@@ -492,9 +494,12 @@ void generate_autogen_tasks(
         }
     }
 
-    // Collect target's resolved includes and definitions for moc flags
-    const auto& resolved_includes = target.get_resolved_property("INCLUDE_DIRECTORIES");
-    const auto& resolved_definitions = target.get_resolved_property("COMPILE_DEFINITIONS");
+    // Collect target's resolved includes and definitions for moc flags.
+    // moc consumes C++ tokens, so evaluate $<COMPILE_LANGUAGE:...> as CXX.
+    auto resolved_includes = target.get_resolved_property_for_language(
+        "INCLUDE_DIRECTORIES", Language::CXX, interp, all_targets);
+    auto resolved_definitions = target.get_resolved_property_for_language(
+        "COMPILE_DEFINITIONS", Language::CXX, interp, all_targets);
 
     // Collect all sources and headers from the target
     auto own_sources = target.get_property_list("SOURCES", TargetPropertyScope::BUILD);

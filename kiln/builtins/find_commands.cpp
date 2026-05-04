@@ -229,10 +229,8 @@ std::vector<std::filesystem::path> build_search_paths(
         search_paths.push_back(root);
     }
 
-    // 2. CMake-specific paths from CMAKE_PREFIX_PATH
-    std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
-    if (!prefix_path.empty()) {
-        auto paths = split_env_path(prefix_path.c_str());
+    // 2. CMake-specific paths from CMAKE_PREFIX_PATH (variable, then environment)
+    auto append_prefix_paths = [&](const std::vector<std::filesystem::path>& paths) {
         for (const auto& prefix : paths) {
             // For find_path and find_file, also add <prefix>/include
             // For find_library, also add <prefix>/lib
@@ -248,6 +246,24 @@ std::vector<std::filesystem::path> build_search_paths(
             // Always add the prefix itself
             search_paths.push_back(prefix);
         }
+    };
+    auto split_cmake_list = [](const std::string& s) {
+        std::vector<std::filesystem::path> result;
+        size_t start = 0;
+        for (size_t i = 0; i <= s.size(); ++i) {
+            if (i == s.size() || s[i] == ';') {
+                if (i > start) result.emplace_back(s.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        return result;
+    };
+    std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
+    if (!prefix_path.empty()) {
+        append_prefix_paths(split_cmake_list(prefix_path));
+    }
+    if (const char* env_prefix = std::getenv("CMAKE_PREFIX_PATH")) {
+        if (*env_prefix) append_prefix_paths(split_env_path(env_prefix));
     }
 
     // 3. HINTS paths (system introspection)
@@ -431,7 +447,7 @@ SearchResult search_for_file(
                             std::error_code ec;
                             return SearchResult{
                                 true,  // found
-                                std::filesystem::canonical(full_path, ec),
+                                std::filesystem::absolute(full_path, ec).lexically_normal(),
                                 check_dir,  // Return the directory where the file was found (includes suffix)
                                 searched_dirs
                             };
@@ -496,7 +512,7 @@ SearchResult search_for_file(
                             std::error_code ec;
                             return SearchResult{
                                 true,  // found
-                                std::filesystem::canonical(full_path, ec),
+                                std::filesystem::absolute(full_path, ec).lexically_normal(),
                                 check_dir,  // Return the directory where the file was found (includes suffix)
                                 searched_dirs
                             };

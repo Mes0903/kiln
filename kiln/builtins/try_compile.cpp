@@ -8,6 +8,7 @@
 #include "../CMakeArray.hpp"
 #include "../compiler.hpp"
 #include "../language.hpp"
+#include "../genex_evaluator.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -787,20 +788,36 @@ void register_try_compile_builtins(Interpreter& interp) {
             }
         }
 
+        // Evaluate generator expressions on propagated INTERFACE properties.
+        // Imported targets like BlocksRuntime::BlocksRuntime carry options like
+        // "$<$<COMPILE_LANGUAGE:C,CXX>:-fblocks>" that must be resolved before
+        // the test compile is invoked.
+        auto genex_ctx = GenexEvaluationContext::from_interpreter(interp, interp.get_root()->targets_);
+        genex_ctx.compile_language = lang;
+        GenexEvaluator genex_evaluator(genex_ctx);
+        auto eval_or_keep = [&](const std::string& v) -> std::string {
+            auto r = genex_evaluator.evaluate(v);
+            return r ? *r : v;
+        };
+
         // Merge propagated properties
         for (const auto& inc : propagated_includes) {
             // Add as -I flags to raw_compile_flags
-            raw_compile_flags.push_back("-I" + inc);
+            auto v = eval_or_keep(inc);
+            if (!v.empty()) raw_compile_flags.push_back("-I" + v);
         }
         for (const auto& inc : propagated_system_includes) {
             // Add as -isystem flags to raw_compile_flags
-            raw_compile_flags.push_back("-isystem" + inc);
+            auto v = eval_or_keep(inc);
+            if (!v.empty()) raw_compile_flags.push_back("-isystem" + v);
         }
         for (const auto& def : propagated_definitions) {
-            compile_definitions.push_back(def);
+            auto v = eval_or_keep(def);
+            if (!v.empty()) compile_definitions.push_back(v);
         }
         for (const auto& opt : propagated_options) {
-            raw_compile_flags.push_back(opt);
+            auto v = eval_or_keep(opt);
+            if (!v.empty()) raw_compile_flags.push_back(v);
         }
 
         // Compute initial signature (without header deps)

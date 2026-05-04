@@ -2495,6 +2495,29 @@ TEST_CASE("multiple dereference", "[interpreter][dereference]") {
     CHECK(output == "Standard: Local Value\nExplicit: Cache Value\n");
 }
 
+TEST_CASE("macro substitution does not apply to dynamically computed names", "[interpreter][macro]") {
+    // CMake macros perform textual substitution on ARGV/ARGC/params *before* the
+    // body is evaluated. Direct ${ARGC} hits the macro's ARGC; an indirect
+    // reference like ${${NAME}} where NAME="ARGC" must hit the enclosing
+    // variable scope (the function's ARGC), because by the time the outer
+    // expansion runs, the inner has already produced the literal "ARGC".
+    // vcpkg's z_vcpkg_function_arguments helper depends on this.
+    auto output = run_script(R"(
+        function(outer)
+          inner(OUT)
+        endfunction()
+
+        macro(inner ARG)
+          message("direct=${ARGC}")
+          set(NAME "ARGC")
+          message("indirect=${${NAME}}")
+        endmacro()
+
+        outer(a b c d)
+    )");
+    CHECK(output == "direct=1\nindirect=4\n");
+}
+
 TEST_CASE("ENV namespace", "[interpreter][env]") {
     // Test reading environment variables
     auto output = run_script(R"(

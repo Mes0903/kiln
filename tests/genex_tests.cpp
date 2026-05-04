@@ -3,10 +3,12 @@
 #include "../kiln/genex_evaluator.hpp"
 #include "../kiln/target.hpp"
 #include "../kiln/build_system.hpp"
+#include "../kiln/interperter.hpp"
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <random>
+#include <sstream>
 
 using namespace kiln;
 
@@ -216,6 +218,88 @@ TEST_CASE("GenexEvaluator - IF expression", "[genex][evaluator]") {
 
     REQUIRE(eval.evaluate("$<IF:1,true_val,false_val>").value() == "true_val");
     REQUIRE(eval.evaluate("$<IF:0,true_val,false_val>").value() == "false_val");
+}
+
+TEST_CASE("GenexEvaluator - LINK_LANGUAGE infers from sources", "[genex][evaluator]") {
+    auto cxx_lib = std::make_shared<Target>("cxx_lib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    cxx_lib->append_property("SOURCES", {"foo.cpp", "bar.cpp"}, PropertyVisibility::PRIVATE);
+
+    auto c_lib = std::make_shared<Target>("c_lib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    c_lib->append_property("SOURCES", {"a.c"}, PropertyVisibility::PRIVATE);
+
+    auto explicit_lib = std::make_shared<Target>("explicit_lib", TargetType::STATIC_LIBRARY, "/src", "/build");
+    explicit_lib->append_property("SOURCES", {"x.cpp"}, PropertyVisibility::PRIVATE);
+    explicit_lib->set_property("LINKER_LANGUAGE", "C");
+
+    TargetMap targets;
+    targets["cxx_lib"] = cxx_lib;
+    targets["c_lib"] = c_lib;
+    targets["explicit_lib"] = explicit_lib;
+
+    auto eval_for = [&](Target* t) {
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        ctx.current_target = t;
+        return GenexEvaluator(ctx);
+    };
+
+    {
+        auto e = eval_for(cxx_lib.get());
+        REQUIRE(e.evaluate("$<LINK_LANGUAGE>").value() == "CXX");
+        REQUIRE(e.evaluate("$<LINK_LANGUAGE:C,CXX>").value() == "1");
+        REQUIRE(e.evaluate("$<LINK_LANGUAGE:C>").value() == "0");
+    }
+    {
+        auto e = eval_for(c_lib.get());
+        REQUIRE(e.evaluate("$<LINK_LANGUAGE>").value() == "C");
+        REQUIRE(e.evaluate("$<LINK_LANGUAGE:CXX>").value() == "0");
+    }
+    {
+        // LINKER_LANGUAGE property overrides source-based inference.
+        auto e = eval_for(explicit_lib.get());
+        REQUIRE(e.evaluate("$<LINK_LANGUAGE>").value() == "C");
+    }
+    {
+        // No target -> error.
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        GenexEvaluator e(ctx);
+        auto r = e.evaluate("$<LINK_LANGUAGE>");
+        REQUIRE_FALSE(r.has_value());
+    }
+}
+
+TEST_CASE("GenexEvaluator - LINK_GROUP wraps libs with feature prologue/epilogue", "[genex][evaluator]") {
+    std::ostringstream out;
+    Interpreter interp("", &out);
+    interp.set_variable("CMAKE_LINK_GROUP_USING_no_as_needed",
+                        "LINKER:--push-state,--no-as-needed;LINKER:--pop-state");
+
+    GenexEvaluationContext ctx;
+    ctx.interp = &interp;
+    GenexEvaluator eval(ctx);
+
+    auto r = eval.evaluate("$<LINK_GROUP:no_as_needed,Fontconfig::Fontconfig,Other::Lib>");
+    REQUIRE(r.has_value());
+    // Result is a CMake list (semicolon separated): prologue;libs...;epilogue.
+    REQUIRE(*r == "LINKER:--push-state,--no-as-needed;Fontconfig::Fontconfig;Other::Lib;LINKER:--pop-state");
+
+    // Single-arg wrapping (only prologue defined) — no epilogue emitted.
+    interp.set_variable("CMAKE_LINK_GROUP_USING_only_pre", "LINKER:--start-group");
+    auto r2 = eval.evaluate("$<LINK_GROUP:only_pre,libA>");
+    REQUIRE(r2.has_value());
+    REQUIRE(*r2 == "LINKER:--start-group;libA");
+
+    // Undefined feature: emit libs without wrapping (degrade gracefully).
+    auto r3 = eval.evaluate("$<LINK_GROUP:does_not_exist,libA,libB>");
+    REQUIRE(r3.has_value());
+    REQUIRE(*r3 == "libA;libB");
+
+    // Missing interpreter -> error.
+    GenexEvaluationContext bad_ctx;
+    GenexEvaluator bad_eval(bad_ctx);
+    auto r4 = bad_eval.evaluate("$<LINK_GROUP:no_as_needed,libA>");
+    REQUIRE_FALSE(r4.has_value());
 }
 
 TEST_CASE("GenexEvaluator - TARGET_EXISTS", "[genex][evaluator]") {

@@ -160,14 +160,25 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
     } else if (ci_equals(subcommand, "IS_RELATIVE")) {
         result = Path(interp.get_variable(args[1])).is_relative();
     } else if (ci_equals(subcommand, "IS_PREFIX")) {
-        // cmake_path(IS_PREFIX <path-var> <input> <out-var> [NORMALIZE])
+        // cmake_path(IS_PREFIX <path-var> <input> [NORMALIZE] <out-var>)
         if (args.size() < 4) {
             interp.set_fatal_error("cmake_path(IS_PREFIX) requires 4 arguments");
             return;
         }
-        // args[1] = path variable name, args[2] = input path, args[3] = output variable
+        // args[1] = path variable name, args[2] = input path.
+        // The optional NORMALIZE keyword may appear either before or after the
+        // out-var; CMake docs place it before, but accept both for robustness.
         std::string input = args[2];
-        out_var = args[3];
+        bool normalize = false;
+        if (args.size() > 4 && ci_equals(args[3], "NORMALIZE")) {
+            normalize = true;
+            out_var = args[4];
+        } else if (args.size() > 4 && ci_equals(args[4], "NORMALIZE")) {
+            normalize = true;
+            out_var = args[3];
+        } else {
+            out_var = args[3];
+        }
 
         // CMake's IS_PREFIX uses logical path prefix matching.
         // Strip trailing separators that confuse std::filesystem::path iteration
@@ -176,7 +187,6 @@ void handle_is(Interpreter& interp, const std::vector<std::string>& args) {
             while (p.size() > 1 && p.back() == '/') p.remove_suffix(1);
             return std::string(p);
         };
-        bool normalize = (args.size() > 4 && ci_equals(args[4], "NORMALIZE"));
         std::filesystem::path prefix_path(strip_trailing_sep(interp.get_variable(args[1])));
         std::filesystem::path other(strip_trailing_sep(input));
         if (normalize) {

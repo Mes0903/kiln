@@ -103,6 +103,7 @@ public:
         }
 
         for (const auto& opt : ctx.options) {
+            if (opt.empty()) continue;
             // Handle CMake's SHELL: prefix - strips prefix and passes arguments as-is
             if (opt.starts_with("SHELL:")) {
                 // Split the rest by whitespace and add as separate arguments
@@ -122,6 +123,7 @@ public:
             if (clean_def.starts_with("-D")) {
                 clean_def = clean_def.substr(2);
             }
+            if (clean_def.empty()) continue;
             // No shell escaping needed: commands are executed via execvp,
             // so each argv element is passed directly to the compiler.
             cmd.push_back("-D" + clean_def);
@@ -179,21 +181,30 @@ public:
             cmd.push_back("-fdiagnostics-color=always");
         }
 
-        for (const auto& flag : ctx.linker_flags) {
-            // Handle CMake's SHELL: prefix - strips prefix and passes arguments as-is
+        if (ctx.is_pie && !ctx.is_shared) {
+            // PIE executables need -pie at link time so the loader maps the
+            // image at a random base address and references to symbols in
+            // shared libs go through the GOT/PLT instead of becoming
+            // non-preemptible (which would error under -Wl,-z,defs).
+            cmd.push_back("-pie");
+        }
+
+        // Expand a single linker-flag entry (handles SHELL:/LINKER: prefixes).
+        // Returns true if the entry was a recognized prefix and was expanded.
+        auto expand_linker_prefix = [&](const std::string& flag) -> bool {
             if (flag.starts_with("SHELL:")) {
                 std::string rest = flag.substr(6);
                 std::stringstream ss(rest);
                 std::string arg;
-                while (ss >> arg) {
-                    cmd.push_back(arg);
-                }
-            } else if (flag.starts_with("LINKER:")) {
+                while (ss >> arg) cmd.push_back(arg);
+                return true;
+            }
+            if (flag.starts_with("LINKER:")) {
                 // CMake LINKER: prefix - split on commas, each piece gets -Wl,
                 // e.g. LINKER:--version-script,/path/to/map -> -Wl,--version-script -Wl,/path/to/map
                 // e.g. LINKER:-Bsymbolic-functions -> -Wl,-Bsymbolic-functions
-                std::string rest = flag.substr(7);
-                std::string_view sv(rest);
+                std::string_view sv(flag);
+                sv.remove_prefix(7);
                 size_t pos = 0;
                 while (pos < sv.size()) {
                     auto comma = sv.find(',', pos);
@@ -201,9 +212,13 @@ public:
                     cmd.push_back("-Wl," + std::string(sv.substr(pos, comma - pos)));
                     pos = comma + 1;
                 }
-            } else {
-                cmd.push_back(flag);
+                return true;
             }
+            return false;
+        };
+
+        for (const auto& flag : ctx.linker_flags) {
+            if (!expand_linker_prefix(flag)) cmd.push_back(flag);
         }
 
         cmd.push_back("-Wl,-rpath,'$ORIGIN'");
@@ -281,6 +296,11 @@ public:
 
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
         for (const auto& lib : ctx.libs) {
+            // CMake permits LINKER:/SHELL: entries inside target_link_libraries()
+            // — used to wrap a group of libs with linker state changes
+            // (e.g. LINKER:--push-state,--no-as-needed lib LINKER:--pop-state).
+            // Order matters, so expand inline at the position the entry appeared.
+            if (expand_linker_prefix(lib)) continue;
             // Handle different library formats:
             // - Flags like "-pthread" -> pass through as-is
             // - Already prefixed "-l..." -> pass through as-is
@@ -350,6 +370,7 @@ public:
             if (clean_def.starts_with("-D")) {
                 clean_def = clean_def.substr(2);
             }
+            if (clean_def.empty()) continue;
             // Escape quotes in definition values so they reach the preprocessor
             std::string escaped_def;
             escaped_def.reserve(clean_def.size() + 4);

@@ -56,6 +56,8 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "UPPER_CASE") return GenexNodeType::UPPER_CASE;
     if (keyword == "COMPILE_LANGUAGE") return GenexNodeType::COMPILE_LANGUAGE;
     if (keyword == "COMPILE_LANG_AND_ID") return GenexNodeType::COMPILE_LANG_AND_ID;
+    if (keyword == "LINK_LANGUAGE") return GenexNodeType::LINK_LANGUAGE;
+    if (keyword == "LINK_GROUP") return GenexNodeType::LINK_GROUP;
     if (keyword == "PLATFORM_ID") return GenexNodeType::PLATFORM_ID;
     if (keyword == "CXX_COMPILER_ID") return GenexNodeType::CXX_COMPILER_ID;
     if (keyword == "C_COMPILER_ID") return GenexNodeType::C_COMPILER_ID;

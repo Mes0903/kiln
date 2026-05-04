@@ -660,6 +660,7 @@ void register_process_builtins(Interpreter& interp) {
         bool error_strip_trailing_whitespace = false;
         bool echo_output_variable = false;
         bool echo_error_variable = false;
+        std::string command_error_is_fatal_mode;
         bool command_error_is_fatal = false;
 
         parser.multi_list("COMMAND", commands);
@@ -680,9 +681,16 @@ void register_process_builtins(Interpreter& interp) {
         parser.flag("ERROR_STRIP_TRAILING_WHITESPACE", error_strip_trailing_whitespace);
         parser.flag("ECHO_OUTPUT_VARIABLE", echo_output_variable);
         parser.flag("ECHO_ERROR_VARIABLE", echo_error_variable);
-        parser.flag("COMMAND_ERROR_IS_FATAL", command_error_is_fatal);
+        parser.value("COMMAND_ERROR_IS_FATAL", command_error_is_fatal_mode);
 
         PARSE_OR_RETURN(parser, interp, args);
+
+        // CMake supports COMMAND_ERROR_IS_FATAL with values ANY|LAST|NONE.
+        // Treat ANY and LAST identically (fatal on any non-zero exit), NONE as no-op.
+        if (ci_equals(command_error_is_fatal_mode, "ANY") ||
+            ci_equals(command_error_is_fatal_mode, "LAST")) {
+            command_error_is_fatal = true;
+        }
 
         if (commands.empty()) {
             interp.set_fatal_error("execute_process requires at least one COMMAND");

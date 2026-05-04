@@ -200,6 +200,20 @@ public:
     const std::vector<std::string>& get_resolved_property(const std::string& name) const;
     const std::vector<std::string>& get_resolved_interface_property(const std::string& name) const;
 
+    // Like get_resolved_property() but with $<COMPILE_LANGUAGE:...> deferred
+    // genex evaluated for the given language. Use this when feeding tools
+    // that consume per-language flags (compilers, moc, etc.).
+    std::vector<std::string> get_resolved_property_for_language(
+        const std::string& name,
+        Language lang,
+        const class Interpreter& interp,
+        const TargetMap& all_targets) const;
+
+    // Linker language used by $<LINK_LANGUAGE>. Returns LINKER_LANGUAGE
+    // property if set, else inferred from this target's own sources
+    // (any C++ source -> CXX, else C). Cached after first call.
+    Language get_linker_language() const;
+
     // Second pass after all targets are resolved: pick up interface properties
     // from circular dependencies that were unavailable during the DFS.
     void resolve_deferred_circular_deps(
@@ -356,6 +370,8 @@ protected:
     std::vector<CustomCommand> pre_build_commands_;
     std::vector<CustomCommand> pre_link_commands_;
     std::vector<CustomCommand> post_build_commands_;
+
+    mutable std::optional<Language> cached_linker_language_;
 };
 
 class CustomTarget : public Target {

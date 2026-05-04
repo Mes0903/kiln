@@ -200,6 +200,77 @@ const std::vector<std::string>& Target::get_resolved_interface_property(const st
     return (it != resolved_interface_properties_.end()) ? it->second : empty;
 }
 
+std::vector<std::string> Target::get_resolved_property_for_language(
+    const std::string& name,
+    Language lang,
+    const Interpreter& interp,
+    const TargetMap& all_targets) const
+{
+    const auto& base = get_resolved_property(name);
+
+    // Fast path: nothing depends on language.
+    bool needs_lang = std::any_of(base.begin(), base.end(),
+        [](const std::string& v) { return v.find("$<COMPILE_LANG") != std::string::npos; });
+    if (!needs_lang) return base;
+
+    GenexEvaluationContext ctx = GenexEvaluationContext::from_interpreter(interp, all_targets);
+    ctx.current_target = this;
+    ctx.compile_language = lang;
+    GenexEvaluator evaluator(ctx);
+
+    std::vector<std::string> out;
+    out.reserve(base.size());
+    for (const auto& val : base) {
+        if (val.find("$<COMPILE_LANG") == std::string::npos) {
+            out.push_back(val);
+            continue;
+        }
+        auto r = evaluator.evaluate(val);
+        if (!r || r->empty()) continue;
+        // Result may be a CMake list — split on top-level ';'
+        for (auto sv : CMakeArrayIterator(*r)) {
+            out.emplace_back(sv);
+        }
+    }
+    return out;
+}
+
+Language Target::get_linker_language() const {
+    if (cached_linker_language_) return *cached_linker_language_;
+
+    // Explicit LINKER_LANGUAGE property wins (CMake semantics).
+    {
+        std::string explicit_lang = get_property("LINKER_LANGUAGE");
+        if (!explicit_lang.empty()) {
+            Language lang = Language::CXX;
+            if (explicit_lang == "C") lang = Language::C;
+            else if (explicit_lang == "ASM") lang = Language::ASM;
+            // Fall back to CXX for unknown — keeps us linking with the most
+            // permissive driver instead of erroring.
+            cached_linker_language_ = lang;
+            return lang;
+        }
+    }
+
+    // Else infer from this target's own sources: any C++ source promotes to CXX.
+    Language lang = Language::C;
+    auto sources = get_property_list("SOURCES", TargetPropertyScope::BUILD);
+    for (const auto& src : sources) {
+        auto info = LanguageClassifier::from_path(src);
+        if (info.lang == Language::CXX) { lang = Language::CXX; break; }
+        if (info.lang == Language::UNKNOWN) {
+            // Extensionless source: probe filesystem for a C++ companion
+            std::string abs = Path::make_absolute_and_normal(source_dir_, src);
+            for (auto ext : {".cpp", ".cc", ".cxx", ".C", ".c++"}) {
+                if (std::filesystem::exists(abs + ext)) { lang = Language::CXX; break; }
+            }
+            if (lang == Language::CXX) break;
+        }
+    }
+    cached_linker_language_ = lang;
+    return lang;
+}
+
 std::string Target::generate_dump_info() const {
     // Helper to print a vector
     auto print_vec = [](const std::string& indent, const std::vector<std::string>& vec) -> std::string {
@@ -406,10 +477,23 @@ void merge_dedup(std::vector<std::string>& target,
         }
     }
 }
-// Detect if a string contains $<TARGET_PROPERTY:X> where X has no comma
-// at the top genex depth (i.e., single-arg form that resolves against the
-// consuming target, not a specific named target).
+// Detect if a string contains genex that can only be resolved in a per-consumer,
+// per-source context — values that must be propagated to consumers as raw genex
+// rather than evaluated at the dep's resolve time:
+//
+//   $<TARGET_PROPERTY:X>             — no comma at top depth: refers to the
+//                                      consuming target's property.
+//   $<COMPILE_LANGUAGE:...>          — depends on the source file's language.
+//   $<COMPILE_LANG_AND_ID:...>       — same.
+//
+// When these appear nested inside another genex (e.g. Qt6's
+// `$<$<NOT:$<COMPILE_LANGUAGE:Swift>>:-mno-direct-extern-access>`), partial
+// evaluation at the dep would resolve the inner placeholder to a literal
+// string the outer genex can't reason about, silently dropping the value.
+// Instead we mark the whole string as deferred and forward it intact.
 bool contains_consumer_target_property_genex(const std::string& s) {
+    if (s.find("$<COMPILE_LANGUAGE:") != std::string::npos) return true;
+    if (s.find("$<COMPILE_LANG_AND_ID:") != std::string::npos) return true;
     static constexpr std::string_view marker = "$<TARGET_PROPERTY:";
     size_t pos = 0;
     while ((pos = s.find(marker, pos)) != std::string::npos) {
@@ -560,14 +644,35 @@ void Target::propagate_from_dependency(
                                         deferred_it->second.begin(),
                                         deferred_it->second.end());
                 } else {
-                    auto eval_result = evaluator.evaluate_property_list(deferred_it->second);
-                    if (eval_result) {
-                        if (info.is_path) {
-                            for (const auto& p : *eval_result) {
-                                if (!p.empty()) dest.push_back(resolve_to_absolute_path(p));
-                            }
+                    // Split deferred values into:
+                    //   - per-source genex (COMPILE_LANGUAGE / COMPILE_LANG_AND_ID):
+                    //     forward raw to dest. The consumer's per-source compile
+                    //     evaluates with that source's language in context.
+                    //     Evaluating here would resolve the per-source genex to
+                    //     a placeholder string the surrounding genex can't reason
+                    //     about, silently dropping the value (Qt6's
+                    //     `$<$<NOT:$<COMPILE_LANGUAGE:Swift>>:-mno-direct-extern-access>`).
+                    //   - the rest ($<TARGET_PROPERTY:X>): evaluate now with the
+                    //     consumer as current_target.
+                    std::vector<std::string> needs_eval;
+                    for (const auto& v : deferred_it->second) {
+                        if (v.find("$<COMPILE_LANGUAGE:") != std::string::npos ||
+                            v.find("$<COMPILE_LANG_AND_ID:") != std::string::npos) {
+                            dest.push_back(v);
                         } else {
-                            dest.insert(dest.end(), eval_result->begin(), eval_result->end());
+                            needs_eval.push_back(v);
+                        }
+                    }
+                    if (!needs_eval.empty()) {
+                        auto eval_result = evaluator.evaluate_property_list(needs_eval);
+                        if (eval_result) {
+                            if (info.is_path) {
+                                for (const auto& p : *eval_result) {
+                                    if (!p.empty()) dest.push_back(resolve_to_absolute_path(p));
+                                }
+                            } else {
+                                dest.insert(dest.end(), eval_result->begin(), eval_result->end());
+                            }
                         }
                     }
                 }
@@ -1790,21 +1895,35 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     // Moved early so autogen (MOC/UIC/RCC) tasks can also depend on these.
     std::vector<ResolvedDep> resolved_manual_deps;
     {
+        std::unordered_set<std::string> seen_dep_outputs;
         auto add_manual_deps = [&](const std::vector<std::string>& deps) {
             for (const auto& dep_name : deps) {
                 auto it = all_targets.find(dep_name);
                 if (it != all_targets.end()) {
                     std::string dep_out = it->second->get_output_path();
-                    resolved_manual_deps.push_back({dep_out.empty() ? dep_name : std::move(dep_out)});
+                    std::string id = dep_out.empty() ? dep_name : std::move(dep_out);
+                    if (seen_dep_outputs.insert(id).second) {
+                        resolved_manual_deps.push_back({id});
+                    }
                 }
             }
         };
         add_manual_deps(manually_added_dependencies_);
-        for (const auto& dep_name : resolved_target_deps_) {
-            auto it = all_targets.find(dep_name);
-            if (it != all_targets.end()) {
-                add_manual_deps(it->second->get_manually_added_dependencies());
-            }
+        // Transitive walk: a custom target attached via add_dependencies to an
+        // imported library (e.g. add_dependencies(libjs_rust libjs_rust-build))
+        // must also order before consumers' compile tasks when those consumers
+        // include headers the custom target produces. The deps reach us through
+        // multiple link levels (js → LibJS → libjs_rust → libjs_rust-build).
+        std::unordered_set<std::string> visited;
+        std::vector<std::string> stack(resolved_target_deps_.begin(), resolved_target_deps_.end());
+        while (!stack.empty()) {
+            std::string cur = std::move(stack.back());
+            stack.pop_back();
+            if (!visited.insert(cur).second) continue;
+            auto it = all_targets.find(cur);
+            if (it == all_targets.end()) continue;
+            add_manual_deps(it->second->get_manually_added_dependencies());
+            for (const auto& d : it->second->get_resolved_target_deps()) stack.push_back(d);
         }
     }
 
@@ -2098,6 +2217,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         ctx.output = output_path;
         ctx.objects = obj_files;
         ctx.is_shared = is_shared;
+        ctx.is_pie = is_pie;
 
         // Determine standard: use highest of explicit standard or required by compile features
         {

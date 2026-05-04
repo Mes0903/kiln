@@ -308,8 +308,19 @@ void register_variable_builtins(Interpreter& interp) {
             one_value_keywords = CMakeArray(args[2]);
             multi_value_keywords = CMakeArray(args[3]);
 
-            // Remaining arguments are what we parse
-            to_parse.assign(args.begin() + 4, args.end());
+            // Remaining arguments are what we parse. Each arg may itself be a
+            // CMake list (e.g. "${ARGN}" expands to "FOO;BAR;BAZ" as one arg);
+            // flatten on ';' so keyword matching works as in CMake.
+            for (auto it = args.begin() + 4; it != args.end(); ++it) {
+                if (it->empty()) continue;
+                size_t start = 0;
+                for (size_t i = 0; i <= it->size(); ++i) {
+                    if (i == it->size() || (*it)[i] == ';') {
+                        to_parse.push_back(it->substr(start, i - start));
+                        start = i + 1;
+                    }
+                }
+            }
         }
 
         // Initialize all option variables to FALSE

@@ -601,6 +601,10 @@ void register_install_builtins(Interpreter& interp) {
             parse_install_script(interp, args, src_dir, bin_dir);
         } else if (mode == "EXPORT") {
             parse_install_export(interp, args, src_dir, bin_dir);
+        } else if (mode == "IMPORTED_RUNTIME_ARTIFACTS") {
+            // CMake 3.21+: install runtime artifacts of imported targets.
+            // No-op for now; relevant only at install time, not for build.
+            interp.print_warning_with_context("install(IMPORTED_RUNTIME_ARTIFACTS) is not implemented; ignoring");
         } else {
             interp.set_fatal_error("install() first argument must be TARGETS, FILES, PROGRAMS, DIRECTORY, SCRIPT, CODE, or EXPORT");
         }

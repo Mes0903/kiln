@@ -66,6 +66,8 @@ enum class GenexNodeType {
     UPPER_CASE,           // $<UPPER_CASE:string> - convert to uppercase
     COMPILE_LANGUAGE,     // $<COMPILE_LANGUAGE:lang>
     COMPILE_LANG_AND_ID,  // $<COMPILE_LANG_AND_ID:lang,id1,id2,...>
+    LINK_LANGUAGE,        // $<LINK_LANGUAGE:lang[,lang2,...]>
+    LINK_GROUP,           // $<LINK_GROUP:feature,libs...> — group libs with linker feature
     PLATFORM_ID,          // $<PLATFORM_ID:platform>
     CXX_COMPILER_ID,      // $<CXX_COMPILER_ID:id>
     C_COMPILER_ID,        // $<C_COMPILER_ID:id>

@@ -44,6 +44,7 @@ struct GenexEvaluationContext {
     enum class Phase { BUILD, INSTALL } phase = Phase::BUILD;
     bool allow_deferred_compile_language = false;  // For deferred evaluation
     const std::map<std::string, std::map<std::string, std::string>>* source_properties = nullptr;
+    const class Interpreter* interp = nullptr;     // For dynamic variable lookups (e.g. $<LINK_GROUP>)
 
     // Factory: populate interpreter-derived fields (build_type, compiler IDs, etc.)
     // Callers set optional fields after: current_target, compile_language, allow_deferred, phase.

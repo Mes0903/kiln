@@ -52,6 +52,7 @@ struct LinkContext {
     // When true, do not embed any link-path-derived RUNPATH entries.
     bool skip_build_rpath = false;
     bool is_shared = false;
+    bool is_pie = false;  // -pie for executables with POSITION_INDEPENDENT_CODE
     std::string standard;
     bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)
     bool color_diagnostics = false;

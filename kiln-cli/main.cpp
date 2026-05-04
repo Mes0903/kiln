@@ -50,6 +50,8 @@ struct GlobalOptions {
     bool config_only = false;  // Debug: interpret + save cache, then exit (no build)
     bool no_sys_init = false;   // Skip compiler detection (for benchmarking)
     bool fresh = false;         // Skip loading persistent cache (fresh configure)
+    bool fast_setup = false;    // Use kiln's hardcoded compiler-vars subset
+                                // instead of including CMake's Compiler/<id>-<lang>.cmake
     std::string break_on_message;
     std::string log_level;       // --log-level (sets CMAKE_MESSAGE_LOG_LEVEL)
 };
@@ -84,6 +86,11 @@ void apply_definitions(kiln::Interpreter& interpreter, const std::vector<std::st
                 var_name = var_name.substr(0, colon);
             }
 
+            // CMake's -D sets a cache variable. Some scripts check
+            // `if(NOT DEFINED CACHE{VAR})` to decide whether they were given
+            // a value via the command line; setting only a normal variable
+            // here would cause those checks to take the wrong branch.
+            interpreter.set_cache_variable(var_name, value);
             interpreter.set_variable(var_name, value);
         } else {
             // Handle -DVAR or -DVAR:BOOL (no value)
@@ -92,6 +99,7 @@ void apply_definitions(kiln::Interpreter& interpreter, const std::vector<std::st
             if (colon != std::string::npos) {
                 var_name = var_name.substr(0, colon);
             }
+            interpreter.set_cache_variable(var_name, "ON");
             interpreter.set_variable(var_name, "ON");
         }
     }
@@ -198,6 +206,10 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
 
         // Set KILN_BUILD_ROOT - shared location for EP/FetchContent sources
         interpreter->set_variable("KILN_BUILD_ROOT", build_root_path.string());
+
+        // --fast-setup: surface as an internal variable so enable_language can
+        // pick it up and skip including Compiler/<id>-<lang>.cmake.
+        if (opt.fast_setup) interpreter->set_variable("KILN_FAST_SETUP", "1");
 
         // Initialize FETCHCONTENT_BASE_DIR (like CMake's FetchContent module does on include)
         // This must be set before any FetchContent_Declare is parsed since args reference it
@@ -682,6 +694,9 @@ int main(int argc, char* argv[]) {
         target->add_option("--break-on-message", opt.break_on_message, "Break into debugger when message matches pattern");
         target->add_flag("--config-only", opt.config_only, "[debug] Interpret CMakeLists.txt and save cache, then exit without building");
         target->add_flag("--no-sys-init", opt.no_sys_init, "[benchmark] Skip compiler detection and system init");
+        target->add_flag("--fast-setup", opt.fast_setup,
+            "Skip loading CMake's Compiler/<id>-<lang>.cmake during enable_language; "
+            "use kiln's built-in subset of compiler vars. Faster but covers fewer flags.");
         target->add_flag("--fresh", opt.fresh, "Skip loading persistent cache (fresh configure)");
         target->add_option("--log-level", opt.log_level, "Set message log level (ERROR, WARNING, NOTICE, STATUS, VERBOSE, DEBUG, TRACE)");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
