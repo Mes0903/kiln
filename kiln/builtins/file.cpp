@@ -1757,12 +1757,23 @@ void register_file_builtins(Interpreter& interp) {
 
                 if (comp_lower == "zstd") {
                     archive_write_add_filter_zstd(a);
-                } else if (comp_lower == "gzip" || comp_lower == "gz") {
+                } else if (comp_lower == "gzip" || comp_lower == "gz" || comp_lower == "deflate") {
                     archive_write_add_filter_gzip(a);
                 } else if (comp_lower == "bzip2" || comp_lower == "bz2") {
                     archive_write_add_filter_bzip2(a);
-                } else if (comp_lower == "xz") {
+                } else if (comp_lower == "xz" || comp_lower == "lzma2") {
                     archive_write_add_filter_xz(a);
+                } else if (comp_lower == "lzma") {
+                    archive_write_add_filter_lzma(a);
+                } else if (comp_lower == "ppmd") {
+                    // PPMd is only supported by the 7zip archive format; libarchive
+                    // applies it via the format options rather than a filter.
+                    if (!ci_eq(format_str, "7zip")) {
+                        archive_write_free(a);
+                        interp.set_fatal_error("file(ARCHIVE_CREATE) PPMd compression requires FORMAT 7zip");
+                        return;
+                    }
+                    archive_write_set_format_option(a, "7zip", "compression", "ppmd");
                 } else if (comp_lower == "none") {
                     archive_write_add_filter_none(a);
                 } else {
