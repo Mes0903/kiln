@@ -157,6 +157,21 @@ struct ExecutionState {
         , cache(std::move(loaded_cache)), new_cache(cache) {}
 };
 
+// Promote a task into the ready set if it's a tracked dirty task that isn't
+// already running/queued/completed and all its dependencies have completed.
+// Caller must hold state.mutex.
+static bool try_promote_to_ready(BuildTask* t, ExecutionState& state) {
+    if (!state.dirty_state.count(t)) return false;
+    if (state.completed.count(t)) return false;
+    if (state.running.count(t)) return false;
+    if (state.ready_set.count(t)) return false;
+    for (auto* dep : t->dependencies) {
+        if (!state.completed.count(dep)) return false;
+    }
+    state.ready_set.insert(t);
+    return true;
+}
+
 std::expected<void, std::string> BuildGraph::generate_compile_commands(const std::string& build_dir) {
     std::string current_dir = std::filesystem::current_path().string();
 
@@ -660,6 +675,60 @@ std::optional<std::string> BuildGraph::check_for_cycles() {
     return std::nullopt;
 }
 
+bool BuildGraph::all_outputs_exist(const BuildTask& task) {
+    if (task.outputs.empty()) return false;
+    for (const auto& out : task.outputs) {
+        if (!get_file_time_if_exists(out)) return false;
+    }
+    return true;
+}
+
+std::optional<std::string> BuildGraph::clean_signature(
+    const BuildTask& task,
+    const std::map<std::string, std::string>& cache)
+{
+    if (task.always_run) return std::nullopt;
+    if (!all_outputs_exist(task)) return std::nullopt;
+    auto sig_res = calculate_signature(task);
+    if (!sig_res) return std::nullopt;
+    auto it = cache.find(task.id);
+    if (it == cache.end() || it->second != *sig_res) return std::nullopt;
+    return *sig_res;
+}
+
+void BuildGraph::propagate_dirty_bfs(
+    std::unordered_map<BuildTask*, std::optional<bool>>& dirty_state)
+{
+    if (dirty_state.empty()) return;
+    std::vector<BuildTask*> worklist;
+    worklist.reserve(dirty_state.size());
+    for (auto& [ptr, _] : dirty_state) worklist.push_back(ptr);
+
+    for (size_t i = 0; i < worklist.size(); ++i) {
+        auto* t = worklist[i];
+        bool definite = dirty_state[t] == true;
+        for (auto* dependent : get_dependents(t)) {
+            auto [it, inserted] = dirty_state.try_emplace(dependent,
+                definite ? std::optional<bool>(true) : std::nullopt);
+            if (inserted) {
+                worklist.push_back(dependent);
+            } else if (definite && !it->second.has_value()) {
+                // Upgrade existing maybe → definite. No re-enqueue needed:
+                // the entry was already walked (or will be) under its prior
+                // state, and definite-ness doesn't add new dependents.
+                it->second = true;
+            }
+        }
+    }
+}
+
+void BuildGraph::report_command_failure(ExecutionState& state, std::string_view captured_output) {
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    state.progress.erase();
+    std::cout.flush();  // erase wrote to cout; flush before cerr
+    if (!captured_output.empty()) std::cerr << captured_output << std::endl;
+}
+
 std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir, int jobs) {
     // Graph setup (dep resolution, cmake compat, reverse edges, validation) is now
     // handled by transaction commit + post-transaction methods before execute() is called.
@@ -680,56 +749,22 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         // Skip marker tasks (but NOT EP orchestrator/sentinel which run in-process)
         if (task.is_marker_task()) continue;
 
-        bool outputs_exist = !task.outputs.empty();
-        if (outputs_exist) {
-            for (const auto& out : task.outputs) {
-                if (!get_file_time_if_exists(out)) { outputs_exist = false; break; }
-            }
-        }
-
         // POST_BUILD tasks have no outputs but should only run when their
         // dependency (the link task) actually rebuilds. Skip direct marking —
         // they'll become dirty via propagation from the link task if needed.
-        if (std::holds_alternative<PostBuildTask>(task.kind) && !outputs_exist) {
+        if (std::holds_alternative<PostBuildTask>(task.kind) && !all_outputs_exist(task)) {
             continue;
         }
 
-        if (!outputs_exist || task.always_run) {
-            // EP sentinels and orchestrators are "maybe" - we can't know if EP will inject tasks
-            // Their dependents should be re-checked at runtime
-            dirty_state[task_ptr.get()] = task.is_ep_task() ? std::nullopt : std::optional<bool>(true);
-            continue;
-        }
+        if (clean_signature(task, cache)) continue;
 
-        auto sig_res = calculate_signature(task);
-        if (!sig_res || !(cache.count(task.id) && cache[task.id] == *sig_res)) {
-            dirty_state[task_ptr.get()] = true;
-        }
+        // EP sentinels and orchestrators are "maybe" — we can't know if EP
+        // will inject tasks. Their dependents are re-checked at runtime.
+        dirty_state[task_ptr.get()] =
+            task.is_ep_task() ? std::nullopt : std::optional<bool>(true);
     }
 
-    // Propagate: dirty deps → dirty, maybe deps → maybe via BFS on reverse edges
-    if (!dirty_state.empty()) {
-        std::vector<BuildTask*> worklist;
-        worklist.reserve(dirty_state.size());
-        for (auto& [ptr, ds] : dirty_state) {
-            worklist.push_back(ptr);
-        }
-        for (size_t i = 0; i < worklist.size(); ++i) {
-            auto* dirty_task = worklist[i];
-            bool is_definitely_dirty = dirty_state[dirty_task] == true;
-            for (auto* dependent : get_dependents(dirty_task)) {
-                auto [it, inserted] = dirty_state.try_emplace(dependent,
-                    is_definitely_dirty ? std::optional<bool>(true) : std::nullopt);
-                if (inserted) {
-                    worklist.push_back(dependent);
-                } else if (is_definitely_dirty && !it->second.has_value()) {
-                    // Upgrade maybe → definitely dirty
-                    it->second = true;
-                    // No need to re-enqueue: already propagated, and dirty dominates
-                }
-            }
-        }
-    }
+    propagate_dirty_bfs(dirty_state);
 
     // Count definitely dirty tasks for progress bar
     int dirty_task_count = 0;
@@ -765,19 +800,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         if (jobs <= 0) jobs = 2;
     }
 
-    // Check if all dependencies of a task are complete
-    auto is_ready = [&](BuildTask* t) {
-        for (auto* dep : t->dependencies) {
-            if (!state.completed.count(dep)) return false;
-        }
-        return true;
-    };
-
     // Initialize ready_set with dirty/maybe tasks whose deps are all complete.
-    for (const auto& [ptr, ds] : state.dirty_state) {
-        if (is_ready(ptr)) {
-            state.ready_set.insert(ptr);
-        }
+    for (const auto& [ptr, _] : state.dirty_state) {
+        try_promote_to_ready(ptr, state);
     }
 
     auto start_time = std::chrono::steady_clock::now();
@@ -859,21 +884,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                     // re-check signature at runtime. If clean, skip execution.
                     auto dirty_it = state.dirty_state.find(current);
                     if (dirty_it != state.dirty_state.end() && !dirty_it->second.has_value()) {
-                        // "Maybe" dirty - re-check signature now that deps are complete
-                        bool outputs_exist = !task.outputs.empty();
-                        if (outputs_exist) {
-                            for (const auto& out : task.outputs) {
-                                if (!get_file_time_if_exists(out)) { outputs_exist = false; break; }
-                            }
-                        }
-                        if (outputs_exist && !task.always_run) {
-                            auto sig_res = calculate_signature(task);
-                            if (sig_res && state.cache.count(id) && state.cache[id] == *sig_res) {
-                                // Actually clean - skip execution, adjust progress total
-                                state.progress.bump_total(-1);
-                                sig = *sig_res;
-                                break;  // Skip to completion handling
-                            }
+                        // "Maybe" dirty - re-check signature now that deps are complete.
+                        if (auto clean_sig = clean_signature(task, state.cache)) {
+                            // Actually clean - skip execution, adjust progress total
+                            state.progress.bump_total(-1);
+                            sig = std::move(*clean_sig);
+                            break;  // Skip to completion handling
                         }
                     }
 
@@ -995,10 +1011,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                         if (is_make_install_command(cmd) || is_cmake_install_command(cmd)) continue;
                                         auto result = kiln::run_command(cmd, working_dir);
                                         if (result.exit_code != 0) {
-                                            {
-                                                std::lock_guard<std::mutex> lock(output_mutex_);
-                                                if (!result.output.empty()) std::cerr << result.output << std::endl;
-                                            }
+                                            report_command_failure(state, result.output);
                                             task_error = "EP " + ep.ep_name + " install command failed";
                                             return;
                                         }
@@ -1101,12 +1114,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 }
                                 auto result = kiln::run_command(cmd, task.working_dir);
                                 if (result.exit_code != 0) {
-                                    {
-                                        std::lock_guard<std::mutex> lock(output_mutex_);
-                                        state.progress.erase();
-                                        std::cout.flush();  // erase wrote to cout; flush before cerr
-                                        if (!result.output.empty()) std::cerr << result.output << std::endl;
-                                    }
+                                    report_command_failure(state, result.output);
                                     task_error = "Command failed: " + join_command(cmd);
                                     return;
                                 } else if (!result.output.empty()) {
@@ -1180,17 +1188,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                     // Check if any dirty/maybe dependents are now ready
                     for (auto* dep_task : get_dependents(current)) {
-                        if (!state.dirty_state.count(dep_task)) continue;  // clean task, skip
-                        if (state.completed.count(dep_task)) continue;   // already done
-                        if (state.running.count(dep_task)) continue;     // already running
-                        if (state.ready_set.count(dep_task)) continue;   // already in ready set
-
-                        // Check if all its dependencies are complete
-                        bool ready = true;
-                        for (auto* d : dep_task->dependencies) {
-                            if (!state.completed.count(d)) { ready = false; break; }
-                        }
-                        if (ready) state.ready_set.insert(dep_task);
+                        try_promote_to_ready(dep_task, state);
                     }
 
                     state.cv.notify_all();
@@ -1597,7 +1595,9 @@ BuildGraph::attach_ep_graph(
     // 1. Load EP's cache for dirty computation
     auto ep_cache = load_cache(ep_binary_dir);
 
-    // 2. Pre-compute dirty state per task (before transferring ownership)
+    // 2. Pre-compute dirty state per task (before transferring ownership).
+    //    Mirrors the main pre-scan: empty-outputs tasks (with commands) are
+    //    treated as dirty, and the stat cache is reused via clean_signature().
     struct TaskDirtyInfo {
         BuildTask* raw;
         bool is_marker;
@@ -1609,26 +1609,7 @@ BuildGraph::attach_ep_graph(
     for (auto& task_uptr : ep_graph.tasks_) {
         auto& task = *task_uptr;
         bool is_marker = task.is_marker_task();
-        bool is_dirty = false;
-
-        if (!is_marker) {
-            bool outputs_exist = true;
-            for (const auto& out : task.outputs) {
-                if (!std::filesystem::exists(out)) {
-                    outputs_exist = false;
-                    break;
-                }
-            }
-
-            if (!outputs_exist || task.always_run) {
-                is_dirty = true;
-            } else {
-                auto sig_res = calculate_signature(task);
-                if (!sig_res || !(ep_cache.count(task.id) && ep_cache[task.id] == *sig_res)) {
-                    is_dirty = true;
-                }
-            }
-        }
+        bool is_dirty = !is_marker && !clean_signature(task, ep_cache).has_value();
 
         task.ep_binary_dir = ep_binary_dir;
         dirty_info.push_back({task_uptr.get(), is_marker, is_dirty});
@@ -1675,45 +1656,19 @@ BuildGraph::attach_ep_graph(
         }
     }
 
-    // 6. Propagate dirtiness through reverse edges (BFS)
-    if (dirty_count > 0) {
-        std::vector<BuildTask*> worklist;
-        worklist.reserve(dirty_count);
-        for (const auto& info : dirty_info) {
-            if (!info.is_marker && info.is_dirty) {
-                worklist.push_back(info.raw);
-            }
-        }
-        for (size_t i = 0; i < worklist.size(); ++i) {
-            for (auto* dependent : get_dependents(worklist[i])) {
-                if (!state.dirty_state.count(dependent)) {
-                    state.dirty_state[dependent] = true;
-                    dirty_count++;
-                    worklist.push_back(dependent);
-                }
-            }
-        }
-    }
+    // 6. Propagate dirtiness through reverse edges. Walks the entire dirty_state
+    //    so newly-attached EP-dirty tasks can also upgrade existing main-graph
+    //    "maybe" entries (whose orchestrator is now known to have produced real
+    //    work) to definite. The size delta is the count of newly-dirty tasks.
+    size_t before = state.dirty_state.size();
+    propagate_dirty_bfs(state.dirty_state);
+    dirty_count += static_cast<int>(state.dirty_state.size() - before);
 
     // 7. Update progress and add ready dirty tasks to ready_set
     state.progress.bump_total(dirty_count);
 
-    for (const auto& [ptr, ds] : state.dirty_state) {
-        if (!ds.has_value() || !*ds) continue;  // Only check definitely-dirty
-        if (state.completed.count(ptr)) continue;
-        if (state.running.count(ptr)) continue;      // already executing
-        if (state.ready_set.count(ptr)) continue;
-
-        bool all_deps_done = true;
-        for (auto* dep : ptr->dependencies) {
-            if (!state.completed.count(dep)) {
-                all_deps_done = false;
-                break;
-            }
-        }
-        if (all_deps_done) {
-            state.ready_set.insert(ptr);
-        }
+    for (const auto& [ptr, _] : state.dirty_state) {
+        try_promote_to_ready(ptr, state);
     }
 
     // Notify waiting threads that new tasks are available

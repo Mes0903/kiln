@@ -324,6 +324,136 @@ std::expected<bool, InterpreterError> evaluate_condition_with_filtering(
     return evaluate_condition(interp, filtered, row, col, offset, length);
 }
 
+// IS_NEWER_THAN: returns true if lhs is newer-or-equal, OR either path can't
+// be stat'd (CMake quirk: missing files compare as "newer" so the rule fires).
+bool is_newer_than(const std::string& lhs, const std::string& rhs) {
+    std::error_code ec1, ec2;
+    auto t1 = std::filesystem::last_write_time(lhs, ec1);
+    auto t2 = std::filesystem::last_write_time(rhs, ec2);
+    if (ec1 || ec2) return true;
+    return t1 >= t2;
+}
+
+// Single dispatch table for all classified ops, used by both the compound
+// sub-condition path and the fast-path evaluator.
+//
+// Caller responsibilities:
+//   - Operand classification guards: classify_condition rejects bare-keyword
+//     operands, so eval_operand_sv (which skips the keyword check) is safe here.
+//   - Negation: caller applies pp.negated() / sub.negated() to the result.
+//   - Error mapping: regex errors surface as std::unexpected(msg). Compound
+//     callers translate to nullopt (fall back); fast-path translates to
+//     interp.set_fatal_error.
+//
+// right_arg is null for unary ops; binary ops without it return an internal
+// error (should never happen if the op was classified correctly).
+std::expected<bool, std::string> dispatch_op(
+    Interpreter& interp,
+    ConditionOp op,
+    const Argument& left_arg,
+    const Argument* right_arg)
+{
+    switch (op) {
+    case ConditionOp::BoolCheck: {
+        std::string buffer;
+        const std::string& token = get_token_string(interp, left_arg, buffer);
+        if (is_boolean_constant_ci(token)) return !Interpreter::is_falsy(token);
+        if (is_numeric_constant(token))    return !Interpreter::is_falsy(token);
+        if (left_arg.quoted)               return false;
+        auto view = interp.get_variable_view(token);
+        return view.has_value() && !Interpreter::is_falsy(*view);
+    }
+    case ConditionOp::Defined: {
+        std::string buffer;
+        const std::string& var_name = get_token_string(interp, left_arg, buffer);
+        if (var_name.size() > 6 && var_name.compare(0, 6, "CACHE{") == 0 && var_name.back() == '}') {
+            return interp.get_cache_variables().contains(var_name.substr(6, var_name.size() - 7));
+        }
+        return interp.is_variable_set(var_name);
+    }
+    case ConditionOp::Target: {
+        std::string buffer;
+        const std::string& name = get_token_string(interp, left_arg, buffer);
+        return interp.find_target(name) != nullptr;
+    }
+    case ConditionOp::Exists:
+        return interp.cached_file_exists(interp.evaluate_argument(left_arg));
+    case ConditionOp::IsDirectory:
+        return interp.cached_is_directory(interp.evaluate_argument(left_arg));
+    case ConditionOp::IsAbsolute:
+        return std::filesystem::path(interp.evaluate_argument(left_arg)).is_absolute();
+    case ConditionOp::IsSymlink:
+        return std::filesystem::is_symlink(interp.evaluate_argument(left_arg));
+    case ConditionOp::Command: {
+        std::string buffer;
+        auto name = eval_operand_sv(interp, left_arg, buffer);
+        return interp.has_user_function(std::string(name));
+    }
+    default: break;  // fall through to binary handling
+    }
+
+    if (!right_arg) return std::unexpected(std::string("dispatch_op: binary op missing right operand"));
+
+    // BinaryIsNewerThan needs the full evaluate_argument output (paths), not
+    // the operand-style resolution. Handle before the eval_operand_sv calls
+    // so we don't pay for those.
+    if (op == ConditionOp::BinaryIsNewerThan) {
+        std::string lpath = interp.evaluate_argument(left_arg);
+        std::string rpath = interp.evaluate_argument(*right_arg);
+        return is_newer_than(lpath, rpath);
+    }
+
+    std::string buf_l, buf_r;
+    auto left = eval_operand_sv(interp, left_arg, buf_l);
+    auto right = eval_operand_sv(interp, *right_arg, buf_r);
+
+    switch (op) {
+    case ConditionOp::BinaryEqual:
+    case ConditionOp::BinaryNotEqual:
+    case ConditionOp::BinaryLess:
+    case ConditionOp::BinaryGreater:
+    case ConditionOp::BinaryLessEqual:
+    case ConditionOp::BinaryGreaterEqual: {
+        int cmp;
+        if (try_numeric_compare(left, right, cmp)) return apply_numeric_op(op, cmp);
+        if (op == ConditionOp::BinaryEqual)    return left == right;
+        if (op == ConditionOp::BinaryNotEqual) return left != right;
+        return false;
+    }
+    case ConditionOp::BinaryStrEqual:        return left == right;
+    case ConditionOp::BinaryStrLess:         return left < right;
+    case ConditionOp::BinaryStrGreater:      return left > right;
+    case ConditionOp::BinaryStrLessEqual:    return left <= right;
+    case ConditionOp::BinaryStrGreaterEqual: return left >= right;
+
+    case ConditionOp::BinaryVersionEqual:
+    case ConditionOp::BinaryVersionLess:
+    case ConditionOp::BinaryVersionGreater:
+    case ConditionOp::BinaryVersionLessEqual:
+    case ConditionOp::BinaryVersionGreaterEqual: {
+        int cmp = compare_versions(std::string(left), std::string(right));
+        switch (op) {
+        case ConditionOp::BinaryVersionEqual:        return cmp == 0;
+        case ConditionOp::BinaryVersionLess:         return cmp < 0;
+        case ConditionOp::BinaryVersionGreater:      return cmp > 0;
+        case ConditionOp::BinaryVersionLessEqual:    return cmp <= 0;
+        case ConditionOp::BinaryVersionGreaterEqual: return cmp >= 0;
+        default: return false;
+        }
+    }
+    case ConditionOp::BinaryMatches: {
+        auto mr = evaluate_matches(interp, std::string(left), std::string(right));
+        if (!mr.error.empty()) return std::unexpected(mr.error);
+        return mr.matched;
+    }
+    case ConditionOp::BinaryInList:
+        return cmake_list_contains(std::string(right), std::string(left));
+
+    default:
+        return false;
+    }
+}
+
 // ConditionParser (full recursive descent — fallback path)
 class ConditionParser {
 public:
@@ -555,11 +685,7 @@ private:
             }
             std::string left = interp_.evaluate_argument(condition_[start_pos]);
             std::string right = interp_.evaluate_argument(condition_[pos_++]);
-            std::error_code ec1, ec2;
-            auto time1 = std::filesystem::last_write_time(left, ec1);
-            auto time2 = std::filesystem::last_write_time(right, ec2);
-            if (ec1 || ec2) return true;
-            return time1 >= time2;
+            return is_newer_than(left, right);
         }
 
         return unary_result;
@@ -653,7 +779,11 @@ std::optional<bool> evaluate_sub_condition(
     const std::vector<Argument>& condition,
     const PreParsedCondition::SubCondition& sub)
 {
-    // If sub has dynamic args, check for empty/semicolons
+    bool is_binary = (static_cast<uint8_t>(sub.op) >= static_cast<uint8_t>(ConditionOp::BinaryEqual) &&
+                      sub.op != ConditionOp::CompoundAnd && sub.op != ConditionOp::CompoundOr);
+
+    // Dynamic args: any operand whose varref expansion is empty or contains
+    // ';' triggers a full-parser fallback (CMake list elision semantics).
     if (sub.has_dynamic_args()) {
         auto check = [&](uint8_t idx) -> bool {
             const auto& arg = condition[idx];
@@ -661,160 +791,14 @@ std::optional<bool> evaluate_sub_condition(
             std::string val = interp.evaluate_argument(arg);
             return !val.empty() && val.find(';') == std::string::npos;
         };
-
-        bool is_binary = (static_cast<uint8_t>(sub.op) >= static_cast<uint8_t>(ConditionOp::BinaryEqual) &&
-                          sub.op != ConditionOp::CompoundAnd && sub.op != ConditionOp::CompoundOr);
-
         if (!check(sub.left_idx)) return std::nullopt;
         if (is_binary && !check(sub.right_idx)) return std::nullopt;
     }
 
-    bool result = false;
-
-    switch (sub.op) {
-    case ConditionOp::BoolCheck: {
-        const Argument& arg = condition[sub.left_idx];
-        std::string buffer;
-        const std::string& token = get_token_string(interp, arg, buffer);
-        if (is_boolean_constant_ci(token)) {
-            result = !Interpreter::is_falsy(token);
-        } else if (is_numeric_constant(token)) {
-            result = !Interpreter::is_falsy(token);
-        } else if (arg.quoted) {
-            result = false;
-        } else {
-            auto view = interp.get_variable_view(token);
-            result = view.has_value() && !Interpreter::is_falsy(*view);
-        }
-        break;
-    }
-
-    case ConditionOp::Defined: {
-        std::string buffer;
-        const std::string& var_name = get_token_string(interp, condition[sub.left_idx], buffer);
-        if (var_name.size() > 6 && var_name.compare(0, 6, "CACHE{") == 0 && var_name.back() == '}') {
-            std::string cache_var = var_name.substr(6, var_name.size() - 7);
-            result = interp.get_cache_variables().contains(cache_var);
-        } else {
-            result = interp.is_variable_set(var_name);
-        }
-        break;
-    }
-
-    case ConditionOp::Target: {
-        std::string buffer;
-        const std::string& name = get_token_string(interp, condition[sub.left_idx], buffer);
-        result = interp.find_target(name) != nullptr;
-        break;
-    }
-
-    case ConditionOp::Exists: {
-        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
-        result = interp.cached_file_exists(path);
-        break;
-    }
-
-    case ConditionOp::IsDirectory: {
-        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
-        result = interp.cached_is_directory(path);
-        break;
-    }
-
-    case ConditionOp::IsAbsolute: {
-        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
-        result = std::filesystem::path(path).is_absolute();
-        break;
-    }
-
-    case ConditionOp::IsSymlink: {
-        std::string path = interp.evaluate_argument(condition[sub.left_idx]);
-        result = std::filesystem::is_symlink(path);
-        break;
-    }
-
-    case ConditionOp::Command: {
-        std::string buffer;
-        auto name = eval_operand_sv(interp, condition[sub.left_idx], buffer);
-        result = interp.has_user_function(std::string(name));
-        break;
-    }
-
-    default: {
-        // Binary ops
-        std::string buf_l, buf_r;
-        auto left = eval_operand_sv(interp, condition[sub.left_idx], buf_l);
-        auto right = eval_operand_sv(interp, condition[sub.right_idx], buf_r);
-
-        switch (sub.op) {
-        case ConditionOp::BinaryEqual:
-        case ConditionOp::BinaryNotEqual:
-        case ConditionOp::BinaryLess:
-        case ConditionOp::BinaryGreater:
-        case ConditionOp::BinaryLessEqual:
-        case ConditionOp::BinaryGreaterEqual: {
-            int cmp;
-            if (try_numeric_compare(left, right, cmp)) {
-                result = apply_numeric_op(sub.op, cmp);
-            } else {
-                if (sub.op == ConditionOp::BinaryEqual) result = left == right;
-                else if (sub.op == ConditionOp::BinaryNotEqual) result = left != right;
-                else result = false;
-            }
-            break;
-        }
-        case ConditionOp::BinaryStrEqual: result = left == right; break;
-        case ConditionOp::BinaryStrLess: result = left < right; break;
-        case ConditionOp::BinaryStrGreater: result = left > right; break;
-        case ConditionOp::BinaryStrLessEqual: result = left <= right; break;
-        case ConditionOp::BinaryStrGreaterEqual: result = left >= right; break;
-
-        case ConditionOp::BinaryVersionEqual:
-        case ConditionOp::BinaryVersionLess:
-        case ConditionOp::BinaryVersionGreater:
-        case ConditionOp::BinaryVersionLessEqual:
-        case ConditionOp::BinaryVersionGreaterEqual: {
-            int cmp = compare_versions(std::string(left), std::string(right));
-            switch (sub.op) {
-            case ConditionOp::BinaryVersionEqual: result = cmp == 0; break;
-            case ConditionOp::BinaryVersionLess: result = cmp < 0; break;
-            case ConditionOp::BinaryVersionGreater: result = cmp > 0; break;
-            case ConditionOp::BinaryVersionLessEqual: result = cmp <= 0; break;
-            case ConditionOp::BinaryVersionGreaterEqual: result = cmp >= 0; break;
-            default: break;
-            }
-            break;
-        }
-
-        case ConditionOp::BinaryMatches: {
-            auto mr = evaluate_matches(interp, std::string(left), std::string(right));
-            if (!mr.error.empty()) return std::nullopt;  // fallback on regex error
-            result = mr.matched;
-            break;
-        }
-
-        case ConditionOp::BinaryInList:
-            result = cmake_list_contains(std::string(right), std::string(left));
-            break;
-
-        case ConditionOp::BinaryIsNewerThan: {
-            std::string lpath = interp.evaluate_argument(condition[sub.left_idx]);
-            std::string rpath = interp.evaluate_argument(condition[sub.right_idx]);
-            std::error_code ec1, ec2;
-            auto time1 = std::filesystem::last_write_time(lpath, ec1);
-            auto time2 = std::filesystem::last_write_time(rpath, ec2);
-            if (ec1 || ec2) result = true;
-            else result = time1 >= time2;
-            break;
-        }
-
-        default: return std::nullopt;
-        }
-        break;
-    }
-    }
-
-    if (sub.negated()) result = !result;
-    return result;
+    const Argument* right = is_binary ? &condition[sub.right_idx] : nullptr;
+    auto r = dispatch_op(interp, sub.op, condition[sub.left_idx], right);
+    if (!r) return std::nullopt;  // regex error → caller falls back to full parser
+    return sub.negated() ? !*r : *r;
 }
 
 } // anonymous namespace
@@ -1244,361 +1228,42 @@ std::expected<bool, InterpreterError> evaluate_condition(
         }
     }
 
-    // Handle dynamic args: expand, check for empty/semicolons, fall back if dirty
+    // For dynamic-args operands, pre-expand the varref and stuff the result
+    // into a temp Argument. This serves two purposes:
+    //   1. CMake list-elision: empty or semicolon-bearing expansions trigger
+    //      a fall back to the full parser.
+    //   2. Avoids re-evaluating the arg inside dispatch_op (eval_operand_sv
+    //      sees a single bare-literal Argument and skips evaluate_argument).
+    // Temps must outlive the dispatch_op call, so they live at this scope.
+    Argument left_temp, right_temp;
+    const Argument* left_arg = &condition[pp.left_idx];
+    const Argument* right_arg = has_binary ? &condition[pp.right_idx] : nullptr;
+
     if (pp.has_dynamic_args()) {
-        // We need to check operands that have varrefs
-        auto check_operand = [&](uint8_t idx) -> std::pair<bool, std::string> {
-            // Returns {needs_fallback, expanded_value}
+        auto expand = [&](uint8_t idx, Argument& temp, const Argument*& slot) -> bool {
             const auto& arg = condition[idx];
-            if (arg.quoted || !arg_has_varref(arg)) return {false, {}};
+            if (arg.quoted || !arg_has_varref(arg)) return true;
             std::string val = interp.evaluate_argument(arg);
-            if (val.empty() || val.find(';') != std::string::npos) return {true, {}};
-            return {false, std::move(val)};
+            if (val.empty() || val.find(';') != std::string::npos) return false;
+            temp.quoted = false;
+            temp.parts.push_back(std::move(val));
+            slot = &temp;
+            return true;
         };
-
-        // Check left operand
-        bool left_dirty = false;
-        std::string left_expanded;
-        if (pp.left_idx < condition.size() && !condition[pp.left_idx].quoted &&
-            arg_has_varref(condition[pp.left_idx])) {
-            auto [dirty, val] = check_operand(pp.left_idx);
-            if (dirty) {
-                return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
-            }
-            left_expanded = std::move(val);
-            left_dirty = false;  // not dirty, but we have expanded value
+        if (!expand(pp.left_idx, left_temp, left_arg)) {
+            return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
         }
-
-        // Check right operand (binary ops only)
-        std::string right_expanded;
-        if (has_binary && pp.right_idx < condition.size() && !condition[pp.right_idx].quoted &&
-            arg_has_varref(condition[pp.right_idx])) {
-            auto [dirty, val] = check_operand(pp.right_idx);
-            if (dirty) {
-                return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
-            }
-            right_expanded = std::move(val);
+        if (has_binary && !expand(pp.right_idx, right_temp, right_arg)) {
+            return evaluate_condition_with_filtering(interp, condition, row, col, offset, length);
         }
-
-        // Create temp arguments for expanded values (Rule 4: must outlive refs into them)
-        Argument left_temp, right_temp;
-        const Argument* left_arg = &condition[pp.left_idx];
-        const Argument* right_arg = has_binary ? &condition[pp.right_idx] : nullptr;
-
-        if (!left_expanded.empty()) {
-            left_temp.quoted = false;
-            left_temp.parts.push_back(std::move(left_expanded));
-            left_arg = &left_temp;
-        }
-        if (has_binary && !right_expanded.empty()) {
-            right_temp.quoted = false;
-            right_temp.parts.push_back(std::move(right_expanded));
-            right_arg = &right_temp;
-        }
-
-        // Now dispatch with the (possibly replaced) arguments
-        bool result = false;
-
-        switch (pp.op) {
-        case ConditionOp::BoolCheck: {
-            // BoolCheck uses get_variable_view (avoids string copy) — Rule 3
-            std::string buffer;
-            const std::string& token = get_token_string(interp, *left_arg, buffer);
-
-            if (is_boolean_constant_ci(token)) {
-                result = !Interpreter::is_falsy(token);
-            } else if (is_numeric_constant(token)) {
-                result = !Interpreter::is_falsy(token);
-            } else if (left_arg->quoted) {
-                result = false;
-            } else {
-                auto view = interp.get_variable_view(token);
-                result = view.has_value() && !Interpreter::is_falsy(*view);
-            }
-            break;
-        }
-
-        case ConditionOp::Defined: {
-            std::string buffer;
-            const std::string& var_name = get_token_string(interp, *left_arg, buffer);
-            if (var_name.size() > 6 && var_name.compare(0, 6, "CACHE{") == 0 && var_name.back() == '}') {
-                std::string cache_var = var_name.substr(6, var_name.size() - 7);
-                result = interp.get_cache_variables().contains(cache_var);
-            } else {
-                result = interp.is_variable_set(var_name);
-            }
-            break;
-        }
-
-        case ConditionOp::Target: {
-            std::string buffer;
-            const std::string& name = get_token_string(interp, *left_arg, buffer);
-            result = interp.find_target(name) != nullptr;
-            break;
-        }
-
-        case ConditionOp::Exists: {
-            std::string path = interp.evaluate_argument(*left_arg);
-            result = interp.cached_file_exists(path);
-            break;
-        }
-
-        case ConditionOp::IsDirectory: {
-            std::string path = interp.evaluate_argument(*left_arg);
-            result = interp.cached_is_directory(path);
-            break;
-        }
-
-        case ConditionOp::IsAbsolute: {
-            std::string path = interp.evaluate_argument(*left_arg);
-            result = std::filesystem::path(path).is_absolute();
-            break;
-        }
-
-        case ConditionOp::IsSymlink: {
-            std::string path = interp.evaluate_argument(*left_arg);
-            result = std::filesystem::is_symlink(path);
-            break;
-        }
-
-        case ConditionOp::Command: {
-            std::string buffer;
-            auto name = eval_operand_sv(interp, *left_arg, buffer);
-            result = interp.has_user_function(std::string(name));
-            break;
-        }
-
-        default: {
-            // Binary ops
-            std::string buf_l, buf_r;
-            auto left_val = eval_operand_sv(interp, *left_arg, buf_l);
-            auto right_val = eval_operand_sv(interp, *right_arg, buf_r);
-
-            switch (pp.op) {
-            case ConditionOp::BinaryEqual:
-            case ConditionOp::BinaryNotEqual:
-            case ConditionOp::BinaryLess:
-            case ConditionOp::BinaryGreater:
-            case ConditionOp::BinaryLessEqual:
-            case ConditionOp::BinaryGreaterEqual: {
-                int cmp;
-                if (try_numeric_compare(left_val, right_val, cmp)) {
-                    result = apply_numeric_op(pp.op, cmp);
-                } else {
-                    if (pp.op == ConditionOp::BinaryEqual) result = left_val == right_val;
-                    else if (pp.op == ConditionOp::BinaryNotEqual) result = left_val != right_val;
-                    else result = false;
-                }
-                break;
-            }
-            case ConditionOp::BinaryStrEqual: result = left_val == right_val; break;
-            case ConditionOp::BinaryStrLess: result = left_val < right_val; break;
-            case ConditionOp::BinaryStrGreater: result = left_val > right_val; break;
-            case ConditionOp::BinaryStrLessEqual: result = left_val <= right_val; break;
-            case ConditionOp::BinaryStrGreaterEqual: result = left_val >= right_val; break;
-
-            case ConditionOp::BinaryVersionEqual:
-            case ConditionOp::BinaryVersionLess:
-            case ConditionOp::BinaryVersionGreater:
-            case ConditionOp::BinaryVersionLessEqual:
-            case ConditionOp::BinaryVersionGreaterEqual: {
-                int cmp = compare_versions(std::string(left_val), std::string(right_val));
-                switch (pp.op) {
-                case ConditionOp::BinaryVersionEqual: result = cmp == 0; break;
-                case ConditionOp::BinaryVersionLess: result = cmp < 0; break;
-                case ConditionOp::BinaryVersionGreater: result = cmp > 0; break;
-                case ConditionOp::BinaryVersionLessEqual: result = cmp <= 0; break;
-                case ConditionOp::BinaryVersionGreaterEqual: result = cmp >= 0; break;
-                default: break;
-                }
-                break;
-            }
-
-            case ConditionOp::BinaryMatches: {
-                auto mr = evaluate_matches(interp, std::string(left_val), std::string(right_val));
-                if (!mr.error.empty()) {
-                    interp.set_fatal_error(mr.error);
-                    return std::unexpected(*interp.get_fatal_error());
-                }
-                result = mr.matched;
-                break;
-            }
-
-            case ConditionOp::BinaryInList:
-                result = cmake_list_contains(std::string(right_val), std::string(left_val));
-                break;
-
-            case ConditionOp::BinaryIsNewerThan: {
-                std::string lpath = interp.evaluate_argument(*left_arg);
-                std::string rpath = interp.evaluate_argument(*right_arg);
-                std::error_code ec1, ec2;
-                auto time1 = std::filesystem::last_write_time(lpath, ec1);
-                auto time2 = std::filesystem::last_write_time(rpath, ec2);
-                if (ec1 || ec2) result = true;
-                else result = time1 >= time2;
-                break;
-            }
-
-            default: break;
-            }
-            break;
-        }
-        }
-
-        if (pp.negated()) result = !result;
-        return result;
     }
 
-    // Non-dynamic fast path (no varrefs in operands — most common)
-    bool result = false;
-
-    switch (pp.op) {
-    case ConditionOp::BoolCheck: {
-        const Argument& arg = condition[pp.left_idx];
-        std::string buffer;
-        const std::string& token = get_token_string(interp, arg, buffer);
-
-        if (is_boolean_constant_ci(token)) {
-            result = !Interpreter::is_falsy(token);
-        } else if (is_numeric_constant(token)) {
-            result = !Interpreter::is_falsy(token);
-        } else if (arg.quoted) {
-            result = false;
-        } else {
-            // BoolCheck: undefined → falsy. Use get_variable_view to avoid string copy.
-            auto view = interp.get_variable_view(token);
-            result = view.has_value() && !Interpreter::is_falsy(*view);
-        }
-        break;
+    auto r = dispatch_op(interp, pp.op, *left_arg, right_arg);
+    if (!r) {
+        interp.set_fatal_error(r.error());
+        return std::unexpected(*interp.get_fatal_error());
     }
-
-    case ConditionOp::Defined: {
-        std::string buffer;
-        const std::string& var_name = get_token_string(interp, condition[pp.left_idx], buffer);
-        if (var_name.size() > 6 && var_name.compare(0, 6, "CACHE{") == 0 && var_name.back() == '}') {
-            std::string cache_var = var_name.substr(6, var_name.size() - 7);
-            result = interp.get_cache_variables().contains(cache_var);
-        } else {
-            result = interp.is_variable_set(var_name);
-        }
-        break;
-    }
-
-    case ConditionOp::Target: {
-        std::string buffer;
-        const std::string& name = get_token_string(interp, condition[pp.left_idx], buffer);
-        result = interp.find_target(name) != nullptr;
-        break;
-    }
-
-    case ConditionOp::Exists: {
-        std::string path = interp.evaluate_argument(condition[pp.left_idx]);
-        result = interp.cached_file_exists(path);
-        break;
-    }
-
-    case ConditionOp::IsDirectory: {
-        std::string path = interp.evaluate_argument(condition[pp.left_idx]);
-        result = interp.cached_is_directory(path);
-        break;
-    }
-
-    case ConditionOp::IsAbsolute: {
-        std::string path = interp.evaluate_argument(condition[pp.left_idx]);
-        result = std::filesystem::path(path).is_absolute();
-        break;
-    }
-
-    case ConditionOp::IsSymlink: {
-        std::string path = interp.evaluate_argument(condition[pp.left_idx]);
-        result = std::filesystem::is_symlink(path);
-        break;
-    }
-
-    case ConditionOp::Command: {
-        std::string buffer;
-        auto name = eval_operand_sv(interp, condition[pp.left_idx], buffer);
-        result = interp.has_user_function(std::string(name));
-        break;
-    }
-
-    default: {
-        // Binary ops — use separate buffers (Rule 2)
-        std::string buf_l, buf_r;
-        auto left = eval_operand_sv(interp, condition[pp.left_idx], buf_l);
-        auto right = eval_operand_sv(interp, condition[pp.right_idx], buf_r);
-
-        switch (pp.op) {
-        case ConditionOp::BinaryEqual:
-        case ConditionOp::BinaryNotEqual:
-        case ConditionOp::BinaryLess:
-        case ConditionOp::BinaryGreater:
-        case ConditionOp::BinaryLessEqual:
-        case ConditionOp::BinaryGreaterEqual: {
-            int cmp;
-            if (try_numeric_compare(left, right, cmp)) {
-                result = apply_numeric_op(pp.op, cmp);
-            } else {
-                if (pp.op == ConditionOp::BinaryEqual) result = left == right;
-                else if (pp.op == ConditionOp::BinaryNotEqual) result = left != right;
-                else result = false;
-            }
-            break;
-        }
-        case ConditionOp::BinaryStrEqual: result = left == right; break;
-        case ConditionOp::BinaryStrLess: result = left < right; break;
-        case ConditionOp::BinaryStrGreater: result = left > right; break;
-        case ConditionOp::BinaryStrLessEqual: result = left <= right; break;
-        case ConditionOp::BinaryStrGreaterEqual: result = left >= right; break;
-
-        case ConditionOp::BinaryVersionEqual:
-        case ConditionOp::BinaryVersionLess:
-        case ConditionOp::BinaryVersionGreater:
-        case ConditionOp::BinaryVersionLessEqual:
-        case ConditionOp::BinaryVersionGreaterEqual: {
-            int cmp = compare_versions(std::string(left), std::string(right));
-            switch (pp.op) {
-            case ConditionOp::BinaryVersionEqual: result = cmp == 0; break;
-            case ConditionOp::BinaryVersionLess: result = cmp < 0; break;
-            case ConditionOp::BinaryVersionGreater: result = cmp > 0; break;
-            case ConditionOp::BinaryVersionLessEqual: result = cmp <= 0; break;
-            case ConditionOp::BinaryVersionGreaterEqual: result = cmp >= 0; break;
-            default: break;
-            }
-            break;
-        }
-
-        case ConditionOp::BinaryMatches: {
-            auto mr = evaluate_matches(interp, std::string(left), std::string(right));
-            if (!mr.error.empty()) {
-                interp.set_fatal_error(mr.error);
-                return std::unexpected(*interp.get_fatal_error());
-            }
-            result = mr.matched;
-            break;
-        }
-
-        case ConditionOp::BinaryInList:
-            result = cmake_list_contains(std::string(right), std::string(left));
-            break;
-
-        case ConditionOp::BinaryIsNewerThan: {
-            std::string lpath = interp.evaluate_argument(condition[pp.left_idx]);
-            std::string rpath = interp.evaluate_argument(condition[pp.right_idx]);
-            std::error_code ec1, ec2;
-            auto time1 = std::filesystem::last_write_time(lpath, ec1);
-            auto time2 = std::filesystem::last_write_time(rpath, ec2);
-            if (ec1 || ec2) result = true;
-            else result = time1 >= time2;
-            break;
-        }
-
-        default: break;
-        }
-        break;
-    }
-    }
-
+    bool result = *r;
     if (pp.negated()) result = !result;
     return result;
 }

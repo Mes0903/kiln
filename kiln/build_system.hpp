@@ -302,6 +302,28 @@ private:
     std::map<std::string, std::string> load_cache(const std::string& build_dir);
     std::expected<void, std::string> save_cache(const std::string& build_dir, const std::map<std::string, std::string>& cache);
 
+    // True iff task has at least one output and all outputs exist on disk.
+    // Empty outputs → false (caller decides if that means "dirty" or "skip").
+    bool all_outputs_exist(const BuildTask& task);
+
+    // If the task is clean (outputs exist, not always_run, sig matches cache),
+    // returns the matching signature; else nullopt. Used by both the pre-scan
+    // (skip clean tasks) and the worker's "maybe dirty" runtime re-check.
+    std::optional<std::string> clean_signature(
+        const BuildTask& task,
+        const std::map<std::string, std::string>& cache);
+
+    // Tri-state BFS over reverse edges. Seeds from every entry already in
+    // dirty_state. Definitely-dirty propagates as definite; maybe-dirty
+    // propagates as maybe; an existing maybe entry reached by a definite
+    // parent is upgraded to definite.
+    void propagate_dirty_bfs(
+        std::unordered_map<BuildTask*, std::optional<bool>>& dirty_state);
+
+    // Atomically erase the progress bar and dump captured output to stderr.
+    // Caller must NOT hold output_mutex_.
+    void report_command_failure(ExecutionState& state, std::string_view captured_output);
+
     // Returns file mtime, or nullopt if file doesn't exist (single syscall)
     std::optional<std::filesystem::file_time_type> get_file_time_if_exists(const std::string& path);
     std::map<std::string, std::optional<std::filesystem::file_time_type>> stat_cache_;
