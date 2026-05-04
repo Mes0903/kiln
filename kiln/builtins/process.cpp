@@ -45,42 +45,25 @@ static bool is_pkgconfig_command(const std::string& cmd) {
     return filename == "pkg-config" || filename == "pkgconf";
 }
 
+// Helper: Append ':'-separated entries from an env var to dirs (skipping empties).
+static void append_path_env(const char* var, std::vector<std::string>& dirs) {
+    const char* val = std::getenv(var);
+    if (!val) return;
+    std::istringstream iss(val);
+    std::string dir;
+    while (std::getline(iss, dir, ':')) {
+        if (!dir.empty()) dirs.push_back(std::move(dir));
+    }
+}
+
 // Helper: Get standard pkgconfig directories
 static std::vector<std::string> get_pkgconfig_search_dirs() {
-    std::vector<std::string> dirs;
-
-    // Standard system directories
-    dirs.push_back("/usr/lib/pkgconfig");
-    dirs.push_back("/usr/lib64/pkgconfig");
-    dirs.push_back("/usr/share/pkgconfig");
-    dirs.push_back("/usr/local/lib/pkgconfig");
-    dirs.push_back("/usr/local/lib64/pkgconfig");
-    dirs.push_back("/usr/local/share/pkgconfig");
-
-    // Check PKG_CONFIG_PATH environment variable
-    if (const char* pkg_path = std::getenv("PKG_CONFIG_PATH")) {
-        std::string path_str(pkg_path);
-        std::istringstream iss(path_str);
-        std::string dir;
-        while (std::getline(iss, dir, ':')) {
-            if (!dir.empty()) {
-                dirs.push_back(dir);
-            }
-        }
-    }
-
-    // Check PKG_CONFIG_LIBDIR (overrides default paths if set)
-    if (const char* pkg_libdir = std::getenv("PKG_CONFIG_LIBDIR")) {
-        std::string libdir_str(pkg_libdir);
-        std::istringstream iss(libdir_str);
-        std::string dir;
-        while (std::getline(iss, dir, ':')) {
-            if (!dir.empty()) {
-                dirs.push_back(dir);
-            }
-        }
-    }
-
+    std::vector<std::string> dirs = {
+        "/usr/lib/pkgconfig", "/usr/lib64/pkgconfig", "/usr/share/pkgconfig",
+        "/usr/local/lib/pkgconfig", "/usr/local/lib64/pkgconfig", "/usr/local/share/pkgconfig",
+    };
+    append_path_env("PKG_CONFIG_PATH", dirs);
+    append_path_env("PKG_CONFIG_LIBDIR", dirs);  // overrides default paths if set
     return dirs;
 }
 
@@ -132,20 +115,21 @@ static bool is_python_interpreter(const std::string& cmd) {
     return std::isdigit(static_cast<unsigned char>(filename[6]));
 }
 
+// Helper: Extract the script text from a Python "<py> -c <script> ..." command line.
+// Returns empty string if -c is absent or has no following argument.
+static std::string find_python_c_script(const std::vector<std::string>& cmd) {
+    for (size_t i = 1; i + 1 < cmd.size(); ++i) {
+        if (cmd[i] == "-c") return cmd[i + 1];
+    }
+    return {};
+}
+
 // Helper: Check if a Python -c script consists entirely of import statements.
 // These are pure availability checks (exit code 0 = installed, non-zero = not).
 // Safe to cache because they have no output side effects.
 static bool is_import_only_script(const std::vector<std::string>& cmd) {
     if (cmd.size() < 3) return false;
-
-    // Find -c <script>
-    std::string script;
-    for (size_t i = 1; i < cmd.size(); ++i) {
-        if (cmd[i] == "-c" && i + 1 < cmd.size()) {
-            script = cmd[i + 1];
-            break;
-        }
-    }
+    std::string script = find_python_c_script(cmd);
     if (script.empty()) return false;
 
     // Tokenize by ';' and '\n', verify each non-empty statement is an import
@@ -230,11 +214,8 @@ static const std::vector<std::string>& get_python_import_dirs(
         std::istringstream iss(res.captured_stdout);
         std::string line;
         while (std::getline(iss, line)) {
-            // Strip trailing whitespace
-            while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
-            if (!line.empty()) {  // Skip empty string (cwd placeholder)
-                dirs.push_back(std::move(line));
-            }
+            auto stripped = rstrip(line);
+            if (!stripped.empty()) dirs.emplace_back(stripped);  // Skip cwd placeholder
         }
     }
 
@@ -278,16 +259,8 @@ static bool is_safe_python_script(const std::vector<std::string>& cmd) {
 
     // Only cache -c <script> invocations
     if (cmd.size() < 3) return false;
-    bool found_c = false;
-    std::string script;
-    for (size_t i = 1; i < cmd.size(); ++i) {
-        if (cmd[i] == "-c") {
-            found_c = true;
-            if (i + 1 < cmd.size()) script = cmd[i + 1];
-            break;
-        }
-    }
-    if (!found_c || script.empty()) return false;
+    std::string script = find_python_c_script(cmd);
+    if (script.empty()) return false;
 
     // Step 1: Blocklist rejection — block non-deterministic or dangerous operations.
     // os.getcwd() and os.path pure functions are safe (cwd is included in cache key).
@@ -439,10 +412,8 @@ static std::string validate_python_binary(const std::string& invoked_path, Cache
     if (vres.exit_codes.empty() || vres.exit_codes[0] != 0) return "";
 
     // Python 2 prints to stderr, Python 3 to stdout
-    std::string current_version = vres.captured_stdout.empty() ? vres.captured_stderr : vres.captured_stdout;
-    // Strip trailing whitespace
-    while (!current_version.empty() && std::isspace(static_cast<unsigned char>(current_version.back())))
-        current_version.pop_back();
+    std::string current_version = std::string(rstrip(
+        vres.captured_stdout.empty() ? vres.captured_stderr : vres.captured_stdout));
 
     // Check stored version from disk cache
     std::string version_key = "python_version:" + binary_key;
@@ -502,31 +473,43 @@ static std::map<std::string, std::optional<int64_t>> get_tracked_dir_mtimes(cons
     return mtimes;
 }
 
-// Helper: Validate external command cache entry by checking tracked directories
+// Helper: Validate external command cache entry by checking tracked directories.
+// Any change (appeared, disappeared, mtime differs) invalidates the entry.
 static bool validate_command_cache(const ExternalCommandCacheEntry& entry) {
-    // Check if any tracked directory mtime changed
     for (const auto& [dir, cached_mtime] : entry.tracked_dir_mtimes) {
-        auto current_mtime = get_dir_mtime(dir);
-
-        // Directory appeared
-        if (!cached_mtime.has_value() && current_mtime.has_value()) {
-            return false;
-        }
-
-        // Directory disappeared
-        if (cached_mtime.has_value() && !current_mtime.has_value()) {
-            return false;
-        }
-
-        // Directory changed
-        if (cached_mtime.has_value() && current_mtime.has_value()) {
-            if (*cached_mtime != *current_mtime) {
-                return false;
-            }
-        }
+        if (cached_mtime != get_dir_mtime(dir)) return false;
     }
-
     return true;
+}
+
+// Helper: Run commands, but serve from the ExternalCommand cache when possible.
+// On miss, executes and stores. `validate_dirs` enables tracked-dir mtime checking
+// against an existing entry. `populate_extras` (optional) is called with a fresh
+// entry before insert — typically to fill tracked_dir_mtimes for the new entry.
+static PipelineResult cached_or_execute(
+    CacheStore& cache,
+    const std::string& signature,
+    bool validate_dirs,
+    const std::function<void(ExternalCommandCacheEntry&)>& populate_extras,
+    const std::vector<std::vector<std::string>>& commands,
+    const ProcessOptions& options
+) {
+    PipelineResult res;
+    auto cached = cache.lookup<CacheSubsystem::ExternalCommand>(signature);
+    if (cached && (!validate_dirs || validate_command_cache(*cached))) {
+        res.captured_stdout = cached->stdout_output;
+        res.captured_stderr = cached->stderr_output;
+        res.exit_codes.push_back(cached->exit_code);
+        return res;
+    }
+    res = execute_pipeline(commands, options);
+    ExternalCommandCacheEntry entry;
+    entry.stdout_output = res.captured_stdout;
+    entry.stderr_output = res.captured_stderr;
+    entry.exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
+    if (populate_extras) populate_extras(entry);
+    cache.insert<CacheSubsystem::ExternalCommand>(signature, entry);
+    return res;
 }
 
 // Helper: Check if an execute_process command is invoking CMAKE_COMMAND (kiln itself)
@@ -757,39 +740,19 @@ void register_process_builtins(Interpreter& interp) {
             const auto& cmd = commands[0];
             std::string binary_key = make_python_binary_key(cmd[0]);
 
-            std::string version = validate_python_binary(cmd[0], cache);
-            if (version.empty()) {
+            if (validate_python_binary(cmd[0], cache).empty()) {
                 res = execute_pipeline(commands, options);
             } else {
-                // Find the script text
-                std::string script;
-                for (size_t i = 1; i < cmd.size(); ++i) {
-                    if (cmd[i] == "-c" && i + 1 < cmd.size()) { script = cmd[i + 1]; break; }
-                }
-
-                std::string signature = compute_python_import_signature(binary_key, script, working_dir);
-                auto cached = cache.lookup<CacheSubsystem::ExternalCommand>(signature);
-                if (cached && validate_command_cache(*cached)) {
-                    // Cache hit with valid dir mtimes
-                    res.captured_stdout = cached->stdout_output;
-                    res.captured_stderr = cached->stderr_output;
-                    res.exit_codes.push_back(cached->exit_code);
-                } else {
-                    // Cache miss or stale — execute, then store with sys.path dir mtimes
-                    res = execute_pipeline(commands, options);
-
-                    // Lazily get sys.path dirs (once per binary per session)
-                    const auto& import_dirs = get_python_import_dirs(binary_key, cmd[0]);
-
-                    ExternalCommandCacheEntry entry;
-                    entry.stdout_output = res.captured_stdout;
-                    entry.stderr_output = res.captured_stderr;
-                    entry.exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
-                    for (const auto& dir : import_dirs) {
-                        entry.tracked_dir_mtimes[dir] = get_dir_mtime(dir);
-                    }
-                    cache.insert<CacheSubsystem::ExternalCommand>(signature, entry);
-                }
+                std::string signature = compute_python_import_signature(
+                    binary_key, find_python_c_script(cmd), working_dir);
+                res = cached_or_execute(cache, signature, /*validate_dirs=*/true,
+                    [&](ExternalCommandCacheEntry& e) {
+                        // Lazily get sys.path dirs (once per binary per session)
+                        for (const auto& dir : get_python_import_dirs(binary_key, cmd[0])) {
+                            e.tracked_dir_mtimes[dir] = get_dir_mtime(dir);
+                        }
+                    },
+                    commands, options);
             }
         } else if (can_cache && is_python) {
             auto& cache = interp.get_cache_store();
@@ -813,7 +776,7 @@ void register_process_builtins(Interpreter& interp) {
                     res = execute_pipeline(commands, options);
                     if (!res.exit_codes.empty() && res.exit_codes[0] == 0) {
                         std::string ver = res.captured_stdout.empty() ? res.captured_stderr : res.captured_stdout;
-                        while (!ver.empty() && std::isspace(static_cast<unsigned char>(ver.back()))) ver.pop_back();
+                        ver = std::string(rstrip(ver));
                         s_python_validated[binary_key] = ver;
                         // Store version to disk cache for next session
                         ExternalCommandCacheEntry ve;
@@ -822,71 +785,28 @@ void register_process_builtins(Interpreter& interp) {
                         cache.insert<CacheSubsystem::ExternalCommand>("python_version:" + binary_key, ve);
                     }
                 }
+            } else if (validate_python_binary(cmd[0], cache).empty()) {
+                res = execute_pipeline(commands, options);
             } else {
-                // -c script: validate binary once per session, then use disk cache
-                std::string version = validate_python_binary(cmd[0], cache);
-                if (version.empty()) {
-                    // Validation failed — execute normally
-                    res = execute_pipeline(commands, options);
-                } else {
-                    std::string signature = compute_python_cache_signature(binary_key, cmd, working_dir);
-                    auto cached = cache.lookup<CacheSubsystem::ExternalCommand>(signature);
-                    if (cached) {
-                        res.captured_stdout = cached->stdout_output;
-                        res.captured_stderr = cached->stderr_output;
-                        res.exit_codes.push_back(cached->exit_code);
-                    } else {
-                        res = execute_pipeline(commands, options);
-
-                        ExternalCommandCacheEntry entry;
-                        entry.stdout_output = res.captured_stdout;
-                        entry.stderr_output = res.captured_stderr;
-                        entry.exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
-                        cache.insert<CacheSubsystem::ExternalCommand>(signature, entry);
-                    }
-                }
+                std::string signature = compute_python_cache_signature(binary_key, cmd, working_dir);
+                res = cached_or_execute(cache, signature, /*validate_dirs=*/false,
+                                        nullptr, commands, options);
             }
         } else if (can_cache && is_pkgconfig) {
-            // Try cache lookup for pkg-config
             auto& cache = interp.get_cache_store();
             std::string signature = compute_command_signature(commands, options);
-
-            auto cached = cache.lookup<CacheSubsystem::ExternalCommand>(signature);
-            if (cached && validate_command_cache(*cached)) {
-                // Cache hit - use cached results
-                res.captured_stdout = cached->stdout_output;
-                res.captured_stderr = cached->stderr_output;
-                res.exit_codes.push_back(cached->exit_code);
-            } else {
-                // Cache miss - execute and store
-                res = execute_pipeline(commands, options);
-
-                // Store in cache
-                ExternalCommandCacheEntry entry;
-                entry.stdout_output = res.captured_stdout;
-                entry.stderr_output = res.captured_stderr;
-                entry.exit_code = res.exit_codes.empty() ? -1 : res.exit_codes.back();
-                entry.tracked_dir_mtimes = get_tracked_dir_mtimes(commands[0][0]);
-
-                cache.insert<CacheSubsystem::ExternalCommand>(signature, entry);
-            }
+            res = cached_or_execute(cache, signature, /*validate_dirs=*/true,
+                [&](ExternalCommandCacheEntry& e) {
+                    e.tracked_dir_mtimes = get_tracked_dir_mtimes(commands[0][0]);
+                },
+                commands, options);
         } else {
             // Not cacheable - execute normally
             res = execute_pipeline(commands, options);
         }
 
-        auto strip_trailing = [](std::string& s) {
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-                s.pop_back();
-            }
-        };
-
-        if (output_strip_trailing_whitespace) {
-            strip_trailing(res.captured_stdout);
-        }
-        if (error_strip_trailing_whitespace) {
-            strip_trailing(res.captured_stderr);
-        }
+        if (output_strip_trailing_whitespace) res.captured_stdout = std::string(rstrip(res.captured_stdout));
+        if (error_strip_trailing_whitespace) res.captured_stderr = std::string(rstrip(res.captured_stderr));
 
         if (!res.setup_error.empty()) {
             interp.set_fatal_error("execute_process " + res.setup_error);
@@ -1027,14 +947,7 @@ void register_process_builtins(Interpreter& interp) {
             cmd_parts.push_back(target);
         }
 
-        // Join with spaces (no escaping needed for simple identifiers)
-        std::string cmd;
-        for (size_t j = 0; j < cmd_parts.size(); ++j) {
-            if (j > 0) cmd += " ";
-            cmd += cmd_parts[j];
-        }
-
-        interp.set_variable(variable, cmd);
+        interp.set_variable(variable, join_command(cmd_parts));
     });
 
     // Deprecated CMake command, still needed by projects like MariaDB
