@@ -154,8 +154,15 @@ This will produce a release binary at `build/release/kiln`.
 - [ ] Proper CMake policy support
 - [ ] Running on RISC-V
 - [ ] vcpkg support
-- [ ] CPack support
+- [ ] CPack support?
 - [ ] Bootstrapping from just a compiler
+- OS support
+   - [ ] Remove Filesystem Hierarchy Standard assumptions
+   - [ ] macOS support
+   - [ ] FreeBSD support
+   - [ ] OpenBSD support
+   - [ ] Windows support (MSVC)
+   - [ ] Windows support (Cygwin/MSYS2)
 
 Explicitely non-goals:
 
