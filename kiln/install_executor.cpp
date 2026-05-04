@@ -63,6 +63,12 @@ std::expected<void, std::string> install_file(
     bool optional,
     std::ostream& out
 ) {
+    // Hard gate: any path leaving for the filesystem must have had its genex resolved.
+    // Catches paths assembled from install_prefix / destination strings that bypassed
+    // the build graph's evaluate_genex step.
+    assert_no_genex(source.string(), "install source");
+    assert_no_genex(destination.string(), "install destination");
+
     // Check source exists
     if (!std::filesystem::exists(source)) {
         if (optional) {

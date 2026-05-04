@@ -2,9 +2,6 @@
 
 C/C++ build system with CMake as an input language.
 
-> [!IMPORTANT]
-> Experimental project, Linux + GCC/G++ + non cross compiling only for now
-
 ## Why
 
 Modern C/C++ development is editor-first:
@@ -15,7 +12,7 @@ Modern C/C++ development is editor-first:
 
 CMake is a mature and widely-supported build system generator, but the configure-then-generate model adds quarks and occationally causes troubles. `kiln` keeps CMake as the input language while changing the execution model:
 
-* **No configure step** - CMakeLists.txt is interpreted directly on every build, eliminating stale cache surprises. With aggressively invalidated cache for heavy built-ins
+* **No configure step** - CMakeLists.txt is interpreted directly on every build, Gone are stale cache surprises. With aggressively invalidated cache for heavy built-ins
 * **Faster interpretation** - kiln's interpreter is significantly faster than CMake's, with 10x+ speedups in some workloads
 * **Better error messagess** - no more looking at cryptic errors and guessing where it originates from
 * **It's a build system** - owns the entire build flow, better integration, no per-build system jank

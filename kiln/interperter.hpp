@@ -219,7 +219,16 @@ public:
     using TransparentStringSet = std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>;
     enum class LoopControl { NONE, BREAK, CONTINUE };
 
-    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout, std::ostream* err = &std::cerr, std::optional<std::string> build_dir = std::nullopt, bool skip_sys_init = false, bool skip_cache_load = false);
+    // skip_host_compiler_detection: when true, the constructor will not eagerly
+    // detect host gcc/g++. Use when the caller knows a toolchain file or
+    // -DCMAKE_<LANG>_COMPILER override is in play and the eager work would be
+    // discarded; lazy on-demand detection inside enable_compiler_for_language
+    // picks up the slack.
+    explicit Interpreter(std::string script_dir, std::ostream* out = &std::cout,
+                         std::ostream* err = &std::cerr,
+                         std::optional<std::string> build_dir = std::nullopt,
+                         bool skip_sys_init = false, bool skip_cache_load = false,
+                         bool skip_host_compiler_detection = false);
 
     std::expected<void, InterpreterError> interpret(const std::vector<AstNode>& ast);
     std::expected<Interpreter*, BuildError> run_build(int jobs = 0, const std::vector<std::string>& targets = {});
@@ -333,6 +342,12 @@ public:
     }
 
     Toolchain& get_toolchain() { return get_root()->toolchain_; }
+
+    // Toolchain file (CMAKE_TOOLCHAIN_FILE) is loaded exactly once at the
+    // start of the first project()/enable_language. These accessors guard
+    // against re-entry and let project() know whether to load.
+    bool toolchain_file_loaded() const { return get_root()->toolchain_file_loaded_; }
+    void mark_toolchain_file_loaded() { get_root()->toolchain_file_loaded_ = true; }
     CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
     // Enable a compiler for the given language (C, CXX, ASM).
@@ -530,6 +545,7 @@ private:
     std::map<std::string, std::vector<ExportSetEntry>> export_sets_;
 
     Toolchain toolchain_;
+    bool toolchain_file_loaded_ = false;
     std::unique_ptr<CacheStore> cache_store_;
     AstCache ast_cache_;
     std::unique_ptr<Debugger> debugger_;

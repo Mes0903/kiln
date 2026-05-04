@@ -150,6 +150,31 @@ public:
     void add_dependency(const std::string& dep) { manually_added_dependencies_.push_back(dep); }
     const std::vector<std::string>& get_manually_added_dependencies() const { return manually_added_dependencies_; }
 
+    // Compiler-scope capture. Stores the values of CMAKE_<LANG>_COMPILER /
+    // CMAKE_SYSROOT / CMAKE_<LANG>_COMPILER_TARGET as they were in the
+    // current variable scope when this target was defined. At
+    // generate_tasks time the build system uses these to look up a
+    // per-target Compiler* from the Toolchain registry, so a subsequent
+    // set(CMAKE_CXX_COMPILER ...) in a different scope won't change which
+    // compiler this target uses. Empty values mean "fall back to the
+    // toolchain default for this language."
+    void capture_compiler_var(const std::string& var, std::string value) {
+        compiler_var_snapshot_[var] = std::move(value);
+    }
+    const std::string& captured_compiler_var(const std::string& var) const {
+        static const std::string empty;
+        auto it = compiler_var_snapshot_.find(var);
+        return it == compiler_var_snapshot_.end() ? empty : it->second;
+    }
+
+    // Resolve the compiler this target should use for `lang`. If the target
+    // captured a non-empty CMAKE_<LANG>_COMPILER at definition time, the
+    // Toolchain registry returns the (possibly registered-on-demand) Compiler*
+    // matching that exact (binary, sysroot, target) tuple. Otherwise we fall
+    // back to the toolchain's default compiler for the language. Returns
+    // nullptr if no compiler is available at all.
+    const class Compiler* resolve_compiler(Language lang, const class Toolchain& toolchain) const;
+
     // Build event commands (TARGET form of add_custom_command)
     void add_pre_build_command(CustomCommand cmd) { pre_build_commands_.push_back(std::move(cmd)); }
     void add_pre_link_command(CustomCommand cmd) { pre_link_commands_.push_back(std::move(cmd)); }
@@ -322,6 +347,7 @@ protected:
 
     // Manually added dependencies (from add_dependencies command)
     std::vector<std::string> manually_added_dependencies_;
+    std::map<std::string, std::string> compiler_var_snapshot_;
 
     // Autogen (UIC/MOC/RCC) task IDs that all compile tasks must depend on
     std::vector<std::string> autogen_deps_;

@@ -4,6 +4,8 @@
 #include "../interperter.hpp"
 #include "../command_parser.hpp"
 #include "../utils.hpp"
+#include "../genex_evaluator.hpp"
+#include "../genex_parser.hpp"
 #include <filesystem>
 #include <algorithm>
 
@@ -271,6 +273,16 @@ void register_external_project_builtins(Interpreter& interp) {
         target->set_ep_download_dir(download_dir);
         target->set_ep_source_subdir(source_subdir);
 
+        // Set up genex evaluator using parent interp context so $<CONFIG>, etc.
+        // get resolved before being forwarded into the EP's interpreter.
+        auto genex_ctx = GenexEvaluationContext::from_interpreter(interp, interp.get_targets());
+        GenexEvaluator genex_eval(genex_ctx);
+        auto eval_genex = [&](std::string s) -> std::string {
+            if (!GenexParser::contains_genex(s)) return s;
+            auto r = genex_eval.evaluate(s);
+            return r ? *r : s;
+        };
+
         // Store CMAKE_ARGS and CMAKE_CACHE_ARGS
         for (const auto& arg : cmake_args) {
             // Apply token replacements
@@ -281,7 +293,7 @@ void register_external_project_builtins(Interpreter& interp) {
             for (const auto& [token, value] : tokens) {
                 processed = kiln::replace_all(std::move(processed), token, value);
             }
-            target->add_cmake_arg(processed);
+            target->add_cmake_arg(eval_genex(std::move(processed)));
         }
         for (const auto& arg : cmake_cache_args) {
             std::string processed = arg;
@@ -291,17 +303,18 @@ void register_external_project_builtins(Interpreter& interp) {
             for (const auto& [token, value] : tokens) {
                 processed = kiln::replace_all(std::move(processed), token, value);
             }
-            target->add_cmake_cache_arg(processed);
+            target->add_cmake_cache_arg(eval_genex(std::move(processed)));
         }
         target->set_list_separator(list_separator);
 
         // Store step commands (for non-cmake EPs)
-        // Apply token replacements to commands
-        auto apply_tokens = [&tokens](std::vector<std::string>& cmd) {
+        // Apply token replacements (and genex eval) to commands
+        auto apply_tokens = [&tokens, &eval_genex](std::vector<std::string>& cmd) {
             for (auto& arg : cmd) {
                 for (const auto& [token, value] : tokens) {
                     arg = kiln::replace_all(std::move(arg), token, value);
                 }
+                arg = eval_genex(std::move(arg));
             }
         };
         if (!configure_command.empty()) {

@@ -27,6 +27,32 @@ LanguageInfo LanguageClassifier::from_extension(std::string_view ext) {
     return {Language::UNKNOWN, "UNKNOWN", false, false, false};
 }
 
+std::string_view language_name(Language lang) {
+    switch (lang) {
+        case Language::C:       return "C";
+        case Language::CXX:     return "CXX";
+        case Language::CUDA:    return "CUDA";
+        case Language::ASM:     return "ASM";
+        case Language::HEADER:  return "HEADER";
+        case Language::UNKNOWN: return "UNKNOWN";
+    }
+    return "UNKNOWN";
+}
+
+bool language_has_compiler(Language lang) {
+    switch (lang) {
+        case Language::C:
+        case Language::CXX:
+        case Language::CUDA:
+        case Language::ASM:
+            return true;
+        case Language::HEADER:
+        case Language::UNKNOWN:
+            return false;
+    }
+    return false;
+}
+
 LanguageInfo LanguageClassifier::from_path(std::string_view path) {
     std::filesystem::path p(path);
     return from_extension(p.extension().string());

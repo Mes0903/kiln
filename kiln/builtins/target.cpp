@@ -78,6 +78,15 @@ void register_target_builtins(Interpreter& interp) {
                 std::string upper_type = kiln::to_upper(build_type);
                 target->add_language_flags(lang, get_flags("CMAKE_" + lang_prefix + "_FLAGS_" + upper_type));
             }
+
+            // Snapshot the compiler-scope vars at target-definition time so
+            // that a later set(CMAKE_<LANG>_COMPILER ...) in a different
+            // scope doesn't change which compiler this target uses.
+            // Empty values flow through and are interpreted as "use default".
+            target->capture_compiler_var("CMAKE_" + lang_prefix + "_COMPILER",
+                interp.get_variable("CMAKE_" + lang_prefix + "_COMPILER"));
+            target->capture_compiler_var("CMAKE_" + lang_prefix + "_COMPILER_TARGET",
+                interp.get_variable("CMAKE_" + lang_prefix + "_COMPILER_TARGET"));
         };
 
         configure_lang(Language::CXX, "CXX");
@@ -85,6 +94,10 @@ void register_target_builtins(Interpreter& interp) {
         if (!interp.get_variable("CMAKE_ASM_COMPILER_LOADED").empty()) {
             configure_lang(Language::ASM, "ASM");
         }
+
+        // CMAKE_SYSROOT is global, not per-language.
+        target->capture_compiler_var("CMAKE_SYSROOT",
+            interp.get_variable("CMAKE_SYSROOT"));
 
         // Set VISIBILITY_INLINES_HIDDEN from CMAKE_VISIBILITY_INLINES_HIDDEN
         std::string vih = interp.get_variable("CMAKE_VISIBILITY_INLINES_HIDDEN");

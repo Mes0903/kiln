@@ -16,6 +16,9 @@
 #include <chrono>
 #include <iomanip>
 #include <array>
+#ifdef __unix__
+#include <sys/utsname.h>
+#endif
 #include "regex.hpp"
 #include "builtins/registry.hpp"
 #include "intercept/external_project.hpp"
@@ -72,22 +75,26 @@ static constexpr std::array asm_lang_vars = {
     "CMAKE_ASM_FLAGS_RELWITHDEBINFO", "CMAKE_ASM_FLAGS_MINSIZEREL",
 };
 
-// Build a cache key for a compiler binary: "<binary>:<realpath>:<mtime>"
-// Cheap to compute (no subprocesses), changes when binary is updated or swapped via symlink.
-std::string make_compiler_cache_key(const std::string& binary) {
+// Build a cache key for a compiler binary: "<binary>:<realpath>:<mtime>:<sysroot>:<target>"
+// Cheap to compute (no subprocesses), changes when binary is updated or swapped via
+// symlink, or when sysroot / compiler-target alters the implicit dirs of detection.
+std::string make_compiler_cache_key(const std::string& binary,
+                                    const std::string& sysroot = {},
+                                    const std::string& compiler_target = {}) {
     // Resolve to absolute path via which(1)-style lookup
     std::error_code ec;
     auto resolved = std::filesystem::canonical(
         // If binary is just a name (e.g. "g++"), we need the full path.
         // /usr/bin/<binary> is the common case on Linux.
         binary.find('/') != std::string::npos ? binary : "/usr/bin/" + binary, ec);
-    if (ec) return binary + ":unresolved:0";
+    if (ec) return binary + ":unresolved:0:" + sysroot + ":" + compiler_target;
 
     auto mtime = std::filesystem::last_write_time(resolved, ec);
-    if (ec) return binary + ":" + resolved.string() + ":0";
+    if (ec) return binary + ":" + resolved.string() + ":0:" + sysroot + ":" + compiler_target;
 
     auto mtime_val = mtime.time_since_epoch().count();
-    return binary + ":" + resolved.string() + ":" + std::to_string(mtime_val);
+    return binary + ":" + resolved.string() + ":" + std::to_string(mtime_val)
+         + ":" + sysroot + ":" + compiler_target;
 }
 
 // Try to load compiler detection from disk cache. Returns nullopt on miss.
@@ -105,6 +112,87 @@ std::optional<PlatformInfo> try_cached_compiler_detection(
     }
 
     return cached->info;
+}
+
+// Detect a (possibly user-supplied) compiler against optional sysroot + target.
+// Disk-cached, validates with --version. On miss, runs the full detection.
+// This is the on-demand path used when the user specifies a non-default
+// CMAKE_<LANG>_COMPILER (toolchain file, -DCMAKE_<LANG>_COMPILER=, etc.).
+PlatformInfo detect_compiler_for(
+    CacheStore& cache, const std::string& binary, Language lang,
+    const std::string& sysroot, const std::string& compiler_target)
+{
+    std::string key = make_compiler_cache_key(binary, sysroot, compiler_target);
+    if (auto hit = try_cached_compiler_detection(cache, binary, key)) {
+        return *hit;
+    }
+    GnuCompiler probe(binary, lang, sysroot, compiler_target);
+    PlatformInfo info = probe.detect_platform();
+    CompilerDetectionCacheEntry entry;
+    entry.info = info;
+    entry.version_output = detail::run_command(binary + " --version 2>&1");
+    cache.insert<CacheSubsystem::CompilerDetection>(key, entry);
+    return info;
+}
+
+// Standard option strings for a language. Centralized so both fake_cmake_*
+// and on-demand detection populate the same set.
+void apply_standard_options(Interpreter& interp, const std::string& lang) {
+    if (lang == "C") {
+        interp.set_variable("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
+        interp.set_variable("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
+        interp.set_variable("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
+        interp.set_variable("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
+        interp.set_variable("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+    } else if (lang == "CXX") {
+        interp.set_variable("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
+        interp.set_variable("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
+        interp.set_variable("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
+        interp.set_variable("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
+        interp.set_variable("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
+        interp.set_variable("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
+    }
+}
+
+// Populate CMAKE_<LANG>_* variables from a PlatformInfo. Used by the on-demand
+// detection path in enable_compiler_for_language.
+void populate_lang_vars(Interpreter& interp, const std::string& lang,
+                        const std::string& binary, const PlatformInfo& info) {
+    interp.set_variable("CMAKE_" + lang + "_COMPILER", binary);
+    interp.set_variable("CMAKE_" + lang + "_COMPILER_ID", info.compiler_id);
+    interp.set_variable("CMAKE_" + lang + "_COMPILER_VERSION", info.compiler_version);
+    interp.set_variable("CMAKE_" + lang + "_IMPLICIT_INCLUDE_DIRECTORIES",
+                        CMakeArray(info.implicit_includes).to_string());
+    interp.set_variable("CMAKE_" + lang + "_IMPLICIT_LINK_DIRECTORIES",
+                        CMakeArray(info.implicit_link_dirs).to_string());
+    interp.set_variable("CMAKE_" + lang + "_IMPLICIT_LINK_LIBRARIES",
+                        CMakeArray(info.implicit_link_libs).to_string());
+    if (lang == "CXX" && info.default_cxx_standard > 0) {
+        interp.set_variable("CMAKE_CXX_STANDARD_DEFAULT", std::to_string(info.default_cxx_standard));
+    } else if (lang == "C" && info.default_c_standard > 0) {
+        interp.set_variable("CMAKE_C_STANDARD_DEFAULT", std::to_string(info.default_c_standard));
+    }
+    apply_standard_options(interp, lang);
+
+    // Cross-compile system info comes from the target compiler's macros.
+    if (!info.system_name.empty())
+        interp.set_variable("CMAKE_SYSTEM_NAME", info.system_name);
+    if (!info.system_processor.empty())
+        interp.set_variable("CMAKE_SYSTEM_PROCESSOR", info.system_processor);
+    if (!info.sizeof_void_p.empty())
+        interp.set_variable("CMAKE_SIZEOF_VOID_P", info.sizeof_void_p);
+
+    // CMAKE_CROSSCOMPILING is TRUE when the target system differs from host.
+    // CMake sets this in CMakeDetermineSystem; mirroring it here means
+    // try_run, find_package's root_path filtering, and user-side
+    // `if(CMAKE_CROSSCOMPILING)` checks all behave as expected.
+    const std::string host_name = interp.get_variable("CMAKE_HOST_SYSTEM_NAME");
+    const std::string host_proc = interp.get_variable("CMAKE_HOST_SYSTEM_PROCESSOR");
+    const std::string sys_name  = interp.get_variable("CMAKE_SYSTEM_NAME");
+    const std::string sys_proc  = interp.get_variable("CMAKE_SYSTEM_PROCESSOR");
+    const bool cross = (!sys_name.empty() && !host_name.empty() && sys_name != host_name)
+                    || (!sys_proc.empty() && !host_proc.empty() && sys_proc != host_proc);
+    interp.set_variable("CMAKE_CROSSCOMPILING", cross ? "TRUE" : "FALSE");
 }
 
 void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
@@ -209,32 +297,55 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
     std::string loaded_var = "CMAKE_" + lang + "_COMPILER_LOADED";
     if (!get_variable(loaded_var).empty()) return {}; // Already loaded
 
-    if (lang == "C") {
-        for (const auto& var : c_lang_vars) {
-            auto it = backup_vars.find(var);
-            if (it != backup_vars.end() && !it->second.empty())
-                set_variable(var, it->second);
+    if (lang == "C" || lang == "CXX") {
+        const Language lang_enum = (lang == "C") ? Language::C : Language::CXX;
+        const std::string default_binary = (lang == "C") ? "gcc" : "g++";
+
+        // Resolve effective compiler and target options from current scope.
+        // User-supplied values (toolchain file, -D, set() in CMakeLists)
+        // take precedence over the host-default detection.
+        std::string user_binary = get_variable("CMAKE_" + lang + "_COMPILER");
+        std::string sysroot = get_variable("CMAKE_SYSROOT");
+        std::string compiler_target = get_variable("CMAKE_" + lang + "_COMPILER_TARGET");
+        const std::string effective_binary = user_binary.empty() ? default_binary : user_binary;
+
+        // Fast path: user didn't override anything → reuse host-detection backup.
+        const bool host_path = user_binary.empty()
+                            && sysroot.empty()
+                            && compiler_target.empty()
+                            && !backup_vars.empty();
+
+        if (host_path) {
+            auto apply_backup = [&](auto const& vars) {
+                for (const auto& var : vars) {
+                    auto it = backup_vars.find(var);
+                    if (it != backup_vars.end() && !it->second.empty())
+                        set_variable(var, it->second);
+                }
+            };
+            if (lang == "C") apply_backup(c_lang_vars);
+            else             apply_backup(cxx_lang_vars);
+        } else {
+            // On-demand detection against the user's compiler + sysroot/target.
+            // Cache-keyed so repeat invocations are cheap.
+            PlatformInfo info = detect_compiler_for(
+                *cache_store_, effective_binary, lang_enum, sysroot, compiler_target);
+            populate_lang_vars(*this, lang, effective_binary, info);
         }
-        if (backup_vars["CMAKE_C_COMPILER_ID"] == "GNU" || backup_vars["CMAKE_C_COMPILER_ID"] == "Clang")
-            set_variable("CMAKE_C_VERBOSE_FLAG", "-v");
-        if (backup_vars["CMAKE_C_COMPILER_ID"] == "GNU")
-            set_variable("CMAKE_COMPILER_IS_GNUCC", "1");
-        set_variable("CMAKE_C_COMPILER_LOADED", "1");
-        auto compiler = std::make_unique<GnuCompiler>(get_variable("CMAKE_C_COMPILER"), Language::C);
-        get_toolchain().set_compiler(Language::C, std::move(compiler));
-    } else if (lang == "CXX") {
-        for (const auto& var : cxx_lang_vars) {
-            auto it = backup_vars.find(var);
-            if (it != backup_vars.end() && !it->second.empty())
-                set_variable(var, it->second);
+
+        const std::string id = get_variable("CMAKE_" + lang + "_COMPILER_ID");
+        if (id == "GNU" || id == "Clang") {
+            set_variable("CMAKE_" + lang + "_VERBOSE_FLAG", "-v");
         }
-        if (backup_vars["CMAKE_CXX_COMPILER_ID"] == "GNU" || backup_vars["CMAKE_CXX_COMPILER_ID"] == "Clang")
-            set_variable("CMAKE_CXX_VERBOSE_FLAG", "-v");
-        if (backup_vars["CMAKE_CXX_COMPILER_ID"] == "GNU")
-            set_variable("CMAKE_COMPILER_IS_GNUCXX", "1");
-        set_variable("CMAKE_CXX_COMPILER_LOADED", "1");
-        auto compiler = std::make_unique<GnuCompiler>(get_variable("CMAKE_CXX_COMPILER"), Language::CXX);
-        get_toolchain().set_compiler(Language::CXX, std::move(compiler));
+        if (id == "GNU") {
+            set_variable(lang == "C" ? "CMAKE_COMPILER_IS_GNUCC"
+                                     : "CMAKE_COMPILER_IS_GNUCXX", "1");
+        }
+        set_variable("CMAKE_" + lang + "_COMPILER_LOADED", "1");
+
+        auto compiler = std::make_unique<GnuCompiler>(
+            effective_binary, lang_enum, sysroot, compiler_target);
+        get_toolchain().set_compiler(lang_enum, std::move(compiler));
     } else if (lang == "ASM") {
         // Check cache first
         auto cached = backup_vars.find("CMAKE_ASM_COMPILER");
@@ -275,7 +386,10 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             }
         }
         set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
-        auto compiler = std::make_unique<GnuCompiler>(get_variable("CMAKE_ASM_COMPILER"), Language::ASM);
+        auto compiler = std::make_unique<GnuCompiler>(
+            get_variable("CMAKE_ASM_COMPILER"), Language::ASM,
+            get_variable("CMAKE_SYSROOT"),
+            get_variable("CMAKE_ASM_COMPILER_TARGET"));
         get_toolchain().set_compiler(Language::ASM, std::move(compiler));
     } else {
         return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
@@ -746,7 +860,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     return std::move(graph);
 }
 
-Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir, bool skip_sys_init, bool skip_cache_load)
+Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream* err, std::optional<std::string> build_dir, bool skip_sys_init, bool skip_cache_load, bool skip_host_compiler_detection)
     : out_(out), err_(err) {
 
     std::filesystem::path abs_script_dir = script_dir.empty() ?
@@ -861,9 +975,26 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     // Initialize toolchain with compiler detection
     // See fake_cmake_compiler_checks_and_init() for what this does and its limitations
     // NOTE: This function directly modifies variables via set_variable(), which now uses ShadowMap
-    if (!skip_sys_init) {
+    //
+    // skip_host_compiler_detection short-circuits when the caller knows a
+    // toolchain file or -DCMAKE_<LANG>_COMPILER override will redirect us;
+    // the host detection would just be wasted subprocess work. Lazy on-demand
+    // detection inside enable_compiler_for_language picks up the slack and
+    // also seeds CMAKE_HOST_SYSTEM_NAME/_PROCESSOR via uname() below.
+    if (!skip_sys_init && !skip_host_compiler_detection) {
         ProfileScope compiler_profile("compiler detection", "init");
         fake_cmake_compiler_checks_and_init(*this, *cache_store_);
+    } else if (!skip_sys_init) {
+        // Still seed the cheap host-info vars (no subprocesses) so that
+        // CMakeLists / toolchain files can read CMAKE_HOST_SYSTEM_NAME etc.
+        // before any enable_language runs.
+#ifdef __unix__
+        struct utsname uname_info;
+        if (uname(&uname_info) == 0) {
+            set_variable("CMAKE_HOST_SYSTEM_NAME", uname_info.sysname);
+            set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", uname_info.machine);
+        }
+#endif
     }
 
     // Initialize built-in global properties

@@ -314,8 +314,14 @@ private:
     };
     std::map<std::string, DepsFileCache> deps_cache_;
 
-    std::expected<std::string, std::string> get_compiler_version();
-    std::optional<std::string> compiler_version_cache_;
+    // Per-binary version cache. Keyed by command-line binary (e.g. "g++",
+    // "clang++", "/opt/riscv/bin/clang++"). The first command of a compile
+    // task starts with the compiler binary; we run "<binary> --version" once
+    // per unique binary and mix the result into the task signature so that
+    // swapping toolchains correctly invalidates cached objects even when the
+    // binary path stays the same (ccache/wrapper case).
+    std::expected<std::string, std::string> get_compiler_version_for(const std::string& binary);
+    std::map<std::string, std::string> compiler_version_cache_;
     std::string get_kiln_version() { return "0.1.0-alpha (task-refactor)"; }
 
     // Parsers for .d files (header dependencies) - uses deps_cache_

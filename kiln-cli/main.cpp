@@ -165,7 +165,34 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
         }
 
         kiln::ProfileScope init_profile("setup for execution", "init");
-        auto interpreter = std::make_unique<kiln::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string(), opt.no_sys_init, opt.fresh);
+
+        // Sniff -D args for toolchain overrides. If any are present, eager
+        // host detection in the Interpreter ctor would be wasted (the
+        // toolchain file or explicit compiler will redirect us anyway). On-
+        // demand detection inside enable_compiler_for_language handles the
+        // actual case.
+        bool skip_host_detect = false;
+        for (const auto& def : opt.definitions) {
+            // Match "VAR=..." or "VAR:TYPE=..." forms.
+            auto starts_with_var = [&](std::string_view name) {
+                if (def.size() < name.size()) return false;
+                if (std::string_view(def).substr(0, name.size()) != name) return false;
+                char next = def[name.size()];
+                return next == '=' || next == ':';
+            };
+            if (starts_with_var("CMAKE_TOOLCHAIN_FILE") ||
+                starts_with_var("CMAKE_C_COMPILER") ||
+                starts_with_var("CMAKE_CXX_COMPILER") ||
+                starts_with_var("CMAKE_ASM_COMPILER") ||
+                starts_with_var("CMAKE_SYSROOT") ||
+                starts_with_var("CMAKE_C_COMPILER_TARGET") ||
+                starts_with_var("CMAKE_CXX_COMPILER_TARGET")) {
+                skip_host_detect = true;
+                break;
+            }
+        }
+
+        auto interpreter = std::make_unique<kiln::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string(), opt.no_sys_init, opt.fresh, skip_host_detect);
         interpreter->set_current_file(cmake_lists.string());
         debug_controller.attach(*interpreter);
 

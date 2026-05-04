@@ -104,7 +104,13 @@ std::expected<std::string, std::string> compute_signature(
     const std::vector<std::string>& compile_defs,
     const std::vector<std::string>& link_libs,
     const std::vector<std::string>& link_opts,
-    bool use_content_hash = false
+    bool use_content_hash = false,
+    // Toolchain context — must invalidate the cache when changed even if the
+    // compiler binary path stays the same. Default to empty so existing
+    // host-build entries don't churn unnecessarily.
+    const std::string& sysroot = {},
+    const std::string& compiler_target = {},
+    const std::string& global_lang_flags = {}
 ) {
     std::ostringstream oss;
 
@@ -113,6 +119,9 @@ std::expected<std::string, std::string> compute_signature(
     oss << "version:" << compiler_version << "|";
     oss << "lang:" << language << "|";
     oss << "std:" << standard << "|";
+    if (!sysroot.empty())          oss << "sysroot:" << sysroot << "|";
+    if (!compiler_target.empty())  oss << "target:" << compiler_target << "|";
+    if (!global_lang_flags.empty()) oss << "lang_flags:" << global_lang_flags << "|";
 
     // Source files: mtime (fast path) or content hash (fallback for rewritten files)
     for (const auto& src : source_files) {
@@ -679,6 +688,14 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string compiler_version = interp.get_variable(version_var);
         std::string compiler_path = interp.get_variable((lang == Language::C) ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER");
 
+        // Toolchain context for the cache signature: a try_compile result
+        // depends on these in addition to the binary identity.
+        std::string sysroot_var_val = interp.get_variable("CMAKE_SYSROOT");
+        std::string target_var_val = interp.get_variable(
+            (lang == Language::C) ? "CMAKE_C_COMPILER_TARGET" : "CMAKE_CXX_COMPILER_TARGET");
+        std::string global_lang_flags = interp.get_variable(
+            (lang == Language::C) ? "CMAKE_C_FLAGS" : "CMAKE_CXX_FLAGS");
+
         // Get standard
         std::string standard;
         if (lang == Language::C) {
@@ -790,7 +807,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         auto sig_result = compute_signature(
             compiler_path, compiler_version, language_str, standard,
             sources, inline_sources_map, compile_definitions,
-            resolved_link_libs, link_options
+            resolved_link_libs, link_options,
+            /*use_content_hash=*/false,
+            sysroot_var_val, target_var_val, global_lang_flags
         );
         if (!sig_result) {
             interp.set_fatal_error("Failed to compute signature: " + sig_result.error());
@@ -841,7 +860,8 @@ void register_try_compile_builtins(Interpreter& interp) {
             auto hash_sig = compute_signature(
                 compiler_path, compiler_version, language_str, standard,
                 sources, inline_sources_map, compile_definitions,
-                resolved_link_libs, link_options, /*use_content_hash=*/true
+                resolved_link_libs, link_options, /*use_content_hash=*/true,
+                sysroot_var_val, target_var_val, global_lang_flags
             );
             if (hash_sig && try_cache_hit(*hash_sig, "content-hash")) return;
         }
@@ -937,7 +957,8 @@ void register_try_compile_builtins(Interpreter& interp) {
             auto hash_sig = compute_signature(
                 compiler_path, compiler_version, language_str, standard,
                 sources, inline_sources_map, compile_definitions,
-                resolved_link_libs, link_options, /*use_content_hash=*/true
+                resolved_link_libs, link_options, /*use_content_hash=*/true,
+                sysroot_var_val, target_var_val, global_lang_flags
             );
             if (hash_sig && *hash_sig != base_signature) {
                 cache.insert<CacheSubsystem::TryCompile>(*hash_sig, entry);
@@ -1193,6 +1214,14 @@ void register_try_compile_builtins(Interpreter& interp) {
         std::string compiler_version = interp.get_variable(version_var);
         std::string compiler_path = interp.get_variable((lang == Language::C) ? "CMAKE_C_COMPILER" : "CMAKE_CXX_COMPILER");
 
+        // Toolchain context for the cache signature: a try_compile result
+        // depends on these in addition to the binary identity.
+        std::string sysroot_var_val = interp.get_variable("CMAKE_SYSROOT");
+        std::string target_var_val = interp.get_variable(
+            (lang == Language::C) ? "CMAKE_C_COMPILER_TARGET" : "CMAKE_CXX_COMPILER_TARGET");
+        std::string global_lang_flags = interp.get_variable(
+            (lang == Language::C) ? "CMAKE_C_FLAGS" : "CMAKE_CXX_FLAGS");
+
         // Get standard
         std::string standard;
         if (lang == Language::C) {
@@ -1299,7 +1328,9 @@ void register_try_compile_builtins(Interpreter& interp) {
         auto sig_result = compute_signature(
             compiler_path, compiler_version, language_str, standard,
             sources, inline_sources_map, compile_definitions,
-            resolved_link_libs, link_options
+            resolved_link_libs, link_options,
+            /*use_content_hash=*/false,
+            sysroot_var_val, target_var_val, global_lang_flags
         );
         if (!sig_result) {
             interp.set_fatal_error("Failed to compute signature: " + sig_result.error());
@@ -1360,7 +1391,8 @@ void register_try_compile_builtins(Interpreter& interp) {
             auto hash_sig = compute_signature(
                 compiler_path, compiler_version, language_str, standard,
                 sources, inline_sources_map, compile_definitions,
-                resolved_link_libs, link_options, /*use_content_hash=*/true
+                resolved_link_libs, link_options, /*use_content_hash=*/true,
+                sysroot_var_val, target_var_val, global_lang_flags
             );
             if (hash_sig) {
                 std::ostringstream hash_run_sig;

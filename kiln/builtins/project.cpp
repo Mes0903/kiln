@@ -319,6 +319,32 @@ void register_project_builtins(Interpreter& interp) {
             languages = {"C", "CXX"};
         }
 
+        // Load CMAKE_TOOLCHAIN_FILE once, before any language enablement, so
+        // it can set CMAKE_<LANG>_COMPILER, CMAKE_SYSROOT, etc. Relative
+        // paths are resolved against CMAKE_SOURCE_DIR (top-level), matching
+        // CMake's behavior.
+        if (!interp.toolchain_file_loaded()) {
+            std::string tc = interp.get_variable("CMAKE_TOOLCHAIN_FILE");
+            if (!tc.empty()) {
+                std::filesystem::path tc_path(tc);
+                if (!tc_path.is_absolute()) {
+                    std::string src = interp.get_variable("CMAKE_SOURCE_DIR");
+                    if (src.empty()) src = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
+                    tc_path = std::filesystem::path(src) / tc_path;
+                }
+                interp.mark_toolchain_file_loaded();
+                auto res = interp.include_file(tc_path.lexically_normal().string());
+                if (!res) {
+                    interp.set_fatal_error("project() failed to load CMAKE_TOOLCHAIN_FILE: " + tc);
+                    return;
+                }
+            } else {
+                // Mark loaded even when empty so we don't re-check on every
+                // nested project() call.
+                interp.mark_toolchain_file_loaded();
+            }
+        }
+
         // Enable each language
         for (const auto& lang : languages) {
             auto err = enable_language_impl(interp, lang);

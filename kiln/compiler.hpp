@@ -45,6 +45,12 @@ struct LinkContext {
     std::vector<std::string> lib_dirs;
     std::vector<std::string> libs;
     std::vector<std::string> linker_flags;
+    // Compiler/system implicit link search dirs (CMAKE_<LANG>_IMPLICIT_LINK_DIRECTORIES).
+    // Used to skip system paths when emitting RUNPATH so we don't pollute it.
+    std::vector<std::string> implicit_link_dirs;
+    // CMAKE_SKIP_BUILD_RPATH / SKIP_BUILD_RPATH target property.
+    // When true, do not embed any link-path-derived RUNPATH entries.
+    bool skip_build_rpath = false;
     bool is_shared = false;
     std::string standard;
     bool extensions_enabled = true;  // GNU extensions (gnu11 vs c11)
@@ -68,6 +74,16 @@ struct PlatformInfo {
 class Compiler {
 public:
     virtual ~Compiler() = default;
+
+    // Identity: the binary path / sysroot / compiler-target this Compiler
+    // instance was configured with. Used by Toolchain to dedupe registry
+    // entries — two captures with the same identity tuple resolve to the
+    // same Compiler*. Default-empty for compilers that don't carry these
+    // (only the GNU/Clang family does today).
+    virtual const std::string& binary() const { static const std::string e; return e; }
+    virtual const std::string& sysroot() const { static const std::string e; return e; }
+    virtual const std::string& compiler_target() const { static const std::string e; return e; }
+
     virtual std::vector<std::string> get_compile_command(const CompileContext& ctx) const = 0;
     virtual std::vector<std::string> get_link_command(const LinkContext& ctx) const = 0;
     virtual std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const = 0;

@@ -1,4 +1,5 @@
 #include "registry.hpp"
+#include "find_helpers.hpp"
 #include "../interperter.hpp"
 #include "../policies.hpp"
 #include "../command_parser.hpp"
@@ -733,6 +734,24 @@ void register_find_package_builtins(Interpreter& interp) {
                 }
                 return false;
             };
+
+            // Apply CMAKE_FIND_ROOT_PATH re-rooting before scanning. Without
+            // this, a cross build with CMAKE_FIND_ROOT_PATH=/sysroot would
+            // still hit host paths first and resolve to host packages.
+            // Mode resolution follows the find_program/library/path family:
+            // per-call flag wins, else CMAKE_FIND_ROOT_PATH_MODE_PACKAGE,
+            // else BOTH (effectively no-op when CMAKE_FIND_ROOT_PATH unset).
+            {
+                std::string root_mode;
+                if (no_cmake_find_root_path)        root_mode = "NEVER";
+                else if (only_cmake_find_root_path) root_mode = "ONLY";
+                else if (cmake_find_root_path_both) root_mode = "BOTH";
+                else {
+                    std::string mode = interp.get_variable("CMAKE_FIND_ROOT_PATH_MODE_PACKAGE");
+                    root_mode = (mode == "NEVER" || mode == "ONLY" || mode == "BOTH") ? mode : "BOTH";
+                }
+                search_paths = apply_find_root_path(interp, search_paths, root_mode);
+            }
 
             // First pass: check explicit search paths
             for (const auto& path : search_paths) {

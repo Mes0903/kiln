@@ -359,6 +359,25 @@ const std::vector<std::string>& Target::get_language_flags(Language lang) const 
     return (it != language_flags_.end()) ? it->second : empty;
 }
 
+const Compiler* Target::resolve_compiler(Language lang, const Toolchain& toolchain) const {
+    if (!language_has_compiler(lang)) {
+        return toolchain.get_compiler_ptr(lang);
+    }
+    std::string_view name = language_name(lang);
+    std::string binary_var = "CMAKE_" + std::string(name) + "_COMPILER";
+    const std::string& captured_binary = captured_compiler_var(binary_var);
+    if (!captured_binary.empty()) {
+        std::string target_var = "CMAKE_" + std::string(name) + "_COMPILER_TARGET";
+        const std::string& captured_sysroot = captured_compiler_var("CMAKE_SYSROOT");
+        const std::string& captured_target = captured_compiler_var(target_var);
+        // The default compiler is also in the registry (registered via
+        // enable_language). If the captured tuple matches it, get_or_register
+        // returns the same pointer; otherwise it lazily registers a fresh one.
+        return toolchain.get_or_register(lang, captured_binary, captured_sysroot, captured_target);
+    }
+    return toolchain.get_compiler_ptr(lang);
+}
+
 // --- Resolution Logic ---
 
 GenexEvaluationContext Target::make_genex_context(
@@ -1391,7 +1410,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
             }
         }
 
-        const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
+        const Compiler* compiler = resolve_compiler(lang_info.lang, toolchain);
         if (!compiler) {
             throw std::runtime_error("No compiler available for language " + std::string(lang_info.name) + " in target '" + name_ + "'");
         }
@@ -1614,7 +1633,7 @@ static PchInfo generate_pch_task(
     int compiler_default_standard,
     const std::vector<ResolvedDep>& manual_deps = {}) {
 
-    const Compiler* compiler = toolchain.get_compiler_ptr(pch_lang);
+    const Compiler* compiler = target->resolve_compiler(pch_lang, toolchain);
     if (!compiler) {
         std::string lang_name = (pch_lang == Language::C) ? "C" : "CXX";
         throw std::runtime_error("No " + lang_name + " compiler available for PCH generation in target '"
@@ -1890,7 +1909,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
                 // Skip languages where the target has no source files
                 if (!target_source_languages.contains(lang)) continue;
                 // Skip languages where no compiler is available
-                if (!toolchain.get_compiler_ptr(lang)) continue;
+                if (!resolve_compiler(lang, toolchain)) continue;
 
                 // Evaluate genex with this language's context
                 auto lang_ctx = make_genex_context(this, interp, all_targets, lang);
@@ -2067,7 +2086,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         }
     }
 
-    const Compiler* linker = toolchain.get_compiler_ptr(linker_lang);
+    const Compiler* linker = resolve_compiler(linker_lang, toolchain);
     if (!linker) {
         throw std::runtime_error("No linker available for language in target '" + name_ + "'");
     }
@@ -2139,6 +2158,22 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
 
         for (const auto& dir : get_resolved_property("LINK_DIRECTORIES")) {
             ctx.lib_dirs.push_back(dir);
+        }
+
+        {
+            const char* implicit_var = (linker_lang == Language::C)
+                ? "CMAKE_C_IMPLICIT_LINK_DIRECTORIES"
+                : "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES";
+            for (const auto& dir : CMakeArray(interp.get_variable(implicit_var))) {
+                ctx.implicit_link_dirs.push_back(dir);
+            }
+        }
+
+        // SKIP_BUILD_RPATH: per-target property overrides the variable default.
+        {
+            std::string skip = get_property("SKIP_BUILD_RPATH");
+            if (skip.empty()) skip = interp.get_variable("CMAKE_SKIP_BUILD_RPATH");
+            ctx.skip_build_rpath = !skip.empty() && !Interpreter::is_falsy(skip);
         }
 
         link.commands.push_back(linker->get_link_command(ctx));
@@ -2411,7 +2446,7 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         if (!lang_info.is_module_interface) continue;
         if (lang_info.lang != Language::CXX) continue;
 
-        const Compiler* compiler = toolchain.get_compiler_ptr(lang_info.lang);
+        const Compiler* compiler = resolve_compiler(lang_info.lang, toolchain);
         if (!compiler) continue;
 
         std::string src_abs = Path::join(source_dir_, src);

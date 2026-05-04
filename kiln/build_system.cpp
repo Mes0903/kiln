@@ -114,6 +114,18 @@ static bool is_make_install_command(const std::vector<std::string>& cmd) {
     return false;
 }
 
+// Helper: Check if a command is a "cmake --install" invocation that should be
+// skipped when kiln handles install rules itself. Handles wrappers like
+// "cmake -E env ... cmake --install . --config Release".
+// Kiln does not generate cmake_install.cmake, so running cmake --install
+// against an EP build dir would fail.
+static bool is_cmake_install_command(const std::vector<std::string>& cmd) {
+    for (const auto& tok : cmd) {
+        if (tok == "--install") return true;
+    }
+    return false;
+}
+
 struct ExecutionState {
     // Configuration (set once, read-only during execution)
     std::string build_dir;
@@ -383,6 +395,33 @@ std::expected<void, std::string> BuildGraph::validate() {
     // Cycle check
     auto cycle_err = check_for_cycles();
     if (cycle_err) return std::unexpected(*cycle_err);
+
+    // Hard gate: nothing in the graph may carry unevaluated generator expressions
+    // by the time we hand it to the executor. evaluate_genex() asserts inline as it
+    // walks tasks, but tasks injected after that point (e.g. EP graphs attached via
+    // attach_ep_graph, or builtins that synthesize tasks late) bypass that pass.
+    // This scan catches them before any shell command runs.
+    auto check_genex = [](std::string_view value, std::string_view ctx) -> std::optional<std::string> {
+        if (value.find("$<") != std::string_view::npos) {
+            return std::string("Unevaluated generator expression in ") + std::string(ctx) +
+                   ": '" + std::string(value) + "'";
+        }
+        return std::nullopt;
+    };
+    for (const auto& task_ptr : tasks_) {
+        const auto& id = task_ptr->id;
+        if (auto e = check_genex(id, "task id")) return std::unexpected(*e);
+        if (auto e = check_genex(task_ptr->working_dir, "working_dir for " + id)) return std::unexpected(*e);
+        for (const auto& cmd : task_ptr->commands)
+            for (const auto& arg : cmd)
+                if (auto e = check_genex(arg, "command for " + id)) return std::unexpected(*e);
+        for (const auto& in : task_ptr->inputs)
+            if (auto e = check_genex(in, "input for " + id)) return std::unexpected(*e);
+        for (const auto& out : task_ptr->outputs)
+            if (auto e = check_genex(out, "output for " + id)) return std::unexpected(*e);
+        for (const auto& dep : task_ptr->explicit_deps)
+            if (auto e = check_genex(dep, "explicit_dep for " + id)) return std::unexpected(*e);
+    }
 
     // Check for missing inputs.
     // Compile tasks with missing source files are errors (the source won't appear).
@@ -952,8 +991,8 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 if (!install_cmd.is_empty && !install_cmd.commands.empty()) {
                                     std::string working_dir = ep_target->get_ep_binary_dir();
                                     for (const auto& cmd : install_cmd.commands) {
-                                        // Skip "make install" - we handle that with our install rules
-                                        if (is_make_install_command(cmd)) continue;
+                                        // Skip "make install" / "cmake --install" - we handle install rules ourselves
+                                        if (is_make_install_command(cmd) || is_cmake_install_command(cmd)) continue;
                                         auto result = kiln::run_command(cmd, working_dir);
                                         if (result.exit_code != 0) {
                                             {
@@ -1350,9 +1389,20 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
     for (const auto& cmd : task.commands) oss << join_command(cmd) << ";";
     oss << "|";
 
-    auto version_res = get_compiler_version();
-    if (!version_res) return std::unexpected(version_res.error());
-    oss << "compiler:" << *version_res << "|";
+    // Mix in the version of each unique binary that this task invokes.
+    // The binary path is already in the command string (so swap-by-path
+    // already invalidates), but explicit version coverage handles the
+    // ccache/wrapper case where the path is stable but the underlying
+    // compiler changed (e.g. system update).
+    std::set<std::string> unique_binaries;
+    for (const auto& cmd : task.commands) {
+        if (!cmd.empty()) unique_binaries.insert(cmd.front());
+    }
+    for (const auto& binary : unique_binaries) {
+        auto version_res = get_compiler_version_for(binary);
+        if (!version_res) return std::unexpected(version_res.error());
+        oss << "tool:" << binary << ":" << *version_res << "|";
+    }
 
     oss << "kiln:" << get_kiln_version() << "|";
 
@@ -1457,17 +1507,29 @@ std::expected<void, std::string> BuildGraph::save_cache(const std::string& build
     return {};
 }
 
-std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
+std::expected<std::string, std::string> BuildGraph::get_compiler_version_for(const std::string& binary) {
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (compiler_version_cache_) return *compiler_version_cache_;
+        auto it = compiler_version_cache_.find(binary);
+        if (it != compiler_version_cache_.end()) return it->second;
     }
+
+    // Shell-quote the binary so paths with spaces work. We're going through
+    // popen, not execve, so quoting matters.
+    std::string quoted;
+    quoted.reserve(binary.size() + 2);
+    quoted += '\'';
+    for (char c : binary) {
+        if (c == '\'') quoted += "'\\''";
+        else           quoted += c;
+    }
+    quoted += '\'';
 
     std::array<char, 128> buffer;
     std::string result;
-    FILE* pipe = popen("g++ --version 2>/dev/null | head -n 1", "r");
+    FILE* pipe = popen((quoted + " --version 2>/dev/null | head -n 1").c_str(), "r");
     if (!pipe) {
-        return std::unexpected("Failed to execute g++ to get version");
+        return std::unexpected("Failed to execute " + binary + " to get version");
     }
 
     while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
@@ -1476,19 +1538,17 @@ std::expected<std::string, std::string> BuildGraph::get_compiler_version() {
 
     int status = pclose(pipe);
     if (status != 0) {
-        return std::unexpected("g++ --version failed with exit code " + std::to_string(status));
+        // Don't fail the whole build over a missing version banner — some
+        // wrappers exit non-zero. Cache the (possibly empty) result so we
+        // don't keep retrying.
+        if (result.empty()) result = "<no-version:" + binary + ">";
     }
 
-    if (result.empty()) {
-        return std::unexpected("g++ --version produced no output");
-    }
-
-    if (result.back() == '\n') result.pop_back();
+    if (!result.empty() && result.back() == '\n') result.pop_back();
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-    compiler_version_cache_ = result;
-
-    return *compiler_version_cache_;
+    compiler_version_cache_.emplace(binary, result);
+    return compiler_version_cache_[binary];
 }
 
 void BuildGraph::inject_module_dependencies(
@@ -1704,7 +1764,11 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             ep_interp->set_force_colors(true);
         }
 
-        // Apply CMAKE_ARGS and CMAKE_CACHE_ARGS
+        // Apply CMAKE_ARGS and CMAKE_CACHE_ARGS.
+        // Hard gate: values forwarded into the child interpreter's variables must
+        // have had their genex resolved by external_project.cpp at intercept time.
+        // Defense in depth: catches future regressions where a value bypasses that
+        // evaluation and gets expanded as a literal in install paths or commands.
         for (const auto& arg : ep_target->get_cmake_args()) {
             // Parse -DVAR=value or -DVAR:TYPE=value
             if (arg.starts_with("-D")) {
@@ -1716,6 +1780,7 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                     // Strip type annotation
                     size_t colon = var.find(':');
                     if (colon != std::string::npos) var = var.substr(0, colon);
+                    assert_no_genex(val, "EP " + ep_name + " CMAKE_ARGS " + var);
                     ep_interp->set_variable(var, val);
                 }
             }
@@ -1729,6 +1794,7 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                     std::string val = def.substr(eq + 1);
                     size_t colon = var.find(':');
                     if (colon != std::string::npos) var = var.substr(0, colon);
+                    assert_no_genex(val, "EP " + ep_name + " CMAKE_CACHE_ARGS " + var);
                     ep_interp->set_variable(var, val);
                 }
             }
@@ -1806,7 +1872,11 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         // For cmake-based EPs, we interpret CMakeLists.txt so we use install rules,
         // not any custom INSTALL_COMMAND (which would require cmake-generated Makefile).
         const auto& install_rules = ep_interp->get_install_rules();
-        std::string install_prefix = ep_target->get_ep_install_dir();
+        // Mirror what `cmake --install` would do: honor CMAKE_INSTALL_PREFIX when the
+        // EP's CMakeLists set it (typically via CMAKE_ARGS=-DCMAKE_INSTALL_PREFIX=...).
+        // Fall back to ExternalProject's INSTALL_DIR when not set.
+        std::string install_prefix = ep_interp->get_variable("CMAKE_INSTALL_PREFIX");
+        if (install_prefix.empty()) install_prefix = ep_target->get_ep_install_dir();
         std::string config = ep_interp->get_variable("CMAKE_BUILD_TYPE");
 
         // Helper to run extra install commands (skip "make install" which we replaced with install rules)
@@ -1815,8 +1885,8 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             if (install_cmd.is_empty || install_cmd.commands.empty()) return std::nullopt;
             std::string working_dir = ep_target->get_ep_binary_dir();
             for (const auto& cmd : install_cmd.commands) {
-                // Skip "make install" - we handle that with our install rules
-                if (is_make_install_command(cmd)) continue;
+                // Skip "make install" / "cmake --install" - we handle install rules ourselves
+                if (is_make_install_command(cmd) || is_cmake_install_command(cmd)) continue;
                 auto result = kiln::run_command(cmd, working_dir);
                 if (result.exit_code != 0) {
                     print_prefixed_output(result.output);

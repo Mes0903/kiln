@@ -3,8 +3,10 @@
 #include "../kiln/genex_evaluator.hpp"
 #include "../kiln/target.hpp"
 #include "../kiln/build_system.hpp"
+#include <cstdlib>
 #include <map>
 #include <memory>
+#include <random>
 
 using namespace kiln;
 
@@ -1481,4 +1483,151 @@ TEST_CASE("GenexEvaluator - TARGET_PROPERTY built-in pseudo-properties", "[genex
     REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,SOURCE_DIR>").value() == "/mysrc");
     REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,BINARY_DIR>").value() == "/mybuild");
     REQUIRE(eval.evaluate("$<TARGET_PROPERTY:mylib,IMPORTED>").value() == "FALSE");
+}
+
+// Monkey test: throw a large randomized corpus of generator expressions at the
+// evaluator and assert two invariants:
+//   1. The evaluator never throws / aborts. It must return std::expected.
+//   2. On success, no '$<' remains in the result (anything left would mean we
+//      pretended to evaluate while leaking unhandled genex into a build path).
+//
+// Deterministic by design: a fixed seed makes failures reproducible. A failing
+// input is reported via INFO so the seed alone reconstructs the case.
+TEST_CASE("GenexEvaluator - monkey test", "[genex][evaluator][monkey]") {
+    using std::string;
+
+    // Atomic patterns spanning every supported genex node. Each is independently
+    // valid against the test context built below.
+    const std::vector<string> atoms = {
+        "literal_text",
+        "$<CONFIG:Debug>",
+        "$<CONFIG:Release>",
+        "$<CONFIG>",
+        "$<CONFIGURATION>",
+        "$<BOOL:1>",
+        "$<BOOL:0>",
+        "$<BOOL:>",
+        "$<BOOL:TRUE>",
+        "$<NOT:1>",
+        "$<NOT:0>",
+        "$<AND:1,1,0>",
+        "$<AND:1,1>",
+        "$<OR:0,0,1>",
+        "$<OR:0,0>",
+        "$<IF:1,yes,no>",
+        "$<IF:0,yes,no>",
+        "$<STREQUAL:foo,foo>",
+        "$<STREQUAL:foo,bar>",
+        "$<EQUAL:1,1>",
+        "$<EQUAL:1,2>",
+        "$<VERSION_LESS:1.0,2.0>",
+        "$<VERSION_GREATER:2.0,1.0>",
+        "$<VERSION_EQUAL:1.0,1.0>",
+        "$<LOWER_CASE:HELLO>",
+        "$<UPPER_CASE:hello>",
+        "$<BUILD_INTERFACE:/abs/include>",
+        "$<INSTALL_INTERFACE:include>",
+        "$<LINK_ONLY:foo>",
+        "$<COMPILE_LANGUAGE:CXX>",
+        "$<CXX_COMPILER_ID:GNU>",
+        "$<C_COMPILER_ID:GNU>",
+        "$<TARGET_EXISTS:mylib>",
+        "$<TARGET_EXISTS:nope>",
+        "$<TARGET_PROPERTY:mylib,NAME>",
+        "$<TARGET_PROPERTY:mylib,SOURCE_DIR>",
+        "$<INSTALL_PREFIX>",
+        "$<COMMA>",
+        "$<SEMICOLON>",
+        "$<ANGLE-R>",
+    };
+
+    // Wrappers that take one inner expression. Used to build nested cases.
+    const std::vector<string> wrappers_unary = {
+        "$<NOT:{}>",
+        "$<BOOL:{}>",
+        "$<LOWER_CASE:{}>",
+        "$<UPPER_CASE:{}>",
+        "$<BUILD_INTERFACE:{}>",
+        "$<INSTALL_INTERFACE:{}>",
+        "prefix-{}-suffix",   // genex embedded in literal context
+        "{}",                 // identity
+    };
+
+    auto substitute = [](string tmpl, const string& inner) -> string {
+        auto pos = tmpl.find("{}");
+        if (pos == string::npos) return tmpl;
+        return tmpl.replace(pos, 2, inner);
+    };
+
+    // Evaluation context: representative state covering the atoms above.
+    TargetMap targets;
+    auto mylib = std::make_shared<Target>("mylib", TargetType::STATIC_LIBRARY, "/src", "/bld");
+    targets["mylib"] = mylib;
+    GenexEvaluationContext ctx;
+    ctx.build_type = "Debug";
+    ctx.cxx_compiler_id = "GNU";
+    ctx.c_compiler_id = "GNU";
+    ctx.compile_language = Language::CXX;
+    ctx.system_name = "Linux";
+    ctx.install_prefix = "/usr/local";
+    ctx.all_targets = &targets;
+    ctx.current_target = mylib.get();
+    GenexEvaluator eval(ctx);
+
+    // Seeded RNG: change the seed via the env var KILN_GENEX_MONKEY_SEED to
+    // reproduce a CI failure locally.
+    uint64_t seed = 0xC0FFEEULL;
+    if (const char* s = std::getenv("KILN_GENEX_MONKEY_SEED")) {
+        try { seed = std::stoull(s); } catch (...) {}
+    }
+    std::mt19937_64 rng(seed);
+
+    auto pick = [&](const auto& v) -> const string& {
+        return v[std::uniform_int_distribution<size_t>(0, v.size() - 1)(rng)];
+    };
+
+    // Generate `iterations` random expressions, nesting up to max_depth wrappers
+    // around a randomly-chosen atom.
+    constexpr int iterations = 2000;
+    constexpr int max_depth = 4;
+    int errors = 0;
+    int leaks = 0;
+    for (int i = 0; i < iterations; ++i) {
+        string expr = pick(atoms);
+        int depth = std::uniform_int_distribution<int>(0, max_depth)(rng);
+        for (int d = 0; d < depth; ++d) {
+            expr = substitute(pick(wrappers_unary), expr);
+        }
+
+        std::expected<string, string> result;
+        try {
+            result = eval.evaluate(expr);
+        } catch (const std::exception& e) {
+            INFO("seed=" << seed << " iter=" << i << " expr=" << expr << " threw: " << e.what());
+            FAIL("evaluator threw on monkey input");
+        } catch (...) {
+            INFO("seed=" << seed << " iter=" << i << " expr=" << expr);
+            FAIL("evaluator threw unknown exception on monkey input");
+        }
+
+        if (!result.has_value()) {
+            // Errors are acceptable (some random nesting may be ill-typed),
+            // but the error string must be non-empty for diagnostics.
+            INFO("seed=" << seed << " iter=" << i << " expr=" << expr);
+            REQUIRE_FALSE(result.error().empty());
+            ++errors;
+            continue;
+        }
+
+        if (result->find("$<") != string::npos) {
+            INFO("seed=" << seed << " iter=" << i << " expr=" << expr << " result=" << *result);
+            FAIL("evaluator returned success but result contains unevaluated genex");
+            ++leaks;
+        }
+    }
+
+    // Sanity: with this corpus we expect a healthy mix — most should succeed.
+    // If everything errors, the test isn't actually exercising the evaluator.
+    REQUIRE(errors < iterations);
+    REQUIRE(leaks == 0);
 }

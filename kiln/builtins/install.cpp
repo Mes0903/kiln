@@ -187,6 +187,23 @@ void parse_install_targets(
         }
     }
 
+    // Apply default destinations from GNUInstallDirs when DESTINATION was not specified.
+    // This matches CMake behavior: install(TARGETS foo RUNTIME) installs to ${CMAKE_INSTALL_BINDIR}
+    // even with no explicit DESTINATION.
+    auto var_or = [&](const char* var, const char* fallback) {
+        auto v = interp.get_variable(var);
+        return v.empty() ? std::string(fallback) : v;
+    };
+    if (rule->runtime_dest.destination.empty()) {
+        rule->runtime_dest.destination = var_or("CMAKE_INSTALL_BINDIR", "bin");
+    }
+    if (rule->library_dest.destination.empty()) {
+        rule->library_dest.destination = var_or("CMAKE_INSTALL_LIBDIR", "lib");
+    }
+    if (rule->archive_dest.destination.empty()) {
+        rule->archive_dest.destination = var_or("CMAKE_INSTALL_LIBDIR", "lib");
+    }
+
     // Add targets to the export set
     if (!export_name.empty()) {
         for (const auto& target_name : rule->targets) {

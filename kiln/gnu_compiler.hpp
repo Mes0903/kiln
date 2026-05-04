@@ -6,7 +6,13 @@
 #include <sstream>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <future>
+#include <map>
+#include <filesystem>
+#include <unordered_map>
+#include <unordered_set>
 #include "regex.hpp"
 
 #ifdef __unix__
@@ -38,12 +44,35 @@ inline std::string run_command(const std::string& command) {
 
 class GnuCompiler : public Compiler {
 public:
-    explicit GnuCompiler(std::string binary, Language lang)
-        : binary_(std::move(binary)), lang_(lang) {}
+    explicit GnuCompiler(std::string binary, Language lang,
+                         std::string sysroot = {}, std::string compiler_target = {})
+        : binary_(std::move(binary)), lang_(lang),
+          sysroot_(std::move(sysroot)), compiler_target_(std::move(compiler_target)) {}
+
+    const std::string& binary() const override { return binary_; }
+    const std::string& sysroot() const override { return sysroot_; }
+    const std::string& compiler_target() const override { return compiler_target_; }
+
+    // Inject --sysroot= and --target= flags. Call after pushing the binary,
+    // before language-/job-specific flags. Idempotent w.r.t. empty fields.
+    void inject_target_flags(std::vector<std::string>& cmd) const {
+        if (!sysroot_.empty()) {
+            cmd.push_back("--sysroot=" + sysroot_);
+        }
+        if (!compiler_target_.empty()) {
+            // GCC ignores --target= (uses binary name for triple); Clang honors it.
+            // Pushing it unconditionally is safe for GCC only when the binary
+            // is actually clang-shaped — but we don't know the ID here without
+            // detection. Callers populate compiler_target_ only when they
+            // actually want it propagated, so trust the input.
+            cmd.push_back("--target=" + compiler_target_);
+        }
+    }
 
     std::vector<std::string> get_compile_command(const CompileContext& ctx) const override {
         std::vector<std::string> cmd;
         cmd.push_back(binary_);
+        inject_target_flags(cmd);
 
         if (!ctx.standard.empty() && lang_ != Language::ASM) {
             std::string std_prefix = (lang_ == Language::C ? "c" : "c++");
@@ -135,6 +164,7 @@ public:
     std::vector<std::string> get_link_command(const LinkContext& ctx) const override {
         std::vector<std::string> cmd;
         cmd.push_back(binary_);
+        inject_target_flags(cmd);
 
         if (!ctx.standard.empty()) {
             std::string std_prefix = (lang_ == Language::C ? "c" : "c++");
@@ -177,6 +207,49 @@ public:
         }
 
         cmd.push_back("-Wl,-rpath,'$ORIGIN'");
+
+        if (!ctx.skip_build_rpath)
+        // Embed each non-system link directory as RUNPATH so that:
+        //   1. shared libs we produce can find their NEEDED entries at runtime
+        //   2. ld can resolve transitive symbol closure when downstream targets
+        //      link against this output (it follows the .so's RUNPATH to find
+        //      indirect deps with soname-only NEEDED entries).
+        // Mirrors CMake's default CMAKE_INSTALL_RPATH_USE_LINK_PATH=ON for the
+        // build tree. System dirs are skipped — embedding them is pointless
+        // and clutters RUNPATH.
+        {
+            // Canonicalize implicit link dirs once so prefix-stripped/symlinked
+            // forms (e.g. /usr/lib vs /usr/lib/../lib) compare equal.
+            std::unordered_set<std::string> system_dirs;
+            for (const auto& d : ctx.implicit_link_dirs) {
+                std::error_code ec;
+                auto canon = std::filesystem::weakly_canonical(d, ec);
+                system_dirs.insert(ec ? d : canon.string());
+            }
+            std::unordered_set<std::string> seen;
+            auto add_rpath = [&](std::string dir) {
+                if (dir.empty() || dir[0] != '/') return;
+                std::error_code ec;
+                auto canon = std::filesystem::weakly_canonical(dir, ec);
+                std::string key = ec ? dir : canon.string();
+                if (system_dirs.count(key)) return;
+                if (!seen.insert(key).second) return;
+                cmd.push_back("-Wl,-rpath," + dir);
+            };
+            // Explicit -L dirs.
+            for (const auto& dir : ctx.lib_dirs) add_rpath(dir);
+            // Absolute-path shared libraries: their directory must be on
+            // RUNPATH so we (and downstream linkers) can find their indirect
+            // NEEDED entries.
+            for (const auto& obj : ctx.objects) {
+                if (obj.empty() || obj[0] != '/') continue;
+                if (obj.find(".so") == std::string::npos) continue;
+                auto slash = obj.find_last_of('/');
+                if (slash == std::string::npos) continue;
+                add_rpath(obj.substr(0, slash));
+            }
+        }
+
         if (ctx.is_shared) cmd.push_back("-shared");
         cmd.push_back("-o");
         cmd.push_back(ctx.output);
@@ -238,6 +311,7 @@ public:
     std::vector<std::string> get_module_scan_command(const ModuleScanContext& ctx) const override {
         std::vector<std::string> cmd;
         cmd.push_back(binary_);
+        inject_target_flags(cmd);
 
         // Set C++ standard (must be C++20 or later for modules)
         if (!ctx.standard.empty()) {
@@ -295,77 +369,210 @@ public:
         return cmd;
     }
 
-    // Platform detection for GCC — runs subprocess calls in parallel
+    // Platform detection
+    // Runs subprocess calls in parallel.
+    // Identifies GCC vs Clang vs IntelLLVM via predefined macros (-dM -E).
+    // When sysroot_/compiler_target_ are set, all probes inherit them so
+    // implicit include/link dirs reflect the target environment, not the host.
     PlatformInfo detect_platform() const override {
         PlatformInfo info;
-        info.compiler_id = "GNU";
-
-        // System info from uname (no subprocess needed)
-#ifdef __unix__
-        struct utsname uname_info;
-        if (uname(&uname_info) == 0) {
-            info.system_name = uname_info.sysname;
-            info.system_processor = uname_info.machine;
-        }
-#endif
         info.sizeof_void_p = std::to_string(sizeof(void*));
 
-        // Implicit link libraries - common for GCC (no subprocess needed)
-        info.implicit_link_libs = {"stdc++", "m", "gcc_s", "c"};
-
-        // Launch all subprocess calls in parallel
-        std::string lang_flag = (lang_ == Language::C || lang_ == Language::ASM) ? "c" : "c++";
+        const std::string flags = build_target_flag_string();
+        const std::string lang_flag = (lang_ == Language::C || lang_ == Language::ASM) ? "c" : "c++";
 
         auto version_future = std::async(std::launch::async, [&] {
             return detail::run_command(binary_ + " --version 2>&1");
         });
         auto verbose_future = std::async(std::launch::async, [&] {
-            return detail::run_command("echo | " + binary_ + " -E -v -x " + lang_flag + " - 2>&1");
+            return detail::run_command("echo | " + binary_ + flags + " -E -v -x " + lang_flag + " - 2>&1");
         });
         auto search_dirs_future = std::async(std::launch::async, [&] {
-            return detail::run_command(binary_ + " -print-search-dirs 2>&1");
+            return detail::run_command(binary_ + flags + " -print-search-dirs 2>&1");
         });
-        auto default_std_future = std::async(std::launch::async, [&]() -> int {
-            std::string x_lang = (lang_ == Language::CXX) ? "c++" : "c";
-            std::string macro_name = (lang_ == Language::CXX) ? "__cplusplus" : "__STDC_VERSION__";
-            std::string output = detail::run_command(binary_ + " -dM -E -x " + x_lang + " /dev/null 2>/dev/null");
-            std::istringstream iss(output);
-            std::string macro_line;
-            while (std::getline(iss, macro_line)) {
-                if (macro_line.find(macro_name + " ") != std::string::npos) {
-                    auto pos = macro_line.rfind(' ');
-                    if (pos == std::string::npos) break;
-                    std::string val = macro_line.substr(pos + 1);
-                    if (!val.empty() && val.back() == 'L') val.pop_back();
-                    auto v_opt = parse_number<long>(val);
-                    if (!v_opt) break;
-                    long v = *v_opt;
-                    if (lang_ == Language::CXX) {
-                        if (v >= 202602L)      return 26;
-                        if (v >= 202302L)      return 23;
-                        if (v >= 202002L)      return 20;
-                        if (v >= 201703L)      return 17;
-                        if (v >= 201402L)      return 14;
-                        if (v >= 201103L)      return 11;
-                        return 98;
-                    } else {
-                        if (v >= 202311L)      return 23;
-                        if (v >= 201710L)      return 17;
-                        if (v >= 201112L)      return 11;
-                        if (v >= 199901L)      return 99;
-                        return 90;
-                    }
-                }
-            }
-            return 0;
+        auto macros_future = std::async(std::launch::async, [&] {
+            return detail::run_command(binary_ + flags + " -dM -E -x " + lang_flag + " /dev/null 2>/dev/null");
         });
 
-        // Collect results
-        std::string version_output = version_future.get();
-        static auto version_re = Regex::compile(R"((\d+\.\d+\.\d+))").value();
-        std::vector<std::string> captures;
-        if (version_re.search(version_output, captures)) {
-            info.compiler_version = captures[1];
+        // Probe-TU compile + binary scan, mirroring CMake's CompilerId flow.
+        // Runs in parallel; consumed only as a fallback when the macro probe
+        // can't identify the compiler (or as a sanity check otherwise). The
+        // probe.c TU below resolves to a tiny rodata string of the form
+        // "INFO:compiler[X]" / "INFO:version[Y]" / "INFO:arch[Z]" via
+        // preprocessor macros, which we then strings-grep out of the produced
+        // object. Robust against compilers that don't accept `-dM -E`.
+        auto probe_tu_future = std::async(std::launch::async, [&]() -> std::map<std::string, std::string> {
+            return run_compiler_id_probe(binary_, flags, lang_flag);
+        });
+
+        // Parse predefined macros — single source of truth for compiler ID,
+        // version, default standard, and (in cross builds) system info.
+        std::unordered_map<std::string, std::string> macros;
+        {
+            std::istringstream iss(macros_future.get());
+            std::string line;
+            while (std::getline(iss, line)) {
+                // "#define NAME VALUE" — split on the second space
+                if (line.rfind("#define ", 0) != 0) continue;
+                auto sp = line.find(' ', 8);
+                if (sp == std::string::npos) {
+                    macros.emplace(line.substr(8), std::string{});
+                } else {
+                    macros.emplace(line.substr(8, sp - 8), line.substr(sp + 1));
+                }
+            }
+        }
+        auto macro = [&](const std::string& name) -> std::string {
+            auto it = macros.find(name);
+            return it == macros.end() ? std::string{} : it->second;
+        };
+        auto has_macro = [&](const std::string& name) {
+            return macros.find(name) != macros.end();
+        };
+
+        // Compiler ID + version (priority: IntelLLVM > Clang > GNU > Unknown)
+        if (has_macro("__INTEL_LLVM_COMPILER")) {
+            info.compiler_id = "IntelLLVM";
+            info.compiler_version = macro("__INTEL_LLVM_COMPILER");
+        } else if (has_macro("__clang__")) {
+            info.compiler_id = "Clang";
+            std::string maj = macro("__clang_major__");
+            std::string min = macro("__clang_minor__");
+            std::string pat = macro("__clang_patchlevel__");
+            if (!maj.empty()) {
+                info.compiler_version = maj + "." + (min.empty() ? "0" : min)
+                                              + "." + (pat.empty() ? "0" : pat);
+            }
+        } else if (has_macro("__GNUC__")) {
+            info.compiler_id = "GNU";
+            std::string maj = macro("__GNUC__");
+            std::string min = macro("__GNUC_MINOR__");
+            std::string pat = macro("__GNUC_PATCHLEVEL__");
+            if (!maj.empty()) {
+                info.compiler_version = maj + "." + (min.empty() ? "0" : min)
+                                              + "." + (pat.empty() ? "0" : pat);
+            }
+        } else {
+            info.compiler_id = "Unknown";
+        }
+
+        // Probe-TU result: authoritative for compilers where -dM -E doesn't
+        // give us a clean answer (compiler_id == Unknown). For known
+        // compilers we use it as a sanity check — disagreement here usually
+        // means a wrapper that lies on -dM -E but actually invokes a
+        // different compiler underneath.
+        const auto probe = probe_tu_future.get();
+        auto get_probe = [&](const std::string& key) -> std::string {
+            auto it = probe.find(key);
+            return it == probe.end() ? std::string{} : it->second;
+        };
+        const std::string probe_compiler = get_probe("compiler");
+        const std::string probe_version  = get_probe("version");
+        if (info.compiler_id == "Unknown" && !probe_compiler.empty()) {
+            info.compiler_id = probe_compiler;
+            if (!probe_version.empty() && probe_version != "unknown") {
+                info.compiler_version = probe_version;
+            }
+        }
+        if (info.compiler_version.empty() && !probe_version.empty() && probe_version != "unknown") {
+            info.compiler_version = probe_version;
+        }
+
+        // Fallback for compiler_version: parse --version banner if macro path failed
+        if (info.compiler_version.empty()) {
+            std::string version_output = version_future.get();
+            static auto version_re = Regex::compile(R"((\d+\.\d+\.\d+))").value();
+            std::vector<std::string> captures;
+            if (version_re.search(version_output, captures)) {
+                info.compiler_version = captures[1];
+            }
+        } else {
+            (void)version_future.get();  // drain
+        }
+
+        // Default standard — parse __cplusplus / __STDC_VERSION__
+        {
+            std::string val = (lang_ == Language::CXX) ? macro("__cplusplus") : macro("__STDC_VERSION__");
+            if (!val.empty() && val.back() == 'L') val.pop_back();
+            if (auto v_opt = parse_number<long>(val); v_opt) {
+                long v = *v_opt;
+                int std_val = 0;
+                if (lang_ == Language::CXX) {
+                    if (v >= 202602L)      std_val = 26;
+                    else if (v >= 202302L) std_val = 23;
+                    else if (v >= 202002L) std_val = 20;
+                    else if (v >= 201703L) std_val = 17;
+                    else if (v >= 201402L) std_val = 14;
+                    else if (v >= 201103L) std_val = 11;
+                    else                   std_val = 98;
+                    info.default_cxx_standard = std_val;
+                } else {
+                    if (v >= 202311L)      std_val = 23;
+                    else if (v >= 201710L) std_val = 17;
+                    else if (v >= 201112L) std_val = 11;
+                    else if (v >= 199901L) std_val = 99;
+                    else                   std_val = 90;
+                    info.default_c_standard = std_val;
+                }
+            }
+        }
+
+        // System info: derive from target macros when cross-compiling
+        // (sysroot or --target is in play); otherwise fall back to host uname.
+        const bool cross = !sysroot_.empty() || !compiler_target_.empty();
+        if (cross) {
+            // OS
+            if (has_macro("__linux__"))      info.system_name = "Linux";
+            else if (has_macro("__APPLE__")) info.system_name = "Darwin";
+            else if (has_macro("_WIN32"))    info.system_name = "Windows";
+            else if (has_macro("__FreeBSD__")) info.system_name = "FreeBSD";
+            else                             info.system_name = "Generic";
+
+            // Processor
+            if (has_macro("__riscv")) {
+                std::string xlen = macro("__riscv_xlen");
+                info.system_processor = (xlen == "64") ? "riscv64" : "riscv32";
+            } else if (has_macro("__x86_64__"))  info.system_processor = "x86_64";
+            else if (has_macro("__i386__"))      info.system_processor = "i386";
+            else if (has_macro("__aarch64__"))   info.system_processor = "aarch64";
+            else if (has_macro("__arm__"))       info.system_processor = "arm";
+            else if (has_macro("__powerpc64__")) info.system_processor = "ppc64";
+            else if (has_macro("__powerpc__"))   info.system_processor = "ppc";
+            else                                 info.system_processor = "Unknown";
+
+            // sizeof_void_p from __SIZEOF_POINTER__ if present (more correct than host's sizeof)
+            std::string sp = macro("__SIZEOF_POINTER__");
+            if (!sp.empty()) info.sizeof_void_p = sp;
+
+            // Probe-TU fallbacks: if -dM -E didn't give us arch / ptrsize,
+            // pick them up from the compiled probe object (still authoritative
+            // for the *target* even if the macro probe choked).
+            if (info.system_processor == "Unknown") {
+                std::string a = get_probe("arch");
+                if (!a.empty() && a != "unknown") info.system_processor = a;
+            }
+            if (info.sizeof_void_p.empty() || info.sizeof_void_p == "0") {
+                std::string ps = get_probe("ptrsize");
+                if (!ps.empty() && ps != "unknown") info.sizeof_void_p = ps;
+            }
+        } else {
+#ifdef __unix__
+            struct utsname uname_info;
+            if (uname(&uname_info) == 0) {
+                info.system_name = uname_info.sysname;
+                info.system_processor = uname_info.machine;
+            }
+#endif
+        }
+
+        // Implicit link libraries. For GCC libstdc++ is the canonical set.
+        // Clang-libc++ users pass -stdlib=libc++ via flags so we still emit
+        // these; bare-metal targets typically override via toolchain file.
+        if (info.compiler_id == "Clang" && cross) {
+            // Bare/embedded cross usually doesn't link these implicitly;
+            // leave empty and let the toolchain file / target deps decide.
+        } else {
+            info.implicit_link_libs = {"stdc++", "m", "gcc_s", "c"};
         }
 
         // Parse implicit includes from -E -v output
@@ -411,20 +618,164 @@ public:
             }
         }
 
-        // Collect default standard
-        int default_std = default_std_future.get();
-        if (lang_ == Language::CXX) {
-            info.default_cxx_standard = default_std;
-        } else {
-            info.default_c_standard = default_std;
+        return info;
+    }
+
+private:
+    // Run CMake-style CompilerId probe: write a tiny TU whose rodata strings
+    // encode the compiler ID, version, architecture, and pointer size via
+    // preprocessor macros, compile it with the binary under test, then scan
+    // the resulting object for the embedded "INFO:" markers. Returns a map
+    // of marker -> value (e.g. {"compiler", "GNU"}, {"version", "13.2.0"}).
+    // Empty map on any failure — caller must treat that as "no signal".
+    static std::map<std::string, std::string> run_compiler_id_probe(
+            const std::string& binary, const std::string& flags, const std::string& lang_flag) {
+        std::map<std::string, std::string> out;
+
+        // Probe TU. The macro mash assembles version components into a
+        // string literal so we don't have to encode digits with DEC()/UNIT()
+        // tricks — every compiler we care about defines __VERSION__ as a
+        // string, and __GNUC__/__clang_major__/__INTEL_LLVM_COMPILER are
+        // available as integers we can dispatch on textually. A canonical
+        // version comes from the major.minor.patch macros where present.
+        static constexpr const char* probe_tu = R"PROBE(
+#if defined(__INTEL_LLVM_COMPILER)
+const char info_compiler[] = "INFO:compiler[IntelLLVM]";
+#elif defined(__clang__)
+const char info_compiler[] = "INFO:compiler[Clang]";
+#elif defined(__GNUC__)
+const char info_compiler[] = "INFO:compiler[GNU]";
+#else
+const char info_compiler[] = "INFO:compiler[Unknown]";
+#endif
+
+#define INFO_STR(x) INFO_STR_(x)
+#define INFO_STR_(x) #x
+#if defined(__clang_major__) && defined(__clang_minor__) && defined(__clang_patchlevel__)
+const char info_version[] = "INFO:version["
+    INFO_STR(__clang_major__) "." INFO_STR(__clang_minor__) "." INFO_STR(__clang_patchlevel__) "]";
+#elif defined(__GNUC__) && defined(__GNUC_MINOR__) && defined(__GNUC_PATCHLEVEL__)
+const char info_version[] = "INFO:version["
+    INFO_STR(__GNUC__) "." INFO_STR(__GNUC_MINOR__) "." INFO_STR(__GNUC_PATCHLEVEL__) "]";
+#elif defined(__INTEL_LLVM_COMPILER)
+const char info_version[] = "INFO:version[" INFO_STR(__INTEL_LLVM_COMPILER) "]";
+#else
+const char info_version[] = "INFO:version[unknown]";
+#endif
+
+#if defined(__riscv)
+#  if __riscv_xlen == 64
+const char info_arch[] = "INFO:arch[riscv64]";
+#  else
+const char info_arch[] = "INFO:arch[riscv32]";
+#  endif
+#elif defined(__x86_64__) || defined(_M_X64)
+const char info_arch[] = "INFO:arch[x86_64]";
+#elif defined(__i386__) || defined(_M_IX86)
+const char info_arch[] = "INFO:arch[i386]";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+const char info_arch[] = "INFO:arch[aarch64]";
+#elif defined(__arm__) || defined(_M_ARM)
+const char info_arch[] = "INFO:arch[arm]";
+#elif defined(__powerpc64__)
+const char info_arch[] = "INFO:arch[ppc64]";
+#elif defined(__powerpc__)
+const char info_arch[] = "INFO:arch[ppc]";
+#else
+const char info_arch[] = "INFO:arch[unknown]";
+#endif
+
+#if defined(__SIZEOF_POINTER__)
+const char info_ptrsize[] = "INFO:ptrsize[" INFO_STR(__SIZEOF_POINTER__) "]";
+#else
+const char info_ptrsize[] = "INFO:ptrsize[unknown]";
+#endif
+
+int kiln_compiler_id_probe_anchor = 0;
+)PROBE";
+
+        // Stage TU and output in a per-binary temp dir under /tmp so concurrent
+        // probes for different compilers don't collide.
+        std::error_code ec;
+        std::string fingerprint = binary + flags;
+        // Hash to a short stable tag without pulling in blake2b here.
+        std::size_t h = std::hash<std::string>{}(fingerprint);
+        auto tmp = std::filesystem::temp_directory_path(ec) / ("kiln-cid-" + std::to_string(h));
+        if (ec) return out;
+        std::filesystem::create_directories(tmp, ec);
+        if (ec) return out;
+
+        // Pick a source extension that matches the language so the compiler
+        // doesn't need an explicit -x.
+        const std::string src_ext = (lang_flag == "c++") ? ".cpp" : ".c";
+        auto src_path = tmp / ("probe" + src_ext);
+        auto obj_path = tmp / "probe.o";
+        {
+            std::ofstream ofs(src_path, std::ios::binary);
+            if (!ofs) return out;
+            ofs << probe_tu;
         }
 
-        return info;
+        // Compile (-c). Suppress warnings, no optimizations, no preprocessor
+        // checks beyond compiling. Stay quiet on stdout/stderr.
+        std::string cmd = binary + flags + " -c -w -O0 -o '"
+                        + obj_path.string() + "' '" + src_path.string() + "' >/dev/null 2>&1";
+        int rc = std::system(cmd.c_str());
+        if (rc != 0) {
+            std::filesystem::remove_all(tmp, ec);
+            return out;
+        }
+
+        // Read the produced object and scan for INFO: markers.
+        std::ifstream ifs(obj_path, std::ios::binary);
+        if (!ifs) {
+            std::filesystem::remove_all(tmp, ec);
+            return out;
+        }
+        std::string buf((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        std::filesystem::remove_all(tmp, ec);
+
+        // Find every "INFO:<key>[<value>]" run. The TU defines markers for
+        // compiler, version, arch, ptrsize.
+        std::string_view sv(buf);
+        size_t pos = 0;
+        while ((pos = sv.find("INFO:", pos)) != std::string::npos) {
+            size_t key_start = pos + 5;
+            size_t bracket = sv.find('[', key_start);
+            if (bracket == std::string::npos) break;
+            size_t end = sv.find(']', bracket);
+            if (end == std::string::npos) break;
+            std::string key(sv.substr(key_start, bracket - key_start));
+            std::string val(sv.substr(bracket + 1, end - bracket - 1));
+            // First occurrence wins (the strings are emitted once each but
+            // some object formats duplicate rodata in debug sections).
+            out.try_emplace(std::move(key), std::move(val));
+            pos = end + 1;
+        }
+        return out;
+    }
+
+    // Build a leading flag string (with leading space) suitable for splicing
+    // into popen-style command lines. Empty string when neither sysroot nor
+    // target is configured.
+    std::string build_target_flag_string() const {
+        std::string s;
+        if (!sysroot_.empty()) {
+            s += " --sysroot=";
+            s += sysroot_;
+        }
+        if (!compiler_target_.empty()) {
+            s += " --target=";
+            s += compiler_target_;
+        }
+        return s;
     }
 
 private:
     std::string binary_;
     Language lang_;
+    std::string sysroot_;
+    std::string compiler_target_;
 };
 
 } // namespace kiln

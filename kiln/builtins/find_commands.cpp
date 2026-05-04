@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iostream>
+#include "find_helpers.hpp"
 
 namespace kiln {
 namespace {  // Anonymous namespace for internal helpers
@@ -64,8 +65,11 @@ std::string get_find_root_path_mode(
     return "BOTH";
 }
 
+}  // close anonymous namespace for the public helper
+
 // Apply CMAKE_FIND_ROOT_PATH re-rooting to a list of search paths.
 // Returns the modified search path list based on the mode.
+// Public — declared in find_helpers.hpp, also used by find_package.cpp.
 std::vector<std::filesystem::path> apply_find_root_path(
     Interpreter& interp,
     const std::vector<std::filesystem::path>& search_paths,
@@ -108,6 +112,8 @@ std::vector<std::filesystem::path> apply_find_root_path(
 
     return result;
 }
+
+namespace {  // re-open anonymous namespace for the rest of the helpers
 
 // Parse a path argument that could be literal or "ENV VAR_NAME"
 std::filesystem::path parse_path_arg(const std::string& arg) {
@@ -278,7 +284,16 @@ struct SearchResult {
 std::string compute_find_signature(
     const std::string& cmd_name,
     const FindOptions& opts,
-    const std::vector<std::filesystem::path>& search_paths
+    const std::vector<std::filesystem::path>& search_paths,
+    // Toolchain context. Most of this is already reflected in search_paths
+    // (CMAKE_FIND_ROOT_PATH re-rooting changes the resolved paths), but
+    // mixing them in explicitly defends against edge cases where a toolchain
+    // swap leaves the visible paths unchanged but the underlying meaning
+    // differs (e.g. NO_CMAKE_FIND_ROOT_PATH per-call disables re-rooting,
+    // so the host result must not be served to a cross build).
+    const std::string& sysroot = {},
+    const std::string& find_root_path = {},
+    const std::string& root_mode = {}
 ) {
     std::ostringstream oss;
     oss << "cmd:" << cmd_name << "|";
@@ -302,6 +317,12 @@ std::string compute_find_signature(
 
     // Flags
     oss << "names_per_dir:" << opts.names_per_dir << "|";
+
+    // Toolchain context — only emit when set so we don't churn existing
+    // host-build cache entries.
+    if (!sysroot.empty())        oss << "sysroot:" << sysroot << "|";
+    if (!find_root_path.empty()) oss << "find_root:" << find_root_path << "|";
+    if (!root_mode.empty())      oss << "root_mode:" << root_mode << "|";
 
     return oss.str();
 }
@@ -732,7 +753,11 @@ void register_find_command(
         std::string root_mode = get_find_root_path_mode(interp, opts, cmd_name);
         search_paths = apply_find_root_path(interp, search_paths, root_mode);
 
-        std::string signature = compute_find_signature(cmd_name, opts, search_paths);
+        std::string signature = compute_find_signature(
+            cmd_name, opts, search_paths,
+            interp.get_variable("CMAKE_SYSROOT"),
+            interp.get_variable("CMAKE_FIND_ROOT_PATH"),
+            root_mode);
 
         auto& cache = interp.get_cache_store();
         auto cached = cache.lookup<CacheSubsystem::FindResult>(signature);

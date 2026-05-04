@@ -1,0 +1,5 @@
+project(ToolchainClang C CXX)
+message(STATUS "Detected C compiler ID: ${CMAKE_C_COMPILER_ID}")
+message(STATUS "Detected CXX compiler ID: ${CMAKE_CXX_COMPILER_ID}")
+message(STATUS "C compiler binary: ${CMAKE_C_COMPILER}")
+add_executable(hello main.cpp)
