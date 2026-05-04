@@ -7231,6 +7231,23 @@ TEST_CASE("IS_NEWER_THAN operator", "[interpreter][if][is_newer_than]") {
     cleanup();
 }
 
+TEST_CASE("execute_process reports redirect open failures", "[interpreter][execute_process]") {
+    auto temp_dir = std::filesystem::temp_directory_path() / "kiln_test_execute_process_redirect";
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::create_directories(temp_dir);
+    auto missing_dir = (temp_dir / "missing").string();
+
+    CHECK_THROWS_WITH(run_script(
+        "execute_process(COMMAND echo hi OUTPUT_FILE \"" + missing_dir + "/out.txt\")\n"
+    ), Catch::Matchers::ContainsSubstring("Failed to open OUTPUT_FILE"));
+
+    CHECK_THROWS_WITH(run_script(
+        "execute_process(COMMAND sh -c \"echo err >&2\" ERROR_FILE \"" + missing_dir + "/err.txt\")\n"
+    ), Catch::Matchers::ContainsSubstring("Failed to open ERROR_FILE"));
+
+    std::filesystem::remove_all(temp_dir);
+}
+
 TEST_CASE("if condition: undefined variable in MATCHES is literal", "[interpreter][if][bugfix]") {
     // Undefined bare words should be kept as literal strings, not become empty.
     // An empty regex would match everything, causing false positives.

@@ -453,7 +453,7 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
 
     for (size_t i = 0; i < num_commands - 1; ++i) {
         if (pipe(pipes[i].data()) == -1) {
-            return {{1}, "", "Failed to create pipe"};
+            return {{1}, "", "", "Failed to create pipe"};
         }
     }
 
@@ -461,22 +461,34 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
     int stderr_pipe[2];
     if (options.output_variable) {
         if (pipe(stdout_pipe) == -1) {
-            return {{1}, "", "Failed to create stdout pipe"};
+            return {{1}, "", "", "Failed to create stdout pipe"};
         }
     }
     if (options.error_variable) {
         if (pipe(stderr_pipe) == -1) {
-            return {{1}, "", "Failed to create stderr pipe"};
+            return {{1}, "", "", "Failed to create stderr pipe"};
         }
+    }
+
+    int setup_pipe[2];
+    if (pipe(setup_pipe) == -1) {
+        return {{1}, "", "", "Failed to create setup pipe"};
     }
 
     for (size_t i = 0; i < num_commands; ++i) {
         pids[i] = fork();
         if (pids[i] == 0) { // Child
+            close(setup_pipe[0]);
+            auto report_setup_error = [&](const std::string& message) {
+                std::string msg = message + ": " + std::strerror(errno);
+                ssize_t ignored = write(setup_pipe[1], msg.data(), msg.size());
+                (void)ignored;
+                _exit(127);
+            };
+
             if (!options.working_dir.empty()) {
                 if (chdir(options.working_dir.c_str()) != 0) {
-                    perror("chdir");
-                    exit(1);
+                    report_setup_error("Failed to change directory to " + options.working_dir);
                 }
             }
 
@@ -484,7 +496,13 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
             if (i == 0) {
                 if (!options.input_file.empty()) {
                     int fd = open(options.input_file.c_str(), O_RDONLY);
-                    if (fd != -1) { dup2(fd, STDIN_FILENO); close(fd); }
+                    if (fd == -1) {
+                        report_setup_error("Failed to open INPUT_FILE " + options.input_file);
+                    }
+                    if (dup2(fd, STDIN_FILENO) == -1) {
+                        report_setup_error("Failed to redirect INPUT_FILE " + options.input_file);
+                    }
+                    close(fd);
                 }
             } else {
                 dup2(pipes[i - 1][0], STDIN_FILENO);
@@ -496,10 +514,18 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
                     dup2(stdout_pipe[1], STDOUT_FILENO);
                 } else if (!options.output_file.empty()) {
                     int fd = open(options.output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                    if (fd != -1) { dup2(fd, STDOUT_FILENO); close(fd); }
+                    if (fd == -1) {
+                        report_setup_error("Failed to open OUTPUT_FILE " + options.output_file);
+                    }
+                    if (dup2(fd, STDOUT_FILENO) == -1) {
+                        report_setup_error("Failed to redirect OUTPUT_FILE " + options.output_file);
+                    }
+                    close(fd);
                 } else if (options.output_quiet) {
                     int fd = open("/dev/null", O_WRONLY);
-                    dup2(fd, STDOUT_FILENO);
+                    if (fd == -1 || dup2(fd, STDOUT_FILENO) == -1) {
+                        report_setup_error("Failed to redirect stdout to /dev/null");
+                    }
                     close(fd);
                 }
             } else {
@@ -511,10 +537,18 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
                 dup2(stderr_pipe[1], STDERR_FILENO);
             } else if (!options.error_file.empty()) {
                 int fd = open(options.error_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (fd != -1) { dup2(fd, STDERR_FILENO); close(fd); }
+                if (fd == -1) {
+                    report_setup_error("Failed to open ERROR_FILE " + options.error_file);
+                }
+                if (dup2(fd, STDERR_FILENO) == -1) {
+                    report_setup_error("Failed to redirect ERROR_FILE " + options.error_file);
+                }
+                close(fd);
             } else if (options.error_quiet) {
                 int fd = open("/dev/null", O_WRONLY);
-                dup2(fd, STDERR_FILENO);
+                if (fd == -1 || dup2(fd, STDERR_FILENO) == -1) {
+                    report_setup_error("Failed to redirect stderr to /dev/null");
+                }
                 close(fd);
             }
 
@@ -522,6 +556,7 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
             for (auto& p : pipes) { close(p[0]); close(p[1]); }
             if (options.output_variable) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
             if (options.error_variable) { close(stderr_pipe[0]); close(stderr_pipe[1]); }
+            close(setup_pipe[1]);
 
             // Exec
             std::vector<char*> argv;
@@ -538,6 +573,7 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
     for (auto& p : pipes) { close(p[0]); close(p[1]); }
     if (options.output_variable) close(stdout_pipe[1]);
     if (options.error_variable) close(stderr_pipe[1]);
+    close(setup_pipe[1]);
 
     PipelineResult result;
 
@@ -560,6 +596,9 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
         result.captured_stderr = read_all(stderr_pipe[0]);
         close(stderr_pipe[0]);
     }
+
+    result.setup_error = read_all(setup_pipe[0]);
+    close(setup_pipe[0]);
 
     // Wait for all processes with optional timeout
     auto start_time = std::chrono::steady_clock::now();

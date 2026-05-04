@@ -888,6 +888,11 @@ void register_process_builtins(Interpreter& interp) {
             strip_trailing(res.captured_stderr);
         }
 
+        if (!res.setup_error.empty()) {
+            interp.set_fatal_error("execute_process " + res.setup_error);
+            return;
+        }
+
         if (!output_variable.empty()) {
             interp.set_variable(output_variable, res.captured_stdout);
         }

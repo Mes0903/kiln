@@ -128,6 +128,7 @@ struct PipelineResult {
     std::vector<int> exit_codes;
     std::string captured_stdout;
     std::string captured_stderr;
+    std::string setup_error;
 };
 
 /**
