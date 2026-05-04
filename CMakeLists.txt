@@ -67,6 +67,7 @@ add_library(kiln SHARED
     kiln/path.cpp
     kiln/debugger.cpp
     kiln/autogen.cpp
+    kiln/presets.cpp
 )
 
 target_include_directories(kiln PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

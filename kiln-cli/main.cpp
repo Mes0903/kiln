@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <csignal>
 #include "kiln/build_system.hpp"
+#include "kiln/presets.hpp"
 
 namespace {
 
@@ -54,6 +55,9 @@ struct GlobalOptions {
                                 // instead of including CMake's Compiler/<id>-<lang>.cmake
     std::string break_on_message;
     std::string log_level;       // --log-level (sets CMAKE_MESSAGE_LOG_LEVEL)
+    std::string preset;          // --preset name (CMakePresets.json)
+    bool list_presets = false;
+    bool literal_build_dir = false;  // Set by --preset: use -B as-is (no /<config> suffix)
 };
 
 void print_error_context(const std::string& file_path, size_t row, size_t col, size_t offset, size_t length, const std::string& message, const std::vector<kiln::CallLocation>& backtrace = {}, const std::optional<std::string>& source_content = std::nullopt) {
@@ -141,13 +145,14 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
         std::filesystem::path build_path;
         std::filesystem::path build_root_path;  // For KILN_BUILD_ROOT
 
-        if (!opt.source_dir_str.empty()) {
-            // -S mode: use -B as-is (no config appended), used for ExternalProject recursive builds
+        if (!opt.source_dir_str.empty() || opt.literal_build_dir) {
+            // -S mode (or --preset binaryDir): use -B as-is (no config
+            // appended). Used for ExternalProject recursive builds and for
+            // CMakePresets.json which already encode the full build path.
             if (opt.build_dir_str.empty()) {
-                return std::unexpected("-S requires -B to be specified");
+                return std::unexpected("-S/--preset requires a build directory");
             }
             build_path = std::filesystem::absolute(opt.build_dir_str).lexically_normal();
-            // In -S mode, build_root is the parent of build_path (EP creates config-specific dirs)
             build_root_path = build_path.parent_path();
         } else {
             build_root_path = opt.build_dir_str.empty() ? (project_path / "build") : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
@@ -699,6 +704,8 @@ int main(int argc, char* argv[]) {
             "use kiln's built-in subset of compiler vars. Faster but covers fewer flags.");
         target->add_flag("--fresh", opt.fresh, "Skip loading persistent cache (fresh configure)");
         target->add_option("--log-level", opt.log_level, "Set message log level (ERROR, WARNING, NOTICE, STATUS, VERBOSE, DEBUG, TRACE)");
+        target->add_option("--preset", opt.preset, "Use a configure preset from CMakePresets.json");
+        target->add_flag("--list-presets", opt.list_presets, "List available configure presets and exit");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
            ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {
@@ -770,6 +777,58 @@ Examples:
 
     if (opt.profile) {
         kiln::Profiler::instance().enable();
+    }
+
+    // --list-presets: print and exit before doing any other work.
+    if (opt.list_presets) {
+        std::filesystem::path proj = std::filesystem::absolute(opt.project_dir_str).lexically_normal();
+        auto names = kiln::list_configure_presets(proj);
+        if (!names) {
+            std::cerr << "Error: " << names.error() << std::endl;
+            return 1;
+        }
+        std::cout << "Available configure presets:" << std::endl;
+        for (const auto& n : *names) std::cout << "  " << n << std::endl;
+        return 0;
+    }
+
+    // --preset: resolve and fold into the global options. Anything the user
+    // also passed on the CLI (-D, -B, -c) wins over the preset, matching
+    // CMake's "command-line wins" rule.
+    if (!opt.preset.empty()) {
+        std::filesystem::path proj = std::filesystem::absolute(opt.project_dir_str).lexically_normal();
+        auto preset = kiln::load_configure_preset(proj, opt.preset);
+        if (!preset) {
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET)
+                      << " preset '" << opt.preset << "': " << preset.error() << std::endl;
+            return 1;
+        }
+
+        // Export environment so child processes (vcpkg, compilers, find_program
+        // targets) see preset-defined vars.
+        for (const auto& [k, v] : preset->environment) {
+            // Don't clobber values already set in this process — $penv{} would
+            // not have been able to see them otherwise. Use overwrite=1 anyway
+            // since CMake's preset env semantics is to set, not append.
+            ::setenv(k.c_str(), v.c_str(), /*overwrite=*/1);
+        }
+
+        // Cache variables: prepend so user -D wins (apply_definitions iterates
+        // in order; later set_cache_variable calls overwrite earlier ones).
+        std::vector<std::string> preset_defs;
+        preset_defs.reserve(preset->cache_variables.size());
+        for (const auto& [k, v] : preset->cache_variables) {
+            preset_defs.push_back(k + "=" + v);
+        }
+        for (auto& d : opt.definitions) preset_defs.push_back(std::move(d));
+        opt.definitions = std::move(preset_defs);
+
+        // binaryDir: use as -S/-B style absolute build dir (no /<config>
+        // suffix). Only if user didn't override -B.
+        if (opt.build_dir_str.empty() && !preset->binary_dir.empty()) {
+            opt.build_dir_str = preset->binary_dir;
+            opt.literal_build_dir = true;
+        }
     }
 
     // Set up debug/trace controller
