@@ -12,10 +12,11 @@ Modern C/C++ development is editor-first:
 
 CMake is a mature and widely-supported build system generator, but the configure-then-generate model adds quarks and occationally causes troubles. `kiln` keeps CMake as the input language while changing the execution model:
 
-* **No configure step** - CMakeLists.txt is interpreted directly on every build, Gone are stale cache surprises. With aggressively invalidated cache for heavy built-ins
+
+* **It's a build system** - CMakeLists.txt is interpreted directly on every build. Gone are stale cache surprises, better integration, no per-build system jank. With aggressively invalidated cache for heavy built-ins
 * **Faster interpretation** - kiln's interpreter is significantly faster than CMake's, with 10x+ speedups in some workloads
 * **Better error messagess** - no more looking at cryptic errors and guessing where it originates from
-* **It's a build system** - owns the entire build flow, better integration, no per-build system jank
+
 
 ## Building
 
@@ -137,3 +138,25 @@ Since `kiln` uses CMake as its input language and is itself built using CMake, i
 ```
 
 This will produce a release binary at `build/release/kiln`.
+
+## Roadmap / TODOs
+
+- [ ] clang support
+- [ ] TCC (Tiny C Compiler) support
+- [ ] ICC support
+- Alternative language support
+   - [ ] CUDA
+   - [ ] HIP
+   - [ ] SYCL
+   - [ ] Fortran
+   - [ ] Objective C(++)
+   - [ ] C#
+- [ ] Proper CMake policy support
+- [ ] Running on RISC-V
+- [ ] vcpkg support
+- [ ] CPack support
+- [ ] Bootstrapping from just a compiler
+
+Explicitely non-goals:
+
+- Shipping CMake modules in Kiln (unless it breaks too often)

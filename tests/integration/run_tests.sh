@@ -43,7 +43,9 @@ for d in $(find "$TEST_ROOT" -maxdepth 1 -type d); do
         PASSED=$((PASSED + 1))
     else
         echo "FAILED"
-        sed 's/^/  /' test.log
+        if [ -f test.log ]; then
+            sed 's/^/  /' test.log
+        fi
     fi
     cd "$TEST_ROOT"
 done
