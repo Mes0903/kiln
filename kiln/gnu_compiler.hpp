@@ -69,8 +69,27 @@ public:
         }
     }
 
-    std::vector<std::string> get_compile_command(const CompileContext& ctx) const override {
+    // Build a CompilerCommand from an argv and the indices of tokens that
+    // were emitted purely for presentation (color, etc). The signature view
+    // is the same argv with those indices erased.
+    static CompilerCommand finalize(std::vector<std::string> cmd,
+                                    const std::vector<size_t>& cosmetic_indices) {
+        std::vector<std::string> sig;
+        sig.reserve(cmd.size() - cosmetic_indices.size());
+        size_t next_skip = 0;
+        for (size_t i = 0; i < cmd.size(); ++i) {
+            if (next_skip < cosmetic_indices.size() && cosmetic_indices[next_skip] == i) {
+                ++next_skip;
+                continue;
+            }
+            sig.push_back(cmd[i]);
+        }
+        return {std::move(cmd), std::move(sig)};
+    }
+
+    CompilerCommand get_compile_command(const CompileContext& ctx) const override {
         std::vector<std::string> cmd;
+        std::vector<size_t> cosmetic;
         cmd.push_back(binary_);
         inject_target_flags(cmd);
 
@@ -84,6 +103,7 @@ public:
         }
 
         if (ctx.color_diagnostics) {
+            cosmetic.push_back(cmd.size());
             cmd.push_back("-fdiagnostics-color=always");
         }
 
@@ -160,11 +180,12 @@ public:
         cmd.push_back(ctx.source);
 
         for (const auto& arg : cmd) assert_no_genex(arg, "compile command");
-        return cmd;
+        return finalize(std::move(cmd), cosmetic);
     }
 
-    std::vector<std::string> get_link_command(const LinkContext& ctx) const override {
+    CompilerCommand get_link_command(const LinkContext& ctx) const override {
         std::vector<std::string> cmd;
+        std::vector<size_t> cosmetic;
         cmd.push_back(binary_);
         inject_target_flags(cmd);
 
@@ -178,6 +199,7 @@ public:
         }
 
         if (ctx.color_diagnostics) {
+            cosmetic.push_back(cmd.size());
             cmd.push_back("-fdiagnostics-color=always");
         }
 
@@ -314,7 +336,7 @@ public:
         }
 
         for (const auto& arg : cmd) assert_no_genex(arg, "link command");
-        return cmd;
+        return finalize(std::move(cmd), cosmetic);
     }
 
     std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const override {
@@ -328,8 +350,9 @@ public:
 
     // C++20 modules: generate scan command for extracting module dependencies
     // Uses preprocessor-only mode to quickly extract import/export declarations
-    std::vector<std::string> get_module_scan_command(const ModuleScanContext& ctx) const override {
+    CompilerCommand get_module_scan_command(const ModuleScanContext& ctx) const override {
         std::vector<std::string> cmd;
+        std::vector<size_t> cosmetic;
         cmd.push_back(binary_);
         inject_target_flags(cmd);
 
@@ -352,6 +375,7 @@ public:
         cmd.push_back("c++");
 
         if (ctx.color_diagnostics) {
+            cosmetic.push_back(cmd.size());
             cmd.push_back("-fdiagnostics-color=always");
         }
 
@@ -387,7 +411,7 @@ public:
         // Source file
         cmd.push_back(ctx.source);
 
-        return cmd;
+        return finalize(std::move(cmd), cosmetic);
     }
 
     // Platform detection

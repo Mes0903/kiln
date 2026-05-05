@@ -1,9 +1,24 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <memory>
 
 namespace kiln {
+
+// A command emitted by a Compiler driver, in two views:
+//   - argv: the actual argv to spawn (includes cosmetic flags like
+//     -fdiagnostics-color=always).
+//   - signature_argv: the same command with cosmetic-only flags omitted, safe
+//     to feed into the build cache signature so toggling color/presentation
+//     doesn't bust cache hits. The driver itself decides which flags it
+//     emitted are cosmetic — we never parse argv strings to find out.
+//
+// User-supplied options (CompileContext::options et al) pass through
+// unchanged in both views. Anything smuggled into a user CFLAGS string is
+// the user's problem, same as in CMake/ninja.
+struct CompilerCommand {
+    std::vector<std::string> argv;
+    std::vector<std::string> signature_argv;
+};
 
 struct CompileContext {
     std::string source;
@@ -85,12 +100,13 @@ public:
     virtual const std::string& sysroot() const { static const std::string e; return e; }
     virtual const std::string& compiler_target() const { static const std::string e; return e; }
 
-    virtual std::vector<std::string> get_compile_command(const CompileContext& ctx) const = 0;
-    virtual std::vector<std::string> get_link_command(const LinkContext& ctx) const = 0;
+    virtual CompilerCommand get_compile_command(const CompileContext& ctx) const = 0;
+    virtual CompilerCommand get_link_command(const LinkContext& ctx) const = 0;
     virtual std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const = 0;
 
     // C++20 modules support
-    virtual std::vector<std::string> get_module_scan_command(const ModuleScanContext& ctx) const {
+    virtual CompilerCommand get_module_scan_command(const ModuleScanContext& ctx) const {
+        (void)ctx;
         return {}; // Default: no module support
     }
 

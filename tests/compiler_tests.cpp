@@ -15,7 +15,7 @@ TEST_CASE("GnuCompiler: CXX compile command", "[compiler]") {
     ctx.definitions = {"DEBUG", "VERSION=1"};
     ctx.is_shared = true;
     
-        std::vector<std::string> cmd_vec = compiler.get_compile_command(ctx);
+        std::vector<std::string> cmd_vec = compiler.get_compile_command(ctx).argv;
     
         std::string cmd = kiln::join_command(cmd_vec);
     
@@ -40,7 +40,7 @@ TEST_CASE("GnuCompiler: C compile command", "[compiler]") {
     ctx.output = "main.o";
     ctx.standard = "11";
     
-    std::vector<std::string> cmd_vec = compiler.get_compile_command(ctx);
+    std::vector<std::string> cmd_vec = compiler.get_compile_command(ctx).argv;
     CHECK(cmd_vec[0] == "gcc");
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-std=gnu11") != cmd_vec.end());
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "main.c") != cmd_vec.end());
@@ -55,7 +55,7 @@ TEST_CASE("GnuCompiler: Link command", "[compiler]") {
     ctx.libs = {"m", "pthread"};
     ctx.is_shared = false;
     
-    std::vector<std::string> cmd_vec = compiler.get_link_command(ctx);
+    std::vector<std::string> cmd_vec = compiler.get_link_command(ctx).argv;
     CHECK(cmd_vec[0] == "g++");
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-std=c++17") == cmd_vec.end()); // No standard set in ctx, so it should not be present
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "main.o") != cmd_vec.end());

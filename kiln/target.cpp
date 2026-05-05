@@ -1657,7 +1657,11 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         task.id = obj;
         task.kind = CompileTask{src_abs_str, lang_info.lang};
         task.parent_target = this;
-        task.commands.push_back(compiler->get_compile_command(ctx));
+        {
+            auto cc = compiler->get_compile_command(ctx);
+            task.commands.push_back(std::move(cc.argv));
+            task.signature_commands.push_back(std::move(cc.signature_argv));
+        }
         task.inputs.push_back(src_abs_str);
         task.outputs.push_back(obj);
         task.outputs.push_back(obj + ".d");
@@ -1814,7 +1818,11 @@ static PchInfo generate_pch_task(
     for (const auto& dir : system_includes)
         ctx.system_includes.push_back(dir);
 
-    pch_task.commands.push_back(compiler->get_compile_command(ctx));
+    {
+        auto cc = compiler->get_compile_command(ctx);
+        pch_task.commands.push_back(std::move(cc.argv));
+        pch_task.signature_commands.push_back(std::move(cc.signature_argv));
+    }
     pch_task.inputs.push_back(pch_wrapper);
 
     for (const auto& hdr : pch_headers) {
@@ -2296,7 +2304,11 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             ctx.skip_build_rpath = !skip.empty() && !Interpreter::is_falsy(skip);
         }
 
-        link.commands.push_back(linker->get_link_command(ctx));
+        {
+            auto lc = linker->get_link_command(ctx);
+            link.commands.push_back(std::move(lc.argv));
+            link.signature_commands.push_back(std::move(lc.signature_argv));
+        }
     }
 
     for (const auto& obj : obj_files) {
@@ -2604,7 +2616,11 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         scanner.id = ddi_path;
         scanner.kind = ModuleScannerTask{src_abs};
         scanner.parent_target = this;
-        scanner.commands.push_back(compiler->get_module_scan_command(ctx));
+        {
+            auto mc = compiler->get_module_scan_command(ctx);
+            scanner.commands.push_back(std::move(mc.argv));
+            scanner.signature_commands.push_back(std::move(mc.signature_argv));
+        }
         scanner.inputs.push_back(src_abs);
         scanner.outputs.push_back(ddi_path);
 

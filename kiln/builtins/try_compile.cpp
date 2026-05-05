@@ -523,7 +523,7 @@ std::expected<CompileResult, std::string> compile_sources(
         }
         ctx.options = params.raw_compile_flags;
 
-        std::vector<std::string> compile_cmd = params.compiler->get_compile_command(ctx);
+        std::vector<std::string> compile_cmd = params.compiler->get_compile_command(ctx).argv;
 
         // Execute compile command
         CommandResult compile_result = run_command(compile_cmd, params.temp_dir.string());
@@ -585,7 +585,7 @@ std::expected<CompileResult, std::string> compile_sources(
         lctx.standard = params.standard;
         lctx.extensions_enabled = params.use_extensions;
 
-        std::vector<std::string> link_cmd = params.compiler->get_link_command(lctx);
+        std::vector<std::string> link_cmd = params.compiler->get_link_command(lctx).argv;
 
         CommandResult link_result = run_command(link_cmd, params.temp_dir.string());
         if (link_result.exit_code != 0) {

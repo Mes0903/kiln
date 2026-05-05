@@ -1384,7 +1384,14 @@ std::optional<std::filesystem::file_time_type> BuildGraph::get_file_time_if_exis
 std::expected<std::string, std::string> BuildGraph::calculate_signature(const BuildTask& task) {
     std::ostringstream oss;
     oss << "cmds:";
-    for (const auto& cmd : task.commands) oss << join_command(cmd) << ";";
+    // Prefer signature_commands when populated — cosmetic flags (e.g.
+    // -fdiagnostics-color=always) are stripped there so toggling color
+    // doesn't invalidate object cache. Fall back to the real argv when a
+    // task didn't go through a Compiler driver (custom commands etc).
+    const auto& sig_cmds = (!task.signature_commands.empty() &&
+                            task.signature_commands.size() == task.commands.size())
+                            ? task.signature_commands : task.commands;
+    for (const auto& cmd : sig_cmds) oss << join_command(cmd) << ";";
     oss << "|";
 
     // Mix in the version of each unique binary that this task invokes.

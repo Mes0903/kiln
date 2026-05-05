@@ -67,6 +67,11 @@ struct BuildTask {
     std::string id;              // Unique identifier (usually the primary output file)
     TaskKind kind{LinkTask{}};   // Variant-based task type
     std::vector<std::vector<std::string>> commands;
+    // Parallel to commands, but with cosmetic flags (e.g. -fdiagnostics-color)
+    // omitted. Used for cache-signature hashing so toggling presentation
+    // flags doesn't bust cache hits. When empty, calculate_signature falls
+    // back to commands. When populated, must have the same length as commands.
+    std::vector<std::vector<std::string>> signature_commands;
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     Target* parent_target = nullptr;
