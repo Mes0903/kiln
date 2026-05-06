@@ -1757,8 +1757,18 @@ static PchInfo generate_pch_task(
     std::string pch_gch_path = pch_wrapper + ".gch";
     std::string pch_include_arg = " -include " + pch_wrapper;
 
+    auto is_angle_bracketed = [](const std::string& h) {
+        return h.size() >= 2 && h.front() == '<' && h.back() == '>';
+    };
+
     std::ostringstream wrapper_content;
-    for (const auto& hdr : pch_headers) wrapper_content << "#include \"" << hdr << "\"\n";
+    for (const auto& hdr : pch_headers) {
+        if (is_angle_bracketed(hdr)) {
+            wrapper_content << "#include " << hdr << "\n";
+        } else {
+            wrapper_content << "#include \"" << hdr << "\"\n";
+        }
+    }
     std::string content = wrapper_content.str();
 
     bool needs_write = true;
@@ -1826,6 +1836,8 @@ static PchInfo generate_pch_task(
     pch_task.inputs.push_back(pch_wrapper);
 
     for (const auto& hdr : pch_headers) {
+        // Angle-bracketed headers are system includes, not files on disk
+        if (is_angle_bracketed(hdr)) continue;
         pch_task.inputs.push_back(Path::make_absolute_and_normal(target->get_source_dir(), hdr));
     }
 
