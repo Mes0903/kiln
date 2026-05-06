@@ -348,6 +348,14 @@ public:
     // against re-entry and let project() know whether to load.
     bool toolchain_file_loaded() const { return get_root()->toolchain_file_loaded_; }
     void mark_toolchain_file_loaded() { get_root()->toolchain_file_loaded_ = true; }
+
+    // Whether project() has been called at least once. Used to give a clear
+    // diagnostic when add_executable()/add_library() runs without a project()
+    // call instead of failing later with "no compiler available".
+    bool project_called() const { return get_root()->project_called_; }
+    void mark_project_called() { get_root()->project_called_ = true; }
+    bool no_project_warned() const { return get_root()->no_project_warned_; }
+    void mark_no_project_warned() { get_root()->no_project_warned_ = true; }
     CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
     // Enable a compiler for the given language (C, CXX, ASM).
@@ -546,6 +554,8 @@ private:
 
     Toolchain toolchain_;
     bool toolchain_file_loaded_ = false;
+    bool project_called_ = false;
+    bool no_project_warned_ = false;
     std::unique_ptr<CacheStore> cache_store_;
     AstCache ast_cache_;
     std::unique_ptr<Debugger> debugger_;

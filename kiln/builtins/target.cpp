@@ -31,6 +31,21 @@ static bool is_banned_target_name(std::string_view name) {
     return false;
 }
 
+// Warn once when a target-defining command runs without a prior project()
+// call. Without project(), no language has been enabled and the build will
+// later fail with a confusing "no compiler available" error. Mirrors CMake's
+// "No project() command is present" diagnostic.
+static void warn_if_no_project(Interpreter& interp, std::string_view command) {
+    if (interp.project_called()) return;
+    if (interp.no_project_warned()) return;
+    interp.mark_no_project_warned();
+    interp.print_warning_with_context(
+        std::string(command) + "() called without a prior project() call. "
+        "The top-level CMakeLists.txt should contain a call to project() "
+        "before defining any targets, otherwise no compiler is selected and "
+        "the build will fail with 'no compiler available'.");
+}
+
 void register_target_builtins(Interpreter& interp) {
     // Helper to configure common target properties (C/C++ standards, flags, inherited directories)
     auto configure_target = [](Interpreter& interp, const std::shared_ptr<Target>& target) {
@@ -145,6 +160,7 @@ void register_target_builtins(Interpreter& interp) {
     };
 
     interp.add_builtin("add_executable", [&](Interpreter& interp, const std::vector<std::string>& args) {
+        warn_if_no_project(interp, "add_executable");
         CommandParser parser("add_executable");
         std::string name;
         bool imported = false;
@@ -220,6 +236,7 @@ void register_target_builtins(Interpreter& interp) {
     });
 
     interp.add_builtin("add_library", [&](Interpreter& interp, const std::vector<std::string>& args) {
+        warn_if_no_project(interp, "add_library");
         CommandParser parser("add_library");
         std::string name;
         bool shared = false, static_lib = false, module_lib = false, object_lib = false, interface_lib = false, imported = false, is_alias = false;

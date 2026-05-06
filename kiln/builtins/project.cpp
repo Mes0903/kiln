@@ -249,6 +249,8 @@ void register_project_builtins(Interpreter& interp) {
             return;
         }
 
+        interp.mark_project_called();
+
         std::string project_name = args[0];
         interp.set_variable("PROJECT_NAME", project_name);
 
