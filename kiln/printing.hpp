@@ -7,6 +7,7 @@
 #include <optional>
 #include <ostream>
 #include <utility>
+#include <functional>
 
 namespace kiln {
 
@@ -47,6 +48,44 @@ inline std::string_view c(bool force_color, std::string_view code) {
 // force_color: if true, output colors even when os is not a TTY
 void print_message(std::ostream& os, std::string_view mode, std::string_view msg,
                    std::string_view indent = "", bool force_color = false);
+
+// Right-alignment width for build-action verbs ("Compiling", "Installing", ...).
+inline constexpr int action_verb_width = 12;
+
+// Format a build-action line: right-aligned bold-green verb followed by detail.
+// Example: "  Installing /usr/local/lib/libfoo.so" (no trailing newline).
+std::string format_action(std::string_view verb, std::string_view detail, bool use_color);
+
+// Format a [MODE] message line (no trailing newline). Matches print_message's layout.
+std::string format_message(std::string_view mode, std::string_view msg,
+                           std::string_view indent, bool use_color);
+
+// Write a build-action line followed by '\n'. Coloring follows is_color_enabled(os).
+void print_action(std::ostream& os, std::string_view verb, std::string_view detail);
+
+// Sink for one already-formatted line (no trailing newline). Implementations
+// either write directly to a stream, or coordinate with a progress bar so
+// concurrent lines don't tear against the bar redraw.
+using LineSink = std::function<void(std::string_view)>;
+
+// Build a sink that writes line + '\n' to the given stream.
+LineSink ostream_sink(std::ostream& os);
+
+// Output context for long-running commands (install, etc.) whose output may
+// race with a progress bar. `sink` receives one formatted line at a time;
+// `use_color` controls whether ANSI escapes are emitted in those lines.
+struct OutputCtx {
+    LineSink sink;
+    bool use_color;
+};
+
+// Default OutputCtx: writes to std::cout, color follows is_color_enabled(std::cout).
+OutputCtx stdout_output_ctx();
+
+// LineSink-based variants used by code that may share output with a progress bar.
+void print_action(const OutputCtx& out, std::string_view verb, std::string_view detail);
+void print_message(const OutputCtx& out, std::string_view mode, std::string_view msg,
+                   std::string_view indent = "");
 
 // Expand tabs to spaces (4-column tab stops) and return mapping from source column to visual column
 std::pair<std::string, std::vector<size_t>> expand_tabs(std::string_view line, size_t tab_width = 4);

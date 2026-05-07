@@ -1,6 +1,8 @@
 #include "printing.hpp"
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <algorithm>
 #include <unistd.h>
 
@@ -14,9 +16,33 @@ bool is_color_enabled(std::ostream& os) {
     return false;
 }
 
+namespace {
+std::pair<std::string_view, std::string_view> message_prefix_and_color(std::string_view mode);
+}
+
+std::string format_message(std::string_view mode, std::string_view msg,
+                           std::string_view indent, bool use_color) {
+    auto [prefix, msg_color] = message_prefix_and_color(mode);
+    std::string out;
+    if (use_color && !msg_color.empty()) {
+        out.reserve(prefix.size() + msg.size() + indent.size() + msg_color.size() + 8);
+        out.append(msg_color); out.append(prefix); out.push_back(' ');
+        out.append(indent); out.append(msg); out.append(colors::RESET);
+    } else {
+        out.reserve(prefix.size() + msg.size() + indent.size() + 1);
+        out.append(prefix); out.push_back(' '); out.append(indent); out.append(msg);
+    }
+    return out;
+}
+
 void print_message(std::ostream& os, std::string_view mode, std::string_view msg,
                    std::string_view indent, bool force_color) {
     bool color = force_color || is_color_enabled(os);
+    os << format_message(mode, msg, indent, color) << '\n';
+}
+
+namespace {
+std::pair<std::string_view, std::string_view> message_prefix_and_color(std::string_view mode) {
     std::string_view prefix, msg_color;
 
     if (mode == "FATAL_ERROR") {
@@ -65,12 +91,40 @@ void print_message(std::ostream& os, std::string_view mode, std::string_view msg
         prefix = "[INFO]";
         msg_color = "";
     }
+    return {prefix, msg_color};
+}
+} // namespace
 
-    if (color && !msg_color.empty()) {
-        os << msg_color << prefix << " " << indent << msg << colors::RESET << std::endl;
+std::string format_action(std::string_view verb, std::string_view detail, bool use_color) {
+    std::ostringstream oss;
+    if (use_color) {
+        oss << colors::BOLD_GREEN << std::setw(action_verb_width) << verb
+            << colors::RESET << ' ' << detail;
     } else {
-        os << prefix << " " << indent << msg << std::endl;
+        oss << verb << ' ' << detail;
     }
+    return oss.str();
+}
+
+void print_action(std::ostream& os, std::string_view verb, std::string_view detail) {
+    os << format_action(verb, detail, is_color_enabled(os)) << '\n';
+}
+
+LineSink ostream_sink(std::ostream& os) {
+    return [&os](std::string_view line) { os << line << '\n'; };
+}
+
+OutputCtx stdout_output_ctx() {
+    return {ostream_sink(std::cout), is_color_enabled(std::cout)};
+}
+
+void print_action(const OutputCtx& out, std::string_view verb, std::string_view detail) {
+    out.sink(format_action(verb, detail, out.use_color));
+}
+
+void print_message(const OutputCtx& out, std::string_view mode, std::string_view msg,
+                   std::string_view indent) {
+    out.sink(format_message(mode, msg, indent, out.use_color));
 }
 
 std::pair<std::string, std::vector<size_t>> expand_tabs(std::string_view line, size_t tab_width) {

@@ -2,6 +2,7 @@
 #include "interperter.hpp"
 #include "target.hpp"
 #include "genex_evaluator.hpp"
+#include "printing.hpp"
 #include "builtins/export_generator.hpp"
 #include <filesystem>
 #include <fstream>
@@ -61,7 +62,7 @@ std::expected<void, std::string> install_file(
     const std::filesystem::path& destination,
     mode_t permissions,
     bool optional,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     // Hard gate: any path leaving for the filesystem must have had its genex resolved.
     // Catches paths assembled from install_prefix / destination strings that bypassed
@@ -80,7 +81,7 @@ std::expected<void, std::string> install_file(
     // Skip if source and destination are the same file
     std::error_code equiv_ec;
     if (std::filesystem::equivalent(source, destination, equiv_ec)) {
-        out << "-- Up-to-date: " << destination.string() << std::endl;
+        print_action(out, "Up-to-date", destination.string());
         return {};
     }
 
@@ -107,7 +108,7 @@ std::expected<void, std::string> install_file(
         return std::unexpected("Failed to set permissions on " + destination.string());
     }
 
-    out << "-- Installing: " << destination.string() << std::endl;
+    print_action(out, "Installing", destination.string());
     return {};
 }
 
@@ -116,7 +117,7 @@ std::expected<void, std::string> create_library_symlinks(
     const std::filesystem::path& library_path,
     const std::string& soversion,
     const std::string& version,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     std::filesystem::path dir = library_path.parent_path();
 
@@ -144,7 +145,7 @@ std::expected<void, std::string> create_library_symlinks(
             if (ec) {
                 return std::unexpected("Failed to create symlink " + soversion_link.string() + ": " + ec.message());
             }
-            out << "-- Installing: " << soversion_link.string() << std::endl;
+            print_action(out, "Installing", soversion_link.string());
 
             // Create libfoo.so -> libfoo.so.1
             std::filesystem::path unversioned = dir / (basename + ext);
@@ -153,7 +154,7 @@ std::expected<void, std::string> create_library_symlinks(
             if (ec) {
                 return std::unexpected("Failed to create symlink " + unversioned.string() + ": " + ec.message());
             }
-            out << "-- Installing: " << unversioned.string() << std::endl;
+            print_action(out, "Installing", unversioned.string());
         } else {
             // Create libfoo.so -> libfoo.so.1.2.3
             std::filesystem::path unversioned = dir / (basename + ext);
@@ -163,7 +164,7 @@ std::expected<void, std::string> create_library_symlinks(
             if (ec) {
                 return std::unexpected("Failed to create symlink " + unversioned.string() + ": " + ec.message());
             }
-            out << "-- Installing: " << unversioned.string() << std::endl;
+            print_action(out, "Installing", unversioned.string());
         }
     } else if (!soversion.empty()) {
         // Main file is libfoo.so.1
@@ -177,7 +178,7 @@ std::expected<void, std::string> create_library_symlinks(
         if (ec) {
             return std::unexpected("Failed to create symlink " + unversioned.string() + ": " + ec.message());
         }
-        out << "-- Installing: " << unversioned.string() << std::endl;
+        print_action(out, "Installing", unversioned.string());
     }
 
     return {};
@@ -226,7 +227,7 @@ std::expected<void, std::string> execute_targets_rule(
     const std::string& current_config,
     const std::string& component_filter,
     const std::string& binary_dir,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     // TARGETS rules require interpreter to look up targets
     if (!interp) {
@@ -365,7 +366,7 @@ std::expected<void, std::string> execute_files_rule(
     const std::string& install_prefix,
     const std::string& current_config,
     const std::string& component_filter,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     // Check if should skip
     if (should_skip_rule(rule.destination, current_config, component_filter)) {
@@ -404,7 +405,7 @@ std::expected<void, std::string> execute_directory_rule(
     const std::string& install_prefix,
     const std::string& current_config,
     const std::string& component_filter,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     // Check if should skip
     if (should_skip_rule(rule.destination, current_config, component_filter)) {
@@ -498,7 +499,7 @@ std::expected<void, std::string> execute_script_rule(
     const InstallScriptRule& rule,
     const std::string& install_prefix,
     const std::string& component_filter,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     // Check component filter
     if (!component_filter.empty() && rule.component != component_filter) {
@@ -507,7 +508,7 @@ std::expected<void, std::string> execute_script_rule(
 
     // TODO: Implement script/code execution
     // This would require creating a temporary interpreter and running the script
-    out << "-- Note: SCRIPT/CODE install rules are not yet fully implemented" << std::endl;
+    print_message(out, "WARNING", "SCRIPT/CODE install rules are not yet fully implemented");
 
     return {};
 }
@@ -519,7 +520,7 @@ std::expected<void, std::string> execute_export_rule(
     const std::string& install_prefix,
     const std::string& current_config,
     const std::string& component_filter,
-    std::ostream& out
+    const OutputCtx& out
 ) {
     // Check component filter
     if (!component_filter.empty() && rule.component != component_filter) {
@@ -593,7 +594,7 @@ std::expected<void, std::string> execute_export_rule(
     }
     out_file << content;
     out_file.close();
-    out << "-- Installing: " << main_export_file.string() << std::endl;
+    print_action(out, "Installing", main_export_file.string());
 
     // CMake also generates per-config files like MyLibTargets-release.cmake
     // Generate the config-specific file
@@ -618,7 +619,7 @@ std::expected<void, std::string> execute_export_rule(
     }
     config_out_file << config_content;
     config_out_file.close();
-    out << "-- Installing: " << config_export_file.string() << std::endl;
+    print_action(out, "Installing", config_export_file.string());
 
     return {};
 }
@@ -630,9 +631,9 @@ std::expected<void, std::string> execute_install_rules(
     const std::vector<std::shared_ptr<InstallRule>>& rules,
     const std::string& install_prefix,
     const std::string& current_config,
-    const std::string& component_filter
+    const std::string& component_filter,
+    const OutputCtx& out
 ) {
-    std::ostream& out = std::cout;
 
     for (const auto& rule : rules) {
         switch (rule->type) {

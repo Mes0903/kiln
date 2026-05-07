@@ -1030,17 +1030,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         };
 
                         std::ostringstream oss;
+                        std::string detail = "[" + artifact_name + "] " + std::string(target_display);
                         if (state.stdout_is_tty) {
-                            oss << color(kiln::colors::BOLD_GREEN) << std::setw(12) << verb
-                                << color(kiln::colors::RESET) << " ["
-                                << artifact_name << "] " << target_display;
+                            oss << kiln::format_action(verb, detail, true);
                         } else {
                             int tot = state.progress.total();
                             int width = static_cast<int>(std::to_string(tot).size());
                             oss << "   [" << std::setw(width) << done << "/" << tot << "] "
                                 << color(kiln::colors::BOLD_GREEN) << verb
-                                << color(kiln::colors::RESET) << " ["
-                                << artifact_name << "] " << target_display;
+                                << color(kiln::colors::RESET) << ' ' << detail;
                         }
 
                         std::lock_guard<std::mutex> lock(output_mutex_);
@@ -1061,6 +1059,16 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         [&](const EPInstallTask& ep) {
                             // EP install task - runs install rules after EP build tasks complete
                             print_status("Installing", ep.ep_name);
+                            // Bar-aware sink: every install line goes through the bar's
+                            // atomic erase+print+redraw so it can't tear against concurrent
+                            // build output.
+                            kiln::OutputCtx ep_out{
+                                [this, &state](std::string_view line) {
+                                    std::lock_guard<std::mutex> lock(output_mutex_);
+                                    state.progress.print_line(std::string(line));
+                                },
+                                state.stdout_is_tty
+                            };
                             auto* ep_target = dynamic_cast<ExternalProjectTarget*>(task.parent_target);
                             if (ep_target) {
                                 // 1. Install pre-computed target artifacts (TARGETS rules)
@@ -1075,7 +1083,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                                     install.artifact_path + " to " + install.dest_path + ": " + ec.message();
                                         return;
                                     }
-                                    std::cout << "-- Installing: " << install.dest_path << std::endl;
+                                    kiln::print_action(ep_out, "Installing", install.dest_path);
                                 }
                                 if (!task_error.empty()) return;
 
@@ -1094,7 +1102,9 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                     std::string config = ep_target->get_pending_install_config();
                                     auto install_result = execute_install_rules(ep_target->get_ep_interpreter(),
                                                                                 install_rules,
-                                                                                install_prefix, config);
+                                                                                install_prefix, config,
+                                                                                /*component_filter=*/"",
+                                                                                ep_out);
                                     if (!install_result) {
                                         task_error = "EP " + ep.ep_name + " install failed: " + install_result.error();
                                         return;

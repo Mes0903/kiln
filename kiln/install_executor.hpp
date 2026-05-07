@@ -1,4 +1,5 @@
 #pragma once
+#include "printing.hpp"
 #include <expected>
 #include <string>
 #include <memory>
@@ -14,7 +15,8 @@ std::expected<void, std::string> execute_install_rules(
     const std::vector<std::shared_ptr<InstallRule>>& rules,
     const std::string& install_prefix,
     const std::string& current_config,
-    const std::string& component_filter = ""
+    const std::string& component_filter = "",
+    const OutputCtx& out = stdout_output_ctx()
 );
 
 } // namespace kiln
