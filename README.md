@@ -163,6 +163,7 @@ This will produce a release binary at `build/release/kiln`.
    - [ ] Windows support (MSVC)
    - [ ] Windows support (Cygwin/MSYS2)
 - [ ] C++ module support
+- [ ] `ccache` support
 
 Explicitely non-goals:
 

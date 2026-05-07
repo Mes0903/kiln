@@ -109,9 +109,9 @@ From here it behaves much like `gdb`. The most useful commands:
 `break` (or `b`) takes three forms:
 
 ```plaintext
-(kiln-dbg) break 42                     # line 42 of the current file
-(kiln-dbg) break src/CMakeLists.txt:17  # specific file and line
-(kiln-dbg) break add_executable         # break whenever this command runs
+(kiln) break 42                     # line 42 of the current file
+(kiln) break src/CMakeLists.txt:17  # specific file and line
+(kiln) break add_executable         # break whenever this command runs
 ```
 
 The third form is particularly handy: if you want to see every `target_link_libraries` call as it happens, set a breakpoint on the command name and `continue` between hits.
