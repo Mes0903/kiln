@@ -5,28 +5,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(KILN_ASAN "Build with AddressSanitizer (memory errors: UAF, OOB, double-free)" OFF)
-option(KILN_TSAN "Build with ThreadSanitizer (data races, deadlocks)" OFF)
-if(KILN_ASAN AND KILN_TSAN)
-    message(FATAL_ERROR "KILN_ASAN and KILN_TSAN are mutually exclusive — pick one.")
-endif()
-if(KILN_ASAN)
-    # -fno-omit-frame-pointer: real backtraces in ASan reports.
-    # -O1: enough opt that the build is usable, little enough that frames
-    #      still map cleanly to source. Bumping to -O2 routinely loses
-    #      the actual call site to inlining.
-    # -g:  line numbers.
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -O1 -g)
-    add_link_options(-fsanitize=address)
-    message(STATUS "kiln: AddressSanitizer enabled (KILN_ASAN=ON)")
-endif()
-if(KILN_TSAN)
-    # TSan: races between worker threads. Same -O1/-g rationale as ASan.
-    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer -O1 -g)
-    add_link_options(-fsanitize=thread)
-    message(STATUS "kiln: ThreadSanitizer enabled (KILN_TSAN=ON)")
-endif()
-
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
 
