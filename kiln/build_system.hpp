@@ -349,7 +349,7 @@ private:
     // binary path stays the same (ccache/wrapper case).
     std::expected<std::string, std::string> get_compiler_version_for(const std::string& binary);
     std::map<std::string, std::string> compiler_version_cache_;
-    std::string get_kiln_version() { return "0.1.0-alpha (task-refactor)"; }
+    std::string get_kiln_version();
 
     // Parsers for .d files (header dependencies) - uses deps_cache_
     std::vector<std::string> get_deps_for_output(const std::string& output_path);

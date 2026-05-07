@@ -7,6 +7,7 @@
 #include "kiln/tool_mode.hpp"
 #include "kiln/debugger.hpp"
 #include "kiln/parse_number.hpp"
+#include "kiln/version.hpp"
 #include <linenoise.h>
 #include <algorithm>
 #include <iostream>
@@ -680,7 +681,7 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
 int main(int argc, char* argv[]) {
     CLI::App app{"kiln - A modern C++ build system with CMake compatibility.\n"
                   "  Use 'kiln <subcommand> --help' for subcommand-specific options."};
-    app.set_version_flag("-v,--version", "0.1.0-alpha");
+    app.set_version_flag("-v,--version", std::string(kiln::version_full()));
     GlobalOptions opt;
     std::string ignored_generator;
 

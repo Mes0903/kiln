@@ -13,6 +13,25 @@ find_package(LibArchive REQUIRED)
 find_package(pugixml REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
+# --- Version (generated from git tag, "0.0.0" fallback) ---
+# version.cpp is regenerated every build via a custom target, but only
+# rewritten when the version string changes (copy_if_different), so tagging
+# only recompiles this single TU.
+set(KILN_VERSION_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/version.cpp")
+if(NOT EXISTS "${KILN_VERSION_CPP}")
+    file(WRITE "${KILN_VERSION_CPP}"
+        "#include \"kiln/version.hpp\"\nnamespace kiln {\nstd::string_view version() noexcept { return \"0.0.0\"; }\nstd::string_view version_full() noexcept { return \"0.0.0\"; }\n}\n")
+endif()
+add_custom_target(kiln_version_gen ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cpp.in
+        -DOUT_FILE=${KILN_VERSION_CPP}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateVersion.cmake
+    BYPRODUCTS ${KILN_VERSION_CPP}
+    COMMENT "Resolving kiln version from git"
+    VERBATIM
+)
 
 add_library(kiln
     kiln/cmake-language.cpp
@@ -66,7 +85,9 @@ add_library(kiln
     kiln/debugger.cpp
     kiln/autogen.cpp
     kiln/presets.cpp
+    ${KILN_VERSION_CPP}
 )
+add_dependencies(kiln kiln_version_gen)
 
 target_include_directories(kiln PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kiln PUBLIC

@@ -8,6 +8,7 @@
 #include "profiler.hpp"
 #include "printing.hpp"
 #include "parse_number.hpp"
+#include "version.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -1049,7 +1050,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_CURRENT_LIST_DIR", abs_script_dir.string());
     variables_.set("CMAKE_CURRENT_LIST_FILE", (abs_script_dir / "CMakeLists.txt").string()); // Default assumption
 
-    variables_.set("KILN_VERSION", "0.1.0");
+    variables_.set("KILN_VERSION", std::string(kiln::version()));
 
     variables_.set("CMAKE_SOURCE_DIR", variables_.get("CMAKE_CURRENT_SOURCE_DIR"));
     variables_.set("CMAKE_BINARY_DIR", abs_binary_dir.string());

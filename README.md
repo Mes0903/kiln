@@ -2,6 +2,9 @@
 
 C/C++ build system with CMake as an input language.
 
+> [!NOTE]
+> CMake compatibility is in best effort mode and does not attempt to fully support all CMake features at CMake head.
+
 ## Why
 
 Modern C/C++ development is editor-first:

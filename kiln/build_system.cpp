@@ -1,4 +1,5 @@
 #include "build_system.hpp"
+#include "version.hpp"
 #include "target.hpp"
 #include "intercept/external_project_target.hpp"
 #include "utils.hpp"
@@ -1389,6 +1390,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
 kiln::CommandResult BuildGraph::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
     return kiln::run_command(command, working_dir);
+}
+
+std::string BuildGraph::get_kiln_version() {
+    return std::string(kiln::version_full());
 }
 
 std::vector<std::string> BuildGraph::get_deps_for_output(const std::string& output_path) {

@@ -54,7 +54,7 @@ Running `kiln` generates a debug build under `build/debug`
 4 directories, 4 files
 ```
 
-## `CMAKE_GENERATOR` and `GENERATOR_IS_MULTI_CONFIG`
+## Meta-data exposure to CMake scripts
 
 Projects sometimes branch on the active generator. For Kiln's purposes:
 
@@ -62,3 +62,5 @@ Projects sometimes branch on the active generator. For Kiln's purposes:
 - `GENERATOR_IS_MULTI_CONFIG` is set to `FALSE`.
 
 The second one is worth elaborating on. As mentioned above, Kiln writes its output into `build/<config>/`, which behaves like a multi-config layout from the outside. The property is set to `FALSE` because most CMake code that checks `GENERATOR_IS_MULTI_CONFIG` is asking a more specific question: "do I read `CMAKE_BUILD_TYPE` (single-config) or `CMAKE_CONFIGURATION_TYPES` (multi-config)?". Kiln runs one configuration per invocation, with `CMAKE_BUILD_TYPE` set, so the single-config answer is the right one. Reporting `TRUE` would push projects down code paths that expect to emit per-config rules in a single configure step. Something Kiln does not do.
+
+Likewise, Kiln pretends to be CMake 3.21 and sets `CMAKE_VERSION` and `CMAKE_VERSION_*` accordingly.
