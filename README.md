@@ -29,7 +29,6 @@ The project has a few dependencies:
 * pugixml (https://github.com/zeux/pugixml)
 * libcurl
 * libarchive
-* linenoise
 * C++23 capable compiler (GCC 13+)
 * CMake (kiln is an execution engine, you still need the CMake shipped modules)
 
