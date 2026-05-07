@@ -336,6 +336,76 @@ public:
         return finalize(std::move(cmd), cosmetic);
     }
 
+    // Parse linker side-effect outputs out of an already-built link argv.
+    // Recognized flags:
+    //   -Map=PATH                 (BFD/gold/lld: link map)
+    //   -Wl,-Map=PATH | -Wl,-Map,PATH
+    //   -Xlinker -Map=PATH | -Xlinker -Map -Xlinker PATH
+    //   -Map PATH                 (bare, when invoking ld directly)
+    //   -Wl,--out-implib=PATH | --out-implib=PATH | --out-implib PATH
+    //                             (MinGW import library for shared DLLs)
+    std::vector<std::string> get_link_side_effect_outputs(
+        const std::vector<std::string>& argv) const override {
+        std::vector<std::string> outputs;
+
+        auto strip_quotes = [](std::string s) {
+            if (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.front() == s.back())
+                s = s.substr(1, s.size() - 2);
+            return s;
+        };
+        auto match_value_flag = [&](std::string_view tok, std::string_view name) -> std::optional<std::string> {
+            // name like "-Map" or "--out-implib": match name= or returns nullopt.
+            if (tok.size() > name.size() && tok.starts_with(name) && tok[name.size()] == '=')
+                return std::string(tok.substr(name.size() + 1));
+            return std::nullopt;
+        };
+
+        for (size_t i = 0; i < argv.size(); ++i) {
+            std::string_view a(argv[i]);
+
+            // -Wl,foo,bar — split on commas and recurse logically.
+            if (a.starts_with("-Wl,")) {
+                std::string_view rest = a.substr(4);
+                std::vector<std::string_view> parts;
+                while (!rest.empty()) {
+                    auto comma = rest.find(',');
+                    parts.push_back(rest.substr(0, comma));
+                    if (comma == std::string_view::npos) break;
+                    rest = rest.substr(comma + 1);
+                }
+                for (size_t j = 0; j < parts.size(); ++j) {
+                    auto p = parts[j];
+                    if (auto v = match_value_flag(p, "-Map")) { outputs.push_back(strip_quotes(*v)); continue; }
+                    if (auto v = match_value_flag(p, "--out-implib")) { outputs.push_back(strip_quotes(*v)); continue; }
+                    if (p == "-Map" && j + 1 < parts.size()) { outputs.push_back(strip_quotes(std::string(parts[++j]))); continue; }
+                    if (p == "--out-implib" && j + 1 < parts.size()) { outputs.push_back(strip_quotes(std::string(parts[++j]))); continue; }
+                }
+                continue;
+            }
+
+            if (auto v = match_value_flag(a, "-Map")) { outputs.push_back(strip_quotes(*v)); continue; }
+            if (auto v = match_value_flag(a, "--out-implib")) { outputs.push_back(strip_quotes(*v)); continue; }
+
+            if (a == "-Xlinker" && i + 1 < argv.size()) {
+                std::string_view nxt(argv[i + 1]);
+                if (auto v = match_value_flag(nxt, "-Map")) { outputs.push_back(strip_quotes(*v)); ++i; continue; }
+                if (auto v = match_value_flag(nxt, "--out-implib")) { outputs.push_back(strip_quotes(*v)); ++i; continue; }
+                if ((nxt == "-Map" || nxt == "--out-implib") && i + 3 < argv.size() && argv[i + 2] == "-Xlinker") {
+                    outputs.push_back(strip_quotes(argv[i + 3]));
+                    i += 3;
+                    continue;
+                }
+            }
+
+            if ((a == "-Map" || a == "--out-implib") && i + 1 < argv.size()) {
+                outputs.push_back(strip_quotes(argv[i + 1]));
+                ++i;
+                continue;
+            }
+        }
+        return outputs;
+    }
+
     std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const override {
         std::vector<std::string> cmd;
         cmd.push_back("ar");

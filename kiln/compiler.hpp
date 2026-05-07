@@ -104,6 +104,22 @@ public:
     virtual CompilerCommand get_link_command(const LinkContext& ctx) const = 0;
     virtual std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const = 0;
 
+    // Files the linker writes as a side effect of producing the primary
+    // output, parsed out of the final argv. CMake doesn't track these
+    // explicitly, but custom_target DEPENDS frequently reference them
+    // (e.g. -Map= map files, --out-implib= MinGW import libraries) and
+    // kiln's stricter dependency graph stalls if no producer is registered.
+    //
+    // Returned paths are as they appear in argv (unnormalized). The caller
+    // resolves them against the link task's working directory. Drivers that
+    // emit no side-effect outputs (or aren't implemented yet, e.g. MSVC
+    // /MAP, /IMPLIB, /PDB) return an empty vector.
+    virtual std::vector<std::string> get_link_side_effect_outputs(
+        const std::vector<std::string>& argv) const {
+        (void)argv;
+        return {};
+    }
+
     // C++20 modules support
     virtual CompilerCommand get_module_scan_command(const ModuleScanContext& ctx) const {
         (void)ctx;

@@ -15,6 +15,7 @@
 namespace kiln {
 
 class Target;
+struct CustomCommandRule;
 using TargetMap = std::unordered_map<std::string, std::shared_ptr<Target>,
                                      TransparentStringHash, TransparentStringEqual>;
 
@@ -406,5 +407,16 @@ private:
 // Compute the object file path for a source file within a target.
 // Single source of truth — used by target task generation, genex evaluator, and module collator.
 std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path);
+
+// Generate a task for an add_custom_command rule (and its custom-command DEPENDS chain).
+// Used by the missing-dependency resolver when a target's input/dep is the OUTPUT of a
+// stand-alone add_custom_command not pulled in via target_sources/DEPENDS.
+void generate_custom_command_task_for_rule(
+    GraphTransaction& txn,
+    const CustomCommandRule& rule,
+    const TargetMap& all_targets,
+    const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
+    std::set<std::string>& generated,
+    const std::unordered_map<std::string, std::string>& target_aliases);
 
 } // namespace kiln

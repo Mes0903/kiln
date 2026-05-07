@@ -500,10 +500,10 @@ void register_external_project_builtins(Interpreter& interp) {
             return;
         }
 
-        std::string target_name = args[0];
-        auto* target = interp.find_target(target_name);
+        std::string name = args[0];
+        auto* target = interp.find_target(name);
         if (!target) {
-            interp.set_fatal_error("ExternalProject_Get_Property: target '" + target_name + "' not found");
+            interp.set_fatal_error("ExternalProject_Get_Property: target '" + name + "' not found");
             return;
         }
         for (size_t i = 1; i < args.size(); ++i) {

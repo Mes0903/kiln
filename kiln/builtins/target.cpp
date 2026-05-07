@@ -746,8 +746,14 @@ void register_target_builtins(Interpreter& interp) {
             }
         }
 
+        auto& source_props = interp.get_source_properties();
         for (const auto& bp : byproducts) {
-            target->add_byproduct(Path::make_absolute_and_normal(bin_dir, bp));
+            std::string abs = Path::make_absolute_and_normal(bin_dir, bp);
+            target->add_byproduct(abs);
+            // Match add_custom_command: BYPRODUCTS are GENERATED. Lets later
+            // target_sources() / add_executable() consumers know the file is
+            // produced by this build and must order after its producer.
+            source_props[abs]["GENERATED"] = "TRUE";
         }
 
         if (!sources.empty()) {

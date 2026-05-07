@@ -1066,9 +1066,11 @@ static void resolve_command_target_references(
 
         // Fall back: executable whose OUTPUT_NAME or output path matches the command
         if (!resolved) {
-            static const TargetMap* cached_source = nullptr;
-            static std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
-            static std::unordered_map<std::string, std::shared_ptr<Target>> output_path_map;
+            // thread_local: parallel EP orchestrators each pass a different
+            // all_targets map; sharing this cache across threads races.
+            thread_local const TargetMap* cached_source = nullptr;
+            thread_local std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
+            thread_local std::unordered_map<std::string, std::shared_ptr<Target>> output_path_map;
             if (&all_targets != cached_source) {
                 cached_source = &all_targets;
                 output_name_map.clear();
@@ -1103,6 +1105,21 @@ static void resolve_command_target_references(
 
 // Helper to generate a task for a custom command rule.
 // Recursively generates tasks for any deps that are themselves custom command outputs.
+static void generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
+                                         const TargetMap& all_targets,
+                                         const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
+                                         std::set<std::string>& generated,
+                                         const std::unordered_map<std::string, std::string>& target_aliases);
+
+void generate_custom_command_task_for_rule(
+    GraphTransaction& txn, const CustomCommandRule& rule,
+    const TargetMap& all_targets,
+    const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
+    std::set<std::string>& generated,
+    const std::unordered_map<std::string, std::string>& target_aliases) {
+    generate_custom_command_task(txn, rule, all_targets, custom_rules, generated, target_aliases);
+}
+
 static void generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
                                          const TargetMap& all_targets,
                                          const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
@@ -1359,9 +1376,15 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     {
         // Cached maps: output_path → Target*, and Target* → custom command primary outputs.
         // Rebuilt when all_targets changes. Precomputation is O(T + S_total), lookup is O(1).
-        static const TargetMap* cached_cc_map_source = nullptr;
-        static std::unordered_map<std::string, Target*> lib_to_target;
-        static std::unordered_map<Target*, std::vector<std::string>> target_cc_outputs;
+        //
+        // thread_local, not static: EP orchestrators run generate_build_graph
+        // concurrently on worker threads, each with its own all_targets map.
+        // A plain static raced — different threads cleared/rewrote the same
+        // hash table, corrupting heap headers (surfaced as glibc
+        // "free(): invalid pointer" deep inside an EP configure).
+        thread_local const TargetMap* cached_cc_map_source = nullptr;
+        thread_local std::unordered_map<std::string, Target*> lib_to_target;
+        thread_local std::unordered_map<Target*, std::vector<std::string>> target_cc_outputs;
 
         if (&all_targets != cached_cc_map_source) {
             cached_cc_map_source = &all_targets;
@@ -1423,6 +1446,28 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
     }
 
     std::unordered_set<std::string> seen_sources;
+    std::vector<std::string> generated_header_inputs;
+
+    // Pre-scan for GENERATED headers in the source list so every compile
+    // task (including ones whose source appears before the header) gets
+    // the order-only dep. Without this, the .h listed at the end of the
+    // source list would only attach to nothing (it's filtered as a header)
+    // and the build would race the producer.
+    for (const auto& src : *evaluated_sources_result) {
+        if (src.empty()) continue;
+        auto li = LanguageClassifier::from_path(src);
+        if (!li.is_header) continue;
+        Path sp(src);
+        std::string norm = sp.is_absolute()
+            ? sp.lexically_normal().str()
+            : Path::make_absolute_and_normal(binary_dir_, src);
+        auto sp_it2 = source_props.find(norm);
+        if (sp_it2 == source_props.end()) continue;
+        auto g_it = sp_it2->second.find("GENERATED");
+        if (g_it == sp_it2->second.end() || Interpreter::is_falsy(g_it->second)) continue;
+        generated_header_inputs.push_back(std::move(norm));
+    }
+
     for (const auto& src : *evaluated_sources_result) {
         if (src.empty()) continue;
 
@@ -1687,6 +1732,14 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         // Autogen deps (UIC outputs): ui_*.h can be included transitively via headers
         for (const auto& dep : autogen_deps_) {
             task.explicit_deps.push_back(dep);
+        }
+
+        // GENERATED headers listed in target sources: route through task.inputs
+        // so the file-dep resolver maps them to the producing custom target's
+        // task (via output_to_task_). Putting them in explicit_deps would only
+        // resolve task IDs, not file paths.
+        for (const auto& gh : generated_header_inputs) {
+            task.inputs.push_back(gh);
         }
 
         // OBJECT_DEPENDS
@@ -2180,6 +2233,10 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     link.id = output_path;
     link.kind = LinkTask{};
     link.parent_target = this;
+    // Run linker from the target's binary dir so relative paths in linker
+    // flags (e.g. -Map=foo.map, response files) resolve where the project
+    // expects, matching CMake.
+    link.working_dir = binary_dir_;
 
     // Use resolved LINK_LIBRARIES directly — resolve() already flattened
     // transitive deps. Circular static lib deps (e.g. MariaDB) are handled
@@ -2204,9 +2261,11 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         // If the target is C but links against libraries containing C++ code,
         // upgrade to g++ for linking so C++ runtime symbols resolve.
         if (linker_lang == Language::C) {
-            // Cached map: output_path → has_cxx_sources (rebuilt when all_targets changes)
-            static const TargetMap* cached_source = nullptr;
-            static std::unordered_map<std::string, bool> output_has_cxx;
+            // Cached map: output_path → has_cxx_sources (rebuilt when all_targets changes).
+            // thread_local: parallel EP orchestrators each pass a different
+            // all_targets map; sharing this cache across threads races.
+            thread_local const TargetMap* cached_source = nullptr;
+            thread_local std::unordered_map<std::string, bool> output_has_cxx;
             if (&all_targets != cached_source) {
                 cached_source = &all_targets;
                 output_has_cxx.clear();
@@ -2339,11 +2398,13 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     // Static libraries are just .o archives — ar doesn't resolve symbols against
     // other libraries. Only executables/shared libraries need link-library deps.
     if (type_ != TargetType::STATIC_LIBRARY) {
-        // Cached maps: output_path → non-imported target, output_path → imported target
+        // Cached maps: output_path → non-imported target, output_path → imported target.
         // Rebuilt when all_targets changes (pointer identity check).
-        static const TargetMap* cached_link_source = nullptr;
-        static std::unordered_set<std::string> non_imported_outputs;
-        static std::unordered_map<std::string, Target*> imported_by_output;
+        // thread_local: parallel EP orchestrators each pass a different
+        // all_targets map; sharing this cache across threads races.
+        thread_local const TargetMap* cached_link_source = nullptr;
+        thread_local std::unordered_set<std::string> non_imported_outputs;
+        thread_local std::unordered_map<std::string, Target*> imported_by_output;
         if (&all_targets != cached_link_source) {
             cached_link_source = &all_targets;
             non_imported_outputs.clear();
@@ -2424,6 +2485,24 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 
     link.outputs.push_back(output_path);
+
+    // Register linker side-effect outputs (e.g. -Map= map files,
+    // --out-implib= MinGW import libraries). The driver parses its own
+    // argv; we just normalize paths against the link working directory.
+    // Without this, custom_target DEPENDS pointing at e.g. a -Map file
+    // have no producer in the graph and the build stalls.
+    {
+        const std::string& wd = link.working_dir.empty() ? binary_dir_ : link.working_dir;
+        for (const auto& cmd : link.commands) {
+            for (auto& raw : linker->get_link_side_effect_outputs(cmd)) {
+                if (raw.empty()) continue;
+                Path pp(raw);
+                link.outputs.push_back(pp.is_absolute()
+                    ? pp.lexically_normal().str()
+                    : Path::make_absolute_and_normal(wd, raw));
+            }
+        }
+    }
     txn.add(std::move(link));
 
     // Generate POST_BUILD task if we have any post-build commands

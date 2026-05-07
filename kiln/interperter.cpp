@@ -48,9 +48,39 @@ namespace {
 // 1. Implement proper platform detection (slow but correct)
 // 2. Cache the results of CMake's detection (run once, reuse)
 // 3. Incrementally add variables as projects need them
-// Cached compiler detection data. Static so we don't re-detect compilers when
-// multiple Interpreters are created (e.g. during tests).
+// Cached compiler detection data. Process-wide so we don't re-detect compilers
+// when multiple Interpreters are created — including parallel EP orchestrators
+// each constructing their own child Interpreter from worker threads. The
+// once_flag guarantees the initial populate runs exactly once; the mutex
+// guards the incremental writes that happen later (e.g. enable_language("ASM")
+// caching ASM-compiler vars on first use). All access goes through the
+// backup_vars_* helpers below — touching the map directly is a footgun.
 static std::unordered_map<std::string, std::string> backup_vars;
+static std::mutex backup_vars_mu;
+static std::once_flag backup_vars_once;
+
+static bool backup_vars_empty() {
+    std::lock_guard lk(backup_vars_mu);
+    return backup_vars.empty();
+}
+// Returns the value for `key`, or "" if absent. "" is also a legitimate stored
+// value for some keys (CMAKE_*_FLAGS_RELEASE etc.); callers that need to
+// distinguish "absent" from "empty" should use backup_vars_lookup instead.
+static std::string backup_vars_get(std::string_view key) {
+    std::lock_guard lk(backup_vars_mu);
+    auto it = backup_vars.find(std::string(key));
+    return it == backup_vars.end() ? std::string{} : it->second;
+}
+static std::optional<std::string> backup_vars_lookup(std::string_view key) {
+    std::lock_guard lk(backup_vars_mu);
+    auto it = backup_vars.find(std::string(key));
+    if (it == backup_vars.end()) return std::nullopt;
+    return it->second;
+}
+static void backup_vars_set(std::string key, std::string value) {
+    std::lock_guard lk(backup_vars_mu);
+    backup_vars[std::move(key)] = std::move(value);
+}
 
 // Variables for each language that enable_compiler_for_language() will apply.
 static constexpr std::array c_lang_vars = {
@@ -197,98 +227,96 @@ void populate_lang_vars(Interpreter& interp, const std::string& lang,
 
 void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
 {
-    auto apply_system_vars = [&] {
-        for (const char* name : {"CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR",
-                                  "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME",
-                                  "CMAKE_HOST_SYSTEM_PROCESSOR"}) {
-            auto it = backup_vars.find(name);
-            if (it != backup_vars.end()) {
-                interp.set_variable(name, it->second);
-            }
+    // Populate the process-wide backup_vars exactly once. call_once
+    // synchronizes every reader with the populator: if multiple EP
+    // orchestrator threads land here concurrently, only one runs the
+    // detection block and the rest block until it finishes — no torn
+    // reads of an in-flight unordered_map.
+    std::call_once(backup_vars_once, [&cache] {
+        // Try disk cache first, fall back to full detection
+        std::string cxx_cache_key = make_compiler_cache_key("g++");
+        std::string c_cache_key = make_compiler_cache_key("gcc");
+
+        auto cxx_cached = try_cached_compiler_detection(cache, "g++", cxx_cache_key);
+        auto c_cached = try_cached_compiler_detection(cache, "gcc", c_cache_key);
+
+        PlatformInfo cxx_info, c_info;
+
+        if (cxx_cached && c_cached) {
+            // Full cache hit — no additional subprocesses needed
+            cxx_info = std::move(*cxx_cached);
+            c_info = std::move(*c_cached);
+        } else {
+            // Cache miss on at least one compiler — detect in parallel
+            auto detect_and_cache = [&cache](const std::string& binary, Language lang,
+                                             const std::string& cache_key,
+                                             std::optional<PlatformInfo> cached) -> PlatformInfo {
+                if (cached) return std::move(*cached);
+                GnuCompiler compiler(binary, lang);
+                auto info = compiler.detect_platform();
+                CompilerDetectionCacheEntry entry;
+                entry.info = info;
+                entry.version_output = detail::run_command(binary + " --version 2>&1");
+                cache.insert<CacheSubsystem::CompilerDetection>(cache_key, entry);
+                return info;
+            };
+
+            auto cxx_future = std::async(std::launch::async, detect_and_cache,
+                "g++", Language::CXX, cxx_cache_key, std::move(cxx_cached));
+            auto c_future = std::async(std::launch::async, detect_and_cache,
+                "gcc", Language::C, c_cache_key, std::move(c_cached));
+            cxx_info = cxx_future.get();
+            c_info = c_future.get();
         }
-        interp.set_variable("CMAKE_CFG_INTDIR", ".");
-    };
 
-    if (!backup_vars.empty()) {
-        apply_system_vars();
-        return;
+        // Cache CXX data in-process
+        backup_vars_set("CMAKE_CXX_COMPILER", "g++");
+        backup_vars_set("CMAKE_CXX_COMPILER_ID", cxx_info.compiler_id);
+        backup_vars_set("CMAKE_CXX_COMPILER_VERSION", cxx_info.compiler_version);
+        backup_vars_set("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(cxx_info.implicit_includes).to_string());
+        backup_vars_set("CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", CMakeArray(cxx_info.implicit_link_dirs).to_string());
+        backup_vars_set("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeArray(cxx_info.implicit_link_libs).to_string());
+        if (cxx_info.default_cxx_standard > 0)
+            backup_vars_set("CMAKE_CXX_STANDARD_DEFAULT", std::to_string(cxx_info.default_cxx_standard));
+        backup_vars_set("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
+        backup_vars_set("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
+        backup_vars_set("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
+        backup_vars_set("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
+        backup_vars_set("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
+        backup_vars_set("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
+
+        // Cache C data in-process
+        backup_vars_set("CMAKE_C_COMPILER", "gcc");
+        backup_vars_set("CMAKE_C_COMPILER_ID", c_info.compiler_id);
+        backup_vars_set("CMAKE_C_COMPILER_VERSION", c_info.compiler_version);
+        backup_vars_set("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(c_info.implicit_includes).to_string());
+        backup_vars_set("CMAKE_C_IMPLICIT_LINK_DIRECTORIES", CMakeArray(c_info.implicit_link_dirs).to_string());
+        backup_vars_set("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeArray(c_info.implicit_link_libs).to_string());
+        if (c_info.default_c_standard > 0)
+            backup_vars_set("CMAKE_C_STANDARD_DEFAULT", std::to_string(c_info.default_c_standard));
+        backup_vars_set("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
+        backup_vars_set("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
+        backup_vars_set("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
+        backup_vars_set("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
+        backup_vars_set("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+
+        // Cache system-level data (same for both compilers)
+        backup_vars_set("CMAKE_SYSTEM_NAME", cxx_info.system_name);
+        backup_vars_set("CMAKE_SYSTEM_PROCESSOR", cxx_info.system_processor);
+        backup_vars_set("CMAKE_SIZEOF_VOID_P", cxx_info.sizeof_void_p);
+        backup_vars_set("CMAKE_HOST_SYSTEM_NAME", cxx_info.system_name);
+        backup_vars_set("CMAKE_HOST_SYSTEM_PROCESSOR", cxx_info.system_processor);
+    });
+
+    // Per-Interpreter: copy system-level vars out of the populated cache.
+    for (const char* name : {"CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR",
+                              "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME",
+                              "CMAKE_HOST_SYSTEM_PROCESSOR"}) {
+        if (auto v = backup_vars_lookup(name)) {
+            interp.set_variable(name, *v);
+        }
     }
-
-    // Try disk cache first, fall back to full detection
-    std::string cxx_cache_key = make_compiler_cache_key("g++");
-    std::string c_cache_key = make_compiler_cache_key("gcc");
-
-    auto cxx_cached = try_cached_compiler_detection(cache, "g++", cxx_cache_key);
-    auto c_cached = try_cached_compiler_detection(cache, "gcc", c_cache_key);
-
-    PlatformInfo cxx_info, c_info;
-
-    if (cxx_cached && c_cached) {
-        // Full cache hit — no additional subprocesses needed
-        cxx_info = std::move(*cxx_cached);
-        c_info = std::move(*c_cached);
-    } else {
-        // Cache miss on at least one compiler — detect in parallel
-        auto detect_and_cache = [&cache](const std::string& binary, Language lang,
-                                         const std::string& cache_key,
-                                         std::optional<PlatformInfo> cached) -> PlatformInfo {
-            if (cached) return std::move(*cached);
-            GnuCompiler compiler(binary, lang);
-            auto info = compiler.detect_platform();
-            CompilerDetectionCacheEntry entry;
-            entry.info = info;
-            entry.version_output = detail::run_command(binary + " --version 2>&1");
-            cache.insert<CacheSubsystem::CompilerDetection>(cache_key, entry);
-            return info;
-        };
-
-        auto cxx_future = std::async(std::launch::async, detect_and_cache,
-            "g++", Language::CXX, cxx_cache_key, std::move(cxx_cached));
-        auto c_future = std::async(std::launch::async, detect_and_cache,
-            "gcc", Language::C, c_cache_key, std::move(c_cached));
-        cxx_info = cxx_future.get();
-        c_info = c_future.get();
-    }
-
-    // Cache CXX data in-process
-    backup_vars["CMAKE_CXX_COMPILER"] = "g++";
-    backup_vars["CMAKE_CXX_COMPILER_ID"] = cxx_info.compiler_id;
-    backup_vars["CMAKE_CXX_COMPILER_VERSION"] = cxx_info.compiler_version;
-    backup_vars["CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeArray(cxx_info.implicit_includes).to_string();
-    backup_vars["CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES"] = CMakeArray(cxx_info.implicit_link_dirs).to_string();
-    backup_vars["CMAKE_CXX_IMPLICIT_LINK_LIBRARIES"] = CMakeArray(cxx_info.implicit_link_libs).to_string();
-    if (cxx_info.default_cxx_standard > 0)
-        backup_vars["CMAKE_CXX_STANDARD_DEFAULT"] = std::to_string(cxx_info.default_cxx_standard);
-    backup_vars["CMAKE_CXX98_STANDARD_COMPILE_OPTION"] = "-std=c++98";
-    backup_vars["CMAKE_CXX11_STANDARD_COMPILE_OPTION"] = "-std=c++11";
-    backup_vars["CMAKE_CXX14_STANDARD_COMPILE_OPTION"] = "-std=c++14";
-    backup_vars["CMAKE_CXX17_STANDARD_COMPILE_OPTION"] = "-std=c++17";
-    backup_vars["CMAKE_CXX20_STANDARD_COMPILE_OPTION"] = "-std=c++20";
-    backup_vars["CMAKE_CXX23_STANDARD_COMPILE_OPTION"] = "-std=c++23";
-
-    // Cache C data in-process
-    backup_vars["CMAKE_C_COMPILER"] = "gcc";
-    backup_vars["CMAKE_C_COMPILER_ID"] = c_info.compiler_id;
-    backup_vars["CMAKE_C_COMPILER_VERSION"] = c_info.compiler_version;
-    backup_vars["CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES"] = CMakeArray(c_info.implicit_includes).to_string();
-    backup_vars["CMAKE_C_IMPLICIT_LINK_DIRECTORIES"] = CMakeArray(c_info.implicit_link_dirs).to_string();
-    backup_vars["CMAKE_C_IMPLICIT_LINK_LIBRARIES"] = CMakeArray(c_info.implicit_link_libs).to_string();
-    if (c_info.default_c_standard > 0)
-        backup_vars["CMAKE_C_STANDARD_DEFAULT"] = std::to_string(c_info.default_c_standard);
-    backup_vars["CMAKE_C90_STANDARD_COMPILE_OPTION"] = "-std=c90";
-    backup_vars["CMAKE_C99_STANDARD_COMPILE_OPTION"] = "-std=c99";
-    backup_vars["CMAKE_C11_STANDARD_COMPILE_OPTION"] = "-std=c11";
-    backup_vars["CMAKE_C17_STANDARD_COMPILE_OPTION"] = "-std=c17";
-    backup_vars["CMAKE_C23_STANDARD_COMPILE_OPTION"] = "-std=c23";
-
-    // Cache system-level data (same for both compilers)
-    backup_vars["CMAKE_SYSTEM_NAME"] = cxx_info.system_name;
-    backup_vars["CMAKE_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
-    backup_vars["CMAKE_SIZEOF_VOID_P"] = cxx_info.sizeof_void_p;
-    backup_vars["CMAKE_HOST_SYSTEM_NAME"] = cxx_info.system_name;
-    backup_vars["CMAKE_HOST_SYSTEM_PROCESSOR"] = cxx_info.system_processor;
-
-    apply_system_vars();
+    interp.set_variable("CMAKE_CFG_INTDIR", ".");
 }
 
 } // anonymous namespace
@@ -313,14 +341,13 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         const bool host_path = user_binary.empty()
                             && sysroot.empty()
                             && compiler_target.empty()
-                            && !backup_vars.empty();
+                            && !backup_vars_empty();
 
         if (host_path) {
             auto apply_backup = [&](auto const& vars) {
                 for (const auto& var : vars) {
-                    auto it = backup_vars.find(var);
-                    if (it != backup_vars.end() && !it->second.empty())
-                        set_variable(var, it->second);
+                    if (auto v = backup_vars_lookup(var); v && !v->empty())
+                        set_variable(var, *v);
                 }
             };
             if (lang == "C") apply_backup(c_lang_vars);
@@ -420,13 +447,36 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             effective_binary, lang_enum, sysroot, compile_target_effective);
         get_toolchain().set_compiler(lang_enum, std::move(compiler));
     } else if (lang == "ASM") {
-        // Check cache first
-        auto cached = backup_vars.find("CMAKE_ASM_COMPILER");
-        if (cached != backup_vars.end() && !cached->second.empty()) {
+        // Don't apply the host-detection backup if the user already pinned a
+        // compiler (toolchain file, -D, set() before project()). Otherwise
+        // the cached host `gcc` would clobber e.g. `riscv64-unknown-elf-gcc`
+        // and downstream commands would invoke the host assembler against
+        // cross-arch sources.
+        std::string user_asm = get_variable("CMAKE_ASM_COMPILER");
+        std::string user_sysroot = get_variable("CMAKE_SYSROOT");
+        std::string user_asm_target = get_variable("CMAKE_ASM_COMPILER_TARGET");
+        const bool asm_host_path = user_asm.empty()
+                                && user_sysroot.empty()
+                                && user_asm_target.empty();
+        auto cached_asm = backup_vars_lookup("CMAKE_ASM_COMPILER");
+        if (asm_host_path && cached_asm && !cached_asm->empty()) {
             for (const auto& var : asm_lang_vars) {
-                auto it = backup_vars.find(var);
-                if (it != backup_vars.end() && !it->second.empty())
-                    set_variable(var, it->second);
+                if (auto v = backup_vars_lookup(var); v && !v->empty())
+                    set_variable(var, *v);
+            }
+        } else if (!user_asm.empty()) {
+            // User pinned the ASM compiler; fill in companion vars from the
+            // C side if available, then defaults. Don't touch CMAKE_ASM_COMPILER.
+            if (get_variable("CMAKE_ASM_COMPILER_ID").empty())
+                set_variable("CMAKE_ASM_COMPILER_ID", get_variable("CMAKE_C_COMPILER_ID"));
+            if (get_variable("CMAKE_ASM_COMPILER_VERSION").empty())
+                set_variable("CMAKE_ASM_COMPILER_VERSION", get_variable("CMAKE_C_COMPILER_VERSION"));
+            for (const auto* var : asm_lang_vars) {
+                std::string_view v(var);
+                if (get_variable(var).empty()) {
+                    if (v == "CMAKE_ASM_FLAGS_DEBUG") set_variable(var, "-g");
+                    else if (v.starts_with("CMAKE_ASM_FLAGS")) set_variable(var, "");
+                }
             }
         } else {
             // Derive from C compiler (prefer C, fallback to "cc")
@@ -435,9 +485,9 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             std::string asm_version = get_variable("CMAKE_C_COMPILER_VERSION");
             if (asm_compiler.empty()) {
                 // C not enabled yet, pull from cache
-                asm_compiler = backup_vars["CMAKE_C_COMPILER"];
-                asm_id = backup_vars["CMAKE_C_COMPILER_ID"];
-                asm_version = backup_vars["CMAKE_C_COMPILER_VERSION"];
+                asm_compiler = backup_vars_get("CMAKE_C_COMPILER");
+                asm_id = backup_vars_get("CMAKE_C_COMPILER_ID");
+                asm_version = backup_vars_get("CMAKE_C_COMPILER_VERSION");
             }
             if (asm_compiler.empty()) {
                 asm_compiler = "cc";
@@ -455,7 +505,7 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
 
             // Cache for next time
             for (const auto& var : asm_lang_vars) {
-                backup_vars[var] = get_variable(var);
+                backup_vars_set(var, get_variable(var));
             }
         }
         set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
@@ -471,6 +521,21 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         get_toolchain().set_compiler(Language::ASM, std::move(compiler));
     } else {
         return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
+    }
+
+    // Seed CMAKE_<LANG>_FLAGS / per-config flags from *_INIT, mirroring CMake.
+    // Toolchain files commonly set CMAKE_<LANG>_FLAGS_INIT (e.g. -mcmodel=medany
+    // for RISC-V) and rely on enable_language to promote them. Only apply when
+    // the user-visible variable is empty so we don't clobber explicit user flags.
+    auto seed_from_init = [&](const std::string& var) {
+        if (get_variable(var).empty()) {
+            std::string init = get_variable(var + "_INIT");
+            if (!init.empty()) set_variable(var, init);
+        }
+    };
+    seed_from_init("CMAKE_" + lang + "_FLAGS");
+    for (const auto* cfg : {"DEBUG", "RELEASE", "RELWITHDEBINFO", "MINSIZEREL"}) {
+        seed_from_init("CMAKE_" + lang + "_FLAGS_" + cfg);
     }
     return {};
 }
@@ -851,14 +916,23 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
         }
     }
 
-    // Generate tasks via transaction
+    // Generate tasks via transaction(s).
+    //
+    // We commit between resolver passes because get_missing_dependencies()
+    // only sees committed tasks — any deps introduced by tasks added in the
+    // current transaction would otherwise be invisible until commit and the
+    // build graph would stall on them at execution time.
     {
+        // Initial pass: generate tasks for the configured target set.
         auto txn = graph.begin();
         for (const auto& name : targets_to_build) {
             targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
         }
+        auto commit_result = txn.commit();
+        if (!commit_result) {
+            return std::unexpected(BuildError{current_file_, commit_result.error()});
+        }
 
-        // Resolve missing dependencies (including custom target byproducts)
         std::unordered_map<std::string, std::string> output_to_target;
         for (const auto& [name, target] : targets_) {
             auto path = target->get_output_path();
@@ -870,15 +944,19 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
             }
         }
 
+        const auto& cc_rules = get_custom_command_rules();
+        std::set<std::string> generated_cc_for_resolver;
+
         bool changed = true;
         while (changed) {
             changed = false;
+            auto resolve_txn = graph.begin();
             for (const auto& missing : graph.get_missing_dependencies()) {
                 // Check if missing dep is an output file of a known target
                 auto it = output_to_target.find(missing);
                 if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
                     targets_to_build.insert(it->second);
-                    targets_[it->second]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    targets_[it->second]->generate_tasks(resolve_txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
                     changed = true;
                     continue;
                 }
@@ -886,14 +964,24 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
                 auto tgt_it = targets_.find(missing);
                 if (tgt_it != targets_.end() && !targets_to_build.count(missing)) {
                     targets_to_build.insert(missing);
-                    tgt_it->second->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    tgt_it->second->generate_tasks(resolve_txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    changed = true;
+                    continue;
+                }
+                // Check if missing dep is the OUTPUT of a stand-alone add_custom_command
+                // not pulled in via any target's source list / DEPENDS.
+                auto cc_it = cc_rules.find(missing);
+                if (cc_it != cc_rules.end() && !generated_cc_for_resolver.count(missing)) {
+                    generate_custom_command_task_for_rule(
+                        resolve_txn, *cc_it->second, targets_, cc_rules,
+                        generated_cc_for_resolver, get_target_aliases());
                     changed = true;
                 }
             }
-        }
-        auto commit_result = txn.commit();
-        if (!commit_result) {
-            return std::unexpected(BuildError{current_file_, commit_result.error()});
+            auto rcommit = resolve_txn.commit();
+            if (!rcommit) {
+                return std::unexpected(BuildError{current_file_, rcommit.error()});
+            }
         }
     }
 
@@ -1286,12 +1374,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             };
 
             // Parse: set_tests_properties(test1 [test2...] PROPERTIES prop1 val1 [prop2 val2...])
-            if (args.size() < 3) {
-                interp.set_fatal_error("set_tests_properties requires at least one test name and PROPERTIES keyword");
-                return;
-            }
-
-            // Find PROPERTIES keyword
+            // CMake quietly accepts an empty test-name list (e.g. when the
+            // caller's ${TEST_NAME} expands to nothing) and treats the whole
+            // call as a no-op. Match that — projects in the wild rely on it.
             auto props_it = std::find(args.begin(), args.end(), "PROPERTIES");
             if (props_it == args.end()) {
                 interp.set_fatal_error("set_tests_properties requires PROPERTIES keyword");
@@ -1301,8 +1386,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             // Extract test names (everything before PROPERTIES)
             std::vector<std::string> test_names(args.begin(), props_it);
             if (test_names.empty()) {
-                interp.set_fatal_error("set_tests_properties requires at least one test name");
-                return;
+                return;  // No-op, matching CMake.
             }
 
             // Extract properties (everything after PROPERTIES)
@@ -1758,17 +1842,32 @@ std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<A
 std::expected<void, InterpreterError> Interpreter::include_file(const std::string& file_path, bool optional) {
     Path path(file_path);
 
-    if(file_path.ends_with("CPack") || file_path.ends_with("CPack.cmake")) {
+    // CMake's include() resolves a bare module name (e.g. "ExternalProject")
+    // to one of the *.cmake files under CMAKE_MODULE_PATH or the system
+    // module dir. Across that resolution the same module surfaces as the
+    // bare name, "<dir>/Foo.cmake", or "<dir>/Foo" (no extension). This
+    // helper hides the three forms behind a single "is this module Foo?"
+    // check so the bespoke matching for each module doesn't drift.
+    auto is_module = [&file_path](std::string_view name) {
+        if (file_path == name) return true;
+        std::string suffix_cmake = "/" + std::string(name) + ".cmake";
+        std::string suffix_bare = "/" + std::string(name);
+        if (file_path.ends_with(std::string(name) + ".cmake")) return true;
+        if (file_path.ends_with(suffix_bare)) return true;
+        return false;
+    };
+
+    if (is_module("CPack")) {
         print_message("WARNING", "kiln does not support cpack (yet). Ignoring..");
         return {};
     }
 
-    if (file_path == "ExternalProject" || file_path.ends_with("ExternalProject.cmake") || file_path.ends_with("/ExternalProject")) {
+    if (is_module("ExternalProject")) {
         register_external_project_builtins(*this);
         return {};
     }
 
-    if (file_path == "FetchContent" || file_path.ends_with("FetchContent.cmake") || file_path.ends_with("/FetchContent")) {
+    if (is_module("FetchContent")) {
         register_fetch_content_builtins(*this);
         return {};
     }

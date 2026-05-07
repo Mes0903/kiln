@@ -518,7 +518,7 @@ TEST_CASE("Common CMake variables are initialized", "[interpreter]") {
     )");
     REQUIRE(output.find("SRC=") != std::string::npos);
     REQUIRE(output.find("BIN=") != std::string::npos);
-    REQUIRE(output.find("VER=3") != std::string::npos);
+    REQUIRE(output.find("VER=4") != std::string::npos);
 }
 
 TEST_CASE("set() creates lists from multiple arguments", "[interpreter][list]") {

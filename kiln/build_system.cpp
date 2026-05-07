@@ -172,6 +172,84 @@ static bool try_promote_to_ready(BuildTask* t, ExecutionState& state) {
     return true;
 }
 
+// Short tag for a BuildTask::kind variant — used in stall diagnostics.
+static const char* task_kind_name(const BuildTask& t) {
+    return std::visit(overloaded{
+        [](const CompileTask&)        { return "compile"; },
+        [](const PCHTask&)            { return "pch"; },
+        [](const LinkTask&)           { return "link"; },
+        [](const CustomCommandTask&)  { return "custom_command"; },
+        [](const CustomTargetTask&)   { return "custom_target"; },
+        [](const PreBuildTask&)       { return "pre_build"; },
+        [](const PostBuildTask&)      { return "post_build"; },
+        [](const ModuleScannerTask&)  { return "module_scan"; },
+        [](const ModuleCollatorTask&) { return "module_collate"; },
+        [](const EPOrchestratorTask&) { return "ep_orchestrate"; },
+        [](const EPSentinelTask&)     { return "ep_sentinel"; },
+        [](const EPInstallTask&)      { return "ep_install"; },
+        [](const MocTask&)            { return "moc"; },
+        [](const UicTask&)            { return "uic"; },
+        [](const RccTask&)            { return "rcc"; },
+    }, t.kind);
+}
+
+// Which scheduler bucket a task is currently in. "limbo" means the task
+// belongs to the graph but isn't tracked anywhere — that's almost always a
+// missed try_promote_to_ready or a forgotten state.completed insertion, and
+// is the shape of bug this diagnostic exists to surface.
+// Caller must hold state.mutex.
+static const char* task_bucket(BuildTask* t, const ExecutionState& state) {
+    if (state.completed.count(t)) return "completed";
+    if (state.running.count(t))   return "running";
+    if (state.ready_set.count(t)) return "ready";
+    auto it = state.dirty_state.find(t);
+    if (it == state.dirty_state.end()) return "limbo";
+    if (!it->second.has_value())       return "maybe-dirty";
+    return *it->second ? "dirty" : "clean";
+}
+
+// Build a diagnostic for a stalled build graph: every uncompleted task that
+// the scheduler is supposed to have touched, with its kind, bucket, and the
+// uncompleted deps it's waiting on. Walks the full task list (not just
+// dirty_state) so a "limbo" task shows up as its own entry, not merely as a
+// dangling name on someone else's "waiting on" line.
+// Caller must hold state.mutex.
+static std::string format_stall_diagnostic(
+    const std::vector<std::unique_ptr<BuildTask>>& tasks,
+    const ExecutionState& state)
+{
+    // A task is worth dumping if it's in dirty_state, or if some uncompleted
+    // dirty task lists it as a dep. Anything else is a clean task the
+    // scheduler correctly skipped, and dumping those would bury the signal.
+    std::unordered_set<BuildTask*> referenced_as_dep;
+    for (const auto& [other, _] : state.dirty_state) {
+        if (state.completed.count(other)) continue;
+        for (auto* d : other->dependencies) referenced_as_dep.insert(d);
+    }
+
+    std::ostringstream oss;
+    oss << "Build graph stalled. Uncompleted tasks (bucket, kind):";
+    for (const auto& task_ptr : tasks) {
+        BuildTask* t = task_ptr.get();
+        if (state.completed.count(t)) continue;
+        const bool tracked = state.dirty_state.count(t)
+                          || referenced_as_dep.count(t);
+        if (!tracked) continue;
+
+        oss << "\n  - [" << task_bucket(t, state) << "] ("
+            << task_kind_name(*t) << ") " << t->id;
+
+        bool any_unmet = false;
+        for (auto* dep : t->dependencies) {
+            if (state.completed.count(dep)) continue;
+            if (!any_unmet) { oss << "\n      waiting on:"; any_unmet = true; }
+            oss << "\n        [" << task_bucket(dep, state) << "] ("
+                << task_kind_name(*dep) << ") " << dep->id;
+        }
+    }
+    return oss.str();
+}
+
 std::expected<void, std::string> BuildGraph::generate_compile_commands(const std::string& build_dir) {
     std::string current_dir = std::filesystem::current_path().string();
 
@@ -784,8 +862,19 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     state.dirty_state = std::move(dirty_state);
 
     // Pre-populate completed with clean tasks (not in dirty_state).
+    //
+    // Marker tasks (no outputs, no commands — pure synchronization points)
+    // have nothing to execute, so they unconditionally count as completed.
+    // Without this, a marker whose deps include a dirty task gets caught
+    // by the has_dirty_dep guard below and is left in limbo: not in
+    // dirty_state, not in completed, never executed — and any dependent
+    // waits for it forever, stalling the graph.
     for (const auto& task_ptr : tasks_) {
         if (state.dirty_state.count(task_ptr.get())) continue;
+        if (task_ptr->is_marker_task()) {
+            state.completed.insert(task_ptr.get());
+            continue;
+        }
         bool has_dirty_dep = false;
         for (auto* dep : task_ptr->dependencies) {
             if (state.dirty_state.count(dep)) { has_dirty_dep = true; break; }
@@ -816,6 +905,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
             while (true) {
                 BuildTask* current = nullptr;
+                bool current_is_maybe_dirty = false;
 
                 // Grab the next ready task from ready_set
                 {
@@ -851,18 +941,21 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         current = *it;
                         state.ready_set.erase(it);
                         state.running.insert(current);
+                        // dirty_state is shared and mutated under state.mutex
+                        // (run_ep_orchestrator injects install tasks while
+                        // workers schedule). Read it here, while we still
+                        // hold the lock, so the post-unlock work below never
+                        // touches the map directly.
+                        auto it2 = state.dirty_state.find(current);
+                        current_is_maybe_dirty = it2 != state.dirty_state.end()
+                                              && !it2->second.has_value();
                     } else if (state.running.empty()) {
-                        // Stall detection
-                        std::ostringstream oss;
-                        oss << "Internal error: Build graph stalled. Unresolved dependencies for tasks:";
-                        for (const auto& [ptr, ds] : state.dirty_state) {
-                            if (state.completed.count(ptr)) continue;
-                            oss << "\n  - " << ptr->id << " depends on: ";
-                            for (auto* dep : ptr->dependencies) {
-                                if (!state.completed.count(dep)) oss << dep->id << " ";
-                            }
-                        }
-                        state.fatal_error = oss.str();
+                        // Stall: nothing ready, nothing running, but
+                        // uncompleted tasks remain. Hand the diagnostic off
+                        // to format_stall_diagnostic so the message tells the
+                        // reader which bucket each stuck task is in (limbo
+                        // entries are usually the proximate bug).
+                        state.fatal_error = format_stall_diagnostic(tasks_, state);
                         state.cv.notify_all();
                         return;
                     } else {
@@ -880,13 +973,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                 auto task_start = std::chrono::steady_clock::now();
 
                 do { // do-while(false) for break-on-error
-                    // Check for "maybe" dirty tasks: if state is nullopt (not true),
-                    // re-check signature at runtime. If clean, skip execution.
-                    auto dirty_it = state.dirty_state.find(current);
-                    if (dirty_it != state.dirty_state.end() && !dirty_it->second.has_value()) {
-                        // "Maybe" dirty - re-check signature now that deps are complete.
+                    // "Maybe" dirty (EP sentinel/orchestrator dependents):
+                    // re-check signature now that deps are complete; if clean,
+                    // skip execution.
+                    if (current_is_maybe_dirty) {
                         if (auto clean_sig = clean_signature(task, state.cache)) {
-                            // Actually clean - skip execution, adjust progress total
                             state.progress.bump_total(-1);
                             sig = std::move(*clean_sig);
                             break;  // Skip to completion handling
@@ -1645,16 +1736,20 @@ BuildGraph::attach_ep_graph(
     ep_graph.tasks_.clear();
     ep_graph.task_by_id_.clear();
 
-    // 4. Apply dirty state from pre-computed info
+    // 4. Apply dirty state from pre-computed info.
+    //    Marker tasks (no outputs, no commands — e.g. a commandless custom_target
+    //    used purely to group DEPENDS) have nothing to execute, so we mark them
+    //    completed immediately. Otherwise their dependents would wait forever
+    //    for a task that never runs and the build would stall.
     int dirty_count = 0;
     for (const auto& info : dirty_info) {
-        if (!info.is_marker) {
-            if (info.is_dirty) {
-                state.dirty_state[info.raw] = true;
-                dirty_count++;
-            } else {
-                state.completed.insert(info.raw);
-            }
+        if (info.is_marker) {
+            state.completed.insert(info.raw);
+        } else if (info.is_dirty) {
+            state.dirty_state[info.raw] = true;
+            dirty_count++;
+        } else {
+            state.completed.insert(info.raw);
         }
     }
 
@@ -1727,6 +1822,10 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         // Create isolated interpreter
         std::stringstream ep_output;
         auto ep_interp = std::make_unique<Interpreter>(source_dir, &ep_output, &ep_output, binary_dir);
+        // Tracks whether the install-injection block already moved ep_interp
+        // into ep_target. The fallback hand-off at the end of this branch
+        // only runs if it didn't.
+        bool ep_interpreter_handed_off = false;
 
         // Force colors in child interpreter if parent stdout is a TTY
         if (state.stdout_is_tty) {
@@ -1922,7 +2021,17 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                 install_task.ep_binary_dir = binary_dir;
                 install_task.inputs = std::move(install_inputs);
 
-                // Inject install task and wire sentinel to depend on it
+                // Inject install task and wire sentinel to depend on it.
+                //
+                // set_ep_interpreter MUST happen under the same lock that
+                // promotes install_raw to ready_set: the install task body
+                // reads ep_target->get_ep_interpreter() (build_system.cpp
+                // EPInstallTask handler) for CMAKE_INSTALL_PREFIX. If the
+                // store is sequenced after the promotion, a worker can pick
+                // up install_raw and dereference an empty unique_ptr (TSan:
+                // external_project_target.hpp:119 read vs. set_ep_interpreter
+                // write). Passing the unique_ptr through the same mutex
+                // acquire gives proper happens-before to the reader.
                 {
                     auto txn = begin_locked(state.mutex);
                     auto install_result = txn.add(std::move(install_task));
@@ -1940,14 +2049,32 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
 
                     // Remove sentinel from ready set (has unsatisfied dependency now)
                     state.ready_set.erase(sentinel);
+
+                    // Hand the EP interpreter to the install task (and any
+                    // deferred install(EXPORT) work) BEFORE making install_raw
+                    // schedulable.
+                    ep_target->set_ep_interpreter(std::move(ep_interp));
+                    ep_interpreter_handed_off = true;
+
+                    // Promote install_raw if its deps are already satisfied —
+                    // otherwise it sits in dirty_state forever (no edge fires
+                    // a re-check, because nothing it depends on is going to
+                    // transition to completed after this point). The
+                    // scheduler only promotes via dependency-completion
+                    // edges or via this explicit nudge.
+                    try_promote_to_ready(install_raw, state);
+                    state.cv.notify_all();
                 }
             }
             // Extra install commands will be run by install task (it has access to ep_target)
         }
 
-        // Keep EP interpreter alive — injected tasks hold raw parent_target pointers
-        // into its target map, and deferred install tasks need it for install(EXPORT).
-        ep_target->set_ep_interpreter(std::move(ep_interp));
+        // Keep EP interpreter alive — injected tasks hold raw parent_target
+        // pointers into its target map. If we didn't hand it off above (e.g.
+        // no install task was injected), do it here.
+        if (!ep_interpreter_handed_off) {
+            ep_target->set_ep_interpreter(std::move(ep_interp));
+        }
 
     } else {
         // === CUSTOM COMMANDS EP ===

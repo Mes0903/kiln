@@ -98,47 +98,18 @@ std::string kiln::Hash128::to_string() const
 
 kiln::CommandResult kiln::run_command(const std::string& command, const std::string& working_dir)
 {
-    std::string prev_dir;
-    if (!working_dir.empty()) {
-        char* cwd = getcwd(nullptr, 0);
-        if (cwd) {
-            prev_dir = cwd;
-            free(cwd);
-        }
-        if (chdir(working_dir.c_str()) != 0) {
-            return {-1, "Failed to change directory to " + working_dir};
-        }
+    // Avoid popen/sh whenever possible. shell_split handles quoting/escapes
+    // exactly like the shell would for the simple word-splitting case; the
+    // vector overload then handles redirects (<, >, >>, 2>) natively via
+    // fork+dup2 and only falls back to spawning a shell for genuine shell
+    // pipelines/logic (|, &&, ||, 2>&1). This is critical: the string
+    // overload was previously the hottest user of process-global chdir,
+    // which races between concurrent build workers.
+    auto argv = shell_split(command);
+    if (argv.empty()) {
+        return {-1, "Empty command"};
     }
-
-    std::string full_command = command + " 2>&1";
-    FILE* pipe = popen(full_command.c_str(), "r");
-    if (!pipe) {
-        if (!prev_dir.empty()) {
-            if (chdir(prev_dir.c_str()) != 0) {
-                return {-1, "Failed to restore directory"};
-            }
-        }
-        return {-1, "Failed to execute command"};
-    }
-
-    std::string output;
-    char buffer[4096];
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        output += buffer;
-    }
-
-    int status = pclose(pipe);
-    if (!prev_dir.empty()) {
-        if (chdir(prev_dir.c_str()) != 0) {
-            return {-1, "Failed to restore directory after command execution"};
-        }
-    }
-
-    // WEXITSTATUS is only valid if WIFEXITED is true.
-    // On many systems pclose returns the raw status.
-    int exit_code = (status == -1) ? -1 : (WIFEXITED(status) ? WEXITSTATUS(status) : status);
-
-    return {exit_code, output};
+    return run_command(argv, working_dir);
 }
 
 std::string kiln::escape_shell_arg(const std::string& arg) {
@@ -564,8 +535,10 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
             argv.push_back(nullptr);
 
             execvp(argv[0], argv.data());
-            fprintf(stderr, "execvp(%s): %s\n", argv[0] ? argv[0] : "(null)", strerror(errno));
-            exit(1);
+            // exec failed — surface via setup_pipe so the parent raises a
+            // fatal error with a stack trace, instead of letting a stray
+            // "command not found" silently flow through RESULT_VARIABLE.
+            report_setup_error(std::string("exec ") + argv[0]);
         }
     }
 
