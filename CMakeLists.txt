@@ -16,7 +16,7 @@ find_package(CLI11 CONFIG REQUIRED)
 # linenoise has no CMake package; find_library is the only available mechanism
 find_library(LINENOISE_LIBRARY NAMES linenoise REQUIRED)
 
-add_library(kiln SHARED
+add_library(kiln
     kiln/cmake-language.cpp
     kiln/interperter.cpp
     kiln/target.cpp
@@ -95,8 +95,8 @@ install(TARGETS kiln_cli kiln
 
 include(CTest)
 if(BUILD_TESTING)
-    find_package(Catch2 3 REQUIRED)
-    add_executable(kiln_tests tests/main.cpp
+  find_package(Catch2 3 REQUIRED)
+  add_executable(kiln_tests tests/main.cpp
         tests/interpreter_tests.cpp
         tests/pch_tests.cpp
         tests/command_parser.cpp
@@ -111,7 +111,7 @@ if(BUILD_TESTING)
         tests/resolve_tests.cpp
         tests/path_tests.cpp
         tests/version_compare_tests.cpp)
-    target_link_libraries(kiln_tests PRIVATE kiln Catch2::Catch2WithMain)
+  target_link_libraries(kiln_tests PRIVATE kiln Catch2::Catch2WithMain)
 
-    add_test(NAME interpreter_tests COMMAND kiln_tests)
+  add_test(NAME interpreter_tests COMMAND kiln_tests)
 endif()
