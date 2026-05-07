@@ -55,16 +55,13 @@ public:
 
     // Inject --sysroot= and --target= flags. Call after pushing the binary,
     // before language-/job-specific flags. Idempotent w.r.t. empty fields.
+    // Caller is responsible for only populating compiler_target_ when the
+    // compiler honors --target= (Clang-likes); GCC errors on it.
     void inject_target_flags(std::vector<std::string>& cmd) const {
         if (!sysroot_.empty()) {
             cmd.push_back("--sysroot=" + sysroot_);
         }
         if (!compiler_target_.empty()) {
-            // GCC ignores --target= (uses binary name for triple); Clang honors it.
-            // Pushing it unconditionally is safe for GCC only when the binary
-            // is actually clang-shaped — but we don't know the ID here without
-            // detection. Callers populate compiler_target_ only when they
-            // actually want it propagated, so trust the input.
             cmd.push_back("--target=" + compiler_target_);
         }
     }

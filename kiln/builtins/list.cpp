@@ -165,9 +165,12 @@ void register_list_builtins(Interpreter& interp) {
                 interp.set_fatal_error("list(APPEND) requires at least the list variable name");
                 return;
             }
-            auto entry = interp.get_variables().entry(sub_args[0]);
-            // String concatenation -- matches CMake behavior of preserving \; in raw string
-            std::string val = entry.get();
+            // Read with cache fallback: when the local variable is unset, CMake
+            // exposes the cache value via `${VAR}` so list(APPEND) sees it. Going
+            // through get_variable() preserves that — reading the local entry
+            // directly would start from empty and silently drop cache-only
+            // values (e.g. CMAKE_MODULE_PATH seeded by a -C initial cache).
+            std::string val = interp.get_variable(sub_args[0]);
             for (size_t i = 1; i < sub_args.size(); ++i) {
                 // CMake skips empty elements only when the list is empty.
                 // When non-empty, appending "" adds a semicolon (empty element).
@@ -175,7 +178,7 @@ void register_list_builtins(Interpreter& interp) {
                 if (!val.empty()) val += ';';
                 val += sub_args[i];
             }
-            entry.set(std::move(val));
+            interp.set_variable(sub_args[0], val);
         } else if (operation == "PREPEND") {
             CommandParser parser("list", "PREPEND");
             std::string list_var;
@@ -184,11 +187,11 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
-            auto entry = interp.get_variables().entry(list_var);
-            CMakeArray list(entry.get());
-            // Insert items at beginning in order
+            // Cache fallback: same reasoning as APPEND — a cache-only list
+            // would otherwise look empty.
+            CMakeArray list(interp.get_variable(list_var));
             list.insert(0, items);
-            entry.set(list.to_string());
+            interp.set_variable(list_var, list.to_string());
         } else if (operation == "POP_BACK") {
             CommandParser parser("list", "POP_BACK");
             std::string list_var;

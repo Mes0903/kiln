@@ -24,6 +24,16 @@ struct ExportContext {
     // Pointers to target maps (not owned)
     const TargetMap* all_targets = nullptr;
     const std::unordered_map<std::string, std::string>* target_aliases = nullptr;
+
+    // Per-target install destinations from install(TARGETS ... EXPORT). Empty
+    // strings mean "fall back to GNUInstallDirs defaults" (lib/, bin/). Keyed
+    // by the unprefixed target name.
+    struct InstallDests {
+        std::string archive_dest;
+        std::string library_dest;
+        std::string runtime_dest;
+    };
+    std::unordered_map<std::string, InstallDests> target_install_dests;
 };
 
 // Generate the content of a CMake export file (.cmake file with IMPORTED targets)

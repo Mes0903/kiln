@@ -168,9 +168,11 @@ void register_target_builtins(Interpreter& interp) {
         bool win32 = false;
         bool macosx_bundle = false;
         bool exclude_from_all = false;
+        bool imported_global = false;
         std::vector<std::string> sources;
         parser.positional(name, "target name");
         parser.flag("IMPORTED", imported);
+        parser.flag("GLOBAL", imported_global);
         parser.flag("ALIAS", is_alias);
         parser.flag("WIN32", win32);
         parser.flag("MACOSX_BUNDLE", macosx_bundle);
@@ -217,6 +219,7 @@ void register_target_builtins(Interpreter& interp) {
         auto target = std::make_shared<Target>(name, TargetType::EXECUTABLE, src_dir, bin_dir);
         if (imported) {
             target->set_imported(true);
+            target->set_imported_global(imported_global);
         } else {
             configure_target(interp, target);
             if (!add_sources_to_target(interp, target, src_dir, sources)) return;
@@ -239,7 +242,7 @@ void register_target_builtins(Interpreter& interp) {
         warn_if_no_project(interp, "add_library");
         CommandParser parser("add_library");
         std::string name;
-        bool shared = false, static_lib = false, module_lib = false, object_lib = false, interface_lib = false, imported = false, is_alias = false;
+        bool shared = false, static_lib = false, module_lib = false, object_lib = false, interface_lib = false, imported = false, imported_global = false, is_alias = false;
         std::vector<std::string> sources;
 
         parser.positional(name, "target name");
@@ -249,6 +252,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.flag("OBJECT", object_lib);
         parser.flag("INTERFACE", interface_lib);
         parser.flag("IMPORTED", imported);
+        parser.flag("GLOBAL", imported_global);
         parser.flag("ALIAS", is_alias);
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
@@ -311,6 +315,7 @@ void register_target_builtins(Interpreter& interp) {
         auto target = std::make_shared<Target>(name, type, src_dir, bin_dir);
         if (imported) {
             target->set_imported(true);
+            target->set_imported_global(imported_global);
         } else {
             configure_target(interp, target);
             if (!add_sources_to_target(interp, target, src_dir, sources)) return;
@@ -540,6 +545,7 @@ void register_target_builtins(Interpreter& interp) {
             CommandParser parser("add_custom_command");
             std::vector<std::vector<std::string>> commands;
             std::vector<std::string> byproducts;
+            std::vector<std::string> ignored_depends;
             std::string working_dir;
             std::vector<std::string> comment_parts;
             bool verbatim = false;
@@ -548,6 +554,11 @@ void register_target_builtins(Interpreter& interp) {
 
             parser.multi_list("COMMAND", commands);
             parser.list("BYPRODUCTS", byproducts);
+            // CMake's TARGET form ignores DEPENDS (build events run on every
+            // build of the target by definition), but real CMake accepts it
+            // silently — some projects pass it. Accept and discard so we
+            // don't reject otherwise-valid CMakeLists.
+            parser.list("DEPENDS", ignored_depends);
             parser.value("WORKING_DIRECTORY", working_dir);
             parser.list("COMMENT", comment_parts);
             parser.flag("VERBATIM", verbatim);

@@ -538,12 +538,17 @@ std::expected<void, std::string> execute_export_rule(
         return {};
     }
 
-    // Collect targets
+    // Collect targets and remember the per-target install destinations so the
+    // generator can emit IMPORTED_LOCATION at the actual install path
+    // (install(TARGETS ... ARCHIVE DESTINATION foo) is non-default — hard-
+    // coding lib/ would mis-locate the artifact).
     std::vector<Target*> targets_to_export;
+    std::unordered_map<std::string, ExportContext::InstallDests> dests;
     for (const auto& entry : it->second) {
         auto* target = interp->find_target(entry.target_name);
         if (target) {
             targets_to_export.push_back(target);
+            dests[entry.target_name] = {entry.archive_dest, entry.library_dest, entry.runtime_dest};
         }
     }
 
@@ -576,6 +581,7 @@ std::expected<void, std::string> execute_export_rule(
     ctx.c_compiler_version = interp->get_variable("CMAKE_C_COMPILER_VERSION");
     ctx.all_targets = &interp->get_targets();
     ctx.target_aliases = &interp->get_target_aliases();
+    ctx.target_install_dests = std::move(dests);
 
     std::string content = generate_export_content(ctx, targets_to_export);
 

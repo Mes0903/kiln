@@ -410,8 +410,14 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         }
         set_variable("CMAKE_" + lang + "_COMPILER_LOADED", "1");
 
+        // CMAKE_<LANG>_COMPILER_TARGET only makes sense for Clang-likes; GCC
+        // errors on --target=. Mirror CMake's semantics (the Clang Compiler
+        // module is what turns this into --target=) by dropping it for GNU.
+        const std::string compile_target_effective =
+            (id == "Clang" || id == "AppleClang" || id == "IntelLLVM" || id == "ARMClang")
+                ? compiler_target : std::string{};
         auto compiler = std::make_unique<GnuCompiler>(
-            effective_binary, lang_enum, sysroot, compiler_target);
+            effective_binary, lang_enum, sysroot, compile_target_effective);
         get_toolchain().set_compiler(lang_enum, std::move(compiler));
     } else if (lang == "ASM") {
         // Check cache first
@@ -453,10 +459,15 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             }
         }
         set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
+        const std::string asm_id_now = get_variable("CMAKE_ASM_COMPILER_ID");
+        const bool asm_clang_like = asm_id_now == "Clang" || asm_id_now == "AppleClang"
+                                  || asm_id_now == "IntelLLVM" || asm_id_now == "ARMClang";
+        const std::string asm_target = asm_clang_like
+            ? get_variable("CMAKE_ASM_COMPILER_TARGET") : std::string{};
         auto compiler = std::make_unique<GnuCompiler>(
             get_variable("CMAKE_ASM_COMPILER"), Language::ASM,
             get_variable("CMAKE_SYSROOT"),
-            get_variable("CMAKE_ASM_COMPILER_TARGET"));
+            asm_target);
         get_toolchain().set_compiler(Language::ASM, std::move(compiler));
     } else {
         return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
@@ -972,10 +983,14 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
     }
 
-    variables_.set("CMAKE_VERSION", "3.31.0");
-    variables_.set("CMAKE_MAJOR_VERSION", "3");
-    variables_.set("CMAKE_MINOR_VERSION", "31");
-    variables_.set("CMAKE_PATCH_VERSION", "0");
+    // Track the system CMake version so cmake_minimum_required() and
+    // cmake_minimum_required(VERSION ...) checks in third-party Modules pass.
+    // System modules ship with version gates targeting whatever CMake the
+    // user has installed; claiming a stale version trips those checks.
+    variables_.set("CMAKE_VERSION", "4.3.2");
+    variables_.set("CMAKE_MAJOR_VERSION", "4");
+    variables_.set("CMAKE_MINOR_VERSION", "3");
+    variables_.set("CMAKE_PATCH_VERSION", "2");
 
     variables_.set("CMAKE_FILES_DIRECTORY", "/CMakeFiles");
 

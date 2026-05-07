@@ -439,12 +439,20 @@ const Compiler* Target::resolve_compiler(Language lang, const Toolchain& toolcha
     const std::string& captured_binary = captured_compiler_var(binary_var);
     if (!captured_binary.empty()) {
         std::string target_var = "CMAKE_" + std::string(name) + "_COMPILER_TARGET";
+        std::string id_var = "CMAKE_" + std::string(name) + "_COMPILER_ID";
         const std::string& captured_sysroot = captured_compiler_var("CMAKE_SYSROOT");
         const std::string& captured_target = captured_compiler_var(target_var);
+        const std::string& captured_id = captured_compiler_var(id_var);
+        // CMAKE_<LANG>_COMPILER_TARGET only makes sense for Clang-likes (real
+        // CMake's Clang Compiler module is what turns it into --target=). GCC
+        // errors on the flag, so drop it when the ID isn't Clang-shaped.
+        const bool clang_like = captured_id == "Clang" || captured_id == "AppleClang"
+                              || captured_id == "IntelLLVM" || captured_id == "ARMClang";
+        const std::string effective_target = clang_like ? captured_target : std::string{};
         // The default compiler is also in the registry (registered via
         // enable_language). If the captured tuple matches it, get_or_register
         // returns the same pointer; otherwise it lazily registers a fresh one.
-        return toolchain.get_or_register(lang, captured_binary, captured_sysroot, captured_target);
+        return toolchain.get_or_register(lang, captured_binary, captured_sysroot, effective_target);
     }
     return toolchain.get_compiler_ptr(lang);
 }

@@ -564,7 +564,7 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
             argv.push_back(nullptr);
 
             execvp(argv[0], argv.data());
-            perror("execvp");
+            fprintf(stderr, "execvp(%s): %s\n", argv[0] ? argv[0] : "(null)", strerror(errno));
             exit(1);
         }
     }

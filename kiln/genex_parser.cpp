@@ -24,6 +24,7 @@ GenexNodeType GenexParser::classify_genex_type(const std::string& keyword) const
     if (keyword == "OR") return GenexNodeType::OR;
     if (keyword == "NOT") return GenexNodeType::NOT;
     if (keyword == "STREQUAL") return GenexNodeType::STREQUAL;
+    if (keyword == "EQUAL") return GenexNodeType::EQUAL;
     if (keyword == "VERSION_LESS") return GenexNodeType::VERSION_LESS;
     if (keyword == "VERSION_GREATER") return GenexNodeType::VERSION_GREATER;
     if (keyword == "VERSION_EQUAL") return GenexNodeType::VERSION_EQUAL;
@@ -360,6 +361,7 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
                                     inner_result->nodes.end());
             }
         } else if (type == GenexNodeType::STREQUAL ||
+                   type == GenexNodeType::EQUAL ||
                    type == GenexNodeType::VERSION_LESS ||
                    type == GenexNodeType::VERSION_GREATER ||
                    type == GenexNodeType::VERSION_EQUAL ||
@@ -370,6 +372,7 @@ std::expected<std::shared_ptr<GenexNode>, std::string> GenexParser::parse_genex(
             if (args.size() != 2) {
                 std::string genex_name;
                 if (type == GenexNodeType::STREQUAL) genex_name = "STREQUAL";
+                else if (type == GenexNodeType::EQUAL) genex_name = "EQUAL";
                 else if (type == GenexNodeType::VERSION_LESS) genex_name = "VERSION_LESS";
                 else if (type == GenexNodeType::VERSION_GREATER) genex_name = "VERSION_GREATER";
                 else if (type == GenexNodeType::VERSION_EQUAL) genex_name = "VERSION_EQUAL";

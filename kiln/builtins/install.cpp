@@ -76,6 +76,7 @@ void parse_install_targets(
         // Stop at first keyword
         if (arg == "EXPORT" || arg == "ARCHIVE" || arg == "LIBRARY" || arg == "RUNTIME" ||
             arg == "BUNDLE" || arg == "PUBLIC_HEADER" || arg == "PRIVATE_HEADER" ||
+            arg == "INCLUDES" ||
             arg == "DESTINATION" || arg == "PERMISSIONS" || arg == "CONFIGURATIONS" ||
             arg == "COMPONENT" || arg == "OPTIONAL" || arg == "EXCLUDE_FROM_ALL") {
             break;
@@ -108,6 +109,12 @@ void parse_install_targets(
     std::string current_dest_type;
     InstallDestination* current_dest = nullptr;
 
+    // INCLUDES DESTINATION dirs — these are added to each target's
+    // INTERFACE_INCLUDE_DIRECTORIES wrapped in $<INSTALL_INTERFACE:...> so
+    // the install export propagates them. Distinct from header file install
+    // (which uses install(FILES ...)).
+    std::vector<std::string> includes_destinations;
+
     i = 0;
     while (i < remaining_args.size()) {
         const auto& arg = remaining_args[i];
@@ -130,6 +137,29 @@ void parse_install_targets(
             else if (arg == "PUBLIC_HEADER") current_dest = &rule->public_header_dest;
             else if (arg == "PRIVATE_HEADER") current_dest = &rule->private_header_dest;
             ++i;
+        } else if (arg == "INCLUDES") {
+            // Expect: INCLUDES DESTINATION dir1 [dir2 ...]
+            if (i + 1 >= remaining_args.size() || remaining_args[i + 1] != "DESTINATION") {
+                interp.set_fatal_error("install(TARGETS) INCLUDES must be followed by DESTINATION");
+                return;
+            }
+            i += 2;
+            // Consume destinations until next keyword
+            while (i < remaining_args.size()) {
+                const auto& a = remaining_args[i];
+                if (a == "EXPORT" || a == "ARCHIVE" || a == "LIBRARY" || a == "RUNTIME" ||
+                    a == "BUNDLE" || a == "PUBLIC_HEADER" || a == "PRIVATE_HEADER" ||
+                    a == "INCLUDES" ||
+                    a == "DESTINATION" || a == "PERMISSIONS" || a == "CONFIGURATIONS" ||
+                    a == "COMPONENT" || a == "OPTIONAL" || a == "EXCLUDE_FROM_ALL") {
+                    break;
+                }
+                includes_destinations.push_back(a);
+                ++i;
+            }
+            // After INCLUDES DESTINATION, no per-type destination is active
+            current_dest = nullptr;
+            current_dest_type.clear();
         } else if (arg == "DESTINATION") {
             if (i + 1 >= remaining_args.size()) {
                 interp.set_fatal_error("install(TARGETS) DESTINATION requires a value");
@@ -204,10 +234,29 @@ void parse_install_targets(
         rule->archive_dest.destination = var_or("CMAKE_INSTALL_LIBDIR", "lib");
     }
 
+    // Apply INCLUDES DESTINATION to each target's INTERFACE_INCLUDE_DIRECTORIES,
+    // wrapped in $<INSTALL_INTERFACE:...> so the value only takes effect
+    // through install exports — not in the build tree.
+    if (!includes_destinations.empty()) {
+        std::vector<std::string> wrapped;
+        wrapped.reserve(includes_destinations.size());
+        for (const auto& d : includes_destinations) {
+            wrapped.push_back("$<INSTALL_INTERFACE:" + d + ">");
+        }
+        for (const auto& target_name : rule->targets) {
+            if (auto* t = interp.find_target(target_name)) {
+                t->append_property("INCLUDE_DIRECTORIES", wrapped, PropertyVisibility::INTERFACE);
+            }
+        }
+    }
+
     // Add targets to the export set
     if (!export_name.empty()) {
         for (const auto& target_name : rule->targets) {
-            interp.add_to_export_set(export_name, target_name, src_dir, bin_dir);
+            interp.add_to_export_set(export_name, target_name, src_dir, bin_dir,
+                                     rule->archive_dest.destination,
+                                     rule->library_dest.destination,
+                                     rule->runtime_dest.destination);
         }
     }
 

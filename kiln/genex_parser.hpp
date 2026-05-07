@@ -34,6 +34,7 @@ enum class GenexNodeType {
     OR,                   // $<OR:...>
     NOT,                  // $<NOT:...>
     STREQUAL,             // $<STREQUAL:a,b>
+    EQUAL,                // $<EQUAL:a,b> - numeric equality
     VERSION_LESS,         // $<VERSION_LESS:v1,v2>
     VERSION_GREATER,      // $<VERSION_GREATER:v1,v2>
     VERSION_EQUAL,        // $<VERSION_EQUAL:v1,v2>

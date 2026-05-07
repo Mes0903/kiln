@@ -105,6 +105,12 @@ public:
 
     void set_imported(bool imported) { is_imported_ = imported; }
     bool is_imported() const { return is_imported_; }
+
+    // Imported targets are directory-scoped by default — visible only in the
+    // dir that created them and its subdirs. The GLOBAL keyword promotes them
+    // to project-wide visibility. Non-imported targets are always global.
+    void set_imported_global(bool g) { imported_global_ = g; }
+    bool is_imported_global() const { return imported_global_; }
     bool is_visiting() const { return visiting_; }
     bool is_resolved() const { return resolved_; }
 
@@ -314,6 +320,7 @@ protected:
     std::string binary_dir_;
     
     bool is_imported_;
+    bool imported_global_ = false;
     std::string imported_location_;
 
     std::map<Language, std::string> standards_;

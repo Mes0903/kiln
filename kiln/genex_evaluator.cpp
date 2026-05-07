@@ -256,6 +256,44 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             return (*arg1_val == *arg2_val) ? "1" : "0";
         }
 
+        case GenexNodeType::EQUAL: {
+            // $<EQUAL:a,b> returns 1 if values are numerically equal, 0 otherwise.
+            // Real CMake parses these as integers (decimal/0x hex/0 octal).
+            auto args = GenexParser().split_genex_args(node.raw_content);
+            if (args.size() != 2) {
+                return std::unexpected("$<EQUAL:...> requires exactly 2 arguments");
+            }
+            GenexParser parser;
+            auto arg1_result = parser.parse(args[0]);
+            if (!arg1_result) return std::unexpected(arg1_result.error());
+            auto arg1_val = evaluate_nodes(arg1_result->nodes);
+            if (!arg1_val) return arg1_val;
+            auto arg2_result = parser.parse(args[1]);
+            if (!arg2_result) return std::unexpected(arg2_result.error());
+            auto arg2_val = evaluate_nodes(arg2_result->nodes);
+            if (!arg2_val) return arg2_val;
+            auto to_int = [](std::string s) -> std::expected<long long, std::string> {
+                size_t b = 0, e = s.size();
+                while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+                while (e > b && std::isspace(static_cast<unsigned char>(s[e-1]))) --e;
+                std::string t = s.substr(b, e - b);
+                if (t.empty()) return std::unexpected("$<EQUAL:...> empty argument");
+                try {
+                    size_t pos = 0;
+                    long long v = std::stoll(t, &pos, 0);
+                    if (pos != t.size()) return std::unexpected("$<EQUAL:...> non-numeric argument: " + t);
+                    return v;
+                } catch (const std::exception&) {
+                    return std::unexpected("$<EQUAL:...> non-numeric argument: " + t);
+                }
+            };
+            auto a = to_int(*arg1_val);
+            if (!a) return std::unexpected(a.error());
+            auto b = to_int(*arg2_val);
+            if (!b) return std::unexpected(b.error());
+            return (*a == *b) ? "1" : "0";
+        }
+
         case GenexNodeType::VERSION_LESS:
         case GenexNodeType::VERSION_GREATER:
         case GenexNodeType::VERSION_EQUAL:

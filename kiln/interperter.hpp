@@ -150,6 +150,13 @@ struct ExportSetEntry {
     std::string target_name;
     std::string source_dir;  // For relative path computation
     std::string binary_dir;
+    // Destinations from install(TARGETS ... ) so the install-tree export can
+    // reproduce IMPORTED_LOCATION at the actual install path. Empty when the
+    // user didn't pass a per-type DESTINATION (consumers fall back to
+    // CMAKE_INSTALL_{BIN,LIB}DIR via the export generator's defaults).
+    std::string archive_dest;
+    std::string library_dest;
+    std::string runtime_dest;
 };
 
 // Forward declaration
@@ -330,10 +337,32 @@ public:
 
     // Look up a target by name, resolving aliases. Returns nullptr if not found.
     // Use this for user-provided target names. For internal/already-resolved names, use get_targets() directly.
+    //
+    // Imported targets are directory-scoped (visible only in their creating dir
+    // and subdirs) unless declared GLOBAL. Non-imported targets are always
+    // global. We filter out imported non-global targets that aren't visible
+    // from the current source dir so multi-find_package() across sibling
+    // subdirs reproduces CMake's per-scope semantics.
     Target* find_target(const std::string& name) const {
         auto& targets = get_root()->targets_;
         auto it = targets.find(resolve_target_alias(name));
-        return (it != targets.end()) ? it->second.get() : nullptr;
+        if (it == targets.end()) return nullptr;
+        Target* t = it->second.get();
+        if (t->is_imported() && !t->is_imported_global()) {
+            const auto& creator = t->get_source_dir();
+            // CMAKE_CURRENT_SOURCE_DIR mutates as we walk into subdirs;
+            // visibility is "creator dir is a prefix of current dir".
+            std::string cur = const_cast<Interpreter*>(this)->get_variable("CMAKE_CURRENT_SOURCE_DIR");
+            if (!creator.empty() && !cur.empty()) {
+                if (cur != creator
+                    && !(cur.size() > creator.size()
+                         && cur.compare(0, creator.size(), creator) == 0
+                         && cur[creator.size()] == '/')) {
+                    return nullptr;
+                }
+            }
+        }
+        return t;
     }
 
     // Check if a name is an alias
@@ -402,8 +431,12 @@ public:
 
     // Export sets (populated by install(TARGETS ... EXPORT))
     void add_to_export_set(const std::string& export_name, const std::string& target,
-                           const std::string& src_dir, const std::string& bin_dir) {
-        get_root()->export_sets_[export_name].push_back({target, src_dir, bin_dir});
+                           const std::string& src_dir, const std::string& bin_dir,
+                           const std::string& archive_dest = {},
+                           const std::string& library_dest = {},
+                           const std::string& runtime_dest = {}) {
+        get_root()->export_sets_[export_name].push_back(
+            {target, src_dir, bin_dir, archive_dest, library_dest, runtime_dest});
     }
     const std::map<std::string, std::vector<ExportSetEntry>>& get_export_sets() const {
         return get_root()->export_sets_;

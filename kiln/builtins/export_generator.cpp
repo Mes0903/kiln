@@ -32,13 +32,52 @@ static std::string to_upper(const std::string& str) {
 }
 
 // Generate the IMPORT_PREFIX computation code for install exports
-static std::string generate_import_prefix_code(const std::string& destination) {
+// Resolve a per-target install destination to a path of the form
+// "${_IMPORT_PREFIX}/<rel>". Handles three cases the user may have written:
+//   - empty → fallback (caller supplies default like "lib")
+//   - relative ("lib", "cm-umode/lib") → joined under _IMPORT_PREFIX
+//   - absolute ("/opt/et/cm-umode/lib") → stripped down to the install_prefix
+//     so ${_IMPORT_PREFIX} substitutes for the prefix portion at consume time.
+//     If the absolute path doesn't sit under install_prefix we leave it alone.
+static std::string resolve_install_dest_under_prefix(const std::string& dest,
+                                                     const std::string& fallback,
+                                                     const std::string& install_prefix) {
+    std::string raw = dest.empty() ? fallback : dest;
+    if (raw.empty()) return std::string{};
+    if (raw.front() != '/') {
+        return std::string("${_IMPORT_PREFIX}/") + raw;
+    }
+    if (!install_prefix.empty()) {
+        std::error_code ec;
+        auto rel = std::filesystem::relative(raw, install_prefix, ec);
+        if (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) {
+            return std::string("${_IMPORT_PREFIX}/") + rel.generic_string();
+        }
+    }
+    return raw;  // outside the install tree — emit verbatim
+}
+
+static std::string generate_import_prefix_code(const std::string& destination,
+                                                const std::string& install_prefix = {}) {
     std::ostringstream ss;
 
-    // Count directory depth from install prefix to destination
+    // Compute the destination's depth *relative to the install prefix*. If the
+    // user passed an absolute DESTINATION (e.g. "${CMAKE_INSTALL_PREFIX}/lib/..."),
+    // counting raw path segments overshoots — we'd walk past the prefix and
+    // end up at "/", landing libraries at "/lib/foo.so" instead of
+    // "${prefix}/lib/foo.so".
     std::filesystem::path dest_path(destination);
+    std::filesystem::path rel_path = dest_path;
+    if (dest_path.is_absolute() && !install_prefix.empty()) {
+        std::filesystem::path prefix_path(install_prefix);
+        std::error_code ec;
+        auto rel = std::filesystem::relative(dest_path, prefix_path, ec);
+        if (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) {
+            rel_path = rel;
+        }
+    }
     int depth = 0;
-    for (const auto& part : dest_path) {
+    for (const auto& part : rel_path) {
         if (!part.empty() && part != ".") {
             depth++;
         }
@@ -145,10 +184,14 @@ std::string target_type_to_imported_type(TargetType type) {
 
 // Escape a string value for CMake syntax (double quotes within quoted strings)
 std::string escape_cmake_string(const std::string& str) {
+    // Do NOT escape '$' — exported property values are re-evaluated when the
+    // generated *Targets.cmake is include()d, so `${_IMPORT_PREFIX}` and
+    // friends must reach the consumer un-escaped. Real CMake's exports
+    // likewise leave '$' alone here.
     std::string result;
     result.reserve(str.size());
     for (char c : str) {
-        if (c == '"' || c == '\\' || c == '$') {
+        if (c == '"' || c == '\\') {
             result += '\\';
         }
         result += c;
@@ -228,7 +271,7 @@ std::string generate_export_content(
     // For install exports, compute _IMPORT_PREFIX
     if (ctx.for_install && !ctx.destination.empty()) {
         ss << "# Compute the installation prefix relative to this file\n";
-        ss << generate_import_prefix_code(ctx.destination);
+        ss << generate_import_prefix_code(ctx.destination, ctx.install_prefix);
         ss << "\n";
     }
 
@@ -288,16 +331,25 @@ std::string generate_export_content(
         if (type != TargetType::INTERFACE_LIBRARY) {
             std::string location;
             if (ctx.for_install) {
-                // Use _IMPORT_PREFIX-relative path for install exports
+                // Resolve from the install(TARGETS) destinations the user
+                // actually wrote — hard-coding lib/ misplaces artifacts when
+                // the project picked a non-default destination (cm-umode does).
                 std::string output_name = target->get_output_name();
-                std::string prefix_var = "${_IMPORT_PREFIX}";
+                auto dit = ctx.target_install_dests.find(target->get_name());
+                const auto* d = (dit != ctx.target_install_dests.end()) ? &dit->second : nullptr;
 
                 if (type == TargetType::EXECUTABLE) {
-                    location = prefix_var + "/bin/" + output_name;
+                    std::string dir = resolve_install_dest_under_prefix(
+                        d ? d->runtime_dest : std::string{}, "bin", ctx.install_prefix);
+                    if (!dir.empty()) location = dir + "/" + output_name;
                 } else if (type == TargetType::SHARED_LIBRARY) {
-                    location = prefix_var + "/lib/lib" + output_name + ".so";
+                    std::string dir = resolve_install_dest_under_prefix(
+                        d ? d->library_dest : std::string{}, "lib", ctx.install_prefix);
+                    if (!dir.empty()) location = dir + "/lib" + output_name + ".so";
                 } else if (type == TargetType::STATIC_LIBRARY) {
-                    location = prefix_var + "/lib/lib" + output_name + ".a";
+                    std::string dir = resolve_install_dest_under_prefix(
+                        d ? d->archive_dest : std::string{}, "lib", ctx.install_prefix);
+                    if (!dir.empty()) location = dir + "/lib" + output_name + ".a";
                 } else if (type == TargetType::OBJECT_LIBRARY) {
                     // Object libraries are trickier - they have multiple .o files
                     // For now, skip IMPORTED_LOCATION for object libs
@@ -320,11 +372,19 @@ std::string generate_export_content(
             std::string include_str;
             for (size_t i = 0; i < includes.size(); ++i) {
                 if (i > 0) include_str += ";";
-                // For install exports, paths might need to be relativized
-                // If it's an absolute path under the build/source tree,
-                // it should have been filtered by INSTALL_INTERFACE genex
-                // Otherwise keep it as-is (system includes, etc.)
-                include_str += includes[i];
+                std::string path = includes[i];
+                // For install exports, INSTALL_INTERFACE genex commonly yields
+                // either a path relative to the install prefix (e.g. "include")
+                // or an absolute path that resolves under it (when the user
+                // wrote $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>).
+                // Real CMake rewrites both forms to ${_IMPORT_PREFIX}/<rel> so
+                // the export stays relocatable. Absolute paths outside the
+                // install tree (system includes etc.) pass through unchanged.
+                if (ctx.for_install && !path.empty()
+                    && path.compare(0, 16, "${_IMPORT_PREFIX}") != 0) {
+                    path = resolve_install_dest_under_prefix(path, std::string{}, ctx.install_prefix);
+                }
+                include_str += path;
             }
             if (!include_str.empty()) {
                 ss << "  INTERFACE_INCLUDE_DIRECTORIES \"" << escape_cmake_string(include_str) << "\"\n";
@@ -369,9 +429,19 @@ std::string generate_export_content(
             }
         }
 
-        // INTERFACE_LINK_DIRECTORIES
+        // INTERFACE_LINK_DIRECTORIES — relativize like INTERFACE_INCLUDE_DIRECTORIES
+        // so install exports stay relocatable. Same set of cases: relative
+        // paths get ${_IMPORT_PREFIX}/ prepended; absolute paths under
+        // install_prefix get rewritten; paths outside it pass through.
         auto link_dirs = evaluate_export_property(*target, "LINK_DIRECTORIES", ctx);
         if (!link_dirs.empty()) {
+            if (ctx.for_install) {
+                for (auto& p : link_dirs) {
+                    if (!p.empty() && p.compare(0, 16, "${_IMPORT_PREFIX}") != 0) {
+                        p = resolve_install_dest_under_prefix(p, std::string{}, ctx.install_prefix);
+                    }
+                }
+            }
             ss << "  INTERFACE_LINK_DIRECTORIES \"" << escape_cmake_string(format_cmake_list(link_dirs)) << "\"\n";
         }
 
@@ -423,7 +493,7 @@ std::string generate_config_export_content(
     // Compute _IMPORT_PREFIX
     if (ctx.for_install && !ctx.destination.empty()) {
         ss << "# Compute the installation prefix relative to this file\n";
-        ss << generate_import_prefix_code(ctx.destination);
+        ss << generate_import_prefix_code(ctx.destination, ctx.install_prefix);
         ss << "\n";
     }
 
@@ -458,12 +528,17 @@ std::string generate_config_export_content(
         target_ctx.current_target = target;
         GenexEvaluator eval(target_ctx);
 
-        // Set the imported location for this configuration
+        // Set the imported location for this configuration. Like the main
+        // export file, derive the directory from the install(TARGETS)
+        // destinations rather than hard-coding lib/ and bin/.
         std::string location;
-        std::string prefix_var = "${_IMPORT_PREFIX}";
+        auto dit = ctx.target_install_dests.find(target->get_name());
+        const auto* d = (dit != ctx.target_install_dests.end()) ? &dit->second : nullptr;
 
         if (type == TargetType::EXECUTABLE) {
-            location = prefix_var + "/bin/" + target->get_output_name();
+            std::string dir = resolve_install_dest_under_prefix(
+                d ? d->runtime_dest : std::string{}, "bin", ctx.install_prefix);
+            if (!dir.empty()) location = dir + "/" + target->get_output_name();
         } else if (type == TargetType::SHARED_LIBRARY) {
             std::string soversion = eval.evaluate_target_property(*target, "SOVERSION");
             std::string version = eval.evaluate_target_property(*target, "VERSION");
@@ -473,9 +548,13 @@ std::string generate_config_export_content(
             } else if (!soversion.empty()) {
                 lib_name += "." + soversion;
             }
-            location = prefix_var + "/lib/" + lib_name;
+            std::string dir = resolve_install_dest_under_prefix(
+                d ? d->library_dest : std::string{}, "lib", ctx.install_prefix);
+            if (!dir.empty()) location = dir + "/" + lib_name;
         } else if (type == TargetType::STATIC_LIBRARY) {
-            location = prefix_var + "/lib/lib" + target->get_output_name() + ".a";
+            std::string dir = resolve_install_dest_under_prefix(
+                d ? d->archive_dest : std::string{}, "lib", ctx.install_prefix);
+            if (!dir.empty()) location = dir + "/lib" + target->get_output_name() + ".a";
         }
 
         if (!location.empty()) {

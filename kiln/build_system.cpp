@@ -992,7 +992,14 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 // TARGETS rules are skipped since interp is null (we handled them above)
                                 const auto& install_rules = ep_target->get_pending_install_rules();
                                 if (!install_rules.empty()) {
-                                    std::string install_prefix = ep_target->get_ep_install_dir();
+                                    // Mirror compute_install_inputs path: prefer the EP's
+                                    // CMAKE_INSTALL_PREFIX (set via CMAKE_ARGS) over the
+                                    // ExternalProject INSTALL_DIR default.
+                                    std::string install_prefix;
+                                    if (auto* ep_interp_for_prefix = ep_target->get_ep_interpreter())
+                                        install_prefix = ep_interp_for_prefix->get_variable("CMAKE_INSTALL_PREFIX");
+                                    if (install_prefix.empty())
+                                        install_prefix = ep_target->get_ep_install_dir();
                                     std::string config = ep_target->get_pending_install_config();
                                     auto install_result = execute_install_rules(ep_target->get_ep_interpreter(),
                                                                                 install_rules,
@@ -1731,8 +1738,8 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         // have had their genex resolved by external_project.cpp at intercept time.
         // Defense in depth: catches future regressions where a value bypasses that
         // evaluation and gets expanded as a literal in install paths or commands.
-        for (const auto& arg : ep_target->get_cmake_args()) {
-            // Parse -DVAR=value or -DVAR:TYPE=value
+        std::vector<std::string> initial_cache_scripts;
+        auto apply_arg = [&](const std::string& arg, const char* origin) {
             if (arg.starts_with("-D")) {
                 std::string def = arg.substr(2);
                 size_t eq = def.find('=');
@@ -1742,25 +1749,18 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
                     // Strip type annotation
                     size_t colon = var.find(':');
                     if (colon != std::string::npos) var = var.substr(0, colon);
-                    assert_no_genex(val, "EP " + ep_name + " CMAKE_ARGS " + var);
+                    assert_no_genex(val, "EP " + ep_name + " " + origin + " " + var);
                     ep_interp->set_variable(var, val);
                 }
+            } else if (arg.starts_with("-C")) {
+                // -C<path> / -C <path>: initial-cache script to pre-populate
+                // the child cache before interpreting CMakeLists.txt.
+                std::string path = arg.substr(2);
+                if (!path.empty()) initial_cache_scripts.push_back(std::move(path));
             }
-        }
-        for (const auto& arg : ep_target->get_cmake_cache_args()) {
-            if (arg.starts_with("-D")) {
-                std::string def = arg.substr(2);
-                size_t eq = def.find('=');
-                if (eq != std::string::npos) {
-                    std::string var = def.substr(0, eq);
-                    std::string val = def.substr(eq + 1);
-                    size_t colon = var.find(':');
-                    if (colon != std::string::npos) var = var.substr(0, colon);
-                    assert_no_genex(val, "EP " + ep_name + " CMAKE_CACHE_ARGS " + var);
-                    ep_interp->set_variable(var, val);
-                }
-            }
-        }
+        };
+        for (const auto& arg : ep_target->get_cmake_args()) apply_arg(arg, "CMAKE_ARGS");
+        for (const auto& arg : ep_target->get_cmake_cache_args()) apply_arg(arg, "CMAKE_CACHE_ARGS");
 
         // Set CMAKE_INSTALL_PREFIX if not already set
         if (ep_interp->get_variable("CMAKE_INSTALL_PREFIX").empty()) {
@@ -1769,6 +1769,29 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
 
         // Suppress STATUS messages in child interpreter
         ep_interp->set_variable("CMAKE_MESSAGE_LOG_LEVEL", "WARNING");
+
+        // Pre-load any initial-cache scripts from -C<file>. CMake interprets
+        // these before CMakeLists.txt; projects use this to seed cache vars
+        // (e.g. CMAKE_MODULE_PATH) for sub-builds.
+        for (const auto& script_path : initial_cache_scripts) {
+            if (!std::filesystem::exists(script_path)) {
+                return "EP " + ep_name + ": initial-cache script not found: " + script_path;
+            }
+            std::ifstream cfs(script_path);
+            std::string cscript((std::istreambuf_iterator<char>(cfs)), std::istreambuf_iterator<char>());
+            Parser cparser(cscript, script_path);
+            auto cast_ = cparser.parse();
+            if (!cast_) {
+                return "EP " + ep_name + ": parse error in -C " + script_path + ": " + cast_.error().reason;
+            }
+            ep_interp->set_current_file(script_path);
+            auto cres = ep_interp->interpret(*cast_);
+            if (!cres) {
+                std::string output = ep_output.str();
+                return "EP " + ep_name + ": -C " + script_path + ": " + cres.error().message +
+                       (output.empty() ? "" : "\nOutput:\n" + output);
+            }
+        }
 
         // Read and parse CMakeLists.txt
         std::string cmake_file = source_dir + "/CMakeLists.txt";
@@ -1791,7 +1814,15 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         auto interp_result = ep_interp->interpret(*ast);
         if (!interp_result) {
             std::string output = ep_output.str();
-            return "EP " + ep_name + ": Interpretation error: " + interp_result.error().message +
+            // Render the full diagnostic (file, line, caret, call stack) so
+            // command-syntax errors and friends carry the same context as
+            // top-level errors. Plain string concatenation lost the backtrace.
+            std::ostringstream diag;
+            const auto& err = interp_result.error();
+            kiln::print_diagnostic(diag, kiln::DiagnosticSeverity::Error,
+                                   err.message, err.file, err.row, err.col,
+                                   err.offset, err.length, err.backtrace, err.source_content);
+            return "EP " + ep_name + ": Interpretation error:\n" + diag.str() +
                    (output.empty() ? "" : "\nOutput:\n" + output);
         }
 
