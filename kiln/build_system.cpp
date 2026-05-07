@@ -1251,6 +1251,28 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                     state.progress.print_line(result.output);
                                 }
                             }
+
+                            // For custom_command tasks: verify declared OUTPUTs were
+                            // actually produced. CMake/Ninja errors out in this case;
+                            // without this check, a command that exits 0 but writes
+                            // nothing leaves downstream compiles to fail with confusing
+                            // "missing header" errors instead of pointing at the
+                            // upstream rule.
+                            if (std::holds_alternative<CustomCommandTask>(task.kind)) {
+                                for (const auto& out : task.outputs) {
+                                    std::error_code ec;
+                                    if (!std::filesystem::exists(out, ec)) {
+                                        std::string detail = "Custom command did not produce declared output\n";
+                                        detail += "  expected: " + out + "\n";
+                                        detail += "  cd " + task.working_dir + "\n";
+                                        for (const auto& cmd : task.commands) {
+                                            detail += "  $ " + join_command(cmd) + "\n";
+                                        }
+                                        task_error = detail;
+                                        return;
+                                    }
+                                }
+                            }
                         }
                     }, task.kind);
                     if (!task_error.empty()) break;
@@ -1753,6 +1775,7 @@ BuildGraph::attach_ep_graph(
 
         task.ep_binary_dir = ep_binary_dir;
         dirty_info.push_back({task_uptr.get(), is_marker, is_dirty});
+
     }
 
     // 3. Transfer task ownership via transaction
@@ -1773,13 +1796,22 @@ BuildGraph::attach_ep_graph(
 
     // 4. Apply dirty state from pre-computed info.
     //    Marker tasks (no outputs, no commands — e.g. a commandless custom_target
-    //    used purely to group DEPENDS) have nothing to execute, so we mark them
-    //    completed immediately. Otherwise their dependents would wait forever
-    //    for a task that never runs and the build would stall.
+    //    used purely to group DEPENDS) have nothing to execute, but they still
+    //    serve to order their dependents AFTER their dependencies. Route them
+    //    through dirty_state so the scheduler waits for their deps before
+    //    declaring them complete. The executor's catch-all branch handles a
+    //    commandless task as a no-op (the commands loop runs zero times).
+    //    Markers without dependencies are completed immediately to avoid
+    //    enqueuing trivial no-ops.
     int dirty_count = 0;
     for (const auto& info : dirty_info) {
         if (info.is_marker) {
-            state.completed.insert(info.raw);
+            if (info.raw->dependencies.empty()) {
+                state.completed.insert(info.raw);
+            } else {
+                state.dirty_state[info.raw] = true;
+                dirty_count++;
+            }
         } else if (info.is_dirty) {
             state.dirty_state[info.raw] = true;
             dirty_count++;
@@ -1900,9 +1932,6 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
         if (ep_interp->get_variable("CMAKE_INSTALL_PREFIX").empty()) {
             ep_interp->set_variable("CMAKE_INSTALL_PREFIX", install_dir);
         }
-
-        // Suppress STATUS messages in child interpreter
-        ep_interp->set_variable("CMAKE_MESSAGE_LOG_LEVEL", "WARNING");
 
         // Pre-load any initial-cache scripts from -C<file>. CMake interprets
         // these before CMakeLists.txt; projects use this to seed cache vars

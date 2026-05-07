@@ -2262,7 +2262,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) {
             if (lib.ends_with("-NOTFOUND")) {
                 kiln::print_message(std::cerr, "WARNING",
-                    "target '" + name_ + "' links '" + lib + "' which was not found — skipping");
+                    "target '" + name_ + "' links '" + lib + "' which was not found - skipping");
                 continue;
             }
             if (seen.insert(lib).second) {

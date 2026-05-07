@@ -259,73 +259,21 @@ std::string kiln::strip_shell_quoting(const std::string& arg) {
     return result;
 }
 
-kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
-    if (command.empty()) return {-1, "Empty command"};
-
-    // Parse command vector: separate program+args from redirections.
-    // This lets us handle redirects via dup2() without needing a shell.
-    // Redirect operators can appear as standalone args (">"), prefixes (">file"),
-    // or embedded within args ("file>out", "file.sql>").
-    std::vector<std::string> argv_strs;
-    std::string stdin_file, stdout_file, stderr_file;
+// Resolved command: argv is what we'll exec; the *_file fields are paths
+// to redirect the child's std fds to (empty = inherit/pipe).
+struct ResolvedCommand {
+    std::vector<std::string> argv;
+    std::string stdin_file;
+    std::string stdout_file;
+    std::string stderr_file;
     bool stdout_append = false;
+};
 
-    // Process command vector: each element is already a distinct argument.
-    // Check for redirect operators as whole arguments, argument prefixes
-    // (e.g. ">file", "< input"), or embedded within arguments (e.g. "file>out",
-    // "file.sql>"). The embedded case arises when CMake source glues a redirect
-    // to the preceding token (e.g. `mariadb_sys_schema.sql>` on one line,
-    // `output.sql` on the next).
-    for (size_t i = 0; i < command.size(); ++i) {
-        const auto& arg = command[i];
-
-        if (arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1") {
-            // Shell pipeline/logic — fall back to shell
-            return run_command(join_command_raw(command), working_dir);
-        }
-
-        size_t pfx = shell_redirect_prefix_len(arg);
-        if (pfx > 0) {
-            std::string op = arg.substr(0, pfx);
-            std::string path = arg.substr(pfx);
-            // Path may be in next argument if this one is just the operator
-            if (path.empty() && i + 1 < command.size()) {
-                path = command[++i];
-            }
-            path = strip_shell_quoting(path);
-
-            if (op == "<") stdin_file = path;
-            else if (op == ">>" || op == "1>>") { stdout_file = path; stdout_append = true; }
-            else if (op == ">" || op == "1>") stdout_file = path;
-            else if (op == "2>") stderr_file = path;
-            else if (op == "2>>") stderr_file = path;
-        } else if (auto [pos, len] = find_embedded_redirect(arg); pos != std::string::npos) {
-            // Embedded redirect: "file.sql>" or "file>out"
-            std::string pre = arg.substr(0, pos);
-            std::string op = arg.substr(pos, len);
-            std::string path = arg.substr(pos + len);
-            if (path.empty() && i + 1 < command.size()) {
-                path = command[++i];
-            }
-            path = strip_shell_quoting(path);
-
-            if (!pre.empty()) argv_strs.push_back(pre);
-
-            if (op == "<") stdin_file = path;
-            else if (op == ">>") { stdout_file = path; stdout_append = true; }
-            else if (op == ">") stdout_file = path;
-        } else {
-            argv_strs.push_back(arg);
-        }
-    }
-
-    if (argv_strs.empty()) return {-1, "Empty command after parsing"};
-
-    // Direct exec: fork + execvp, no shell involved.
+// Fork + execvp the resolved command. No parsing — argv and redirects are
+// applied verbatim. Caller is responsible for ensuring argv is non-empty.
+static kiln::CommandResult exec_resolved(const ResolvedCommand& rc, const std::string& working_dir) {
     int pipe_fd[2];
-    if (pipe(pipe_fd) != 0) {
-        return {-1, "Failed to create pipe"};
-    }
+    if (pipe(pipe_fd) != 0) return {-1, "Failed to create pipe"};
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -335,31 +283,29 @@ kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, c
     }
 
     if (pid == 0) {
-        // Child
         close(pipe_fd[0]);
 
         if (!working_dir.empty()) {
             if (chdir(working_dir.c_str()) != 0) _exit(127);
         }
 
-        // Handle redirections
-        if (!stdin_file.empty()) {
-            int fd = open(stdin_file.c_str(), O_RDONLY);
+        if (!rc.stdin_file.empty()) {
+            int fd = open(rc.stdin_file.c_str(), O_RDONLY);
             if (fd < 0) _exit(127);
             dup2(fd, STDIN_FILENO);
             close(fd);
         }
-        if (!stdout_file.empty()) {
-            int flags = O_WRONLY | O_CREAT | (stdout_append ? O_APPEND : O_TRUNC);
-            int fd = open(stdout_file.c_str(), flags, 0644);
+        if (!rc.stdout_file.empty()) {
+            int flags = O_WRONLY | O_CREAT | (rc.stdout_append ? O_APPEND : O_TRUNC);
+            int fd = open(rc.stdout_file.c_str(), flags, 0644);
             if (fd < 0) _exit(127);
             dup2(fd, STDOUT_FILENO);
             close(fd);
         } else {
             dup2(pipe_fd[1], STDOUT_FILENO);
         }
-        if (!stderr_file.empty()) {
-            int fd = open(stderr_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (!rc.stderr_file.empty()) {
+            int fd = open(rc.stderr_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) _exit(127);
             dup2(fd, STDERR_FILENO);
             close(fd);
@@ -368,19 +314,16 @@ kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, c
         }
         close(pipe_fd[1]);
 
-        // Build argv
         std::vector<const char*> argv;
-        argv.reserve(argv_strs.size() + 1);
-        for (const auto& a : argv_strs) argv.push_back(a.c_str());
+        argv.reserve(rc.argv.size() + 1);
+        for (const auto& a : rc.argv) argv.push_back(a.c_str());
         argv.push_back(nullptr);
 
         execvp(argv[0], const_cast<char* const*>(argv.data()));
-        // exec failed — write error to the pipe so the parent can report it
         fprintf(stderr, "exec: %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
 
-    // Parent
     close(pipe_fd[1]);
 
     std::string output;
@@ -396,6 +339,68 @@ kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, c
     int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
     return {exit_code, output};
+}
+
+kiln::CommandResult kiln::run_command(const std::vector<std::string>& command, const std::string& working_dir) {
+    if (command.empty()) return {-1, "Empty command"};
+
+    // Parse command vector: separate program+args from redirections.
+    // This lets us handle redirects via dup2() without needing a shell.
+    // Redirect operators can appear as standalone args (">"), prefixes (">file"),
+    // or embedded within args ("file>out", "file.sql>"). The embedded case
+    // arises when CMake source glues a redirect to the preceding token
+    // (e.g. `mariadb_sys_schema.sql>` on one line, `output.sql` on the next).
+    //
+    // If we encounter true shell logic (|, ||, &&, 2>&1), we hand the whole
+    // command off to /bin/sh -c verbatim and skip our own redirect handling
+    // entirely — the shell will parse it. We must NOT recurse through this
+    // function with `{"/bin/sh","-c",joined}` because the joined command
+    // contains literal `>` / `<` that find_embedded_redirect would split on.
+    ResolvedCommand rc;
+
+    for (size_t i = 0; i < command.size(); ++i) {
+        const auto& arg = command[i];
+
+        if (arg == "|" || arg == "&&" || arg == "||" || arg == "2>&1") {
+            ResolvedCommand shell_rc;
+            shell_rc.argv = {"/bin/sh", "-c", join(command, " ")};
+            return exec_resolved(shell_rc, working_dir);
+        }
+
+        size_t pfx = shell_redirect_prefix_len(arg);
+        if (pfx > 0) {
+            std::string op = arg.substr(0, pfx);
+            std::string path = arg.substr(pfx);
+            if (path.empty() && i + 1 < command.size()) {
+                path = command[++i];
+            }
+            path = strip_shell_quoting(path);
+
+            if (op == "<") rc.stdin_file = path;
+            else if (op == ">>" || op == "1>>") { rc.stdout_file = path; rc.stdout_append = true; }
+            else if (op == ">" || op == "1>") rc.stdout_file = path;
+            else if (op == "2>" || op == "2>>") rc.stderr_file = path;
+        } else if (auto [pos, len] = find_embedded_redirect(arg); pos != std::string::npos) {
+            std::string pre = arg.substr(0, pos);
+            std::string op = arg.substr(pos, len);
+            std::string path = arg.substr(pos + len);
+            if (path.empty() && i + 1 < command.size()) {
+                path = command[++i];
+            }
+            path = strip_shell_quoting(path);
+
+            if (!pre.empty()) rc.argv.push_back(pre);
+
+            if (op == "<") rc.stdin_file = path;
+            else if (op == ">>") { rc.stdout_file = path; rc.stdout_append = true; }
+            else if (op == ">") rc.stdout_file = path;
+        } else {
+            rc.argv.push_back(arg);
+        }
+    }
+
+    if (rc.argv.empty()) return {-1, "Empty command after parsing"};
+    return exec_resolved(rc, working_dir);
 }
 
 std::string kiln::get_executable_path() {
