@@ -78,10 +78,39 @@ public:
             auto it = registry_.find(key);
             if (it != registry_.end()) return it->second.get();
             auto compiler = make_compiler(compiler_id, binary, lang, sysroot, compiler_target);
+            // Propagate version from any sibling entry sharing this binary
+            // (e.g. the default compiler registered by enable_language). The
+            // detected version lives on whichever Compiler ran detect_platform;
+            // a per-subdir `set(CMAKE_CXX_COMPILER ...)` that captures the same
+            // binary under a different sysroot/target should still mix the
+            // version into task signatures.
+            for (const auto& [_, sibling] : registry_) {
+                if (sibling->binary() == binary && !sibling->version().empty()) {
+                    compiler->set_version(sibling->version());
+                    break;
+                }
+            }
             const Compiler* raw = compiler.get();
             registry_.emplace(std::move(key), std::move(compiler));
             return raw;
         }
+    }
+
+    // Look up a registered compiler's detected version by binary path.
+    // Returns the version string (e.g. "13.2.0") or empty if no compiler
+    // with this binary is registered. Used by BuildGraph::calculate_signature
+    // to mix the compiler version into task signatures without re-probing
+    // arbitrary executables (which would be unsafe — custom_command first
+    // tokens are arbitrary user scripts).
+    std::string version_for(const std::string& binary) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [_, uniq] : registry_) {
+            if (uniq->binary() == binary) {
+                const std::string& v = uniq->version();
+                if (!v.empty()) return v;
+            }
+        }
+        return {};
     }
 
 private:

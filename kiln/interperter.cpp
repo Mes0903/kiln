@@ -461,6 +461,7 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         }
         set_variable("CMAKE_" + lang + "_COMPILER_LOADED", "1");
 
+        compiler->set_version(get_variable("CMAKE_" + lang + "_COMPILER_VERSION"));
         get_toolchain().set_compiler(lang_enum, std::move(compiler));
     } else if (lang == "ASM") {
         // Don't apply the host-detection backup if the user already pinned a
@@ -531,6 +532,7 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         auto compiler = make_compiler(
             asm_id_now, get_variable("CMAKE_ASM_COMPILER"), Language::ASM,
             get_variable("CMAKE_SYSROOT"), asm_target);
+        compiler->set_version(get_variable("CMAKE_ASM_COMPILER_VERSION"));
         get_toolchain().set_compiler(Language::ASM, std::move(compiler));
     } else {
         return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";
@@ -893,6 +895,7 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
     std::filesystem::create_directories(root_binary_dir);
 
     BuildGraph graph;
+    graph.set_toolchain(&get_toolchain());
 
     // Build linker flags
     std::vector<std::string> exe_linker_flags;

@@ -122,6 +122,14 @@ public:
     virtual const std::string& sysroot() const { static const std::string e; return e; }
     virtual const std::string& compiler_target() const { static const std::string e; return e; }
 
+    // Detected version string (e.g. "13.2.0"). Populated once by the caller
+    // after detect_platform() runs and the compiler is registered with the
+    // toolchain — empty until then. Used as part of the per-task signature
+    // hash so a system update that swaps the underlying compiler under a
+    // stable PATH entry invalidates cached objects.
+    const std::string& version() const { return version_; }
+    void set_version(std::string v) { version_ = std::move(v); }
+
     virtual CompilerCommand get_compile_command(const CompileContext& ctx) const = 0;
     virtual CompilerCommand get_link_command(const LinkContext& ctx) const = 0;
     virtual std::vector<std::string> get_archive_command(const std::string& output, const std::vector<std::string>& objs) const = 0;
@@ -196,6 +204,9 @@ public:
         (void)lang; (void)standard;
         return {};
     }
+
+private:
+    std::string version_;
 };
 
 } // namespace kiln

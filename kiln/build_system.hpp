@@ -175,7 +175,7 @@ public:
           ep_target_owners_(std::move(other.ep_target_owners_)),
           stat_cache_(std::move(other.stat_cache_)),
           deps_cache_(std::move(other.deps_cache_)),
-          compiler_version_cache_(std::move(other.compiler_version_cache_)) {}
+          toolchain_(other.toolchain_) {}
 
     BuildGraph& operator=(BuildGraph&& other) noexcept {
         if (this != &other) {
@@ -187,7 +187,7 @@ public:
             ep_target_owners_ = std::move(other.ep_target_owners_);
             stat_cache_ = std::move(other.stat_cache_);
             deps_cache_ = std::move(other.deps_cache_);
-            compiler_version_cache_ = std::move(other.compiler_version_cache_);
+            toolchain_ = other.toolchain_;
         }
         return *this;
     }
@@ -372,14 +372,17 @@ private:
     };
     std::map<std::string, DepsFileCache> deps_cache_;
 
-    // Per-binary version cache. Keyed by command-line binary (e.g. "g++",
-    // "clang++", "/opt/riscv/bin/clang++"). The first command of a compile
-    // task starts with the compiler binary; we run "<binary> --version" once
-    // per unique binary and mix the result into the task signature so that
-    // swapping toolchains correctly invalidates cached objects even when the
-    // binary path stays the same (ccache/wrapper case).
-    std::expected<std::string, std::string> get_compiler_version_for(const std::string& binary);
-    std::map<std::string, std::string> compiler_version_cache_;
+    // Toolchain pointer for compiler-version lookup at signature time.
+    // Set by Interpreter::generate_build_graph after the graph is built.
+    // Versions are detected once at startup (enable_language ->
+    // detect_platform) and stored on the Compiler instance; we just look
+    // them up here, never re-probing arbitrary binaries.
+    const Toolchain* toolchain_ = nullptr;
+
+public:
+    void set_toolchain(const Toolchain* t) { toolchain_ = t; }
+
+private:
     std::string get_kiln_version();
 
     // Parsers for .d files (header dependencies) - uses deps_cache_

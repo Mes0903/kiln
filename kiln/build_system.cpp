@@ -1824,19 +1824,30 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
     for (const auto& cmd : sig_cmds) oss << join_command(cmd) << ";";
     oss << "|";
 
-    // Mix in the version of each unique binary that this task invokes.
-    // The binary path is already in the command string (so swap-by-path
-    // already invalidates), but explicit version coverage handles the
-    // ccache/wrapper case where the path is stable but the underlying
-    // compiler changed (e.g. system update).
-    std::set<std::string> unique_binaries;
-    for (const auto& cmd : task.commands) {
-        if (!cmd.empty()) unique_binaries.insert(cmd.front());
-    }
-    for (const auto& binary : unique_binaries) {
-        auto version_res = get_compiler_version_for(binary);
-        if (!version_res) return std::unexpected(version_res.error());
-        oss << "tool:" << binary << ":" << *version_res << "|";
+    // Mix in the compiler version for any binary that's a registered toolchain
+    // compiler. The binary path is already in the command string (so swap-by-
+    // path already invalidates); this catches the system-update case where the
+    // path is stable but the underlying compiler changed (e.g. gcc 13.2 →
+    // 13.3 under /usr/bin/g++).
+    //
+    // The version is detected once at startup by enable_language /
+    // detect_platform() and stored on the Compiler instance. We just look it
+    // up here — no re-probing at signature time. Critically, this means we
+    // never invoke arbitrary first-token binaries from custom_command argv,
+    // which would be unsafe: side-effectful project scripts that use `$1` to
+    // pick an output filename will happily create `--version.<ext>` in CWD if
+    // we hand them `--version`.
+    if (toolchain_) {
+        std::set<std::string> unique_binaries;
+        for (const auto& cmd : task.commands) {
+            if (!cmd.empty()) unique_binaries.insert(cmd.front());
+        }
+        for (const auto& binary : unique_binaries) {
+            std::string ver = toolchain_->version_for(binary);
+            if (!ver.empty()) {
+                oss << "tool:" << binary << ":" << ver << "|";
+            }
+        }
     }
 
     oss << "kiln:" << get_kiln_version() << "|";
@@ -1947,50 +1958,6 @@ std::expected<void, std::string> BuildGraph::save_cache(const std::string& build
     }
 
     return {};
-}
-
-std::expected<std::string, std::string> BuildGraph::get_compiler_version_for(const std::string& binary) {
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        auto it = compiler_version_cache_.find(binary);
-        if (it != compiler_version_cache_.end()) return it->second;
-    }
-
-    // Shell-quote the binary so paths with spaces work. We're going through
-    // popen, not execve, so quoting matters.
-    std::string quoted;
-    quoted.reserve(binary.size() + 2);
-    quoted += '\'';
-    for (char c : binary) {
-        if (c == '\'') quoted += "'\\''";
-        else           quoted += c;
-    }
-    quoted += '\'';
-
-    std::array<char, 128> buffer;
-    std::string result;
-    FILE* pipe = popen((quoted + " --version 2>/dev/null | head -n 1").c_str(), "r");
-    if (!pipe) {
-        return std::unexpected("Failed to execute " + binary + " to get version");
-    }
-
-    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-        result += buffer.data();
-    }
-
-    int status = pclose(pipe);
-    if (status != 0) {
-        // Don't fail the whole build over a missing version banner — some
-        // wrappers exit non-zero. Cache the (possibly empty) result so we
-        // don't keep retrying.
-        if (result.empty()) result = "<no-version:" + binary + ">";
-    }
-
-    if (!result.empty() && result.back() == '\n') result.pop_back();
-
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    compiler_version_cache_.emplace(binary, result);
-    return compiler_version_cache_[binary];
 }
 
 void BuildGraph::inject_header_unit_tasks(
