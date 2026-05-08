@@ -115,12 +115,20 @@ jobs:
           cmake --install /tmp/cli11/build
 
       - name: Configure
+        env:
+          CPATH: ${{ github.workspace }}/thirdparty-install/include
+          LIBRARY_PATH: ${{ github.workspace }}/thirdparty-install/lib
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/thirdparty-install"
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/thirdparty-install" \
+            -DCMAKE_INCLUDE_PATH="$GITHUB_WORKSPACE/thirdparty-install/include" \
+            -DCMAKE_LIBRARY_PATH="$GITHUB_WORKSPACE/thirdparty-install/lib"
 
       - name: Build
+        env:
+          CPATH: ${{ github.workspace }}/thirdparty-install/include
+          LIBRARY_PATH: ${{ github.workspace }}/thirdparty-install/lib
         run: cmake --build build --parallel
 
       - name: Test
