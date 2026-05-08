@@ -1,160 +1,9 @@
 #include "module_scanner.hpp"
 #include <fstream>
 #include <sstream>
-#include "regex.hpp"
 #include <glaze/glaze.hpp>
 
 namespace kiln {
-
-// JSON-serializable version of ModuleDependencyInfo (without file_time_type)
-struct DDIJson {
-    std::string source;
-    std::string provides;
-    std::vector<std::string> imports;
-    bool is_module_partition = false;
-    std::string partition_name;
-    int64_t timestamp = 0;  // Epoch time in nanoseconds
-};
-
-std::expected<ModuleDependencyInfo, std::string> parse_ddi_file(const std::string& path) {
-    std::ifstream file(path);
-    if (!file) {
-        return std::unexpected("Failed to open DDI file: " + path);
-    }
-
-    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-    DDIJson ddi_json;
-    auto ec = glz::read_json(ddi_json, content);
-    if (ec) {
-        return std::unexpected("Failed to parse DDI JSON from " + path + ": " + glz::format_error(ec, content));
-    }
-
-    ModuleDependencyInfo info;
-    info.source = ddi_json.source;
-    info.provides = ddi_json.provides;
-    info.imports = ddi_json.imports;
-    info.is_module_partition = ddi_json.is_module_partition;
-    info.partition_name = ddi_json.partition_name;
-
-    // Convert epoch nanoseconds back to file_time_type
-    auto duration = std::chrono::nanoseconds(ddi_json.timestamp);
-    info.timestamp = std::filesystem::file_time_type(std::chrono::duration_cast<std::filesystem::file_time_type::duration>(duration));
-
-    return info;
-}
-
-std::expected<void, std::string> write_ddi_file(const std::string& path, const ModuleDependencyInfo& info) {
-    // Ensure parent directory exists
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-    if (ec) {
-        return std::unexpected("Failed to create directory for DDI file: " + ec.message());
-    }
-
-    DDIJson ddi_json;
-    ddi_json.source = info.source;
-    ddi_json.provides = info.provides;
-    ddi_json.imports = info.imports;
-    ddi_json.is_module_partition = info.is_module_partition;
-    ddi_json.partition_name = info.partition_name;
-    ddi_json.timestamp = info.timestamp.time_since_epoch().count();
-
-    std::string json;
-    auto write_ec = glz::write_json(ddi_json, json);
-    if (write_ec) {
-        return std::unexpected("Failed to serialize DDI to JSON: " + glz::format_error(write_ec));
-    }
-
-    std::ofstream file(path);
-    if (!file) {
-        return std::unexpected("Failed to open DDI file for writing: " + path);
-    }
-    file << json;
-
-    if (!file) {
-        return std::unexpected("Failed to write DDI file: " + path);
-    }
-
-    return {};
-}
-
-ModuleDependencyInfo parse_module_scan_output(const std::string& output, const std::string& source_path) {
-    ModuleDependencyInfo info;
-    info.source = source_path;
-
-    // Parse the preprocessor output line by line
-    // Looking for:
-    //   export module ModuleName;
-    //   export module ModuleName:PartitionName;
-    //   module ModuleName;
-    //   import ModuleName;
-    //   import :PartitionName;
-
-    // Regex patterns for module declarations
-    // Note: preprocessor output preserves these directives
-    static auto export_module_re = Regex::compile(R"(^\s*export\s+module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*;)").value();
-    static auto module_impl_re = Regex::compile(R"(^\s*module\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)").value();
-    static auto import_re = Regex::compile(R"(^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;)").value();
-    static auto import_partition_re = Regex::compile(R"(^\s*import\s+:([a-zA-Z_][a-zA-Z0-9_]*)\s*;)").value();
-
-    std::istringstream stream(output);
-    std::string line;
-    std::vector<std::string> captures;
-
-    while (std::getline(stream, line)) {
-        // Check for export module declaration
-        if (export_module_re.search(line, captures)) {
-            info.provides = captures[1];
-            if (captures.size() > 2 && !captures[2].empty()) {
-                info.is_module_partition = true;
-                info.partition_name = captures[2];
-                // Full partition name is ModuleName:PartitionName
-                info.provides = info.provides + ":" + info.partition_name;
-            }
-            continue;
-        }
-
-        // Check for module implementation unit (module ModuleName;)
-        if (module_impl_re.search(line, captures)) {
-            // Implementation unit doesn't provide the module, it just implements it
-            // But it implicitly imports the module interface
-            std::string module_name = captures[1];
-            // Add to imports if not already there and not the same as provides
-            if (info.provides != module_name &&
-                std::find(info.imports.begin(), info.imports.end(), module_name) == info.imports.end()) {
-                info.imports.push_back(module_name);
-            }
-            continue;
-        }
-
-        // Check for import declaration
-        if (import_re.search(line, captures)) {
-            std::string module_name = captures[1];
-            // Skip standard library module (we'll handle these separately)
-            if (module_name == "std" || module_name.starts_with("std.")) {
-                // Still add to imports so we know about the dependency
-            }
-            if (std::find(info.imports.begin(), info.imports.end(), module_name) == info.imports.end()) {
-                info.imports.push_back(module_name);
-            }
-            continue;
-        }
-
-        // Check for partition import (import :PartitionName;)
-        if (import_partition_re.search(line, captures)) {
-            // Partition imports are relative to current module
-            // We store them with : prefix to indicate they're partitions
-            std::string partition = ":" + captures[1];
-            if (std::find(info.imports.begin(), info.imports.end(), partition) == info.imports.end()) {
-                info.imports.push_back(partition);
-            }
-            continue;
-        }
-    }
-
-    return info;
-}
 
 std::string generate_module_mapper_content(const std::vector<ModuleMapEntry>& entries) {
     // GCC module mapper format (one entry per line):
@@ -210,6 +59,108 @@ std::string get_ddi_path(const std::string& binary_dir, const std::string& sourc
     std::filesystem::path ddi = std::filesystem::path(binary_dir) / "ddi" / ddi_suffix;
     ddi += ".ddi";
     return ddi.lexically_normal().string();
+}
+
+} // namespace kiln
+
+template <>
+struct glz::meta<kiln::P1689Provide> {
+    using T = kiln::P1689Provide;
+    static constexpr auto value = glz::object(
+        "logical-name", &T::logical_name,
+        "source-path", &T::source_path,
+        "compiled-module-path", &T::compiled_module_path,
+        "is-interface", &T::is_interface);
+};
+
+template <>
+struct glz::meta<kiln::P1689Require> {
+    using T = kiln::P1689Require;
+    static constexpr auto value = glz::object(
+        "logical-name", &T::logical_name,
+        "lookup-method", &T::lookup_method,
+        "source-path", &T::source_path);
+};
+
+template <>
+struct glz::meta<kiln::ModuleManifestEntry> {
+    using T = kiln::ModuleManifestEntry;
+    static constexpr auto value = glz::object(
+        "logical-name", &T::logical_name,
+        "bmi-path", &T::bmi_path,
+        "primary-output", &T::primary_output,
+        "source-path", &T::source_path,
+        "visibility", &T::visibility);
+};
+
+template <>
+struct glz::meta<kiln::ModuleManifest> {
+    using T = kiln::ModuleManifest;
+    static constexpr auto value = glz::object(
+        "entries", &T::entries);
+};
+
+template <>
+struct glz::meta<kiln::P1689Rule> {
+    using T = kiln::P1689Rule;
+    static constexpr auto value = glz::object(
+        "primary-output", &T::primary_output,
+        "provides", &T::provides,
+        "requires", &T::requires_);
+};
+
+namespace kiln {
+
+std::expected<P1689File, std::string> parse_p1689_string(const std::string& json) {
+    P1689File file;
+    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(file, json);
+    if (ec) {
+        return std::unexpected("Failed to parse P1689 JSON: " + glz::format_error(ec, json));
+    }
+    return file;
+}
+
+std::expected<P1689File, std::string> parse_p1689_file(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return std::unexpected("Failed to open P1689 file: " + path);
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto result = parse_p1689_string(content);
+    if (!result) return std::unexpected(result.error() + " (file: " + path + ")");
+    return result;
+}
+
+std::expected<ModuleManifest, std::string> parse_module_manifest_string(const std::string& json) {
+    ModuleManifest m;
+    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(m, json);
+    if (ec) {
+        return std::unexpected("Failed to parse module manifest: " + glz::format_error(ec, json));
+    }
+    return m;
+}
+
+std::expected<ModuleManifest, std::string> read_module_manifest(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return std::unexpected("Failed to open module manifest: " + path);
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto r = parse_module_manifest_string(content);
+    if (!r) return std::unexpected(r.error() + " (file: " + path + ")");
+    return r;
+}
+
+std::expected<void, std::string> write_module_manifest(const std::string& path, const ModuleManifest& manifest) {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    if (ec) return std::unexpected("Failed to create directory for manifest: " + ec.message());
+
+    std::string json;
+    auto write_ec = glz::write<glz::opts{.prettify = true}>(manifest, json);
+    if (write_ec) return std::unexpected("Failed to serialize manifest: " + glz::format_error(write_ec));
+
+    std::ofstream f(path);
+    if (!f) return std::unexpected("Failed to open manifest for writing: " + path);
+    f << json;
+    if (!f) return std::unexpected("Failed to write manifest: " + path);
+    return {};
 }
 
 } // namespace kiln

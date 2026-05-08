@@ -45,7 +45,9 @@ struct CompileContext {
 
 struct ModuleScanContext {
     std::string source;
-    std::string output;                    // DDI output file path
+    std::string output;                    // DDI (P1689 JSON) output file path
+    std::string obj_path;                  // Final .o path; emitted as `primary-output` in P1689
+    std::string depfile;                   // .d depfile for header dependencies (-MF)
     std::vector<std::string> includes;
     std::vector<std::string> system_includes;  // Directories to include with -isystem (no warnings)
     std::vector<std::string> definitions;
@@ -125,6 +127,11 @@ public:
         (void)ctx;
         return {}; // Default: no module support
     }
+
+    // True if this compiler can emit a P1689r5 dependency-info JSON
+    // (-fdeps-format=p1689r5 on GCC ≥14, /scanDependencies on MSVC, etc.).
+    // kiln rejects module sources at interpretation time when this is false.
+    virtual bool supports_p1689() const { return false; }
 
     // Platform detection - detects compiler info and system platform
     virtual PlatformInfo detect_platform() const {

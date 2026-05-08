@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <future>
 #include <map>
 #include <filesystem>
@@ -425,29 +426,45 @@ public:
         return cmd;
     }
 
-    // C++20 modules: generate scan command for extracting module dependencies
-    // Uses preprocessor-only mode to quickly extract import/export declarations
+    // C++20 modules: scan a TU and emit a P1689r5 dependency-info JSON.
+    // GCC writes the JSON straight to ctx.output via -fdeps-file=. The
+    // preprocessor pass is necessary (not -fdirectives-only) because GCC
+    // needs to see all imports after macro expansion.
     CompilerCommand get_module_scan_command(const ModuleScanContext& ctx) const override {
         std::vector<std::string> cmd;
         std::vector<size_t> cosmetic;
         cmd.push_back(binary_);
         inject_target_flags(cmd);
 
-        // Set C++ standard (must be C++20 or later for modules)
+        // C++20 or later required for modules.
         if (!ctx.standard.empty()) {
             cmd.push_back("-std=c++" + ctx.standard);
         } else {
-            cmd.push_back("-std=c++20");  // Default to C++20 for modules
+            cmd.push_back("-std=c++20");
         }
 
-        // Enable modules TS
         cmd.push_back("-fmodules-ts");
 
-        // Preprocessor-only mode with directives
-        cmd.push_back("-E");
-        cmd.push_back("-fdirectives-only");
+        // P1689r5 emission. -fdeps-target must equal the final .o path so
+        // the collator can join DDI → obj task by primary-output.
+        cmd.push_back("-fdeps-format=p1689r5");
+        cmd.push_back("-fdeps-file=" + ctx.output);
+        cmd.push_back("-fdeps-target=" + ctx.obj_path);
 
-        // Force C++ mode for module interface files
+        // GCC requires -M/-MD when emitting deps. -MD writes a make-style
+        // header depfile alongside; we use it for header up-to-date checks.
+        cmd.push_back("-MD");
+        if (!ctx.depfile.empty()) {
+            cmd.push_back("-MF");
+            cmd.push_back(ctx.depfile);
+        }
+
+        // Preprocess-only; discard the preprocessed output, we only want the DDI.
+        cmd.push_back("-E");
+        cmd.push_back("-o");
+        cmd.push_back("/dev/null");
+
+        // Force C++ mode (gcc doesn't recognize .cppm/.ixx/etc.).
         cmd.push_back("-x");
         cmd.push_back("c++");
 
@@ -456,7 +473,6 @@ public:
             cmd.push_back("-fdiagnostics-color=always");
         }
 
-        // Include directories
         for (const auto& dir : ctx.includes) {
             cmd.push_back("-I" + dir);
         }
@@ -464,28 +480,21 @@ public:
             cmd.push_back("-isystem" + dir);
         }
 
-        // Definitions
         for (const auto& def : ctx.definitions) {
-            // Strip -D prefix if present (some CMakeLists.txt files include it)
             std::string clean_def = def;
             if (clean_def.starts_with("-D")) {
                 clean_def = clean_def.substr(2);
             }
             if (clean_def.empty()) continue;
-            // Escape quotes in definition values so they reach the preprocessor
             std::string escaped_def;
             escaped_def.reserve(clean_def.size() + 4);
             for (char c : clean_def) {
-                if (c == '"') {
-                    escaped_def += "\\\"";
-                } else {
-                    escaped_def += c;
-                }
+                if (c == '"') escaped_def += "\\\"";
+                else          escaped_def += c;
             }
             cmd.push_back("-D" + escaped_def);
         }
 
-        // Source file
         cmd.push_back(ctx.source);
 
         return finalize(std::move(cmd), cosmetic);
@@ -893,11 +902,40 @@ int kiln_compiler_id_probe_anchor = 0;
         return s;
     }
 
+    // -fdeps-format=p1689r5 first landed in GCC 14. We confirm two things:
+    //   1. The binary identifies as g++ / gcc (not clang masquerading).
+    //   2. Major version ≥ 14.
+    // Result is cached per-Compiler-instance; this is called from interp time.
+    bool supports_p1689() const override {
+        std::call_once(p1689_probe_once_, [this] {
+            // dumpfullversion handles cases like "14" by printing "14.0.0".
+            std::string ver = detail::run_command(binary_ + " -dumpfullversion -dumpversion 2>/dev/null");
+            // Strip trailing whitespace/newline.
+            while (!ver.empty() && (ver.back() == '\n' || ver.back() == '\r' || ver.back() == ' '))
+                ver.pop_back();
+            std::string banner = detail::run_command(binary_ + " --version 2>/dev/null");
+            bool is_gcc = banner.find("clang") == std::string::npos &&
+                          (banner.find("g++") != std::string::npos ||
+                           banner.find("gcc") != std::string::npos ||
+                           banner.find("GCC") != std::string::npos);
+            int major = 0;
+            for (char c : ver) {
+                if (c == '.') break;
+                if (c >= '0' && c <= '9') major = major * 10 + (c - '0');
+                else break;
+            }
+            p1689_supported_ = is_gcc && major >= 14;
+        });
+        return p1689_supported_;
+    }
+
 private:
     std::string binary_;
     Language lang_;
     std::string sysroot_;
     std::string compiler_target_;
+    mutable std::once_flag p1689_probe_once_;
+    mutable bool p1689_supported_ = false;
 };
 
 } // namespace kiln

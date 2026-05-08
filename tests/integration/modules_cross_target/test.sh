@@ -2,6 +2,8 @@
 set -e
 
 KILN=$1
+TEST_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$TEST_DIR"
 
 # C++20 modules via P1689r5 dependency scanning: GCC 14+ only.
 CXX_BIN=${CXX:-g++}
@@ -19,19 +21,17 @@ if [ -z "$gcc_major" ] || [ "$gcc_major" -lt 14 ]; then
     exit 0
 fi
 
-# Build all targets
-$KILN test_basic test_modules test_lib
+rm -rf build
 
-# Run the basic test
-./build/debug/test_basic
+echo "Building modules_cross_target with kiln..."
+$KILN -j4
 
-# Run the modules test
-./build/debug/test_modules
-
-# Verify library was built
-if [ ! -f build/debug/libtest_lib.a ]; then
-    echo "ERROR: Library not built"
+if [ ! -f build/debug/app ]; then
+    echo "Error: app not built"
     exit 1
 fi
 
-echo "All tests passed!"
+echo "Running app..."
+./build/debug/app
+
+echo "Test passed!"

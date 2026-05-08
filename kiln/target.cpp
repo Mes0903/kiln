@@ -365,28 +365,24 @@ void Target::add_file_set(FileSet file_set) {
 }
 
 bool Target::is_in_cxx_modules_file_set(const std::string& source) const {
+    return file_set_visibility_for_source(source).has_value();
+}
+
+std::optional<PropertyVisibility>
+Target::file_set_visibility_for_source(const std::string& source) const {
     for (const auto& fs : file_sets_) {
-        if (fs.type == "CXX_MODULES") {
-            for (const auto& file : fs.files) {
-                // Check if source matches (could be absolute or relative)
-                Path src_path(source);
-                Path fs_path(file);
-
-                // Try direct match
-                if (src_path == fs_path) return true;
-
-                // Try filename match
-                if (src_path.filename() == fs_path.filename()) return true;
-
-                // Try resolved paths match
-                auto src_norm = Path::make_absolute_and_normal(source_dir_, source);
-                auto fs_norm = Path::make_absolute_and_normal(source_dir_, file);
-
-                if (src_norm == fs_norm) return true;
-            }
+        if (fs.type != "CXX_MODULES") continue;
+        for (const auto& file : fs.files) {
+            Path src_path(source);
+            Path fs_path(file);
+            if (src_path == fs_path) return fs.visibility;
+            if (src_path.filename() == fs_path.filename()) return fs.visibility;
+            auto src_norm = Path::make_absolute_and_normal(source_dir_, source);
+            auto fs_norm = Path::make_absolute_and_normal(source_dir_, file);
+            if (src_norm == fs_norm) return fs.visibility;
         }
     }
-    return false;
+    return std::nullopt;
 }
 
 // --- Specific Property Helpers (Legacy Wrappers) ---
@@ -1207,7 +1203,10 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                                       std::vector<ResolvedDep> resolved_manual_deps) {
     // --- Hoist all loop-invariant computations ---
 
-    bool target_has_modules = has_module_sources();
+    // True when this target needs the module compile pipeline. Includes the
+    // cross-target consumer case where the target imports a foreign module
+    // but provides none of its own.
+    bool target_has_modules = participates_in_modules(all_targets);
 
     const auto& source_props = interp.get_source_properties();
     const auto& custom_rules = interp.get_custom_command_rules();
@@ -2031,7 +2030,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 
     // C++20 modules: generate scanner tasks first (they have no dependencies)
-    bool has_modules = generate_module_scanner_tasks(txn, toolchain, cxx_default_std);
+    bool has_modules = generate_module_scanner_tasks(txn, toolchain, all_targets, cxx_default_std);
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // PCH: generate per-language precompiled headers (C gets _pch.h, CXX gets _pch.hxx)
@@ -2646,6 +2645,10 @@ std::string Target::get_module_mapper_path() const {
     return (Path(binary_dir_) / (name_ + ".module-mapper")).lexically_normal().str();
 }
 
+std::string Target::get_module_manifest_path() const {
+    return (Path(binary_dir_) / (name_ + ".module-exports.json")).lexically_normal().str();
+}
+
 bool Target::has_module_sources() const {
     if (modules_detected_) return has_modules_;
 
@@ -2672,14 +2675,17 @@ bool Target::has_module_sources() const {
     return false;
 }
 
-bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain, int cxx_default_std) {
+bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
+                                            const TargetMap& all_targets, int cxx_default_std) {
     std::vector<std::string> scanner_ids;
 
     auto sources = get_property_list("SOURCES", TargetPropertyScope::BUILD);
 
-    // First pass: does this target have any module interface units? If not,
-    // skip scanning entirely — paying a scan per .cpp for non-modular targets
-    // would be pure overhead.
+    // Decide whether this target participates in modules. Two reasons it might:
+    //   1. It has its own module-interface unit (it provides a module).
+    //   2. It links a transitive PUBLIC/INTERFACE dep that provides modules,
+    //      meaning some TU here may `import` that module. We can't know which
+    //      TUs do without scanning, so scan all CXX TUs once we're committed.
     bool has_interface = false;
     for (const auto& src : sources) {
         auto info = LanguageClassifier::from_path(src);
@@ -2689,7 +2695,8 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
             break;
         }
     }
-    if (!has_interface) return false;
+    bool has_module_dep = !transitive_module_providing_deps(all_targets).empty();
+    if (!has_interface && !has_module_dep) return false;
 
     for (const auto& src : sources) {
         auto lang_info = LanguageClassifier::from_path(src);
@@ -2711,10 +2718,16 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
 
         std::string src_abs = Path::join(source_dir_, src);
         std::string ddi_path = get_ddi_path(binary_dir_, src);
+        // The obj path the compile task will produce. P1689 -fdeps-target
+        // emits this as the rule's primary-output, which the collator uses
+        // to re-join DDIs to obj task ids without path-relativizing.
+        std::string obj_path = get_obj_path(binary_dir_, name_, src);
 
         ModuleScanContext ctx;
         ctx.source = src_abs;
         ctx.output = ddi_path;
+        ctx.obj_path = obj_path;
+        ctx.depfile = ddi_path + ".d";
 
         // Determine standard: use highest of explicit standard or required by compile features
         {
@@ -2757,33 +2770,78 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
     }
 
     if (!scanner_ids.empty()) {
-        generate_module_collator_task(txn, scanner_ids);
+        generate_module_collator_task(txn, scanner_ids, all_targets);
         return true;
     }
 
     return false;
 }
 
-void Target::generate_module_collator_task(GraphTransaction& txn, const std::vector<std::string>& scanner_task_ids) {
+void Target::generate_module_collator_task(GraphTransaction& txn,
+                                           const std::vector<std::string>& scanner_task_ids,
+                                           const TargetMap& all_targets) {
     std::string mapper_path = get_module_mapper_path();
+    std::string manifest_path = get_module_manifest_path();
 
     BuildTask collator;
     collator.id = mapper_path;
     collator.kind = ModuleCollatorTask{};
     collator.parent_target = this;
 
-    // Collator depends on all scanner tasks
+    // Local: collator depends on every scanner in this target.
     for (const auto& scanner_id : scanner_task_ids) {
         collator.explicit_deps.push_back(scanner_id);
         collator.inputs.push_back(scanner_id);
     }
 
+    // Cross-target: each module-providing dep emits a manifest. Reading that
+    // manifest is how this collator learns about modules outside its own
+    // scanned sources, so producer collators must finish first — declare an
+    // explicit_deps edge on the dep's manifest output.
+    for (Target* dep : transitive_module_providing_deps(all_targets)) {
+        std::string dep_manifest = dep->get_module_manifest_path();
+        collator.explicit_deps.push_back(dep_manifest);
+        collator.inputs.push_back(dep_manifest);
+    }
+
+    // Both the per-target mapper (consumed by this target's compiles) and the
+    // export manifest (consumed by downstream targets' collators) are graph-
+    // visible outputs of this single in-process task.
     collator.outputs.push_back(mapper_path);
+    collator.outputs.push_back(manifest_path);
 
     // Collator has no commands - it's executed in-process by the build graph
     // The actual work happens in BuildGraph::execute() when it detects a collator task
 
     txn.add(std::move(collator));
+}
+
+std::vector<Target*>
+Target::transitive_module_providing_deps(const TargetMap& all_targets) const {
+    // Walk resolved LINK_LIBRARIES (already flattened by resolve()) and collect
+    // every dep that has its own module-interface units. PRIVATE link deps are
+    // already excluded from this property's transitive closure as resolved by
+    // Target::resolve, so we don't need to re-filter visibility here.
+    std::vector<Target*> result;
+    std::unordered_set<Target*> seen;
+    auto consider = [&](const std::string& lib) {
+        auto it = all_targets.find(lib);
+        if (it == all_targets.end()) return;
+        Target* dep = it->second.get();
+        if (dep == this) return;
+        if (!seen.insert(dep).second) return;
+        if (dep->has_module_sources()) result.push_back(dep);
+    };
+    for (const auto& lib : get_resolved_property("LINK_LIBRARIES")) consider(lib);
+    // resolved_target_deps_ catches link-only / interface-only edges that
+    // resolve() recorded but may have filtered out of res_libs.
+    for (const auto& lib : resolved_target_deps_) consider(lib);
+    return result;
+}
+
+bool Target::participates_in_modules(const TargetMap& all_targets) const {
+    if (has_module_sources()) return true;
+    return !transitive_module_providing_deps(all_targets).empty();
 }
 
 } // namespace kiln

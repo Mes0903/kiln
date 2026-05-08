@@ -4,20 +4,9 @@
 #include <vector>
 #include <expected>
 #include <optional>
-#include <map>
 #include <filesystem>
 
 namespace kiln {
-
-// Dynamic Dependency Info - information extracted from module scanning
-struct ModuleDependencyInfo {
-    std::string source;                      // Source file path
-    std::string provides;                    // Module name exported (empty if none)
-    std::vector<std::string> imports;        // Module names imported
-    bool is_module_partition = false;        // True if this is a module partition
-    std::string partition_name;              // Partition name (if is_module_partition)
-    std::filesystem::file_time_type timestamp;  // Source file timestamp at scan time
-};
 
 // Module map entry - maps module names to their BMI paths
 struct ModuleMapEntry {
@@ -26,16 +15,6 @@ struct ModuleMapEntry {
     std::string source_path;
     std::string object_task_id;  // Task ID that produces this module's BMI
 };
-
-// Parse DDI file from disk (JSON format)
-std::expected<ModuleDependencyInfo, std::string> parse_ddi_file(const std::string& path);
-
-// Write DDI file to disk (JSON format)
-std::expected<void, std::string> write_ddi_file(const std::string& path, const ModuleDependencyInfo& info);
-
-// Parse module info from g++ preprocessor output
-// Input is the combined stdout/stderr from: g++ -E -fdirectives-only -fmodules-ts <source>
-ModuleDependencyInfo parse_module_scan_output(const std::string& output, const std::string& source_path);
 
 // Generate module mapper file content for g++ -fmodule-mapper=<file>
 // Maps module names to BMI file paths
@@ -49,5 +28,64 @@ std::string get_bmi_path(const std::string& binary_dir, const std::string& modul
 
 // Get the DDI file path for a given source file
 std::string get_ddi_path(const std::string& binary_dir, const std::string& source_path);
+
+// --- P1689r5 ---
+// Schema: https://wg21.link/p1689r5 — the JSON format emitted by GCC's
+// -fdeps-format=p1689r5, clang-scan-deps --format=p1689, and MSVC
+// /scanDependencies. One file per scanned TU; rules[] usually has one entry.
+
+struct P1689Provide {
+    std::string logical_name;                           // Module name, e.g. "Math" or "Math:Part"
+    std::optional<std::string> source_path;             // Source path of the providing TU
+    std::optional<std::string> compiled_module_path;    // Hint for BMI output path
+    bool is_interface = true;                           // True for interface units, false for impl
+};
+
+struct P1689Require {
+    std::string logical_name;                           // Module name or header-unit name
+    std::string lookup_method = "by-name";              // "by-name" | "include-angle" | "include-quote"
+    std::optional<std::string> source_path;             // Header path (for include-* methods)
+};
+
+struct P1689Rule {
+    std::string primary_output;                         // The compile output (.o) this scan describes
+    std::vector<P1689Provide> provides;
+    std::vector<P1689Require> requires_;                // Trailing _ avoids C++ keyword
+};
+
+struct P1689File {
+    int version = 0;
+    int revision = 0;
+    std::vector<P1689Rule> rules;
+};
+
+// Parse a P1689r5 JSON file produced by the compiler's scanner.
+std::expected<P1689File, std::string> parse_p1689_file(const std::string& path);
+
+// Same, but from an in-memory string. Used by tests.
+std::expected<P1689File, std::string> parse_p1689_string(const std::string& json);
+
+// --- Module export manifest ---
+// Per-target manifest of modules a target makes visible to consumers, written
+// by that target's ModuleCollatorTask. Consumer collators read manifests from
+// transitive PUBLIC/INTERFACE link deps to resolve cross-target imports.
+
+struct ModuleManifestEntry {
+    std::string logical_name;     // e.g. "Foo" or "Foo:Part"
+    std::string bmi_path;         // Absolute path to the BMI (.gcm)
+    std::string primary_output;   // The producing compile task's id (its .o path)
+    std::string source_path;      // The provider's source TU; used in error messages
+    std::string visibility;       // "PUBLIC" | "INTERFACE" — PRIVATE entries are not written
+};
+
+struct ModuleManifest {
+    std::vector<ModuleManifestEntry> entries;
+};
+
+std::expected<ModuleManifest, std::string> read_module_manifest(const std::string& path);
+std::expected<void, std::string> write_module_manifest(const std::string& path, const ModuleManifest& manifest);
+
+// String-form parse, exposed for unit tests.
+std::expected<ModuleManifest, std::string> parse_module_manifest_string(const std::string& json);
 
 } // namespace kiln

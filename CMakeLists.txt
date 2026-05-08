@@ -137,7 +137,8 @@ if(BUILD_TESTING)
         tests/cmake_array_tests.cpp
         tests/resolve_tests.cpp
         tests/path_tests.cpp
-        tests/version_compare_tests.cpp)
+        tests/version_compare_tests.cpp
+        tests/p1689_parse_tests.cpp)
   target_link_libraries(kiln_tests PRIVATE kiln Catch2::Catch2WithMain)
 
   add_test(NAME interpreter_tests COMMAND kiln_tests)

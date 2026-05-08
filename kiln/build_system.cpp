@@ -1134,43 +1134,129 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             print_status("Ready", ep.ep_name);
                         },
                         [&](const ModuleCollatorTask&) {
-                            // C++20 modules: handle collator tasks specially (in-process execution)
+                            // C++20 modules: handle collator tasks specially (in-process execution).
+                            //
+                            // Inputs to this task are a mix of:
+                            //   - per-source DDI files (P1689 JSON, ".ddi" suffix) from this
+                            //     target's own scanners, and
+                            //   - foreign module-export manifests (".module-exports.json")
+                            //     from transitive PUBLIC/INTERFACE link deps that provide
+                            //     modules. The graph guarantees those manifests are written
+                            //     before this task runs.
                             print_status("Collating", "modules");
 
                             std::map<std::string, std::string> module_to_task;
                             std::map<std::string, std::vector<std::string>> task_requires;
                             std::vector<ModuleMapEntry> mapper_entries;
+                            // Track who first claimed each logical name, so a conflict
+                            // diagnostic can name both source paths.
+                            std::map<std::string, std::string> module_to_source;
+                            // Local provides (for the manifest we'll write).
+                            ModuleManifest own_manifest;
 
-                            for (const auto& ddi_path : task.inputs) {
-                                auto ddi_result = parse_ddi_file(ddi_path);
-                                if (!ddi_result) { task_error = ddi_result.error(); return; }
-
-                                const auto& ddi = *ddi_result;
-                                // ddi.source is absolute, but the compile task was created with
-                                // the original (often relative) SOURCES entry. get_obj_path
-                                // produces different paths for relative vs absolute inputs, so
-                                // we re-relativize against the target's source dir to recover
-                                // the same obj path / task id.
-                                std::string obj_source = Path(ddi.source).fs_path()
-                                    .lexically_relative(task.parent_target->get_source_dir())
-                                    .string();
-                                if (obj_source.empty() || obj_source.starts_with("..")) {
-                                    obj_source = ddi.source;
+                            auto record_provider = [&](const std::string& logical_name,
+                                                       const std::string& obj_path,
+                                                       const std::string& bmi_path,
+                                                       const std::string& source_path) -> bool {
+                                auto existing = module_to_task.find(logical_name);
+                                if (existing != module_to_task.end()) {
+                                    task_error = "Module '" + logical_name + "' is provided by two sources: '" +
+                                                 module_to_source[logical_name] + "' and '" + source_path + "'";
+                                    return false;
                                 }
-                                std::string obj_path = get_obj_path(task.parent_target->get_binary_dir(), task.parent_target->get_name(), obj_source);
+                                module_to_task[logical_name] = obj_path;
+                                module_to_source[logical_name] = source_path;
+                                ModuleMapEntry entry;
+                                entry.module_name = logical_name;
+                                entry.bmi_path = bmi_path;
+                                entry.source_path = source_path;
+                                entry.object_task_id = obj_path;
+                                mapper_entries.push_back(std::move(entry));
+                                return true;
+                            };
 
-                                if (!ddi.provides.empty()) {
-                                    module_to_task[ddi.provides] = obj_path;
-                                    ModuleMapEntry entry;
-                                    entry.module_name = ddi.provides;
-                                    entry.bmi_path = get_bmi_path(task.parent_target->get_binary_dir(), ddi.provides);
-                                    entry.source_path = ddi.source;
-                                    entry.object_task_id = obj_path;
-                                    mapper_entries.push_back(entry);
+                            for (const auto& input_path : task.inputs) {
+                                if (input_path.size() >= 20 &&
+                                    input_path.compare(input_path.size() - 20, 20, ".module-exports.json") == 0) {
+                                    // Foreign manifest: producer collator wrote this.
+                                    auto man = read_module_manifest(input_path);
+                                    if (!man) { task_error = man.error(); return; }
+                                    for (const auto& e : man->entries) {
+                                        // Defense in depth — producer should have already filtered.
+                                        if (e.visibility != "PUBLIC" && e.visibility != "INTERFACE") continue;
+                                        if (!record_provider(e.logical_name, e.primary_output,
+                                                             e.bmi_path, e.source_path)) return;
+                                    }
+                                    continue;
                                 }
 
-                                if (!ddi.imports.empty()) {
-                                    task_requires[obj_path] = ddi.imports;
+                                // Local DDI (P1689 JSON).
+                                auto p1689 = parse_p1689_file(input_path);
+                                if (!p1689) { task_error = p1689.error(); return; }
+                                if (p1689->rules.empty()) {
+                                    task_error = "P1689 file has no rules: " + input_path;
+                                    return;
+                                }
+                                if (p1689->rules.size() > 1) {
+                                    task_error = "P1689 file has more than one rule: " + input_path;
+                                    return;
+                                }
+                                const auto& rule = p1689->rules[0];
+
+                                // primary-output is what we passed via -fdeps-target;
+                                // it equals get_obj_path(...) at scanner-task generation
+                                // time, so it's the obj task id directly.
+                                const std::string& obj_path = rule.primary_output;
+
+                                if (rule.provides.size() > 1) {
+                                    task_error = "P1689 rule provides more than one module: " + input_path;
+                                    return;
+                                }
+                                if (!rule.provides.empty()) {
+                                    const auto& prov = rule.provides[0];
+                                    std::string bmi = get_bmi_path(task.parent_target->get_binary_dir(), prov.logical_name);
+                                    // GCC's P1689 doesn't populate provides[].source-path,
+                                    // so recover it from the upstream scanner task that
+                                    // produced this DDI.
+                                    std::string src = prov.source_path.value_or("");
+                                    if (src.empty()) {
+                                        auto scanner_it = task_by_id_.find(input_path);
+                                        if (scanner_it != task_by_id_.end()) {
+                                            if (auto* st = std::get_if<ModuleScannerTask>(&scanner_it->second->kind)) {
+                                                src = st->source_file;
+                                            }
+                                        }
+                                    }
+                                    if (!record_provider(prov.logical_name, obj_path, bmi, src)) return;
+
+                                    // This module is exported iff its source lives in a
+                                    // PUBLIC or INTERFACE cxx_modules file set. Otherwise
+                                    // it stays internal to this target.
+                                    auto vis = task.parent_target->file_set_visibility_for_source(src);
+                                    if (vis && (*vis == PropertyVisibility::PUBLIC ||
+                                                *vis == PropertyVisibility::INTERFACE)) {
+                                        ModuleManifestEntry me;
+                                        me.logical_name = prov.logical_name;
+                                        me.bmi_path = bmi;
+                                        me.primary_output = obj_path;
+                                        me.source_path = src;
+                                        me.visibility = (*vis == PropertyVisibility::PUBLIC ? "PUBLIC" : "INTERFACE");
+                                        own_manifest.entries.push_back(std::move(me));
+                                    }
+                                }
+
+                                std::vector<std::string> requires_names;
+                                for (const auto& req : rule.requires_) {
+                                    if (req.lookup_method != "by-name") {
+                                        task_error = "Header units (lookup-method='" + req.lookup_method +
+                                                     "') are not supported; got import of '" + req.logical_name +
+                                                     "' in " + input_path;
+                                        return;
+                                    }
+                                    requires_names.push_back(req.logical_name);
+                                }
+                                if (!requires_names.empty()) {
+                                    task_requires[obj_path] = std::move(requires_names);
                                 }
                             }
                             if (!task_error.empty()) return;
@@ -1185,10 +1271,17 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             }
 
                             std::string mapper_content = generate_module_mapper_content(mapper_entries);
+                            // task.outputs[0] is the mapper, [1] is the manifest (set in
+                            // generate_module_collator_task). Write both.
                             std::ofstream mapper_file(task.outputs[0]);
                             if (!mapper_file) { task_error = "Failed to write module mapper: " + task.outputs[0]; return; }
                             mapper_file << mapper_content;
                             mapper_file.close();
+
+                            if (task.outputs.size() >= 2) {
+                                auto wm = write_module_manifest(task.outputs[1], own_manifest);
+                                if (!wm) { task_error = wm.error(); return; }
+                            }
 
                             inject_module_dependencies(module_to_task, task_requires);
                         },
@@ -1196,12 +1289,18 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             std::string scan_display(Path(scanner.source_file).filename());
                             print_status("Scanning", scan_display);
 
+                            // GCC writes the P1689 JSON directly to ctx.output via
+                            // -fdeps-file=. We only need to surface compiler errors;
+                            // the DDI is parsed later by the collator.
                             auto result = run_command(task.commands[0], task.working_dir);
-                            ModuleDependencyInfo ddi = parse_module_scan_output(result.output, scanner.source_file);
-                            ddi.timestamp = std::filesystem::last_write_time(scanner.source_file);
-
-                            auto write_result = write_ddi_file(task.outputs[0], ddi);
-                            if (!write_result) { task_error = write_result.error(); }
+                            if (result.exit_code != 0) {
+                                report_command_failure(state, result.output);
+                                task_error = "Module scan failed for " + scanner.source_file;
+                                return;
+                            }
+                            if (!std::filesystem::exists(task.outputs[0])) {
+                                task_error = "Module scan produced no DDI: " + task.outputs[0];
+                            }
                         },
                         [&](const auto&) {
                             // Regular task execution (compile, PCH, link, custom command/target, pre/post-build)

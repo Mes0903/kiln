@@ -153,6 +153,12 @@ public:
     const std::vector<FileSet>& get_file_sets() const { return file_sets_; }
     bool is_in_cxx_modules_file_set(const std::string& source) const;
 
+    // Look up the visibility of the cxx_modules FILE_SET that contains `source`,
+    // if any. Returns nullopt if not in any cxx_modules file set (treat as PRIVATE
+    // for export purposes — those modules stay internal to this target).
+    std::optional<PropertyVisibility>
+    file_set_visibility_for_source(const std::string& source) const;
+
     // Manually added dependencies (add_dependencies command)
     void add_dependency(const std::string& dep) { manually_added_dependencies_.push_back(dep); }
     const std::vector<std::string>& get_manually_added_dependencies() const { return manually_added_dependencies_; }
@@ -236,6 +242,11 @@ public:
     // Get the module mapper file path for this target
     std::string get_module_mapper_path() const;
 
+    // Get the path of this target's exported-modules manifest file. Written by
+    // the target's collator with one entry per PUBLIC/INTERFACE provided module;
+    // read by consumers' collators to resolve cross-target imports.
+    std::string get_module_manifest_path() const;
+
     // Qt autogen helpers — called by generate_autogen_tasks()
     void inject_autogen_include(const std::string& dir);
     void inject_autogen_source(const std::string& path);
@@ -304,15 +315,30 @@ protected:
                                std::vector<struct ResolvedDep> resolved_manual_deps);
 
     // C++20 modules task generation
-    // Returns true if any module sources were detected
-    bool generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain, int cxx_default_std = 0);
+    // Returns true if module pipeline (scanner+collator) was generated for this target
+    bool generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
+                                       const TargetMap& all_targets, int cxx_default_std = 0);
 
-    // Generate the collator task that depends on all scanner tasks
-    // The collator parses DDI files and injects module dependencies into compile tasks
-    void generate_module_collator_task(GraphTransaction& txn, const std::vector<std::string>& scanner_task_ids);
+    // Generate the collator task that depends on all scanner tasks plus the
+    // module-export manifests of every module-providing transitive PUBLIC/INTERFACE
+    // link dep, so cross-target imports resolve.
+    void generate_module_collator_task(GraphTransaction& txn,
+                                       const std::vector<std::string>& scanner_task_ids,
+                                       const TargetMap& all_targets);
 
-    // Check if target has any module sources
+    // Check if target has any module sources of its own
     bool has_module_sources() const;
+
+    // Transitive PUBLIC/INTERFACE link deps that have module sources. Walks
+    // the resolved LINK_LIBRARIES closure. Used to: (a) decide whether this
+    // target needs a module pipeline even without own interface units, and
+    // (b) collect manifest inputs for the collator.
+    std::vector<Target*> transitive_module_providing_deps(const TargetMap& all_targets) const;
+
+    // True iff this target needs the module compile pipeline (scanner, collator,
+    // -fmodules-ts, module mapper). Triggered by own modules OR by cross-target
+    // imports from a module-providing link dep.
+    bool participates_in_modules(const TargetMap& all_targets) const;
 
     std::string name_;
     std::string output_name_;

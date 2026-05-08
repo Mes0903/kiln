@@ -6,6 +6,9 @@
 #include "../compile_features.hpp"
 #include "../CMakeArray.hpp"
 #include "../path.hpp"
+#include "../language.hpp"
+#include "../compiler.hpp"
+#include "../toolchain.hpp"
 #include <sstream>
 #include <algorithm>
 #include <set>
@@ -156,7 +159,33 @@ void register_target_builtins(Interpreter& interp) {
     // Skips existence check for files that are outputs of add_custom_command or have GENERATED property
     // Source validation is deferred to build graph construction (generate_object_tasks),
     // matching CMake behavior. Custom commands may be registered after add_library/add_executable.
-    auto add_sources_to_target = [](Interpreter&, const std::shared_ptr<Target>& target, const std::string&, const std::vector<std::string>& sources) -> bool {
+    auto add_sources_to_target = [](Interpreter& interp, const std::shared_ptr<Target>& target, const std::string&, const std::vector<std::string>& sources) -> bool {
+        // Reject C++ module sources at interpretation time when the toolchain
+        // can't emit P1689r5. Failing here yields a stack trace pointing at
+        // the offending add_executable/add_library/target_sources call.
+        bool has_module_iface = false;
+        for (const auto& s : sources) {
+            if (LanguageClassifier::from_path(s).is_module_interface) {
+                has_module_iface = true;
+                break;
+            }
+        }
+        if (has_module_iface && !target->is_imported()) {
+            // If no CXX compiler is configured yet, defer: the existing
+            // "no compiler available" diagnostic at build-graph time covers
+            // it, and project() may not have been called yet (e.g. in unit
+            // tests that exercise just the parser). When a compiler IS set,
+            // we hard-reject unsupported toolchains here so the user sees
+            // the failure with a stack trace pointing at this call.
+            const Compiler* cxx = interp.get_toolchain().get_compiler(Language::CXX);
+            if (cxx && !cxx->supports_p1689()) {
+                interp.set_fatal_error(
+                    "target '" + target->get_name() + "' has a C++ module-interface source, but the configured "
+                    "C++ compiler ('" + cxx->binary() + "') does not support P1689r5 dependency scanning. "
+                    "kiln requires GCC ≥14 (-fdeps-format=p1689r5) for C++ modules.");
+                return false;
+            }
+        }
         target->append_property("SOURCES", sources, PropertyVisibility::PRIVATE);
         return true;
     };
@@ -1123,6 +1152,20 @@ void register_target_builtins(Interpreter& interp) {
                         if (fs.type == "CXX_MODULES" && fs.visibility == PropertyVisibility::INTERFACE && !target->is_imported()) {
                             interp.set_fatal_error("target_sources() FILE_SET TYPE CXX_MODULES cannot use INTERFACE scope on non-imported targets");
                             return;
+                        }
+
+                        // Reject CXX_MODULES file sets when a CXX compiler is
+                        // configured but lacks P1689r5. If no compiler is set
+                        // yet (e.g. parser-only tests), defer to the build-time
+                        // "no compiler available" path.
+                        if (fs.type == "CXX_MODULES" && !target->is_imported()) {
+                            const Compiler* cxx = interp.get_toolchain().get_compiler(Language::CXX);
+                            if (cxx && !cxx->supports_p1689()) {
+                                interp.set_fatal_error("target_sources() FILE_SET TYPE CXX_MODULES on '" + target->get_name() +
+                                                       "' requires a compiler with P1689r5 support; configured C++ compiler '" +
+                                                       cxx->binary() + "' does not. kiln requires GCC ≥14.");
+                                return;
+                            }
                         }
                     } else if (keyword == "BASE_DIRS") {
                         i++;
