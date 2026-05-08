@@ -68,3 +68,53 @@ jobs:
 
       - name: Integration tests
         run: tests/integration/run_tests.sh build/kiln
+
+  build-alpine:
+    runs-on: ubuntu-24.04
+    container:
+      image: alpine:3.20
+    env:
+      GLAZE_REF: main
+
+    steps:
+      - name: Install build deps
+        run: |
+          apk add --no-cache \
+            build-base cmake ninja git pkgconf bash \
+            curl-dev libarchive-dev pcre2-dev pugixml-dev \
+            cli11 catch2-3 openssl-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Cache third-party installs
+        id: cache-thirdparty
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/thirdparty-install
+          key: thirdparty-alpine-3.20-glaze-${{ env.GLAZE_REF }}-v1
+
+      - name: Build & install glaze
+        if: steps.cache-thirdparty.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$GLAZE_REF" https://github.com/stephenberry/glaze.git /tmp/glaze
+          cmake -S /tmp/glaze -B /tmp/glaze/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/thirdparty-install" \
+            -Dglaze_BUILD_EXAMPLES=OFF
+          cmake --install /tmp/glaze/build
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/thirdparty-install"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Integration tests
+        run: tests/integration/run_tests.sh build/kiln
