@@ -14,6 +14,7 @@ struct ModuleMapEntry {
     std::string bmi_path;
     std::string source_path;
     std::string object_task_id;  // Task ID that produces this module's BMI
+    bool is_header_unit = false; // module_name is the header's resolved path
 };
 
 // Generate module mapper file content for g++ -fmodule-mapper=<file>
@@ -25,6 +26,13 @@ std::expected<std::vector<ModuleMapEntry>, std::string> parse_module_mapper_file
 
 // Get the BMI (Binary Module Interface) path for a given module name
 std::string get_bmi_path(const std::string& binary_dir, const std::string& module_name);
+
+// Get the BMI path for a header unit, derived from the header's absolute
+// source path. Header-unit BMIs live under <binary_dir>/bmis/header_units/
+// keyed by a path-mangled form of the source so they don't collide with
+// named-module BMIs.
+std::string get_header_unit_bmi_path(const std::string& binary_dir,
+                                     const std::string& source_path);
 
 // Get the DDI file path for a given source file
 std::string get_ddi_path(const std::string& binary_dir, const std::string& source_path);

@@ -46,6 +46,22 @@ std::string get_bmi_path(const std::string& binary_dir, const std::string& modul
     return path.lexically_normal().string();
 }
 
+std::string get_header_unit_bmi_path(const std::string& binary_dir,
+                                     const std::string& source_path) {
+    // Mangle the absolute source path into a flat filename. Replace path
+    // separators and other path-meaningful punctuation with '_' so the BMI
+    // sits at a single, deterministic location under bmis/header_units/.
+    std::string mangled;
+    mangled.reserve(source_path.size());
+    for (char c : source_path) {
+        if (c == '/' || c == '\\' || c == ':') mangled.push_back('_');
+        else mangled.push_back(c);
+    }
+    std::filesystem::path path = std::filesystem::path(binary_dir) /
+                                  "bmis" / "header_units" / (mangled + ".gcm");
+    return path.lexically_normal().string();
+}
+
 std::string get_ddi_path(const std::string& binary_dir, const std::string& source_path) {
     std::filesystem::path src(source_path);
     std::filesystem::path ddi_suffix;

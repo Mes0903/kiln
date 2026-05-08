@@ -43,6 +43,25 @@ struct CompileContext {
     std::vector<std::string> module_files; // Explicit -fmodule-file= arguments
 };
 
+// C++20 header-unit compilation context. Inputs to the compile that turns a
+// header file into a precompiled BMI (Binary Module Interface) consumable by
+// `import <header>;` / `import "header";`. The driver emits
+// -fmodule-header=<system|user> based on is_system_header. The BMI is written
+// to the path advertised by the mapper file (kiln pre-stages an entry there).
+struct HeaderUnitContext {
+    std::string source;                         // Absolute path to the header
+    std::string bmi_output;                     // Where the BMI should land
+    std::string module_mapper_file;             // Mapper used to advertise the BMI path
+    bool is_system_header = false;              // include-angle (true) vs include-quote
+    std::vector<std::string> includes;
+    std::vector<std::string> system_includes;
+    std::vector<std::string> definitions;
+    std::vector<std::string> options;
+    std::string standard;
+    bool extensions_enabled = true;
+    bool color_diagnostics = false;
+};
+
 struct ModuleScanContext {
     std::string source;
     std::string output;                    // DDI (P1689 JSON) output file path
@@ -126,6 +145,13 @@ public:
     virtual CompilerCommand get_module_scan_command(const ModuleScanContext& ctx) const {
         (void)ctx;
         return {}; // Default: no module support
+    }
+
+    // C++20 header-unit compilation. Compile a header file into a BMI usable
+    // by `import <header>;` / `import "header";`. Default: not supported.
+    virtual CompilerCommand get_header_unit_compile_command(const HeaderUnitContext& ctx) const {
+        (void)ctx;
+        return {};
     }
 
     // True if this compiler can emit a P1689r5 dependency-info JSON

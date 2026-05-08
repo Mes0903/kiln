@@ -30,7 +30,15 @@ struct CustomTargetTask   {};
 struct PreBuildTask       {};
 struct PostBuildTask      {};
 struct ModuleScannerTask  { std::string source_file; };
-struct ModuleCollatorTask {};
+struct ModuleCollatorTask {
+    // Compiler used to build header units this target imports. Nullable
+    // (e.g. when modules are off, or when the target only consumes named
+    // modules and doesn't end up importing any header unit). Owned by the
+    // Toolchain, which outlives the build graph.
+    const class Compiler* cxx_compiler = nullptr;
+    std::string cxx_standard;       // numeric form, e.g. "20", "23"
+    bool cxx_extensions_enabled = true;
+};
 struct EPOrchestratorTask { std::string ep_name; };
 struct EPSentinelTask     { std::string ep_name; };
 struct EPInstallTask      { std::string ep_name; };
@@ -220,11 +228,34 @@ public:
         return missing;
     }
 
+    // Header-unit info shared between the collator and the injector.
+    struct HeaderUnitInfo {
+        std::string source_path;
+        bool is_system = false;
+    };
+
     // C++20 modules support: inject dependencies after collator runs
     // Called by collator task to update compile task dependencies based on module imports
     void inject_module_dependencies(
         const std::map<std::string, std::string>& module_to_task,  // Module name -> provider task ID
         const std::map<std::string, std::vector<std::string>>& task_requires  // Task ID -> required modules
+    );
+
+    // Header-unit support: spawn header-unit compile tasks and wire
+    // compile-task → header-unit-task edges. Called by the collator after
+    // the mapper has been written, so GCC can read it on the spawned
+    // compiles. header_units is keyed by the resolved header path; the
+    // is_system flag selects -fmodule-header=system vs =user.
+    void inject_header_unit_tasks(
+        Target& parent_target,
+        const class Compiler* cxx_compiler,
+        const std::string& cxx_standard,
+        bool cxx_extensions_enabled,
+        const std::string& mapper_path,
+        const std::map<std::string, HeaderUnitInfo>& header_units,
+        const std::map<std::string, std::string>& header_unit_to_bmi,
+        const std::map<std::string, std::vector<std::string>>& task_header_units,
+        std::string& task_error
     );
 
     // ExternalProject support: run EP orchestrator task in-process

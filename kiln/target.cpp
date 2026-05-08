@@ -2867,6 +2867,9 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
     }
 
     if (!scanner_ids.empty()) {
+        const Compiler* cxx = resolve_compiler(Language::CXX, toolchain);
+        bool cxx_ext = get_language_extensions(Language::CXX);
+
         // Schedule the toolchain-level std module compile and write its
         // foreign manifest, but only when this target's sources actually
         // contain `import std;` (cheap textual peek). Empty manifest path
@@ -2874,15 +2877,28 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         // — `import std;` then hard-fails at collate time.
         std::string std_manifest;
         if (target_imports_std()) {
-            const Compiler* cxx = resolve_compiler(Language::CXX, toolchain);
             const std::string& top_binary = interp.get_variable("CMAKE_BINARY_DIR");
             std_manifest = ensure_std_module_tasks(
                 txn, cxx,
                 top_binary.empty() ? binary_dir_ : top_binary,
                 cxx_default_std,
-                get_language_extensions(Language::CXX));
+                cxx_ext);
         }
-        generate_module_collator_task(txn, scanner_ids, all_targets, std_manifest);
+
+        // Pick the C++ standard the header-unit compile should use. Mirrors
+        // the per-source standard resolution for normal compiles, but at the
+        // target granularity — a single header-unit BMI is shared by all
+        // importers in this target, so per-source variance can't be honored.
+        int required_std = 0;
+        const auto& cf = get_resolved_property("COMPILE_FEATURES");
+        if (!cf.empty()) {
+            required_std = CompileFeatures::instance().get_required_standard(cf, Language::CXX);
+        }
+        std::string cxx_std_str = compute_effective_standard(
+            get_language_standard(Language::CXX), required_std, cxx_default_std);
+
+        generate_module_collator_task(txn, scanner_ids, all_targets, std_manifest,
+                                      cxx, cxx_std_str, cxx_ext);
         return true;
     }
 
@@ -2892,13 +2908,20 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
 void Target::generate_module_collator_task(GraphTransaction& txn,
                                            const std::vector<std::string>& scanner_task_ids,
                                            const TargetMap& all_targets,
-                                           const std::string& std_module_manifest_path) {
+                                           const std::string& std_module_manifest_path,
+                                           const Compiler* cxx_compiler,
+                                           const std::string& cxx_standard,
+                                           bool cxx_extensions_enabled) {
     std::string mapper_path = get_module_mapper_path();
     std::string manifest_path = get_module_manifest_path();
 
     BuildTask collator;
     collator.id = mapper_path;
-    collator.kind = ModuleCollatorTask{};
+    ModuleCollatorTask collator_kind{};
+    collator_kind.cxx_compiler = cxx_compiler;
+    collator_kind.cxx_standard = cxx_standard;
+    collator_kind.cxx_extensions_enabled = cxx_extensions_enabled;
+    collator.kind = collator_kind;
     collator.parent_target = this;
 
     // Local: collator depends on every scanner in this target.

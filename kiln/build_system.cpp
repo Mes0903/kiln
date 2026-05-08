@@ -12,6 +12,7 @@
 #include "progress_bar.hpp"
 #include "interperter.hpp"
 #include "toolchain.hpp"
+#include "compiler.hpp"
 #include "install_executor.hpp"
 #include "path.hpp"
 #include <glaze/core/reflect.hpp>
@@ -1133,7 +1134,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             // Install is now handled by a separate install task that sentinel depends on
                             print_status("Ready", ep.ep_name);
                         },
-                        [&](const ModuleCollatorTask&) {
+                        [&](const ModuleCollatorTask& collator) {
                             // C++20 modules: handle collator tasks specially (in-process execution).
                             //
                             // Inputs to this task are a mix of:
@@ -1153,6 +1154,16 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             std::map<std::string, std::string> module_to_source;
                             // Local provides (for the manifest we'll write).
                             ModuleManifest own_manifest;
+
+                            // Header-unit imports surfaced by the scanner. Keyed by
+                            // resolved header path so the same header imported with
+                            // both `<h>` and `"h"` collapses to a single BMI.
+                            using HeaderUnitNeeded = BuildGraph::HeaderUnitInfo;
+                            std::map<std::string, HeaderUnitNeeded> header_units;
+                            // Per-importer-task list of header-unit source paths that
+                            // task imports. Used to wire compile-task → header-unit
+                            // dependencies once header-unit tasks exist.
+                            std::map<std::string, std::vector<std::string>> task_header_units;
 
                             auto record_provider = [&](const std::string& logical_name,
                                                        const std::string& obj_path,
@@ -1247,13 +1258,40 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
 
                                 std::vector<std::string> requires_names;
                                 for (const auto& req : rule.requires_) {
-                                    if (req.lookup_method != "by-name") {
-                                        task_error = "Header units (lookup-method='" + req.lookup_method +
-                                                     "') are not supported; got import of '" + req.logical_name +
+                                    if (req.lookup_method == "by-name") {
+                                        requires_names.push_back(req.logical_name);
+                                        continue;
+                                    }
+                                    // Header unit. The scanner gives us the resolved
+                                    // header path in source_path; that's the key both
+                                    // GCC and we use to identify the header unit.
+                                    if (req.lookup_method != "include-angle" &&
+                                        req.lookup_method != "include-quote") {
+                                        task_error = "Unsupported lookup-method '" + req.lookup_method +
+                                                     "' for import of '" + req.logical_name +
                                                      "' in " + input_path;
                                         return;
                                     }
-                                    requires_names.push_back(req.logical_name);
+                                    if (!req.source_path.has_value() || req.source_path->empty()) {
+                                        task_error = "Header-unit import '" + req.logical_name +
+                                                     "' has no resolved source-path in " + input_path +
+                                                     " — scanner failed to locate the header on the include path";
+                                        return;
+                                    }
+                                    HeaderUnitNeeded hu;
+                                    hu.source_path = *req.source_path;
+                                    hu.is_system = (req.lookup_method == "include-angle");
+                                    // First sighting wins; later sightings just confirm.
+                                    auto it = header_units.find(hu.source_path);
+                                    if (it == header_units.end()) {
+                                        header_units.emplace(hu.source_path, hu);
+                                    } else if (it->second.is_system != hu.is_system) {
+                                        // Mixed angle/quote include of the same resolved
+                                        // path — pick angle ("system") since it's the more
+                                        // permissive include search.
+                                        it->second.is_system = it->second.is_system || hu.is_system;
+                                    }
+                                    task_header_units[obj_path].push_back(hu.source_path);
                                 }
                                 if (!requires_names.empty()) {
                                     task_requires[obj_path] = std::move(requires_names);
@@ -1284,6 +1322,37 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 }
                             }
 
+                            // Header-unit imports: each unique header gets a single
+                            // BMI under bmis/header_units/. We add a mapper entry
+                            // (key = resolved header path, value = BMI path) so
+                            // GCC finds the BMI when an importer compiles, and
+                            // remember the path so the next pass can spawn a
+                            // header-unit compile task and wire the dep edge.
+                            std::map<std::string, std::string> header_unit_to_bmi;
+                            if (!header_units.empty()) {
+                                if (!task.parent_target) {
+                                    task_error = "Header-unit imports require a parent target on the collator task";
+                                    return;
+                                }
+                                if (!collator.cxx_compiler) {
+                                    task_error = "Header-unit imports need a C++ compiler, but none was resolved for target '" +
+                                                 task.parent_target->get_name() + "'";
+                                    return;
+                                }
+                                const std::string& bin_dir = task.parent_target->get_binary_dir();
+                                for (auto& [src, hu] : header_units) {
+                                    std::string bmi = get_header_unit_bmi_path(bin_dir, src);
+                                    header_unit_to_bmi[src] = bmi;
+                                    ModuleMapEntry entry;
+                                    entry.module_name = src;          // header path is the key
+                                    entry.bmi_path = bmi;
+                                    entry.source_path = src;
+                                    entry.object_task_id = bmi;        // header-unit task id = BMI path
+                                    entry.is_header_unit = true;
+                                    mapper_entries.push_back(std::move(entry));
+                                }
+                            }
+
                             // GCC writes BMIs straight to the mapper-advertised path
                             // without creating intermediate dirs — so bmis/ must exist
                             // before any compile reads/writes the mapper.
@@ -1307,6 +1376,23 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             }
 
                             inject_module_dependencies(module_to_task, task_requires);
+
+                            // Spawn header-unit compile tasks and wire compile-task
+                            // → header-unit-task edges. The mapper file already has
+                            // each header unit's BMI path advertised, so GCC will
+                            // place the BMI exactly where downstream importers expect.
+                            if (!header_units.empty()) {
+                                inject_header_unit_tasks(*task.parent_target,
+                                                         collator.cxx_compiler,
+                                                         collator.cxx_standard,
+                                                         collator.cxx_extensions_enabled,
+                                                         task.outputs[0],   // mapper path
+                                                         header_units,
+                                                         header_unit_to_bmi,
+                                                         task_header_units,
+                                                         task_error);
+                                if (!task_error.empty()) return;
+                            }
                         },
                         [&](const ModuleScannerTask& scanner) {
                             std::string scan_display(Path(scanner.source_file).filename());
@@ -1838,6 +1924,97 @@ std::expected<std::string, std::string> BuildGraph::get_compiler_version_for(con
     std::lock_guard<std::mutex> lock(state_mutex_);
     compiler_version_cache_.emplace(binary, result);
     return compiler_version_cache_[binary];
+}
+
+void BuildGraph::inject_header_unit_tasks(
+    Target& parent_target,
+    const Compiler* cxx_compiler,
+    const std::string& cxx_standard,
+    bool cxx_extensions_enabled,
+    const std::string& mapper_path,
+    const std::map<std::string, HeaderUnitInfo>& header_units,
+    const std::map<std::string, std::string>& header_unit_to_bmi,
+    const std::map<std::string, std::vector<std::string>>& task_header_units,
+    std::string& task_error) {
+
+    if (!cxx_compiler) return;
+
+    auto txn = begin_locked(graph_mutation_mutex_);
+
+    // Snapshot resolved CXX-relevant properties from the target. These are the
+    // include / definition / option flags an importer of one of these header
+    // units would compile with — using them here keeps the header unit's BMI
+    // ABI-compatible with the importing TU's view of macros and headers.
+    const auto& include_dirs = parent_target.get_resolved_property("INCLUDE_DIRECTORIES");
+    const auto& sys_include_dirs = parent_target.get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES");
+    const auto& definitions = parent_target.get_resolved_property("COMPILE_DEFINITIONS");
+
+    // Map header source path → header-unit task pointer, so we can wire dep
+    // edges in the second pass without a re-find through task_by_id_.
+    std::map<std::string, BuildTask*> hu_task_by_src;
+
+    for (const auto& [src_path, info] : header_units) {
+        auto bmi_it = header_unit_to_bmi.find(src_path);
+        if (bmi_it == header_unit_to_bmi.end()) continue;
+        const std::string& bmi_path = bmi_it->second;
+
+        // Idempotent: a previous collator (cross-target shared header unit)
+        // may have already inserted a task with this id — reuse it rather
+        // than fail.
+        if (auto* existing = txn.find_task(bmi_path)) {
+            hu_task_by_src[src_path] = existing;
+            continue;
+        }
+
+        HeaderUnitContext hctx;
+        hctx.source = src_path;
+        hctx.bmi_output = bmi_path;
+        hctx.module_mapper_file = mapper_path;
+        hctx.is_system_header = info.is_system;
+        hctx.standard = cxx_standard;
+        hctx.extensions_enabled = cxx_extensions_enabled;
+        hctx.includes.assign(include_dirs.begin(), include_dirs.end());
+        hctx.system_includes.assign(sys_include_dirs.begin(), sys_include_dirs.end());
+        hctx.definitions.assign(definitions.begin(), definitions.end());
+        hctx.color_diagnostics = isatty(STDOUT_FILENO);
+
+        auto cmd = cxx_compiler->get_header_unit_compile_command(hctx);
+        if (cmd.argv.empty()) {
+            task_error = "Compiler does not support header-unit compilation; cannot import header '" + src_path + "'";
+            return;
+        }
+
+        BuildTask hu_task;
+        hu_task.id = bmi_path;
+        hu_task.kind = CompileTask{src_path, Language::CXX};
+        hu_task.parent_target = &parent_target;
+        hu_task.commands.push_back(std::move(cmd.argv));
+        hu_task.signature_commands.push_back(std::move(cmd.signature_argv));
+        hu_task.inputs.push_back(src_path);
+        hu_task.inputs.push_back(mapper_path);
+        hu_task.outputs.push_back(bmi_path);
+
+        auto added = txn.add(std::move(hu_task));
+        if (!added) {
+            task_error = "Failed to add header-unit task: " + added.error();
+            return;
+        }
+        hu_task_by_src[src_path] = *added;
+    }
+
+    // Wire compile-task → header-unit-task edges. The importing TU's compile
+    // reads the BMI off the mapper-advertised path, so it must wait for the
+    // header unit's compile to land that BMI.
+    for (const auto& [importer_id, hu_srcs] : task_header_units) {
+        auto importer_it = task_by_id_.find(importer_id);
+        if (importer_it == task_by_id_.end()) continue;
+        BuildTask* importer = importer_it->second;
+        for (const auto& src : hu_srcs) {
+            auto hu_it = hu_task_by_src.find(src);
+            if (hu_it == hu_task_by_src.end()) continue;
+            txn.dependency(importer, hu_it->second);
+        }
+    }
 }
 
 void BuildGraph::inject_module_dependencies(

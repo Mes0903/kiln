@@ -124,7 +124,11 @@ public:
         // gcc-14 doesn't recognize .cppm/.ccm/.cxxm/.ixx/.mpp as C++ source; without
         // -x c++ it silently treats them as linker inputs, "compiles" successfully,
         // and produces no BMI. Force C++ mode for module-interface extensions.
-        std::string_view ext = Path(ctx.source).extension();
+        // Bind the Path to a named local; .extension() returns a string_view
+        // into the Path's internal storage, so a temporary here would dangle
+        // before the comparisons below run.
+        Path src_path(ctx.source);
+        std::string_view ext = src_path.extension();
         if (ext == ".cppm" || ext == ".ccm" || ext == ".cxxm" || ext == ".ixx" || ext == ".mpp") {
             cmd.push_back("-x");
             cmd.push_back("c++");
@@ -497,6 +501,77 @@ public:
 
         cmd.push_back(ctx.source);
 
+        return finalize(std::move(cmd), cosmetic);
+    }
+
+    // C++20 header-unit compilation. Builds a BMI from a header file in
+    // -fmodule-header mode. The BMI lands at the path advertised by the
+    // mapper for this header's resolved source path; the .o is suppressed
+    // (header units have no compile-side object). is_system_header selects
+    // -fmodule-header=system vs =user, mirroring `import <h>;` vs
+    // `import "h";` (and the matching -x c++-{system,user}-header input
+    // mode so GCC accepts a bare `.h`/`.hpp` as a header unit).
+    CompilerCommand get_header_unit_compile_command(const HeaderUnitContext& ctx) const override {
+        std::vector<std::string> cmd;
+        std::vector<size_t> cosmetic;
+        cmd.push_back(binary_);
+        inject_target_flags(cmd);
+
+        if (!ctx.standard.empty()) {
+            std::string std_prefix = ctx.extensions_enabled ? "gnu++" : "c++";
+            cmd.push_back("-std=" + std_prefix + ctx.standard);
+        } else {
+            cmd.push_back("-std=c++20");
+        }
+
+        cmd.push_back("-fmodules-ts");
+        cmd.push_back(std::string("-fmodule-header=") + (ctx.is_system_header ? "system" : "user"));
+        if (!ctx.module_mapper_file.empty()) {
+            cmd.push_back("-fmodule-mapper=" + ctx.module_mapper_file);
+        }
+
+        if (ctx.color_diagnostics) {
+            cosmetic.push_back(cmd.size());
+            cmd.push_back("-fdiagnostics-color=always");
+        }
+
+        for (const auto& opt : ctx.options) {
+            if (opt.empty()) continue;
+            if (opt.starts_with("SHELL:")) {
+                std::string rest = opt.substr(6);
+                std::stringstream ss(rest);
+                std::string arg;
+                while (ss >> arg) cmd.push_back(arg);
+            } else {
+                cmd.push_back(opt);
+            }
+        }
+        for (const auto& def : ctx.definitions) {
+            std::string clean_def = def;
+            if (clean_def.starts_with("-D")) clean_def = clean_def.substr(2);
+            if (clean_def.empty()) continue;
+            cmd.push_back("-D" + clean_def);
+        }
+        for (const auto& dir : ctx.includes) {
+            cmd.push_back("-I" + dir);
+        }
+        for (const auto& dir : ctx.system_includes) {
+            cmd.push_back("-isystem" + dir);
+        }
+
+        // -c is required even though no .o is produced; the BMI travels via
+        // the mapper. -o /dev/null silences the obj write.
+        cmd.push_back("-c");
+        cmd.push_back("-o");
+        cmd.push_back("/dev/null");
+
+        // Tell GCC how to interpret the input. Without -x, a `.h` file would
+        // be treated as a C header.
+        cmd.push_back("-x");
+        cmd.push_back(ctx.is_system_header ? "c++-system-header" : "c++-user-header");
+        cmd.push_back(ctx.source);
+
+        for (const auto& arg : cmd) assert_no_genex(arg, "header unit compile command");
         return finalize(std::move(cmd), cosmetic);
     }
 

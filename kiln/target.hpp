@@ -326,7 +326,10 @@ protected:
     void generate_module_collator_task(GraphTransaction& txn,
                                        const std::vector<std::string>& scanner_task_ids,
                                        const TargetMap& all_targets,
-                                       const std::string& std_module_manifest_path);
+                                       const std::string& std_module_manifest_path,
+                                       const class Compiler* cxx_compiler,
+                                       const std::string& cxx_standard,
+                                       bool cxx_extensions_enabled);
 
     // Check if target has any module sources of its own
     bool has_module_sources() const;
