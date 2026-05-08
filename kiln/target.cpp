@@ -56,6 +56,42 @@ static std::string compute_effective_standard(
     return std::to_string(effective);
 }
 
+// CMake's <LANG>_COMPILER_LAUNCHER / <LANG>_LINKER_LAUNCHER: target property
+// (semicolon list) overrides the corresponding CMAKE_<LANG>_..._LAUNCHER cache
+// variable. Tokens are prepended verbatim to the compiler/linker argv. Empty
+// result = no launcher.
+static std::vector<std::string> resolve_launcher(
+    const Target& target, const Interpreter& interp,
+    Language lang, const std::string& kind /* "COMPILER" or "LINKER" */)
+{
+    std::string lang_str(language_name(lang));
+    std::string prop = lang_str + "_" + kind + "_LAUNCHER";
+    std::string val = target.get_property(prop);
+    if (val.empty()) {
+        val = interp.get_variable("CMAKE_" + prop);
+    }
+    std::vector<std::string> out;
+    if (val.empty()) return out;
+    for (auto sv : CMakeArrayIterator(val)) {
+        if (!sv.empty()) out.emplace_back(sv);
+    }
+    return out;
+}
+
+// Prepend launcher tokens onto a CompilerCommand's argv (and signature_argv).
+// Launcher identity is part of the signature so that swapping
+// ccache↔none reruns the compile.
+static void apply_launcher(CompilerCommand& cc, const std::vector<std::string>& launcher) {
+    if (launcher.empty()) return;
+    cc.argv.insert(cc.argv.begin(), launcher.begin(), launcher.end());
+    cc.signature_argv.insert(cc.signature_argv.begin(), launcher.begin(), launcher.end());
+}
+
+static void apply_launcher(std::vector<std::string>& argv, const std::vector<std::string>& launcher) {
+    if (launcher.empty()) return;
+    argv.insert(argv.begin(), launcher.begin(), launcher.end());
+}
+
 // --- Generic Property Implementation ---
 
 void Target::set_property(const std::string& name, const std::string& value) {
@@ -1712,6 +1748,7 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         task.parent_target = this;
         {
             auto cc = compiler->get_compile_command(ctx);
+            apply_launcher(cc, resolve_launcher(*this, interp, lang_info.lang, "COMPILER"));
             task.commands.push_back(std::move(cc.argv));
             task.signature_commands.push_back(std::move(cc.signature_argv));
         }
@@ -1793,6 +1830,7 @@ static PchInfo generate_pch_task(
     GraphTransaction& txn,
     const Toolchain& toolchain,
     const Target* target,
+    const Interpreter& interp,
     Language pch_lang,
     const std::vector<std::string>& pch_headers,
     bool is_shared,
@@ -1891,6 +1929,7 @@ static PchInfo generate_pch_task(
 
     {
         auto cc = compiler->get_compile_command(ctx);
+        apply_launcher(cc, resolve_launcher(*target, interp, pch_lang, "COMPILER"));
         pch_task.commands.push_back(std::move(cc.argv));
         pch_task.signature_commands.push_back(std::move(cc.signature_argv));
     }
@@ -2152,7 +2191,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
                 if (!pch_exports_define.empty()) {
                     pch_defs.push_back(pch_exports_define);
                 }
-                auto info = generate_pch_task(txn, toolchain, this, lang, *result, is_shared,
+                auto info = generate_pch_task(txn, toolchain, this, interp, lang, *result, is_shared,
                     filter_implicit(evaluate_for_pch(get_resolved_property("INCLUDE_DIRECTORIES"))),
                     filter_implicit(evaluate_for_pch(get_resolved_property("SYSTEM_INCLUDE_DIRECTORIES"))),
                     pch_defs,
@@ -2310,7 +2349,10 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 
     if (type_ == TargetType::STATIC_LIBRARY) {
-        link.commands.push_back(linker->get_archive_command(output_path, obj_files));
+        auto archive_cmd = linker->get_archive_command(output_path, obj_files);
+        // Static archives don't run a compiler/linker; CMake doesn't apply
+        // launchers here either, so leave the argv untouched.
+        link.commands.push_back(std::move(archive_cmd));
     } else {
         LinkContext ctx;
         ctx.output = output_path;
@@ -2397,6 +2439,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
 
         {
             auto lc = linker->get_link_command(ctx);
+            apply_launcher(lc, resolve_launcher(*this, interp, linker_lang, "LINKER"));
             link.commands.push_back(std::move(lc.argv));
             link.signature_commands.push_back(std::move(lc.signature_argv));
         }
@@ -2688,7 +2731,8 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
                                            const Compiler* cxx,
                                            const std::string& top_binary_dir,
                                            int cxx_default_std,
-                                           bool extensions_enabled) {
+                                           bool extensions_enabled,
+                                           const std::vector<std::string>& compiler_launcher) {
     if (!cxx || !cxx->supports_import_std()) return {};
     std::string json_path = cxx->libstdcxx_modules_json_path();
     if (json_path.empty()) return {};
@@ -2744,6 +2788,7 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
             ctx.options.push_back("-Wno-reserved-identifier");
         }
         auto cmd = cxx->get_compile_command(ctx);
+        apply_launcher(cmd, compiler_launcher);
 
         // Pre-write the late-bound file the std compile reads:
         //   GCC:   mapper at mapper_path: `std <bmi>`
@@ -2901,7 +2946,8 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
                 txn, cxx,
                 top_binary.empty() ? binary_dir_ : top_binary,
                 cxx_default_std,
-                cxx_ext);
+                cxx_ext,
+                resolve_launcher(*this, interp, Language::CXX, "COMPILER"));
         }
 
         // Pick the C++ standard the header-unit compile should use. Mirrors
