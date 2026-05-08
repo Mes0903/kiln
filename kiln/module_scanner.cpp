@@ -101,6 +101,24 @@ struct glz::meta<kiln::ModuleManifest> {
 };
 
 template <>
+struct glz::meta<kiln::LibstdcxxModuleEntry> {
+    using T = kiln::LibstdcxxModuleEntry;
+    static constexpr auto value = glz::object(
+        "logical-name", &T::logical_name,
+        "source-path", &T::source_path,
+        "is-std-library", &T::is_std_library);
+};
+
+template <>
+struct glz::meta<kiln::LibstdcxxModulesJson> {
+    using T = kiln::LibstdcxxModulesJson;
+    static constexpr auto value = glz::object(
+        "version", &T::version,
+        "revision", &T::revision,
+        "modules", &T::modules);
+};
+
+template <>
 struct glz::meta<kiln::P1689Rule> {
     using T = kiln::P1689Rule;
     static constexpr auto value = glz::object(
@@ -127,6 +145,24 @@ std::expected<P1689File, std::string> parse_p1689_file(const std::string& path) 
     auto result = parse_p1689_string(content);
     if (!result) return std::unexpected(result.error() + " (file: " + path + ")");
     return result;
+}
+
+std::expected<LibstdcxxModulesJson, std::string> parse_libstdcxx_modules_json_string(const std::string& json) {
+    LibstdcxxModulesJson j;
+    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(j, json);
+    if (ec) {
+        return std::unexpected("Failed to parse libstdc++.modules.json: " + glz::format_error(ec, json));
+    }
+    return j;
+}
+
+std::expected<LibstdcxxModulesJson, std::string> parse_libstdcxx_modules_json_file(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return std::unexpected("Failed to open libstdc++.modules.json: " + path);
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto r = parse_libstdcxx_modules_json_string(content);
+    if (!r) return std::unexpected(r.error() + " (file: " + path + ")");
+    return r;
 }
 
 std::expected<ModuleManifest, std::string> parse_module_manifest_string(const std::string& json) {

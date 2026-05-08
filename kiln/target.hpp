@@ -317,14 +317,16 @@ protected:
     // C++20 modules task generation
     // Returns true if module pipeline (scanner+collator) was generated for this target
     bool generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
-                                       const TargetMap& all_targets, int cxx_default_std = 0);
+                                       const TargetMap& all_targets, const class Interpreter& interp,
+                                       int cxx_default_std = 0);
 
     // Generate the collator task that depends on all scanner tasks plus the
     // module-export manifests of every module-providing transitive PUBLIC/INTERFACE
     // link dep, so cross-target imports resolve.
     void generate_module_collator_task(GraphTransaction& txn,
                                        const std::vector<std::string>& scanner_task_ids,
-                                       const TargetMap& all_targets);
+                                       const TargetMap& all_targets,
+                                       const std::string& std_module_manifest_path);
 
     // Check if target has any module sources of its own
     bool has_module_sources() const;
@@ -339,6 +341,16 @@ protected:
     // -fmodules-ts, module mapper). Triggered by own modules OR by cross-target
     // imports from a module-providing link dep.
     bool participates_in_modules(const TargetMap& all_targets) const;
+
+    // Cheap textual peek for `import` directives in CXX sources. Lets us
+    // opt targets that import std (or any module) into the module pipeline
+    // even when they have no own interface units / module-providing deps.
+    bool target_imports_anything() const;
+
+    // Targeted variant: matches only `import std;` / `import std.compat;`.
+    // Used to gate eager scheduling of the toolchain-level std module
+    // compile so projects that don't `import std;` pay no cost.
+    bool target_imports_std() const;
 
     std::string name_;
     std::string output_name_;

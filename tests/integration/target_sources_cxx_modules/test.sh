@@ -2,6 +2,9 @@
 set -e
 
 KILN=$1
+TEST_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$TEST_DIR"
+rm -rf build
 
 # C++20 modules via P1689r5 dependency scanning: GCC 14+ only.
 CXX_BIN=${CXX:-g++}

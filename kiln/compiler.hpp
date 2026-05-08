@@ -133,6 +133,15 @@ public:
     // kiln rejects module sources at interpretation time when this is false.
     virtual bool supports_p1689() const { return false; }
 
+    // True if this compiler ships a libstdc++.modules.json (or equivalent)
+    // describing the std module's source unit, AND is recent enough to
+    // compile it. GCC ≥15 with libstdc++.modules.json present.
+    virtual bool supports_import_std() const { return false; }
+
+    // Absolute path to the toolchain's libstdc++.modules.json, or empty if
+    // the compiler doesn't ship one or doesn't expose it.
+    virtual std::string libstdcxx_modules_json_path() const { return {}; }
+
     // Platform detection - detects compiler info and system platform
     virtual PlatformInfo detect_platform() const {
         return {}; // Default: empty platform info

@@ -1261,6 +1261,29 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             }
                             if (!task_error.empty()) return;
 
+                            // Validate every required module has a provider.
+                            // The most common failure mode is `import std;` on
+                            // a GCC<15 toolchain (no libstdc++.modules.json) —
+                            // emit a targeted diagnostic for that case.
+                            for (const auto& [importer_obj, reqs] : task_requires) {
+                                for (const auto& mod : reqs) {
+                                    if (module_to_task.count(mod)) continue;
+                                    if (mod == "std" || mod == "std.compat") {
+                                        task_error =
+                                            "Module '" + mod + "' is not available: "
+                                            "kiln couldn't locate libstdc++.modules.json. "
+                                            "`import std;` requires GCC >= 15 with libstdc++ "
+                                            "module support installed. (importer: " + importer_obj + ")";
+                                    } else {
+                                        task_error =
+                                            "Module '" + mod + "' has no provider in this build. "
+                                            "Did you forget a target_link_libraries() to the providing target? "
+                                            "(importer: " + importer_obj + ")";
+                                    }
+                                    return;
+                                }
+                            }
+
                             // GCC writes BMIs straight to the mapper-advertised path
                             // without creating intermediate dirs — so bmis/ must exist
                             // before any compile reads/writes the mapper.
@@ -1672,12 +1695,19 @@ std::expected<std::string, std::string> BuildGraph::calculate_signature(const Bu
         }
     }
 
-    // 2. Header dependencies from .d files (cached parsing + combined exists+stat)
+    // 2. Header dependencies from .d files (cached parsing + combined exists+stat).
+    // Filter out the task's own outputs: GCC's depfile for module units emits
+    // multi-target rules (e.g. `std.o std.gcm: ...`) plus order-only rules
+    // (`std.gcm:| std.o`) that the simple `find(':')` parser conflates into
+    // listing the .o as a dep of itself. Re-stating an output as a dep makes
+    // every signature mtime-mismatch, so the task perpetually rebuilds.
+    std::set<std::string> own_outputs(task.outputs.begin(), task.outputs.end());
     bool found_deps = false;
     for (const auto& out : task.outputs) {
         auto deps = get_deps_for_output(out);
         if (!deps.empty()) {
             for (const auto& dep : deps) {
+                if (own_outputs.count(dep)) continue;
                 if (auto mtime = get_file_time_if_exists(dep)) {
                     oss << "dep:" << dep << ":" << mtime->time_since_epoch().count() << "|";
                 }
@@ -1824,11 +1854,6 @@ void BuildGraph::inject_module_dependencies(
         const auto& required_modules = req_it->second;
 
         for (const auto& required_module : required_modules) {
-            // Skip standard library modules (not built locally)
-            if (required_module == "std" || required_module.starts_with("std.")) {
-                continue;
-            }
-
             auto provider_it = module_to_task.find(required_module);
             if (provider_it == module_to_task.end()) {
                 continue;

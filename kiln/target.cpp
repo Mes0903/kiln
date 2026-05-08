@@ -2030,7 +2030,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 
     // C++20 modules: generate scanner tasks first (they have no dependencies)
-    bool has_modules = generate_module_scanner_tasks(txn, toolchain, all_targets, cxx_default_std);
+    bool has_modules = generate_module_scanner_tasks(txn, toolchain, all_targets, interp, cxx_default_std);
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // PCH: generate per-language precompiled headers (C gets _pch.h, CXX gets _pch.hxx)
@@ -2675,8 +2675,104 @@ bool Target::has_module_sources() const {
     return false;
 }
 
+// Eagerly schedules the synthetic compile task for the libstdc++ std module
+// unit and pre-writes the foreign manifest at config time so this target's
+// collator can pick it up like any cross-target export. Idempotent — the
+// task id (the std obj path) is shared across all targets, so subsequent
+// callers no-op.
+//
+// Returns the manifest path on success, empty string when std isn't
+// available (no CXX compiler, GCC<15, libstdc++.modules.json missing).
+static std::string ensure_std_module_tasks(GraphTransaction& txn,
+                                           const Compiler* cxx,
+                                           const std::string& top_binary_dir,
+                                           int cxx_default_std,
+                                           bool extensions_enabled) {
+    if (!cxx || !cxx->supports_import_std()) return {};
+    std::string json_path = cxx->libstdcxx_modules_json_path();
+    if (json_path.empty()) return {};
+
+    auto parsed = parse_libstdcxx_modules_json_file(json_path);
+    if (!parsed) return {};
+
+    std::filesystem::path std_dir = std::filesystem::path(top_binary_dir) / "_kiln_std";
+    std::string manifest_path = (std_dir / "std.module-exports.json").string();
+    std::string mapper_path   = (std_dir / "std.mapper").string();
+    std::string obj_path      = (std_dir / "std.o").string();
+    std::string bmi_path      = (std_dir / "bmis" / "std.gcm").string();
+
+    std::error_code ec;
+    std::filesystem::create_directories(std_dir, ec);
+    std::filesystem::create_directories(std_dir / "bmis", ec);
+
+    std::filesystem::path json_dir = std::filesystem::path(json_path).parent_path();
+    std::string src_abs;
+    for (const auto& mod : parsed->modules) {
+        if (mod.logical_name != "std") continue;
+        std::filesystem::path src_path = (json_dir / mod.source_path).lexically_normal();
+        src_abs = std::filesystem::weakly_canonical(src_path, ec).string();
+        if (ec) src_abs = src_path.string();
+        break;
+    }
+    if (src_abs.empty()) return {};
+
+    if (!txn.has_task(obj_path)) {
+        std::string standard = "23";
+        if (cxx_default_std >= 23) standard = std::to_string(cxx_default_std);
+
+        CompileContext ctx;
+        ctx.source = src_abs;
+        ctx.output = obj_path;
+        ctx.standard = standard;
+        ctx.extensions_enabled = extensions_enabled;
+        ctx.is_module_source = true;
+        ctx.module_mapper_file = mapper_path;
+        ctx.bmi_output = bmi_path;
+        auto cmd = cxx->get_compile_command(ctx);
+
+        // Pre-write the mapper file the std compile reads (`std <bmi>`).
+        // Skip the write if content is unchanged so the mapper's mtime stays
+        // stable — otherwise every config rerun bumps it and forces the std
+        // compile to invalidate its signature.
+        {
+            std::string desired = "std " + bmi_path + "\n";
+            std::ifstream existing(mapper_path);
+            std::string current((std::istreambuf_iterator<char>(existing)),
+                                 std::istreambuf_iterator<char>());
+            if (current != desired) {
+                std::ofstream m(mapper_path);
+                m << desired;
+            }
+        }
+
+        BuildTask task;
+        task.id = obj_path;
+        task.kind = CompileTask{src_abs, Language::CXX};
+        task.commands.push_back(std::move(cmd.argv));
+        task.signature_commands.push_back(std::move(cmd.signature_argv));
+        task.inputs.push_back(src_abs);
+        task.inputs.push_back(mapper_path);
+        task.outputs.push_back(obj_path);
+        task.outputs.push_back(bmi_path);
+        (void)txn.add(std::move(task));
+
+        ModuleManifest manifest;
+        ModuleManifestEntry me;
+        me.logical_name = "std";
+        me.bmi_path = bmi_path;
+        me.primary_output = obj_path;
+        me.source_path = src_abs;
+        me.visibility = "PUBLIC";
+        manifest.entries.push_back(std::move(me));
+        (void)write_module_manifest(manifest_path, manifest);
+    }
+
+    return manifest_path;
+}
+
 bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
-                                            const TargetMap& all_targets, int cxx_default_std) {
+                                            const TargetMap& all_targets, const Interpreter& interp,
+                                            int cxx_default_std) {
     std::vector<std::string> scanner_ids;
 
     auto sources = get_property_list("SOURCES", TargetPropertyScope::BUILD);
@@ -2696,7 +2792,8 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         }
     }
     bool has_module_dep = !transitive_module_providing_deps(all_targets).empty();
-    if (!has_interface && !has_module_dep) return false;
+    bool imports_something = !has_interface && !has_module_dep && target_imports_anything();
+    if (!has_interface && !has_module_dep && !imports_something) return false;
 
     for (const auto& src : sources) {
         auto lang_info = LanguageClassifier::from_path(src);
@@ -2770,7 +2867,22 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
     }
 
     if (!scanner_ids.empty()) {
-        generate_module_collator_task(txn, scanner_ids, all_targets);
+        // Schedule the toolchain-level std module compile and write its
+        // foreign manifest, but only when this target's sources actually
+        // contain `import std;` (cheap textual peek). Empty manifest path
+        // when std is unavailable (GCC<15, libstdc++.modules.json missing)
+        // — `import std;` then hard-fails at collate time.
+        std::string std_manifest;
+        if (target_imports_std()) {
+            const Compiler* cxx = resolve_compiler(Language::CXX, toolchain);
+            const std::string& top_binary = interp.get_variable("CMAKE_BINARY_DIR");
+            std_manifest = ensure_std_module_tasks(
+                txn, cxx,
+                top_binary.empty() ? binary_dir_ : top_binary,
+                cxx_default_std,
+                get_language_extensions(Language::CXX));
+        }
+        generate_module_collator_task(txn, scanner_ids, all_targets, std_manifest);
         return true;
     }
 
@@ -2779,7 +2891,8 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
 
 void Target::generate_module_collator_task(GraphTransaction& txn,
                                            const std::vector<std::string>& scanner_task_ids,
-                                           const TargetMap& all_targets) {
+                                           const TargetMap& all_targets,
+                                           const std::string& std_module_manifest_path) {
     std::string mapper_path = get_module_mapper_path();
     std::string manifest_path = get_module_manifest_path();
 
@@ -2802,6 +2915,13 @@ void Target::generate_module_collator_task(GraphTransaction& txn,
         std::string dep_manifest = dep->get_module_manifest_path();
         collator.explicit_deps.push_back(dep_manifest);
         collator.inputs.push_back(dep_manifest);
+    }
+
+    // Toolchain-level std module: foreign manifest for `import std;`. The
+    // collator picks it up via the same suffix-detection used for cross-
+    // target manifests.
+    if (!std_module_manifest_path.empty()) {
+        collator.inputs.push_back(std_module_manifest_path);
     }
 
     // Both the per-target mapper (consumed by this target's compiles) and the
@@ -2839,9 +2959,82 @@ Target::transitive_module_providing_deps(const TargetMap& all_targets) const {
     return result;
 }
 
+// Cheap textual peek: does any CXX source in this target contain an
+// `import` directive? Used to opt targets that don't otherwise look
+// module-flavored (no .cppm, no module-providing dep) into the module
+// pipeline so that `import std;` and similar resolve. Reads up to a few
+// KB per source — full parsing is the scanner's job.
+bool Target::target_imports_std() const {
+    // Targeted peek: only matches `import std;` or `import std.<x>` to avoid
+    // false positives from unrelated `import Foo;` lines.
+    auto matches = [](const std::string& buf) {
+        size_t pos = 0;
+        while (pos < buf.size()) {
+            while (pos < buf.size() && (buf[pos] == ' ' || buf[pos] == '\t')) ++pos;
+            if (pos + 11 <= buf.size() && buf.compare(pos, 7, "import ") == 0) {
+                size_t q = pos + 7;
+                while (q < buf.size() && (buf[q] == ' ' || buf[q] == '\t')) ++q;
+                if (q + 3 <= buf.size() && buf.compare(q, 3, "std") == 0) {
+                    char after = q + 3 < buf.size() ? buf[q + 3] : '\0';
+                    if (after == ';' || after == '.' || after == ' ' || after == '\t' || after == '\n') {
+                        return true;
+                    }
+                }
+            }
+            while (pos < buf.size() && buf[pos] != '\n') ++pos;
+            if (pos < buf.size()) ++pos;
+        }
+        return false;
+    };
+    for (const auto& src : get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
+        auto info = LanguageClassifier::from_path(src);
+        if (info.lang != Language::CXX || info.is_header) continue;
+        std::string abs = Path(src).is_absolute() ? src : Path::join(source_dir_, src);
+        std::ifstream f(abs);
+        if (!f) continue;
+        std::string buf(8192, '\0');
+        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        buf.resize(static_cast<size_t>(f.gcount()));
+        if (matches(buf)) return true;
+    }
+    return false;
+}
+
+bool Target::target_imports_anything() const {
+    auto matches = [](const std::string& buf) {
+        size_t pos = 0;
+        while (pos < buf.size()) {
+            // Skip whitespace at line start
+            size_t line_start = pos;
+            while (pos < buf.size() && (buf[pos] == ' ' || buf[pos] == '\t')) ++pos;
+            if (pos + 7 <= buf.size() && buf.compare(pos, 7, "import ") == 0) return true;
+            if (pos + 7 <= buf.size() && buf.compare(pos, 7, "import\t") == 0) return true;
+            // Advance to next line
+            while (pos < buf.size() && buf[pos] != '\n') ++pos;
+            if (pos < buf.size()) ++pos;
+            (void)line_start;
+        }
+        return false;
+    };
+
+    for (const auto& src : get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
+        auto info = LanguageClassifier::from_path(src);
+        if (info.lang != Language::CXX || info.is_header) continue;
+        std::string abs = Path(src).is_absolute() ? src : Path::join(source_dir_, src);
+        std::ifstream f(abs);
+        if (!f) continue;
+        std::string buf(8192, '\0');
+        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        buf.resize(static_cast<size_t>(f.gcount()));
+        if (matches(buf)) return true;
+    }
+    return false;
+}
+
 bool Target::participates_in_modules(const TargetMap& all_targets) const {
     if (has_module_sources()) return true;
-    return !transitive_module_providing_deps(all_targets).empty();
+    if (!transitive_module_providing_deps(all_targets).empty()) return true;
+    return target_imports_anything();
 }
 
 } // namespace kiln

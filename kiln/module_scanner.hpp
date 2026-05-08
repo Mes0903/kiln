@@ -88,4 +88,25 @@ std::expected<void, std::string> write_module_manifest(const std::string& path, 
 // String-form parse, exposed for unit tests.
 std::expected<ModuleManifest, std::string> parse_module_manifest_string(const std::string& json);
 
+// --- libstdc++.modules.json (GCC ≥15) ---
+// Toolchain-shipped manifest describing the std module units. The path is
+// "libstdc++.modules.json" relative to the compiler's library dir (queryable
+// via `g++ -print-file-name=`). source-path entries are relative to the
+// directory containing modules.json.
+
+struct LibstdcxxModuleEntry {
+    std::string logical_name;      // "std" or "std.compat"
+    std::string source_path;       // Relative to modules.json's directory
+    bool is_std_library = false;
+};
+
+struct LibstdcxxModulesJson {
+    int version = 0;
+    int revision = 0;
+    std::vector<LibstdcxxModuleEntry> modules;
+};
+
+std::expected<LibstdcxxModulesJson, std::string> parse_libstdcxx_modules_json_string(const std::string& json);
+std::expected<LibstdcxxModulesJson, std::string> parse_libstdcxx_modules_json_file(const std::string& path);
+
 } // namespace kiln

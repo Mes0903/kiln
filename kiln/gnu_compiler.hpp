@@ -925,8 +925,40 @@ int kiln_compiler_id_probe_anchor = 0;
                 else break;
             }
             p1689_supported_ = is_gcc && major >= 14;
+            gcc_major_ = is_gcc ? major : 0;
         });
         return p1689_supported_;
+    }
+
+    // GCC 15 was the first release to ship libstdc++.modules.json. We require:
+    //   1. supports_p1689() (i.e. GCC ≥14) — really we need ≥15.
+    //   2. modules.json reachable via `g++ -print-file-name=`.
+    bool supports_import_std() const override {
+        (void)supports_p1689();  // populates gcc_major_
+        std::call_once(import_std_probe_once_, [this] {
+            if (gcc_major_ < 15) { import_std_supported_ = false; return; }
+            std::string path = libstdcxx_modules_json_path();
+            std::error_code ec;
+            import_std_supported_ = !path.empty() && std::filesystem::exists(path, ec);
+        });
+        return import_std_supported_;
+    }
+
+    std::string libstdcxx_modules_json_path() const override {
+        std::call_once(modules_json_probe_once_, [this] {
+            std::string out = detail::run_command(
+                binary_ + " -print-file-name=libstdc++.modules.json 2>/dev/null");
+            while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
+                out.pop_back();
+            if (out.empty() || out == "libstdc++.modules.json") {
+                modules_json_path_.clear();
+                return;
+            }
+            std::error_code ec;
+            auto canon = std::filesystem::weakly_canonical(out, ec);
+            modules_json_path_ = ec ? out : canon.string();
+        });
+        return modules_json_path_;
     }
 
 private:
@@ -936,6 +968,11 @@ private:
     std::string compiler_target_;
     mutable std::once_flag p1689_probe_once_;
     mutable bool p1689_supported_ = false;
+    mutable int gcc_major_ = 0;
+    mutable std::once_flag import_std_probe_once_;
+    mutable bool import_std_supported_ = false;
+    mutable std::once_flag modules_json_probe_once_;
+    mutable std::string modules_json_path_;
 };
 
 } // namespace kiln
