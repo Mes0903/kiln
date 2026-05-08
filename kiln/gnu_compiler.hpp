@@ -121,7 +121,7 @@ public:
         // before the comparisons below run.
         Path src_path(ctx.source);
         std::string_view ext = src_path.extension();
-        emit_module_input_kind_flags(cmd, ext, ctx.is_module_source);
+        emit_module_input_kind_flags(cmd, ext, ctx);
 
         for (const auto& opt : ctx.options) {
             if (opt.empty()) continue;
@@ -1049,8 +1049,8 @@ protected:
     // (plain `-x c++` would silently downgrade it to a regular TU).
     virtual void emit_module_input_kind_flags(std::vector<std::string>& cmd,
                                                 std::string_view ext,
-                                                bool is_module_source) const {
-        (void)is_module_source;
+                                                const CompileContext& ctx) const {
+        (void)ctx;
         if (ext == ".cppm" || ext == ".ccm" || ext == ".cxxm" || ext == ".ixx" || ext == ".mpp") {
             cmd.push_back("-x");
             cmd.push_back("c++");
@@ -1062,7 +1062,7 @@ protected:
     std::string sysroot_;
     std::string compiler_target_;
 
-private:
+protected:
     mutable std::once_flag p1689_probe_once_;
     mutable bool p1689_supported_ = false;
     mutable int gcc_major_ = 0;
@@ -1070,6 +1070,7 @@ private:
     mutable bool import_std_supported_ = false;
     mutable std::once_flag modules_json_probe_once_;
     mutable std::string modules_json_path_;
+    mutable bool std_uses_libcxx_ = false;
 };
 
 // Clang driver. Inherits the gcc-compatible compile/link/archive emitters
@@ -1094,12 +1095,58 @@ public:
 
     bool uses_per_task_module_rsp() const override { return true; }
 
-    // TODO(modules): libc++ ships the std module as a `std.cppm` source and
-    // a libc++.modules.json (clang >= 18). Probe and report here.
-    bool supports_import_std() const override { return false; }
+    // Clang can consume either libc++.modules.json (clang's own libc++,
+    // shipped from clang 18+) or libstdc++.modules.json (libstdc++ from
+    // GCC 15+, the default stdlib on most Linux distros). We probe libc++
+    // first under `-stdlib=libc++`, then fall back to libstdc++ at the
+    // driver's default search path.
+    bool supports_import_std() const override {
+        (void)libstdcxx_modules_json_path();
+        return !modules_json_path_.empty();
+    }
 
-    // GCC-only path; libc++ uses a different filename.
-    std::string libstdcxx_modules_json_path() const override { return {}; }
+    std::string libstdcxx_modules_json_path() const override {
+        std::call_once(modules_json_probe_once_, [this] {
+            auto try_probe = [&](const std::string& stdlib_flag,
+                                 const std::string& filename) -> std::string {
+                std::string cmd = binary_;
+                if (!stdlib_flag.empty()) cmd += " " + stdlib_flag;
+                cmd += " -print-file-name=" + filename + " 2>/dev/null";
+                std::string out = detail::run_command(cmd);
+                while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
+                    out.pop_back();
+                if (out.empty() || out == filename) return {};
+                std::error_code ec;
+                if (!std::filesystem::exists(out, ec)) return {};
+                auto canon = std::filesystem::weakly_canonical(out, ec);
+                return ec ? out : canon.string();
+            };
+            // libc++ first (only matters if user explicitly opts in via
+            // -stdlib=libc++; clang still uses libstdc++ at link time on
+            // most Linux unless told otherwise).
+            auto p = try_probe("-stdlib=libc++", "libc++.modules.json");
+            if (!p.empty()) {
+                modules_json_path_ = p;
+                std_uses_libcxx_ = true;
+                return;
+            }
+            p = try_probe("", "libstdc++.modules.json");
+            if (!p.empty()) {
+                modules_json_path_ = p;
+                std_uses_libcxx_ = false;
+            }
+        });
+        return modules_json_path_;
+    }
+
+    // True when supports_import_std() resolved via libc++ rather than
+    // libstdc++ — callers (the std-module compile in target.cpp) need to
+    // inject `-stdlib=libc++` so the std.cppm source picks up libc++
+    // headers, not libstdc++'s.
+    bool import_std_uses_libcxx() const {
+        (void)libstdcxx_modules_json_path();
+        return std_uses_libcxx_;
+    }
 
     // Wrap a normal clang compile invocation in `clang-scan-deps -format=p1689
     // -o <ddi> -- ...`. The inner command needs `-c`, the source, and enough
@@ -1178,13 +1225,16 @@ protected:
 
     // Clang needs `-x c++-module` to treat the input as a module interface;
     // `-x c++` (the GCC override) silently demotes it to a regular TU and the
-    // -fmodule-output= flag becomes a no-op.
+    // -fmodule-output= flag becomes a no-op. We trigger on either a module-
+    // interface extension OR `bmi_output` being set (libstdc++ ships its std
+    // module as a plain `bits/std.cc`, which has no special extension).
     void emit_module_input_kind_flags(std::vector<std::string>& cmd,
                                         std::string_view ext,
-                                        bool is_module_source) const override {
+                                        const CompileContext& ctx) const override {
         const bool is_module_ext = (ext == ".cppm" || ext == ".ccm" ||
                                     ext == ".cxxm" || ext == ".ixx" || ext == ".mpp");
-        if (is_module_ext && is_module_source) {
+        const bool provides_module = !ctx.bmi_output.empty();
+        if (ctx.is_module_source && (is_module_ext || provides_module)) {
             cmd.push_back("-x");
             cmd.push_back("c++-module");
         }

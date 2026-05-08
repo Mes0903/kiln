@@ -4,6 +4,7 @@
 #include "language.hpp"
 #include "toolchain.hpp"
 #include "module_scanner.hpp"
+#include "gnu_compiler.hpp"
 #include "genex_evaluator.hpp"
 #include "interperter.hpp"
 #include "compile_features.hpp"
@@ -2720,27 +2721,45 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
         std::string standard = "23";
         if (cxx_default_std >= 23) standard = std::to_string(cxx_default_std);
 
+        const auto* clang = dynamic_cast<const ClangCompiler*>(cxx);
+        const bool clang_rsp = cxx->uses_per_task_module_rsp();
+        std::string late_bound_path = clang_rsp ? (obj_path + ".modules.rsp") : mapper_path;
+
         CompileContext ctx;
         ctx.source = src_abs;
         ctx.output = obj_path;
         ctx.standard = standard;
         ctx.extensions_enabled = extensions_enabled;
         ctx.is_module_source = true;
-        ctx.module_mapper_file = mapper_path;
+        ctx.module_mapper_file = mapper_path;  // Unused on clang; harmless.
         ctx.bmi_output = bmi_path;
+        if (clang && clang->import_std_uses_libcxx()) {
+            ctx.options.push_back("-stdlib=libc++");
+        }
+        if (clang_rsp) {
+            // libstdc++'s std module references reserved identifiers as part
+            // of its implementation; clang warns by default. Silencing
+            // matches what the libc++/libstdc++ build systems do.
+            ctx.options.push_back("-Wno-reserved-module-identifier");
+            ctx.options.push_back("-Wno-reserved-identifier");
+        }
         auto cmd = cxx->get_compile_command(ctx);
 
-        // Pre-write the mapper file the std compile reads (`std <bmi>`).
-        // Skip the write if content is unchanged so the mapper's mtime stays
-        // stable — otherwise every config rerun bumps it and forces the std
+        // Pre-write the late-bound file the std compile reads:
+        //   GCC:   mapper at mapper_path: `std <bmi>`
+        //   Clang: rsp at <obj>.modules.rsp: `-fmodule-output=<bmi>`
+        // Skip the write if content is unchanged so the file's mtime stays
+        // stable; otherwise every config rerun bumps it and forces the std
         // compile to invalidate its signature.
         {
-            std::string desired = "std " + bmi_path + "\n";
-            std::ifstream existing(mapper_path);
+            std::string desired = clang_rsp
+                ? ("-fmodule-output=" + bmi_path + "\n")
+                : ("std " + bmi_path + "\n");
+            std::ifstream existing(late_bound_path);
             std::string current((std::istreambuf_iterator<char>(existing)),
                                  std::istreambuf_iterator<char>());
             if (current != desired) {
-                std::ofstream m(mapper_path);
+                std::ofstream m(late_bound_path);
                 m << desired;
             }
         }
@@ -2751,7 +2770,7 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
         task.commands.push_back(std::move(cmd.argv));
         task.signature_commands.push_back(std::move(cmd.signature_argv));
         task.inputs.push_back(src_abs);
-        task.inputs.push_back(mapper_path);
+        task.inputs.push_back(late_bound_path);
         task.outputs.push_back(obj_path);
         task.outputs.push_back(bmi_path);
         (void)txn.add(std::move(task));

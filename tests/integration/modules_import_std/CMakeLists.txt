@@ -5,4 +5,3 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(import_std_app main.cpp)
-target_compile_options(import_std_app PRIVATE -fmodules-ts)
