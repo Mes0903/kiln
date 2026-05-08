@@ -11,5 +11,6 @@ Kiln is a modern **build system** that consumes `CMakeLists.txt`, interpret the 
 
 * [Using Kiln](using-kiln.md)
 * [Debugging CMake programs](debugging-cmake-programs.md)
-* [Kiln for CMake veterans](kiln-for-cmake-veterans.md)
 * [Intercepted CMake commands](intercepted-cmake-commands.md)
+* [Kiln's caching machinism](kilns-caching-machinism.md)
+* [Kiln for CMake veterans](kiln-for-cmake-veterans.md)

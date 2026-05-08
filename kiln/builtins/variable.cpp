@@ -6,6 +6,7 @@
 #include "../parse_number.hpp"
 #include <algorithm>
 #include <unistd.h>
+#include <limits.h>
 
 namespace kiln {
 
