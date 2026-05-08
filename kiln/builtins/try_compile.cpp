@@ -963,8 +963,7 @@ void register_try_compile_builtins(Interpreter& interp) {
             }
 
             std::string lib_file = (temp_dir / "libtest.a").string();
-            std::vector<std::string> ar_cmd = {"ar", "rcs", lib_file};
-            ar_cmd.insert(ar_cmd.end(), obj_files.begin(), obj_files.end());
+            std::vector<std::string> ar_cmd = tc.compiler->get_archive_command(lib_file, obj_files);
             CommandResult ar_result = run_command(ar_cmd, temp_dir.string());
 
             if (ar_result.exit_code != 0) {

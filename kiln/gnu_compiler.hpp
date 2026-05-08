@@ -55,6 +55,18 @@ public:
     const std::string& sysroot() const override { return sysroot_; }
     const std::string& compiler_target() const override { return compiler_target_; }
 
+    // GCC-style `-std=c++NN` / `-std=cNN`. ClangCompiler and TccCompiler
+    // inherit this — same spelling for all three. MSVC overrides.
+    std::string std_compile_option(Language lang, int standard) const override {
+        if (lang == Language::CXX) {
+            return "-std=c++" + std::to_string(standard);
+        }
+        if (lang == Language::C) {
+            return "-std=c" + std::to_string(standard);
+        }
+        return {};
+    }
+
     // Inject --sysroot= and --target= flags. Call after pushing the binary,
     // before language-/job-specific flags. Idempotent w.r.t. empty fields.
     // Caller is responsible for only populating compiler_target_ when the
@@ -101,10 +113,7 @@ public:
             cmd.push_back("-std=" + std_prefix + ctx.standard);
         }
 
-        if (ctx.color_diagnostics) {
-            cosmetic.push_back(cmd.size());
-            cmd.push_back("-fdiagnostics-color=always");
-        }
+        if (ctx.color_diagnostics) emit_color_flag(cmd, cosmetic);
 
         // C++20 modules support. Subclasses override emit_module_compile_flags
         // to swap in their own indirection scheme (clang reads per-task
@@ -150,9 +159,7 @@ public:
             cmd.push_back("-D" + clean_def);
         }
 
-        cmd.push_back("-MMD");
-        cmd.push_back("-MF");
-        cmd.push_back(ctx.output + ".d");
+        emit_dependency_flags(cmd, ctx.output);
 
         if (ctx.is_shared) cmd.push_back("-fPIC");
         else if (ctx.is_pie) cmd.push_back("-fPIE");
@@ -199,10 +206,7 @@ public:
             cmd.push_back("-std=" + std_prefix + ctx.standard);
         }
 
-        if (ctx.color_diagnostics) {
-            cosmetic.push_back(cmd.size());
-            cmd.push_back("-fdiagnostics-color=always");
-        }
+        if (ctx.color_diagnostics) emit_color_flag(cmd, cosmetic);
 
         if (ctx.is_pie && !ctx.is_shared) {
             // PIE executables need -pie at link time so the loader maps the
@@ -311,10 +315,10 @@ public:
         // rescans and resolves circular dependencies between archives
         // and shared libs that reference each other's symbols.
         if (!static_libs.empty() || !shared_libs.empty()) {
-            cmd.push_back("-Wl,--start-group");
+            emit_link_group_open(cmd);
             for (const auto& a : static_libs) cmd.push_back(a);
             for (const auto& so : shared_libs) cmd.push_back(so);
-            cmd.push_back("-Wl,--end-group");
+            emit_link_group_close(cmd);
         }
 
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("-L" + dir);
@@ -461,10 +465,7 @@ public:
         cmd.push_back("-x");
         cmd.push_back("c++");
 
-        if (ctx.color_diagnostics) {
-            cosmetic.push_back(cmd.size());
-            cmd.push_back("-fdiagnostics-color=always");
-        }
+        if (ctx.color_diagnostics) emit_color_flag(cmd, cosmetic);
 
         for (const auto& dir : ctx.includes) {
             cmd.push_back("-I" + dir);
@@ -519,10 +520,7 @@ public:
             cmd.push_back("-fmodule-mapper=" + ctx.module_mapper_file);
         }
 
-        if (ctx.color_diagnostics) {
-            cosmetic.push_back(cmd.size());
-            cmd.push_back("-fdiagnostics-color=always");
-        }
+        if (ctx.color_diagnostics) emit_color_flag(cmd, cosmetic);
 
         for (const auto& opt : ctx.options) {
             if (opt.empty()) continue;
@@ -646,6 +644,20 @@ public:
             if (!maj.empty()) {
                 info.compiler_version = maj + "." + (min.empty() ? "0" : min)
                                               + "." + (pat.empty() ? "0" : pat);
+            }
+        } else if (has_macro("__TINYC__")) {
+            // TCC defines __TINYC__ but neither __GNUC__ nor __clang__, so
+            // this disambiguates cleanly. The macro encodes version as
+            // major*10000 + minor*100 + patch (e.g. 927 -> 0.9.27).
+            info.compiler_id = "TCC";
+            if (auto v_opt = parse_number<long>(macro("__TINYC__")); v_opt) {
+                long v = *v_opt;
+                long maj = v / 10000;
+                long min = (v / 100) % 100;
+                long pat = v % 100;
+                info.compiler_version = std::to_string(maj) + "."
+                                      + std::to_string(min) + "."
+                                      + std::to_string(pat);
             }
         } else {
             info.compiler_id = "Unknown";
@@ -840,6 +852,8 @@ const char info_compiler[] = "INFO:compiler[IntelLLVM]";
 const char info_compiler[] = "INFO:compiler[Clang]";
 #elif defined(__GNUC__)
 const char info_compiler[] = "INFO:compiler[GNU]";
+#elif defined(__TINYC__)
+const char info_compiler[] = "INFO:compiler[TCC]";
 #else
 const char info_compiler[] = "INFO:compiler[Unknown]";
 #endif
@@ -1057,6 +1071,42 @@ protected:
         }
     }
 
+    // Hooks for kiln-internal flags whose spelling differs across drivers.
+    // These are *not* user-facing CMake properties — kiln chooses to add
+    // them — so it's the driver's job to pick the spelling that works for
+    // its compiler (or capability-flag itself out). User-facing flags
+    // (-std=, -fvisibility=, -fPIC, -pie) are emitted unconditionally and
+    // it's the user's problem if a given compiler rejects them.
+
+    // Color diagnostics. Cosmetic; index goes into the cosmetic vector so
+    // it's elided from the cache signature.
+    virtual void emit_color_flag(std::vector<std::string>& cmd,
+                                 std::vector<size_t>& cosmetic) const {
+        cosmetic.push_back(cmd.size());
+        cmd.push_back("-fdiagnostics-color=always");
+    }
+
+    // Make-style depfile emission for header up-to-date tracking. GCC
+    // emits "-MMD -MF <out>.d"; TCC rejects -MMD (uses -MD) and rejects
+    // -MT outright.
+    virtual void emit_dependency_flags(std::vector<std::string>& cmd,
+                                       const std::string& output) const {
+        cmd.push_back("-MMD");
+        cmd.push_back("-MF");
+        cmd.push_back(output + ".d");
+    }
+
+    // Wrap static/shared lib inputs in a linker group so the linker
+    // rescans for circular references. GNU ld and lld both accept
+    // --start-group/--end-group; TCC's single-pass linker neither
+    // accepts nor needs it.
+    virtual void emit_link_group_open(std::vector<std::string>& cmd) const {
+        cmd.push_back("-Wl,--start-group");
+    }
+    virtual void emit_link_group_close(std::vector<std::string>& cmd) const {
+        cmd.push_back("-Wl,--end-group");
+    }
+
     std::string binary_;
     Language lang_;
     std::string sysroot_;
@@ -1178,10 +1228,7 @@ public:
             cmd.push_back("-std=c++20");
         }
 
-        if (ctx.color_diagnostics) {
-            cosmetic.push_back(cmd.size());
-            cmd.push_back("-fdiagnostics-color=always");
-        }
+        if (ctx.color_diagnostics) emit_color_flag(cmd, cosmetic);
 
         // Force C++ mode for module-interface extensions (clang recognizes
         // .cppm but not all variants); harmless for plain .cpp.
@@ -1288,16 +1335,84 @@ private:
     mutable std::string scan_deps_path_;
 };
 
-// Pick the right driver subclass for a detected compiler id. "Clang",
-// "AppleClang", "IntelLLVM", and "ARMClang" all share clang's modules
-// model; everything else (including "GNU" and "Unknown") falls back to
-// the gcc-style base.
-inline std::unique_ptr<Compiler> make_gnu_like_compiler(
+// TCC (Tiny C Compiler) driver. Inherits gcc-style argv from GnuCompiler;
+// overrides only the kiln-internal flags TCC handles differently:
+//   - color diagnostics (TCC errors on -fdiagnostics-color=)
+//   - depfile syntax (TCC accepts -MD/-MF, not -MMD; rejects -MT)
+//   - linker grouping (TCC's single-pass linker has no --start-group)
+//   - archive tool (TCC ships its own `tcc -ar` archiver)
+// User-facing flags (-std=, -fvisibility=, -fPIC, -pie) pass through
+// unchanged: if the user pinned a property TCC rejects, that's a user
+// misconfiguration and TCC's own error is more accurate than anything
+// kiln could synthesize. Capability flags below opt out of features
+// TCC doesn't implement (modules, P1689, import std).
+class TccCompiler : public GnuCompiler {
+public:
+    using GnuCompiler::GnuCompiler;
+
+    bool supports_p1689() const override { return false; }
+    bool uses_per_task_module_rsp() const override { return false; }
+    bool supports_import_std() const override { return false; }
+    std::string libstdcxx_modules_json_path() const override { return {}; }
+
+    std::vector<std::string> get_archive_command(
+        const std::string& output, const std::vector<std::string>& objs) const override {
+        std::vector<std::string> cmd;
+        cmd.push_back(binary_);
+        cmd.push_back("-ar");
+        cmd.push_back("rcs");
+        cmd.push_back(output);
+        for (const auto& obj : objs) cmd.push_back(obj);
+        return cmd;
+    }
+
+protected:
+    void emit_color_flag(std::vector<std::string>& cmd,
+                         std::vector<size_t>& cosmetic) const override {
+        (void)cmd; (void)cosmetic;  // TCC rejects -fdiagnostics-color=*
+    }
+
+    void emit_dependency_flags(std::vector<std::string>& cmd,
+                               const std::string& output) const override {
+        // TCC supports -MD (Make-style depfile) and -MF, but rejects -MMD
+        // (a GCC extension) and errors hard on -MT.
+        cmd.push_back("-MD");
+        cmd.push_back("-MF");
+        cmd.push_back(output + ".d");
+    }
+
+    void emit_link_group_open(std::vector<std::string>& cmd) const override {
+        (void)cmd;  // TCC's single-pass linker doesn't accept --start-group
+    }
+    void emit_link_group_close(std::vector<std::string>& cmd) const override {
+        (void)cmd;
+    }
+};
+
+// True for compiler IDs whose driver honors `--target=<triple>`. The
+// Clang family does; GCC, TCC, and (future) MSVC error on it. Used to
+// decide whether `CMAKE_<LANG>_COMPILER_TARGET` should be threaded into
+// the Compiler constructor or dropped on the floor.
+inline bool compiler_honors_target_flag(std::string_view id) {
+    return id == "Clang" || id == "AppleClang"
+        || id == "IntelLLVM" || id == "ARMClang";
+}
+
+// Construct a Compiler driver for a detected compiler id. Dispatch:
+//   - Clang/AppleClang/IntelLLVM/ARMClang -> ClangCompiler (modules differ)
+//   - TCC                                 -> TccCompiler
+//   - GNU/Unknown/everything else         -> GnuCompiler
+// Future: MSVC will branch off to its own non-gnu-derived class.
+inline std::unique_ptr<Compiler> make_compiler(
     const std::string& compiler_id, std::string binary, Language lang,
     std::string sysroot = {}, std::string compiler_target = {}) {
     if (compiler_id == "Clang" || compiler_id == "AppleClang"
         || compiler_id == "IntelLLVM" || compiler_id == "ARMClang") {
         return std::make_unique<ClangCompiler>(
+            std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
+    }
+    if (compiler_id == "TCC") {
+        return std::make_unique<TccCompiler>(
             std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
     }
     return std::make_unique<GnuCompiler>(

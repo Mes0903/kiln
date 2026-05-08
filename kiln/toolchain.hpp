@@ -60,10 +60,15 @@ public:
     // Used by per-target capture in add_executable / add_library, and by
     // try_compile when scope vars differ from the default.
     //
+    // The Key is (lang, binary, sysroot, target) — `compiler_id` is not
+    // part of identity (a binary's id is determined by the binary). It only
+    // feeds the factory on insert.
+    //
     // const because target generation is invoked through const Toolchain&
     // and may need to lazily resolve a captured (binary, sysroot, target)
     // tuple. Internal state is mutex-protected.
     const Compiler* get_or_register(Language lang,
+                                    const std::string& compiler_id,
                                     const std::string& binary,
                                     const std::string& sysroot,
                                     const std::string& compiler_target) const {
@@ -72,8 +77,7 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = registry_.find(key);
             if (it != registry_.end()) return it->second.get();
-            auto compiler = std::make_unique<GnuCompiler>(
-                binary, lang, sysroot, compiler_target);
+            auto compiler = make_compiler(compiler_id, binary, lang, sysroot, compiler_target);
             const Compiler* raw = compiler.get();
             registry_.emplace(std::move(key), std::move(compiler));
             return raw;

@@ -166,29 +166,30 @@ PlatformInfo detect_compiler_for(
     return info;
 }
 
-// Standard option strings for a language. Centralized so both fake_cmake_*
-// and on-demand detection populate the same set.
-void apply_standard_options(Interpreter& interp, const std::string& lang) {
+// Set CMAKE_<LANG><STD>_STANDARD_COMPILE_OPTION variables from the driver.
+// Each compiler family (GCC/Clang/TCC: "-std=cNN"; MSVC: "/std:c++NN")
+// owns its spelling — kiln just asks. Empty results are skipped so a
+// driver can decline a standard it has no flag for.
+void apply_standard_options(Interpreter& interp, const std::string& lang,
+                            const Compiler& compiler) {
+    auto set_for = [&](const char* var_prefix, Language l, int std_val) {
+        std::string flag = compiler.std_compile_option(l, std_val);
+        if (flag.empty()) return;
+        interp.set_variable(std::string("CMAKE_") + var_prefix
+                            + std::to_string(std_val) + "_STANDARD_COMPILE_OPTION", flag);
+    };
     if (lang == "C") {
-        interp.set_variable("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
-        interp.set_variable("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
-        interp.set_variable("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
-        interp.set_variable("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
-        interp.set_variable("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+        for (int s : {90, 99, 11, 17, 23}) set_for("C", Language::C, s);
     } else if (lang == "CXX") {
-        interp.set_variable("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
-        interp.set_variable("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
-        interp.set_variable("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
-        interp.set_variable("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
-        interp.set_variable("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
-        interp.set_variable("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
+        for (int s : {98, 11, 14, 17, 20, 23}) set_for("CXX", Language::CXX, s);
     }
 }
 
 // Populate CMAKE_<LANG>_* variables from a PlatformInfo. Used by the on-demand
 // detection path in enable_compiler_for_language.
 void populate_lang_vars(Interpreter& interp, const std::string& lang,
-                        const std::string& binary, const PlatformInfo& info) {
+                        const std::string& binary, const PlatformInfo& info,
+                        const Compiler& compiler) {
     interp.set_variable("CMAKE_" + lang + "_COMPILER", binary);
     interp.set_variable("CMAKE_" + lang + "_COMPILER_ID", info.compiler_id);
     interp.set_variable("CMAKE_" + lang + "_COMPILER_VERSION", info.compiler_version);
@@ -203,7 +204,7 @@ void populate_lang_vars(Interpreter& interp, const std::string& lang,
     } else if (lang == "C" && info.default_c_standard > 0) {
         interp.set_variable("CMAKE_C_STANDARD_DEFAULT", std::to_string(info.default_c_standard));
     }
-    apply_standard_options(interp, lang);
+    apply_standard_options(interp, lang, compiler);
 
     // Cross-compile system info comes from the target compiler's macros.
     if (!info.system_name.empty())
@@ -279,6 +280,10 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
         backup_vars_set("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeArray(cxx_info.implicit_link_libs).to_string());
         if (cxx_info.default_cxx_standard > 0)
             backup_vars_set("CMAKE_CXX_STANDARD_DEFAULT", std::to_string(cxx_info.default_cxx_standard));
+        // Host-default backup uses gcc-style -std= strings unconditionally:
+        // this block fires only when host detection resolved gcc/g++ (the
+        // default binary). User-pinned non-GCC compilers go through the
+        // on-demand path which queries the driver for std_compile_option().
         backup_vars_set("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
         backup_vars_set("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
         backup_vars_set("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
@@ -344,6 +349,12 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
                             && compiler_target.empty()
                             && !backup_vars_empty();
 
+        // Resolve compiler_id either from the host-detection backup or via
+        // on-demand detection. We need it early so the right Compiler subclass
+        // can be constructed before populate_lang_vars asks the driver for
+        // standard-option spellings.
+        std::string detected_id;
+        std::optional<PlatformInfo> on_demand_info;
         if (host_path) {
             auto apply_backup = [&](auto const& vars) {
                 for (const auto& var : vars) {
@@ -353,12 +364,24 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
             };
             if (lang == "C") apply_backup(c_lang_vars);
             else             apply_backup(cxx_lang_vars);
+            detected_id = get_variable("CMAKE_" + lang + "_COMPILER_ID");
         } else {
             // On-demand detection against the user's compiler + sysroot/target.
             // Cache-keyed so repeat invocations are cheap.
-            PlatformInfo info = detect_compiler_for(
+            on_demand_info = detect_compiler_for(
                 *cache_store_, effective_binary, lang_enum, sysroot, compiler_target);
-            populate_lang_vars(*this, lang, effective_binary, info);
+            detected_id = on_demand_info->compiler_id;
+        }
+
+        // CMAKE_<LANG>_COMPILER_TARGET only makes sense for drivers that
+        // honor --target=. (compiler_target is always empty on host_path.)
+        const std::string compile_target_effective =
+            compiler_honors_target_flag(detected_id) ? compiler_target : std::string{};
+        auto compiler = make_compiler(
+            detected_id, effective_binary, lang_enum, sysroot, compile_target_effective);
+
+        if (on_demand_info) {
+            populate_lang_vars(*this, lang, effective_binary, *on_demand_info, *compiler);
         }
 
         const std::string id = get_variable("CMAKE_" + lang + "_COMPILER_ID");
@@ -438,14 +461,6 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         }
         set_variable("CMAKE_" + lang + "_COMPILER_LOADED", "1");
 
-        // CMAKE_<LANG>_COMPILER_TARGET only makes sense for Clang-likes; GCC
-        // errors on --target=. Mirror CMake's semantics (the Clang Compiler
-        // module is what turns this into --target=) by dropping it for GNU.
-        const std::string compile_target_effective =
-            (id == "Clang" || id == "AppleClang" || id == "IntelLLVM" || id == "ARMClang")
-                ? compiler_target : std::string{};
-        auto compiler = make_gnu_like_compiler(
-            id, effective_binary, lang_enum, sysroot, compile_target_effective);
         get_toolchain().set_compiler(lang_enum, std::move(compiler));
     } else if (lang == "ASM") {
         // Don't apply the host-detection backup if the user already pinned a
@@ -511,11 +526,9 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         }
         set_variable("CMAKE_ASM_COMPILER_LOADED", "1");
         const std::string asm_id_now = get_variable("CMAKE_ASM_COMPILER_ID");
-        const bool asm_clang_like = asm_id_now == "Clang" || asm_id_now == "AppleClang"
-                                  || asm_id_now == "IntelLLVM" || asm_id_now == "ARMClang";
-        const std::string asm_target = asm_clang_like
+        const std::string asm_target = compiler_honors_target_flag(asm_id_now)
             ? get_variable("CMAKE_ASM_COMPILER_TARGET") : std::string{};
-        auto compiler = make_gnu_like_compiler(
+        auto compiler = make_compiler(
             asm_id_now, get_variable("CMAKE_ASM_COMPILER"), Language::ASM,
             get_variable("CMAKE_SYSROOT"), asm_target);
         get_toolchain().set_compiler(Language::ASM, std::move(compiler));

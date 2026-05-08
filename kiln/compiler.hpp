@@ -1,4 +1,5 @@
 #pragma once
+#include "language.hpp"
 #include <string>
 #include <vector>
 
@@ -183,6 +184,17 @@ public:
     // Platform detection - detects compiler info and system platform
     virtual PlatformInfo detect_platform() const {
         return {}; // Default: empty platform info
+    }
+
+    // Spelling for `-std=cNN`/`-std=c++NN` style flags. Used to populate
+    // `CMAKE_<LANG><STD>_STANDARD_COMPILE_OPTION` so CMake scripts that
+    // read those variables (or the upstream Compiler/<id>-<lang>.cmake
+    // modules) see driver-correct strings. GCC/Clang/TCC return
+    // "-std=c++17" etc.; MSVC will return "/std:c++17". Returns empty
+    // string for standards the driver has no spelling for.
+    virtual std::string std_compile_option(Language lang, int standard) const {
+        (void)lang; (void)standard;
+        return {};
     }
 };
 
