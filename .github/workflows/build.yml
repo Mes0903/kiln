@@ -75,6 +75,7 @@ jobs:
       image: alpine:3.20
     env:
       GLAZE_REF: main
+      CLI11_REF: v2.4.2
 
     steps:
       - name: Install build deps
@@ -82,7 +83,7 @@ jobs:
           apk add --no-cache \
             build-base cmake ninja git pkgconf bash \
             curl-dev libarchive-dev pcre2-dev pugixml-dev \
-            cli11 catch2-3 openssl-dev
+            catch2-3 openssl-dev
 
       - uses: actions/checkout@v4
 
@@ -91,7 +92,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/thirdparty-install
-          key: thirdparty-alpine-3.20-glaze-${{ env.GLAZE_REF }}-v1
+          key: thirdparty-alpine-3.20-glaze-${{ env.GLAZE_REF }}-cli11-${{ env.CLI11_REF }}-v1
 
       - name: Build & install glaze
         if: steps.cache-thirdparty.outputs.cache-hit != 'true'
@@ -102,6 +103,16 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/thirdparty-install" \
             -Dglaze_BUILD_EXAMPLES=OFF
           cmake --install /tmp/glaze/build
+
+      - name: Build & install CLI11
+        if: steps.cache-thirdparty.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$CLI11_REF" https://github.com/CLIUtils/CLI11.git /tmp/cli11
+          cmake -S /tmp/cli11 -B /tmp/cli11/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/thirdparty-install" \
+            -DCLI11_BUILD_TESTS=OFF -DCLI11_BUILD_EXAMPLES=OFF
+          cmake --install /tmp/cli11/build
 
       - name: Configure
         run: |
