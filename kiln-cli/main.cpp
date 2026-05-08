@@ -681,7 +681,8 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
 int main(int argc, char* argv[]) {
     CLI::App app{"kiln - A modern C++ build system with CMake compatibility.\n"
                   "  Use 'kiln <subcommand> --help' for subcommand-specific options."};
-    app.set_version_flag("-v,--version", std::string(kiln::version_full()));
+    app.set_version_flag("-v,--version",
+                         std::string(kiln::version()) + " (" + std::string(kiln::version_full()) + ")");
     GlobalOptions opt;
     std::string ignored_generator;
 
