@@ -82,6 +82,7 @@ jobs:
         run: |
           apk add --no-cache \
             build-base cmake ninja git pkgconf bash \
+            linux-headers \
             curl-dev libarchive-dev pcre2-dev pugixml-dev \
             catch2-3 openssl-dev
 
