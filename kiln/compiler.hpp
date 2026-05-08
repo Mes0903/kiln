@@ -159,6 +159,18 @@ public:
     // kiln rejects module sources at interpretation time when this is false.
     virtual bool supports_p1689() const { return false; }
 
+    // Module bindings can't be known until after the collator runs (logical
+    // name -> BMI path is resolved cross-target). GCC takes this via a single
+    // `-fmodule-mapper=<file>` indirection on argv; the file's contents are
+    // late-bound. Clang has no mapper; instead each compile gets a per-task
+    // `@<file>` response file containing `-fmodule-file=name=path` lines
+    // (and `-fmodule-output=` if the TU provides a module).
+    //
+    // When this returns true, the collator writes a per-importer rsp file at
+    // `<obj>.modules.rsp` and the compiler's get_compile_command emits
+    // `@<obj>.modules.rsp` instead of `-fmodule-mapper=`.
+    virtual bool uses_per_task_module_rsp() const { return false; }
+
     // True if this compiler ships a libstdc++.modules.json (or equivalent)
     // describing the std module's source unit, AND is recent enough to
     // compile it. GCC ≥15 with libstdc++.modules.json present.

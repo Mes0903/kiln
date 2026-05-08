@@ -106,19 +106,11 @@ public:
             cmd.push_back("-fdiagnostics-color=always");
         }
 
-        // C++20 modules support
+        // C++20 modules support. Subclasses override emit_module_compile_flags
+        // to swap in their own indirection scheme (clang reads per-task
+        // response files instead of GCC's -fmodule-mapper=).
         if (ctx.is_module_source) {
-            cmd.push_back("-fmodules-ts");
-
-            // Module mapper file for resolving import declarations
-            if (!ctx.module_mapper_file.empty()) {
-                cmd.push_back("-fmodule-mapper=" + ctx.module_mapper_file);
-            }
-
-            // Explicit module file mappings
-            for (const auto& mf : ctx.module_files) {
-                cmd.push_back("-fmodule-file=" + mf);
-            }
+            emit_module_compile_flags(cmd, ctx);
         }
 
         // gcc-14 doesn't recognize .cppm/.ccm/.cxxm/.ixx/.mpp as C++ source; without
@@ -129,10 +121,7 @@ public:
         // before the comparisons below run.
         Path src_path(ctx.source);
         std::string_view ext = src_path.extension();
-        if (ext == ".cppm" || ext == ".ccm" || ext == ".cxxm" || ext == ".ixx" || ext == ".mpp") {
-            cmd.push_back("-x");
-            cmd.push_back("c++");
-        }
+        emit_module_input_kind_flags(cmd, ext, ctx.is_module_source);
 
         for (const auto& opt : ctx.options) {
             if (opt.empty()) continue;
@@ -1036,11 +1025,44 @@ int kiln_compiler_id_probe_anchor = 0;
         return modules_json_path_;
     }
 
-private:
+protected:
+    // Emit the module-related flags into a compile command for a TU that
+    // imports/exports modules. GCC default: -fmodules-ts plus a single
+    // `-fmodule-mapper=<path>` indirection (mapper is filled in late by the
+    // collator). ClangCompiler overrides to emit `@<rsp-path>` instead, since
+    // clang has no mapper-flag equivalent.
+    virtual void emit_module_compile_flags(std::vector<std::string>& cmd,
+                                            const CompileContext& ctx) const {
+        cmd.push_back("-fmodules-ts");
+        if (!ctx.module_mapper_file.empty()) {
+            cmd.push_back("-fmodule-mapper=" + ctx.module_mapper_file);
+        }
+        for (const auto& mf : ctx.module_files) {
+            cmd.push_back("-fmodule-file=" + mf);
+        }
+    }
+
+    // Coerce a module-interface source (.cppm/.ccm/.cxxm/.ixx/.mpp) into
+    // module-interface mode. GCC needs `-x c++` because gcc-14 otherwise
+    // treats unknown extensions as linker inputs. Clang recognizes .cppm
+    // natively and needs `-x c++-module` to mark it as a module interface
+    // (plain `-x c++` would silently downgrade it to a regular TU).
+    virtual void emit_module_input_kind_flags(std::vector<std::string>& cmd,
+                                                std::string_view ext,
+                                                bool is_module_source) const {
+        (void)is_module_source;
+        if (ext == ".cppm" || ext == ".ccm" || ext == ".cxxm" || ext == ".ixx" || ext == ".mpp") {
+            cmd.push_back("-x");
+            cmd.push_back("c++");
+        }
+    }
+
     std::string binary_;
     Language lang_;
     std::string sysroot_;
     std::string compiler_target_;
+
+private:
     mutable std::once_flag p1689_probe_once_;
     mutable bool p1689_supported_ = false;
     mutable int gcc_major_ = 0;
@@ -1051,27 +1073,169 @@ private:
 };
 
 // Clang driver. Inherits the gcc-compatible compile/link/archive emitters
-// (clang accepts -std=, -fPIC, -fvisibility=, -MMD, -Wl,…) and the platform
-// detector (already clang-aware via __clang__ macros and the CompilerId
-// probe). The split exists so the C++20 modules path — which on clang uses
-// an external clang-scan-deps tool and per-import -fmodule-file=<name>=<path>
-// instead of GCC's -fdeps-format / mapper file — can be added as overrides
-// without disturbing GCC behavior. Until that lands, ClangCompiler advertises
-// no modules support and target.cpp rejects module sources at interp time.
+// (clang accepts -std=, -fPIC, -fvisibility=, -MMD, -Wl,...) and the platform
+// detector. The C++20 modules path differs from GCC in two ways, both
+// overridden below:
+//   1. P1689r5 dependency scanning is done by an external clang-scan-deps
+//      tool, not an in-driver flag (-fdeps-format=).
+//   2. Module bindings are consumed via per-importer response files
+//      (`@<obj>.modules.rsp`) instead of a single `-fmodule-mapper=` file.
+//      The collator writes those rsp files; argv stays static.
 class ClangCompiler : public GnuCompiler {
 public:
     using GnuCompiler::GnuCompiler;
 
-    // TODO(modules): clang emits P1689 via `clang-scan-deps --format=p1689`,
-    // not an in-driver flag. Hook that in here when wiring modules support.
-    bool supports_p1689() const override { return false; }
+    bool supports_p1689() const override {
+        std::call_once(scan_deps_probe_once_, [this] {
+            scan_deps_path_ = locate_clang_scan_deps();
+        });
+        return !scan_deps_path_.empty();
+    }
+
+    bool uses_per_task_module_rsp() const override { return true; }
 
     // TODO(modules): libc++ ships the std module as a `std.cppm` source and
-    // a libc++.modules.json (clang ≥18). Probe and report here.
+    // a libc++.modules.json (clang >= 18). Probe and report here.
     bool supports_import_std() const override { return false; }
 
     // GCC-only path; libc++ uses a different filename.
     std::string libstdcxx_modules_json_path() const override { return {}; }
+
+    // Wrap a normal clang compile invocation in `clang-scan-deps -format=p1689
+    // -o <ddi> -- ...`. The inner command needs `-c`, the source, and enough
+    // flags (std, includes, defs, target/sysroot) for clang-scan-deps to
+    // resolve the same imports the eventual real compile will see.
+    CompilerCommand get_module_scan_command(const ModuleScanContext& ctx) const override {
+        std::vector<std::string> cmd;
+        std::vector<size_t> cosmetic;
+
+        // Outer: clang-scan-deps invocation. Must be located before this is
+        // called (supports_p1689() does the lookup); fall back to PATH name
+        // if the cached probe is empty so we get a clean ENOENT later.
+        std::call_once(scan_deps_probe_once_, [this] {
+            scan_deps_path_ = locate_clang_scan_deps();
+        });
+        cmd.push_back(scan_deps_path_.empty() ? std::string("clang-scan-deps") : scan_deps_path_);
+        cmd.push_back("-format=p1689");
+        cmd.push_back("-o");
+        cmd.push_back(ctx.output);
+        cmd.push_back("--");
+
+        // Inner: a self-contained clang compile command.
+        cmd.push_back(binary_);
+        inject_target_flags(cmd);
+
+        if (!ctx.standard.empty()) {
+            cmd.push_back("-std=c++" + ctx.standard);
+        } else {
+            cmd.push_back("-std=c++20");
+        }
+
+        if (ctx.color_diagnostics) {
+            cosmetic.push_back(cmd.size());
+            cmd.push_back("-fdiagnostics-color=always");
+        }
+
+        // Force C++ mode for module-interface extensions (clang recognizes
+        // .cppm but not all variants); harmless for plain .cpp.
+        cmd.push_back("-x");
+        cmd.push_back("c++");
+
+        for (const auto& dir : ctx.includes) cmd.push_back("-I" + dir);
+        for (const auto& dir : ctx.system_includes) cmd.push_back("-isystem" + dir);
+        for (const auto& def : ctx.definitions) {
+            std::string clean = def;
+            if (clean.starts_with("-D")) clean = clean.substr(2);
+            if (clean.empty()) continue;
+            cmd.push_back("-D" + clean);
+        }
+
+        // primary-output gets recorded as ctx.obj_path so the collator can
+        // join DDI -> obj task by output path, same as the GCC path.
+        cmd.push_back("-c");
+        cmd.push_back("-o");
+        cmd.push_back(ctx.obj_path);
+        cmd.push_back(ctx.source);
+
+        return finalize(std::move(cmd), cosmetic);
+    }
+
+protected:
+    // Clang has no -fmodule-mapper= equivalent. The collator writes a per-
+    // importer response file at `<obj>.modules.rsp` containing
+    // `-fmodule-file=name=path` (and `-fmodule-output=` for module-providing
+    // TUs); we just point clang at it via `@<path>`. ctx.output is the .o
+    // path, which is the stable per-task identifier the collator also uses.
+    void emit_module_compile_flags(std::vector<std::string>& cmd,
+                                    const CompileContext& ctx) const override {
+        if (!ctx.output.empty()) {
+            cmd.push_back("@" + ctx.output + ".modules.rsp");
+        }
+        for (const auto& mf : ctx.module_files) {
+            cmd.push_back("-fmodule-file=" + mf);
+        }
+    }
+
+    // Clang needs `-x c++-module` to treat the input as a module interface;
+    // `-x c++` (the GCC override) silently demotes it to a regular TU and the
+    // -fmodule-output= flag becomes a no-op.
+    void emit_module_input_kind_flags(std::vector<std::string>& cmd,
+                                        std::string_view ext,
+                                        bool is_module_source) const override {
+        const bool is_module_ext = (ext == ".cppm" || ext == ".ccm" ||
+                                    ext == ".cxxm" || ext == ".ixx" || ext == ".mpp");
+        if (is_module_ext && is_module_source) {
+            cmd.push_back("-x");
+            cmd.push_back("c++-module");
+        }
+    }
+
+private:
+    // Find clang-scan-deps next to the clang driver. Mirrors how clang's own
+    // toolchain does it: same directory, same version suffix. e.g.
+    //   /usr/bin/clang++-18 -> /usr/bin/clang-scan-deps-18
+    //   /opt/llvm/bin/clang++ -> /opt/llvm/bin/clang-scan-deps
+    // Falls back to PATH lookup if no sibling is found.
+    std::string locate_clang_scan_deps() const {
+        if (binary_.empty()) return {};
+        std::filesystem::path p(binary_);
+        std::string dir = p.parent_path().string();
+        std::string name(p.filename());
+
+        // Extract version suffix from the binary basename (e.g. "-18" from
+        // "clang++-18"). If absent, suffix is empty.
+        std::string suffix;
+        auto dash = name.find('-');
+        if (dash != std::string::npos) {
+            suffix = name.substr(dash);  // includes leading "-"
+        }
+
+        auto exists = [](const std::string& path) {
+            std::error_code ec;
+            return !path.empty() && std::filesystem::exists(path, ec);
+        };
+
+        if (!dir.empty()) {
+            std::string with_suffix = dir + "/clang-scan-deps" + suffix;
+            if (exists(with_suffix)) return with_suffix;
+            std::string plain = dir + "/clang-scan-deps";
+            if (exists(plain)) return plain;
+        }
+
+        // PATH lookup last resort. popen avoids re-implementing PATH parsing.
+        std::string out = detail::run_command("command -v clang-scan-deps" + suffix + " 2>/dev/null");
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+        if (exists(out)) return out;
+
+        out = detail::run_command("command -v clang-scan-deps 2>/dev/null");
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+        if (exists(out)) return out;
+
+        return {};
+    }
+
+    mutable std::once_flag scan_deps_probe_once_;
+    mutable std::string scan_deps_path_;
 };
 
 // Pick the right driver subclass for a detected compiler id. "Clang",

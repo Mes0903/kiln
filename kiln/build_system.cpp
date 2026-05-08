@@ -333,13 +333,22 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
             }
         }
 
-        // Infer dependencies from command arguments that reference target outputs
-        for (const auto& cmd : task.commands) {
-            for (const auto& arg : cmd) {
-                if (arg.empty() || arg[0] != '/') continue;
-                auto it = output_to_task_.find(arg);
-                if (it != output_to_task_.end() && it->second != task_ptr.get()) {
-                    task.inputs.push_back(arg);
+        // Infer dependencies from command arguments that reference target outputs.
+        // Skip module scanners: their argv legitimately contains the obj path
+        // (as P1689's primary-output identifier when wrapped in clang-scan-deps,
+        // or as -fdeps-target on GCC) but the scanner does not actually depend
+        // on the compile -- it produces the DDI the compile *consumes*. Treating
+        // the obj-path argv mention as an input creates a scanner->compile edge,
+        // which combined with collator->scanner gives a 3-cycle.
+        const bool is_scanner = std::holds_alternative<ModuleScannerTask>(task.kind);
+        if (!is_scanner) {
+            for (const auto& cmd : task.commands) {
+                for (const auto& arg : cmd) {
+                    if (arg.empty() || arg[0] != '/') continue;
+                    auto it = output_to_task_.find(arg);
+                    if (it != output_to_task_.end() && it->second != task_ptr.get()) {
+                        task.inputs.push_back(arg);
+                    }
                 }
             }
         }
@@ -1186,6 +1195,11 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 return true;
                             };
 
+                            // Every local module-bearing TU's obj path (= rule.primary_output).
+                            // Used below to emit per-task clang response files: every TU that
+                            // imports/exports a module needs an rsp file at <obj>.modules.rsp,
+                            // even one that doesn't import anything (still needs -fmodule-output=).
+                            std::vector<std::string> local_module_objs;
                             for (const auto& input_path : task.inputs) {
                                 if (input_path.size() >= 20 &&
                                     input_path.compare(input_path.size() - 20, 20, ".module-exports.json") == 0) {
@@ -1218,6 +1232,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 // it equals get_obj_path(...) at scanner-task generation
                                 // time, so it's the obj task id directly.
                                 const std::string& obj_path = rule.primary_output;
+                                local_module_objs.push_back(obj_path);
 
                                 if (rule.provides.size() > 1) {
                                     task_error = "P1689 rule provides more than one module: " + input_path;
@@ -1373,6 +1388,53 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                             if (task.outputs.size() >= 2) {
                                 auto wm = write_module_manifest(task.outputs[1], own_manifest);
                                 if (!wm) { task_error = wm.error(); return; }
+                            }
+
+                            // Clang-style consumption: per-importer response files.
+                            // Clang has no -fmodule-mapper= equivalent, so we materialize
+                            // the same name -> BMI bindings into per-task rsp files at
+                            // <obj>.modules.rsp. ClangCompiler::emit_module_compile_flags
+                            // bakes `@<that-path>` into argv at scheduling time; the file
+                            // here is the late-bound contents.
+                            if (collator.cxx_compiler &&
+                                collator.cxx_compiler->uses_per_task_module_rsp()) {
+                                // Build logical_name -> bmi_path lookup once.
+                                std::map<std::string, std::string> name_to_bmi;
+                                for (const auto& e : mapper_entries) {
+                                    if (!e.is_header_unit) name_to_bmi[e.module_name] = e.bmi_path;
+                                }
+                                // Reverse module_to_task to find: obj_path -> logical_name
+                                // (so a producer task can emit -fmodule-output=<bmi>).
+                                std::map<std::string, std::string> obj_to_provided;
+                                for (const auto& [name, obj] : module_to_task) {
+                                    obj_to_provided[obj] = name;
+                                }
+                                for (const auto& obj : local_module_objs) {
+                                    std::string rsp_path = obj + ".modules.rsp";
+                                    std::error_code dir_ec;
+                                    std::filesystem::create_directories(
+                                        std::string(Path(rsp_path).parent_path()), dir_ec);
+                                    std::ofstream rsp(rsp_path);
+                                    if (!rsp) {
+                                        task_error = "Failed to write modules rsp: " + rsp_path;
+                                        return;
+                                    }
+                                    auto req_it = task_requires.find(obj);
+                                    if (req_it != task_requires.end()) {
+                                        for (const auto& name : req_it->second) {
+                                            auto bit = name_to_bmi.find(name);
+                                            if (bit == name_to_bmi.end()) continue;
+                                            rsp << "-fmodule-file=" << name << "=" << bit->second << "\n";
+                                        }
+                                    }
+                                    auto prov_it = obj_to_provided.find(obj);
+                                    if (prov_it != obj_to_provided.end()) {
+                                        auto bit = name_to_bmi.find(prov_it->second);
+                                        if (bit != name_to_bmi.end()) {
+                                            rsp << "-fmodule-output=" << bit->second << "\n";
+                                        }
+                                    }
+                                }
                             }
 
                             inject_module_dependencies(module_to_task, task_requires);
