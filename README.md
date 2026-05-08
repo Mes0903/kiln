@@ -143,9 +143,10 @@ This will produce a release binary at `build/release/kiln`.
 
 ## Roadmap / TODOs
 
-- [ ] clang support
-- [ ] TCC (Tiny C Compiler) support
+- [x] clang support
+- [x] TCC (Tiny C Compiler) support
 - [ ] ICC support
+- [ ] Full CMake properties and default variables support
 - Alternative language support
    - [ ] CUDA
    - [ ] HIP
@@ -166,7 +167,7 @@ This will produce a release binary at `build/release/kiln`.
    - [ ] Windows support (MSVC)
    - [ ] Windows support (Cygwin/MSYS2)
 - [ ] C++ module support
-- [ ] `ccache` support
+- [x] `ccache` support
 
 Explicitely non-goals:
 

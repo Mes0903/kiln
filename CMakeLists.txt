@@ -13,13 +13,10 @@ find_package(LibArchive REQUIRED)
 find_package(pugixml REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
-# --- Version (generated from git tag, "0.0.0" fallback) ---
 # version.cpp is regenerated every build via a custom target, but only
-# rewritten when the version string changes (copy_if_different), so tagging
-# only recompiles this single TU.
 set(KILN_VERSION_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/version.cpp")
 if(NOT EXISTS "${KILN_VERSION_CPP}")
-    file(WRITE "${KILN_VERSION_CPP}"
+  file(WRITE "${KILN_VERSION_CPP}"
         "#include \"kiln/version.hpp\"\nnamespace kiln {\nstd::string_view version() noexcept { return \"0.0.0\"; }\nstd::string_view version_full() noexcept { return \"0.0.0\"; }\n}\n")
 endif()
 add_custom_target(kiln_version_gen ALL
@@ -99,8 +96,6 @@ target_link_libraries(kiln PUBLIC
 
 target_precompile_headers(kiln PRIVATE kiln/pch.hpp)
 
-# --- Executable ---
-
 add_executable(kiln_cli
     kiln-cli/main.cpp
     kiln-cli/linenoise-ng/src/linenoise.cpp
@@ -111,14 +106,20 @@ target_include_directories(kiln_cli PRIVATE kiln-cli/linenoise-ng/include)
 target_link_libraries(kiln_cli PRIVATE kiln CLI11::CLI11)
 set_target_properties(kiln_cli PROPERTIES OUTPUT_NAME kiln)
 
-# --- Install rules ---
+include(GNUInstallDirs)
 
 install(TARGETS kiln_cli kiln
-    RUNTIME DESTINATION bin
-    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
-# --- Testing ---
+install(DIRECTORY kiln/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/kiln
+    FILES_MATCHING
+        PATTERN "*.hpp"
+        PATTERN "*.h"
+)
 
 include(CTest)
 if(BUILD_TESTING)
