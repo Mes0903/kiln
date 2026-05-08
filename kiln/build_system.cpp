@@ -1676,12 +1676,17 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
     const auto& command = commands[0];
 
     std::vector<std::string> scan_cmd;
-    scan_cmd.push_back("g++");
+    // Use the actual compiler binary from the task (argv[0]) so the scan runs
+    // through the same driver as the real compile — clang++ accepts -H -E
+    // identically to g++. Hardcoding "g++" here would invoke the wrong driver
+    // (or fail entirely) on systems without GCC installed.
+    if (command.empty() || command[0].empty()) return std::vector<std::string>{};
+    scan_cmd.push_back(command[0]);
     scan_cmd.push_back("-H");
     scan_cmd.push_back("-E");
 
     std::string source;
-    for (size_t i = 0; i < command.size(); ++i) {
+    for (size_t i = 1; i < command.size(); ++i) {
         const auto& arg = command[i];
         if (arg.starts_with("-I") || arg.starts_with("-D") || arg.starts_with("-std=") ||
             arg.starts_with("-f") || arg == "-include") {
@@ -1704,7 +1709,7 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
     std::vector<std::string> headers;
 
     FILE* pipe = popen(full_cmd.c_str(), "r");
-    if (!pipe) return std::unexpected("Failed to execute g++ for header scanning");
+    if (!pipe) return std::unexpected("Failed to execute " + scan_cmd[0] + " for header scanning");
 
         std::string full_output;
         while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {

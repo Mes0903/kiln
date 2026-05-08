@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-14 g++-14 \
+            gcc-14 g++-14 clang \
             cmake ninja-build pkg-config git ca-certificates \
             libpcre2-dev libcurl4-openssl-dev libarchive-dev \
             libpugixml-dev libcli11-dev catch2
@@ -66,8 +66,11 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure
 
-      - name: Integration tests
+      - name: Integration tests (gcc)
         run: tests/integration/run_tests.sh build/kiln
+
+      - name: Integration tests (clang)
+        run: tests/integration/run_tests.sh build/kiln clang++ clang
 
   build-alpine:
     runs-on: ubuntu-24.04
@@ -81,7 +84,7 @@ jobs:
       - name: Install build deps
         run: |
           apk add --no-cache \
-            build-base cmake ninja git pkgconf bash \
+            build-base clang cmake ninja git pkgconf bash \
             linux-headers \
             curl-dev libarchive-dev pcre2-dev pugixml-dev \
             catch2-3 openssl-dev
@@ -136,5 +139,8 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure
 
-      - name: Integration tests
+      - name: Integration tests (gcc)
         run: tests/integration/run_tests.sh build/kiln
+
+      - name: Integration tests (clang)
+        run: tests/integration/run_tests.sh build/kiln clang++ clang

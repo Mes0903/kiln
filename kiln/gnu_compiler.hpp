@@ -1050,4 +1050,44 @@ private:
     mutable std::string modules_json_path_;
 };
 
+// Clang driver. Inherits the gcc-compatible compile/link/archive emitters
+// (clang accepts -std=, -fPIC, -fvisibility=, -MMD, -Wl,…) and the platform
+// detector (already clang-aware via __clang__ macros and the CompilerId
+// probe). The split exists so the C++20 modules path — which on clang uses
+// an external clang-scan-deps tool and per-import -fmodule-file=<name>=<path>
+// instead of GCC's -fdeps-format / mapper file — can be added as overrides
+// without disturbing GCC behavior. Until that lands, ClangCompiler advertises
+// no modules support and target.cpp rejects module sources at interp time.
+class ClangCompiler : public GnuCompiler {
+public:
+    using GnuCompiler::GnuCompiler;
+
+    // TODO(modules): clang emits P1689 via `clang-scan-deps --format=p1689`,
+    // not an in-driver flag. Hook that in here when wiring modules support.
+    bool supports_p1689() const override { return false; }
+
+    // TODO(modules): libc++ ships the std module as a `std.cppm` source and
+    // a libc++.modules.json (clang ≥18). Probe and report here.
+    bool supports_import_std() const override { return false; }
+
+    // GCC-only path; libc++ uses a different filename.
+    std::string libstdcxx_modules_json_path() const override { return {}; }
+};
+
+// Pick the right driver subclass for a detected compiler id. "Clang",
+// "AppleClang", "IntelLLVM", and "ARMClang" all share clang's modules
+// model; everything else (including "GNU" and "Unknown") falls back to
+// the gcc-style base.
+inline std::unique_ptr<Compiler> make_gnu_like_compiler(
+    const std::string& compiler_id, std::string binary, Language lang,
+    std::string sysroot = {}, std::string compiler_target = {}) {
+    if (compiler_id == "Clang" || compiler_id == "AppleClang"
+        || compiler_id == "IntelLLVM" || compiler_id == "ARMClang") {
+        return std::make_unique<ClangCompiler>(
+            std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
+    }
+    return std::make_unique<GnuCompiler>(
+        std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
+}
+
 } // namespace kiln

@@ -6,6 +6,13 @@ if ! command -v clang++ >/dev/null 2>&1; then
     exit 0
 fi
 
+# This test asserts the top-level target uses GCC and the subdir
+# overrides to clang. If the runner already forced CXX=clang++ at the
+# top level, the contrast is gone — skip cleanly rather than fail.
+case "${CXX:-}" in
+    *clang*) echo "top-level CXX is already clang ($CXX); contrast not possible; skipping"; exit 0 ;;
+esac
+
 OUT=$("$1" 2>&1)
 echo "$OUT" | tail -40
 

@@ -444,8 +444,8 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         const std::string compile_target_effective =
             (id == "Clang" || id == "AppleClang" || id == "IntelLLVM" || id == "ARMClang")
                 ? compiler_target : std::string{};
-        auto compiler = std::make_unique<GnuCompiler>(
-            effective_binary, lang_enum, sysroot, compile_target_effective);
+        auto compiler = make_gnu_like_compiler(
+            id, effective_binary, lang_enum, sysroot, compile_target_effective);
         get_toolchain().set_compiler(lang_enum, std::move(compiler));
     } else if (lang == "ASM") {
         // Don't apply the host-detection backup if the user already pinned a
@@ -515,10 +515,9 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
                                   || asm_id_now == "IntelLLVM" || asm_id_now == "ARMClang";
         const std::string asm_target = asm_clang_like
             ? get_variable("CMAKE_ASM_COMPILER_TARGET") : std::string{};
-        auto compiler = std::make_unique<GnuCompiler>(
-            get_variable("CMAKE_ASM_COMPILER"), Language::ASM,
-            get_variable("CMAKE_SYSROOT"),
-            asm_target);
+        auto compiler = make_gnu_like_compiler(
+            asm_id_now, get_variable("CMAKE_ASM_COMPILER"), Language::ASM,
+            get_variable("CMAKE_SYSROOT"), asm_target);
         get_toolchain().set_compiler(Language::ASM, std::move(compiler));
     } else {
         return "unsupported language: " + lang + " (only C, CXX, and ASM are supported)";

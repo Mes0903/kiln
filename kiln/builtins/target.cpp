@@ -182,7 +182,8 @@ void register_target_builtins(Interpreter& interp) {
                 interp.set_fatal_error(
                     "target '" + target->get_name() + "' has a C++ module-interface source, but the configured "
                     "C++ compiler ('" + cxx->binary() + "') does not support P1689r5 dependency scanning. "
-                    "kiln requires GCC ≥14 (-fdeps-format=p1689r5) for C++ modules.");
+                    "kiln currently requires GCC ≥14 (-fdeps-format=p1689r5) for C++ modules; "
+                    "Clang module support (clang-scan-deps) is not yet wired up.");
                 return false;
             }
         }
@@ -1163,7 +1164,8 @@ void register_target_builtins(Interpreter& interp) {
                             if (cxx && !cxx->supports_p1689()) {
                                 interp.set_fatal_error("target_sources() FILE_SET TYPE CXX_MODULES on '" + target->get_name() +
                                                        "' requires a compiler with P1689r5 support; configured C++ compiler '" +
-                                                       cxx->binary() + "' does not. kiln requires GCC ≥14.");
+                                                       cxx->binary() + "' does not. kiln currently requires GCC ≥14; "
+                                                       "Clang module support is not yet wired up.");
                                 return;
                             }
                         }
