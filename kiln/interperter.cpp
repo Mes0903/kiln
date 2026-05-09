@@ -942,7 +942,9 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
         // Initial pass: generate tasks for the configured target set.
         auto txn = graph.begin();
         for (const auto& name : targets_to_build) {
-            targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+            if (auto r = targets_[name]->generate_tasks(txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags); !r) {
+                return std::unexpected(BuildError{current_file_, r.error()});
+            }
         }
         auto commit_result = txn.commit();
         if (!commit_result) {
@@ -972,7 +974,9 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
                 auto it = output_to_target.find(missing);
                 if (it != output_to_target.end() && !targets_to_build.count(it->second)) {
                     targets_to_build.insert(it->second);
-                    targets_[it->second]->generate_tasks(resolve_txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    if (auto r = targets_[it->second]->generate_tasks(resolve_txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags); !r) {
+                        return std::unexpected(BuildError{current_file_, r.error()});
+                    }
                     changed = true;
                     continue;
                 }
@@ -980,7 +984,9 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
                 auto tgt_it = targets_.find(missing);
                 if (tgt_it != targets_.end() && !targets_to_build.count(missing)) {
                     targets_to_build.insert(missing);
-                    tgt_it->second->generate_tasks(resolve_txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags);
+                    if (auto r = tgt_it->second->generate_tasks(resolve_txn, get_root()->toolchain_, targets_, *this, exe_linker_flags, shared_linker_flags); !r) {
+                        return std::unexpected(BuildError{current_file_, r.error()});
+                    }
                     changed = true;
                     continue;
                 }
@@ -988,9 +994,11 @@ Interpreter::generate_build_graph(const std::vector<std::string>& requested_targ
                 // not pulled in via any target's source list / DEPENDS.
                 auto cc_it = cc_rules.find(missing);
                 if (cc_it != cc_rules.end() && !generated_cc_for_resolver.count(missing)) {
-                    generate_custom_command_task_for_rule(
+                    if (auto r = generate_custom_command_task_for_rule(
                         resolve_txn, *cc_it->second, targets_, cc_rules,
-                        generated_cc_for_resolver, get_target_aliases());
+                        generated_cc_for_resolver, get_target_aliases()); !r) {
+                        return std::unexpected(BuildError{current_file_, r.error()});
+                    }
                     changed = true;
                 }
             }
@@ -1635,11 +1643,12 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 for (size_t i = 1; i < args.size(); ++i) {
                     const std::string& var_name = args[i];
                     auto value = interp.get_optional_variable(var_name);
-                    if (value.has_value()) {
-                        interp.get_variables().set_parent_scope(var_name, *value);
-                    } else {
-                        // Variable not defined - unset in parent scope
-                        interp.get_variables().unset_parent_scope(var_name);
+                    auto result = value.has_value()
+                        ? interp.get_variables().set_parent_scope(var_name, *value)
+                        : interp.get_variables().unset_parent_scope(var_name);
+                    if (!result) {
+                        interp.set_fatal_error("return(PROPAGATE " + var_name + "): " + result.error());
+                        return;
                     }
                 }
             }

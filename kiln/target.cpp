@@ -1137,28 +1137,28 @@ static void resolve_command_target_references(
 
 // Helper to generate a task for a custom command rule.
 // Recursively generates tasks for any deps that are themselves custom command outputs.
-static void generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
+static std::expected<void, std::string> generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
                                          const TargetMap& all_targets,
                                          const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
                                          std::set<std::string>& generated,
                                          const std::unordered_map<std::string, std::string>& target_aliases);
 
-void generate_custom_command_task_for_rule(
+std::expected<void, std::string> generate_custom_command_task_for_rule(
     GraphTransaction& txn, const CustomCommandRule& rule,
     const TargetMap& all_targets,
     const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
     std::set<std::string>& generated,
     const std::unordered_map<std::string, std::string>& target_aliases) {
-    generate_custom_command_task(txn, rule, all_targets, custom_rules, generated, target_aliases);
+    return generate_custom_command_task(txn, rule, all_targets, custom_rules, generated, target_aliases);
 }
 
-static void generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
+static std::expected<void, std::string> generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule,
                                          const TargetMap& all_targets,
                                          const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
                                          std::set<std::string>& generated,
                                          const std::unordered_map<std::string, std::string>& target_aliases) {
     if (generated.count(rule.outputs[0]) || txn.has_task(rule.outputs[0]))
-        return;
+        return {};
     generated.insert(rule.outputs[0]);
 
     BuildTask task;
@@ -1216,19 +1216,21 @@ static void generate_custom_command_task(GraphTransaction& txn, const CustomComm
                 }
             }
             if (cc_it != custom_rules.end()) {
-                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated, target_aliases);
+                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated, target_aliases); !r)
+                    return std::unexpected(std::move(r.error()));
                 task.explicit_deps.push_back(cc_it->second->outputs[0]);
             }
             task.inputs.push_back(normalized);
         }
     }
 
-    txn.add(std::move(task));
+    if (auto r = txn.add(std::move(task)); !r) return std::unexpected(std::move(r.error()));
+    return {};
 }
 
 struct ResolvedDep { std::string id; };
 
-void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
+std::expected<void, std::string> Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                       const std::map<Language, PchInfo>& pch_per_lang,
                                       bool is_shared, bool is_pie, const TargetMap& all_targets,
                                       GenexEvaluator& evaluator, const Interpreter& interp,
@@ -1398,7 +1400,8 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
         if (cc_it == custom_rules.end()) cc_it = custom_rules.find(norm_bin);
         if (cc_it != custom_rules.end()) {
             if (!generated_custom_tasks.count(cc_it->second->outputs[0])) {
-                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_custom_tasks, interp.get_target_aliases());
+                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_custom_tasks, interp.get_target_aliases()); !r)
+                    return std::unexpected(std::move(r.error()));
             }
             resolved_manual_deps.push_back({cc_it->second->outputs[0]});
         }
@@ -1471,8 +1474,9 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                     // Look up the rule by its primary output to generate the task
                     auto rule_it = custom_rules.find(key);
                     if (rule_it != custom_rules.end()) {
-                        generate_custom_command_task(txn, *rule_it->second, all_targets,
-                            custom_rules, generated_custom_tasks, interp.get_target_aliases());
+                        if (auto r = generate_custom_command_task(txn, *rule_it->second, all_targets,
+                            custom_rules, generated_custom_tasks, interp.get_target_aliases()); !r)
+                            return std::unexpected(std::move(r.error()));
                     }
                 }
                 resolved_manual_deps.push_back({key});
@@ -1791,7 +1795,8 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
                     auto od_cc_it = custom_rules.find(dep_normalized);
                     if (od_cc_it != custom_rules.end()) {
                         if (!generated_custom_tasks.count(od_cc_it->second->outputs[0])) {
-                            generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules, generated_custom_tasks, interp.get_target_aliases());
+                            if (auto r = generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules, generated_custom_tasks, interp.get_target_aliases()); !r)
+                                return std::unexpected(std::move(r.error()));
                         }
                         task.explicit_deps.push_back(od_cc_it->second->outputs[0]);
                     }
@@ -1821,11 +1826,12 @@ void Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolc
             task.inputs.push_back(module_mapper_path);
         }
 
-        txn.add(std::move(task));
+        if (auto r = txn.add(std::move(task)); !r) return std::unexpected(std::move(r.error()));
     }
+    return {};
 }
 
-static PchInfo generate_pch_task(
+static std::expected<PchInfo, std::string> generate_pch_task(
     GraphTransaction& txn,
     const Toolchain& toolchain,
     const Target* target,
@@ -1946,13 +1952,13 @@ static PchInfo generate_pch_task(
         pch_task.explicit_deps.push_back(dep.id);
     }
 
-    txn.add(std::move(pch_task));
+    if (auto r = txn.add(std::move(pch_task)); !r) return std::unexpected(std::move(r.error()));
 
-    return {pch_gch_path, pch_include_arg};
+    return PchInfo{pch_gch_path, pch_include_arg};
 }
 
-void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
-    if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return;
+std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const Interpreter& interp, const std::vector<std::string>& exe_linker_flags, const std::vector<std::string>& shared_linker_flags) {
+    if (type_ == TargetType::INTERFACE_LIBRARY || is_imported_) return {};
 
     resolve(all_targets, interp);
 
@@ -2007,7 +2013,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
 
         resolve_command_target_references(pre_build.commands, pre_build, all_targets, interp.get_target_aliases());
 
-        txn.add(std::move(pre_build));
+        if (auto r = txn.add(std::move(pre_build)); !r) return std::unexpected(std::move(r.error()));
     }
 
     // Pre-resolve manual dependencies for autogen, PCH, and compile tasks.
@@ -2055,7 +2061,8 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         std::vector<std::string> manual_dep_ids;
         manual_dep_ids.reserve(resolved_manual_deps.size());
         for (const auto& d : resolved_manual_deps) manual_dep_ids.push_back(d.id);
-        generate_autogen_tasks(*this, txn, const_cast<Interpreter&>(interp), all_targets, pre_build_task_id, manual_dep_ids);
+        if (auto r = generate_autogen_tasks(*this, txn, const_cast<Interpreter&>(interp), all_targets, pre_build_task_id, manual_dep_ids); !r)
+            return std::unexpected(std::move(r.error()));
     }
 
     // Read compiler default standards (for suppressing unnecessary -std= flags)
@@ -2069,7 +2076,9 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
     }
 
     // C++20 modules: generate scanner tasks first (they have no dependencies)
-    bool has_modules = generate_module_scanner_tasks(txn, toolchain, all_targets, interp, cxx_default_std);
+    auto has_modules_result = generate_module_scanner_tasks(txn, toolchain, all_targets, interp, cxx_default_std);
+    if (!has_modules_result) return std::unexpected(std::move(has_modules_result.error()));
+    bool has_modules = *has_modules_result;
     std::string module_mapper_path = has_modules ? get_module_mapper_path() : std::string{};
 
     // PCH: generate per-language precompiled headers (C gets _pch.h, CXX gets _pch.hxx)
@@ -2196,19 +2205,21 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
                     pch_defs,
                     evaluate_for_pch(get_resolved_property("COMPILE_OPTIONS")),
                     default_std, resolved_manual_deps);
-                pch_per_lang[lang] = std::move(info);
+                if (!info) return std::unexpected(std::move(info.error()));
+                pch_per_lang[lang] = std::move(*info);
             }
         }
     }
 
     // Single pass: evaluates sources, discovers custom commands, generates compile tasks,
     // and wires dependencies (PRE_BUILD, custom commands, module mapper) inline.
-    generate_object_tasks(txn, toolchain, obj_files, pch_per_lang, is_shared, is_pie,
+    if (auto r = generate_object_tasks(txn, toolchain, obj_files, pch_per_lang, is_shared, is_pie,
                           all_targets, evaluator, interp,
                           pre_build_task_id, module_mapper_path, generated_custom_tasks,
-                          implicit_includes, resolved_manual_deps);
+                          implicit_includes, resolved_manual_deps); !r)
+        return std::unexpected(std::move(r.error()));
 
-    if (type_ == TargetType::OBJECT_LIBRARY) return;
+    if (type_ == TargetType::OBJECT_LIBRARY) return {};
 
     // Collect object files from OBJECT library dependencies.
     // resolve() populates resolved_object_lib_deps_ with all OBJECT library
@@ -2557,7 +2568,7 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
             }
         }
     }
-    txn.add(std::move(link));
+    if (auto r = txn.add(std::move(link)); !r) return std::unexpected(std::move(r.error()));
 
     // Generate POST_BUILD task if we have any post-build commands
     if (!post_build_commands_.empty()) {
@@ -2581,11 +2592,12 @@ void Target::generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, c
         post_build.explicit_deps.push_back(output_path);
         post_build.inputs.push_back(output_path);
 
-        txn.add(std::move(post_build));
+        if (auto r = txn.add(std::move(post_build)); !r) return std::unexpected(std::move(r.error()));
     }
+    return {};
 }
 
-void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const TargetMap& all_targets, const Interpreter& interp, const std::vector<std::string>&, const std::vector<std::string>&) {
+std::expected<void, std::string> CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const TargetMap& all_targets, const Interpreter& interp, const std::vector<std::string>&, const std::vector<std::string>&) {
     BuildTask task;
     task.id = name_;
     task.kind = CustomTargetTask{};
@@ -2649,7 +2661,8 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
                 }
             }
             if (cc_it != custom_rules.end()) {
-                generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_cc_tasks, interp.get_target_aliases());
+                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_cc_tasks, interp.get_target_aliases()); !r)
+                    return std::unexpected(std::move(r.error()));
                 task.explicit_deps.push_back(cc_it->second->outputs[0]);
             }
             task.inputs.push_back(normalized);
@@ -2679,7 +2692,8 @@ void CustomTarget::generate_tasks(GraphTransaction& txn, const Toolchain&, const
          task.inputs.push_back(Path(src).is_absolute() ? src : Path::join(source_dir_, src));
     }
 
-    txn.add(std::move(task));
+    if (auto r = txn.add(std::move(task)); !r) return std::unexpected(std::move(r.error()));
+    return {};
 }
 
 // --- C++20 Modules Support ---
@@ -2726,18 +2740,18 @@ bool Target::has_module_sources() const {
 //
 // Returns the manifest path on success, empty string when std isn't
 // available (no CXX compiler, GCC<15, libstdc++.modules.json missing).
-static std::string ensure_std_module_tasks(GraphTransaction& txn,
+static std::expected<std::string, std::string> ensure_std_module_tasks(GraphTransaction& txn,
                                            const Compiler* cxx,
                                            const std::string& top_binary_dir,
                                            int cxx_default_std,
                                            bool extensions_enabled,
                                            const std::vector<std::string>& compiler_launcher) {
-    if (!cxx || !cxx->supports_import_std()) return {};
+    if (!cxx || !cxx->supports_import_std()) return std::string{};
     std::string json_path = cxx->libstdcxx_modules_json_path();
-    if (json_path.empty()) return {};
+    if (json_path.empty()) return std::string{};
 
     auto parsed = parse_libstdcxx_modules_json_file(json_path);
-    if (!parsed) return {};
+    if (!parsed) return std::string{};
 
     std::filesystem::path std_dir = std::filesystem::path(top_binary_dir) / "_kiln_std";
     std::string manifest_path = (std_dir / "std.module-exports.json").string();
@@ -2758,7 +2772,7 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
         if (ec) src_abs = src_path.string();
         break;
     }
-    if (src_abs.empty()) return {};
+    if (src_abs.empty()) return std::string{};
 
     if (!txn.has_task(obj_path)) {
         std::string standard = "23";
@@ -2817,7 +2831,7 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
         task.inputs.push_back(late_bound_path);
         task.outputs.push_back(obj_path);
         task.outputs.push_back(bmi_path);
-        (void)txn.add(std::move(task));
+        if (auto r = txn.add(std::move(task)); !r) return std::unexpected(std::move(r.error()));
 
         ModuleManifest manifest;
         ModuleManifestEntry me;
@@ -2833,7 +2847,7 @@ static std::string ensure_std_module_tasks(GraphTransaction& txn,
     return manifest_path;
 }
 
-bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
+std::expected<bool, std::string> Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
                                             const TargetMap& all_targets, const Interpreter& interp,
                                             int cxx_default_std) {
     std::vector<std::string> scanner_ids;
@@ -2925,7 +2939,7 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         scanner.inputs.push_back(src_abs);
         scanner.outputs.push_back(ddi_path);
 
-        txn.add(std::move(scanner));
+        if (auto r = txn.add(std::move(scanner)); !r) return std::unexpected(std::move(r.error()));
         scanner_ids.push_back(ddi_path);
     }
 
@@ -2941,12 +2955,14 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         std::string std_manifest;
         if (target_imports_std()) {
             const std::string& top_binary = interp.get_variable("CMAKE_BINARY_DIR");
-            std_manifest = ensure_std_module_tasks(
+            auto sm = ensure_std_module_tasks(
                 txn, cxx,
                 top_binary.empty() ? binary_dir_ : top_binary,
                 cxx_default_std,
                 cxx_ext,
                 resolve_launcher(*this, interp, Language::CXX, "COMPILER"));
+            if (!sm) return std::unexpected(std::move(sm.error()));
+            std_manifest = std::move(*sm);
         }
 
         // Pick the C++ standard the header-unit compile should use. Mirrors
@@ -2961,15 +2977,16 @@ bool Target::generate_module_scanner_tasks(GraphTransaction& txn, const Toolchai
         std::string cxx_std_str = compute_effective_standard(
             get_language_standard(Language::CXX), required_std, cxx_default_std);
 
-        generate_module_collator_task(txn, scanner_ids, all_targets, std_manifest,
-                                      cxx, cxx_std_str, cxx_ext);
+        if (auto r = generate_module_collator_task(txn, scanner_ids, all_targets, std_manifest,
+                                      cxx, cxx_std_str, cxx_ext); !r)
+            return std::unexpected(std::move(r.error()));
         return true;
     }
 
     return false;
 }
 
-void Target::generate_module_collator_task(GraphTransaction& txn,
+std::expected<void, std::string> Target::generate_module_collator_task(GraphTransaction& txn,
                                            const std::vector<std::string>& scanner_task_ids,
                                            const TargetMap& all_targets,
                                            const std::string& std_module_manifest_path,
@@ -3020,7 +3037,8 @@ void Target::generate_module_collator_task(GraphTransaction& txn,
     // Collator has no commands - it's executed in-process by the build graph
     // The actual work happens in BuildGraph::execute() when it detects a collator task
 
-    txn.add(std::move(collator));
+    if (auto r = txn.add(std::move(collator)); !r) return std::unexpected(std::move(r.error()));
+    return {};
 }
 
 std::vector<Target*>

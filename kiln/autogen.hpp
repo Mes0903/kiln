@@ -1,6 +1,7 @@
 #pragma once
 
 #include "target.hpp"
+#include <expected>
 #include <string>
 
 namespace kiln {
@@ -12,7 +13,7 @@ class Interpreter;
 // but before module scanner and object task generation.
 // Scans sources/headers for Qt macros, creates moc/uic/rcc tasks,
 // injects generated sources into SOURCES, adds autogen include dir.
-void generate_autogen_tasks(
+std::expected<void, std::string> generate_autogen_tasks(
     Target& target,
     GraphTransaction& txn,
     Interpreter& interp,

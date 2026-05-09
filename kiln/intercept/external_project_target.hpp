@@ -45,7 +45,7 @@ public:
     ~ExternalProjectTarget() override;
 
     // Generate tasks creates TWO tasks: orchestrator and sentinel
-    void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain,
+    std::expected<void, std::string> generate_tasks(GraphTransaction& txn, const Toolchain& toolchain,
                         const TargetMap& all_targets,
                         const Interpreter& interp,
                         const std::vector<std::string>& exe_linker_flags = {},

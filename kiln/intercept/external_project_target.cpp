@@ -29,7 +29,7 @@ std::vector<std::pair<std::string, std::string>> ExternalProjectTarget::get_toke
     };
 }
 
-void ExternalProjectTarget::generate_tasks(
+std::expected<void, std::string> ExternalProjectTarget::generate_tasks(
     GraphTransaction& txn,
     const Toolchain&,
     const TargetMap& all_targets,
@@ -82,7 +82,7 @@ void ExternalProjectTarget::generate_tasks(
         // File dependencies are not relevant for orchestrator (it doesn't use files directly)
     }
 
-    txn.add(std::move(orchestrator));
+    if (auto r = txn.add(std::move(orchestrator)); !r) return std::unexpected(r.error());
 
     // --- Sentinel task ---
     BuildTask sentinel;
@@ -95,7 +95,8 @@ void ExternalProjectTarget::generate_tasks(
     // Sentinel depends on orchestrator
     sentinel.explicit_deps.push_back(orchestrator_id);
 
-    txn.add(std::move(sentinel));
+    if (auto r = txn.add(std::move(sentinel)); !r) return std::unexpected(r.error());
+    return {};
 }
 
 } // namespace kiln

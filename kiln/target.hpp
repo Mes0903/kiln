@@ -203,7 +203,7 @@ public:
     virtual std::string get_output_path(class GenexEvaluator* evaluator = nullptr) const;
 
     // The core task generation logic
-    virtual void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
+    virtual std::expected<void, std::string> generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {});
 
     // Resolves transitive properties (includes, definitions, options, libraries).
     // Must be called before generating tasks. Safe to call multiple times (cached).
@@ -304,7 +304,7 @@ protected:
     std::vector<std::string> deferred_circular_deps_;
 
     // Helper methods for task generation
-    void generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
+    std::expected<void, std::string> generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain, std::vector<std::string>& obj_files,
                                const std::map<Language, PchInfo>& pch_per_lang,
                                bool is_shared, bool is_pie, const TargetMap& all_targets,
                                class GenexEvaluator& evaluator, const class Interpreter& interp,
@@ -316,14 +316,14 @@ protected:
 
     // C++20 modules task generation
     // Returns true if module pipeline (scanner+collator) was generated for this target
-    bool generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
+    std::expected<bool, std::string> generate_module_scanner_tasks(GraphTransaction& txn, const Toolchain& toolchain,
                                        const TargetMap& all_targets, const class Interpreter& interp,
                                        int cxx_default_std = 0);
 
     // Generate the collator task that depends on all scanner tasks plus the
     // module-export manifests of every module-providing transitive PUBLIC/INTERFACE
     // link dep, so cross-target imports resolve.
-    void generate_module_collator_task(GraphTransaction& txn,
+    std::expected<void, std::string> generate_module_collator_task(GraphTransaction& txn,
                                        const std::vector<std::string>& scanner_task_ids,
                                        const TargetMap& all_targets,
                                        const std::string& std_module_manifest_path,
@@ -436,7 +436,7 @@ public:
     void set_build_by_default(bool b) { build_by_default_ = b; }
     bool is_build_by_default() const { return build_by_default_; }
 
-    void generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {}) override;
+    std::expected<void, std::string> generate_tasks(GraphTransaction& txn, const Toolchain& toolchain, const TargetMap& all_targets, const class Interpreter& interp, const std::vector<std::string>& exe_linker_flags = {}, const std::vector<std::string>& shared_linker_flags = {}) override;
 
 private:
     std::vector<CustomCommand> custom_commands_;
@@ -452,7 +452,7 @@ std::string get_obj_path(const std::string& binary_dir, const std::string& targe
 // Generate a task for an add_custom_command rule (and its custom-command DEPENDS chain).
 // Used by the missing-dependency resolver when a target's input/dep is the OUTPUT of a
 // stand-alone add_custom_command not pulled in via target_sources/DEPENDS.
-void generate_custom_command_task_for_rule(
+std::expected<void, std::string> generate_custom_command_task_for_rule(
     GraphTransaction& txn,
     const CustomCommandRule& rule,
     const TargetMap& all_targets,

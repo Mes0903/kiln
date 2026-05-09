@@ -1340,8 +1340,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.commands = {{"echo", "Config: $<CONFIG:Debug>", "$<$<CONFIG:Debug>:DEBUG_MODE>"}};
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.build_type = "Debug";
@@ -1364,8 +1364,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.commands = {{"echo", "$<$<CONFIG:Release>:RELEASE_MODE>", "always"}};
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.build_type = "Debug";
@@ -1388,8 +1388,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.working_dir = "/build/$<$<CONFIG:Debug>:debug>";
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.build_type = "Debug";
@@ -1409,8 +1409,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.commands = {{"g++", "$<$<COMPILE_LANGUAGE:CXX>:-std=c++17>", "file.cpp"}};
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.phase = GenexEvaluationContext::Phase::BUILD;
@@ -1430,8 +1430,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.commands = {{"g++", "-O2", "-Wall", "file.cpp"}};
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.phase = GenexEvaluationContext::Phase::BUILD;
@@ -1452,8 +1452,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         };
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.build_type = "Debug";
@@ -1475,8 +1475,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.inputs = {"$<$<CONFIG:Debug>:/path/to/debug_dep>", "/always_dep"};
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.build_type = "Debug";
@@ -1498,8 +1498,8 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         task.inputs = {"$<$<CONFIG:Release>:/release_dep>", "/always_dep"};
 
         auto txn = graph.begin();
-        txn.add(std::move(task));
-        txn.commit();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
 
         GenexEvaluationContext ctx;
         ctx.build_type = "Debug";

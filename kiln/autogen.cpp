@@ -373,7 +373,7 @@ static std::vector<std::string> build_moc_command(
 
 // --- Main entry point ---
 
-void generate_autogen_tasks(
+std::expected<void, std::string> generate_autogen_tasks(
     Target& target,
     GraphTransaction& txn,
     Interpreter& interp,
@@ -385,7 +385,7 @@ void generate_autogen_tasks(
     bool do_uic = !Interpreter::is_falsy(target.get_property("AUTOUIC"));
     bool do_rcc = !Interpreter::is_falsy(target.get_property("AUTORCC"));
 
-    if (!do_moc && !do_uic && !do_rcc) return;
+    if (!do_moc && !do_uic && !do_rcc) return {};
 
     // Set up genex evaluator early — needed for tool discovery and option evaluation
     auto genex_ctx = Target::make_genex_context(&target, interp, all_targets);
@@ -421,7 +421,7 @@ void generate_autogen_tasks(
         }
     }
 
-    if (!do_moc && !do_uic && !do_rcc) return;
+    if (!do_moc && !do_uic && !do_rcc) return {};
 
     // Compute paths
     std::string autogen_dir = (fs::path(target.get_binary_dir()) / (target.get_name() + "_autogen")).string();
@@ -506,7 +506,7 @@ void generate_autogen_tasks(
 
     // Evaluate genex in sources (evaluator created earlier for tool discovery)
     auto eval_result = evaluator.evaluate_property_list(own_sources);
-    if (!eval_result) return;  // silently fail on genex error
+    if (!eval_result) return {};  // silently fail on genex error
 
     const auto& source_props = interp.get_source_properties();
 
@@ -716,7 +716,7 @@ void generate_autogen_tasks(
                 task.explicit_deps.push_back(entry.input_file);
             }
 
-            txn.add(std::move(task));
+            if (auto r = txn.add(std::move(task)); !r) return std::unexpected(r.error());
 
             // All compile tasks must wait for MOC outputs (same as UIC).
             // On clean builds there are no .d files, so file dep resolution can't
@@ -817,7 +817,7 @@ void generate_autogen_tasks(
                 kiln::print_message(std::cerr, "FATAL_ERROR",
                     "Failed to serialize AutogenInfo.json for target '" +
                     target.get_name() + "': " + glz::format_error(ec));
-                return;
+                return {};
             }
 
             bool needs_write = true;
@@ -954,7 +954,7 @@ void generate_autogen_tasks(
                     task.explicit_deps.push_back(dep);
                 }
 
-                txn.add(std::move(task));
+                if (auto r = txn.add(std::move(task)); !r) return std::unexpected(r.error());
 
                 // All compile tasks in this target must wait for UIC outputs,
                 // since ui_*.h headers can be included transitively via other headers.
@@ -1061,7 +1061,7 @@ void generate_autogen_tasks(
                 task.explicit_deps.push_back(dep);
             }
 
-            txn.add(std::move(task));
+            if (auto r = txn.add(std::move(task)); !r) return std::unexpected(r.error());
 
             // Register as custom command rule
             auto rule = std::make_shared<CustomCommandRule>();
@@ -1082,6 +1082,7 @@ void generate_autogen_tasks(
 
     // Add the autogen include directory to the target's resolved includes
     target.inject_autogen_include(include_dir);
+    return {};
 }
 
 } // namespace kiln

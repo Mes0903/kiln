@@ -1623,8 +1623,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     }
 
     // Always save cache — even on failure, successful tasks should be cached
-    // so we don't redo them on the next build.
-    save_cache(state.build_dir, state.new_cache);
+    // so we don't redo them on the next build. Cache-save errors are logged
+    // but never override an in-flight build error.
+    if (auto r = save_cache(state.build_dir, state.new_cache); !r) {
+        kiln::print_message(std::cerr, "WARNING",
+            "Failed to save build cache (" + state.build_dir + "): " + r.error());
+    }
 
     // Save EP-specific caches to their respective build directories
     for (const auto& [ep_dir, ep_cache_entries] : state.ep_caches) {
@@ -1633,7 +1637,10 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
         for (const auto& [task_id, sig] : ep_cache_entries) {
             ep_cache[task_id] = sig;
         }
-        save_cache(ep_dir, ep_cache);
+        if (auto r = save_cache(ep_dir, ep_cache); !r) {
+            kiln::print_message(std::cerr, "WARNING",
+                "Failed to save EP cache (" + ep_dir + "): " + r.error());
+        }
     }
 
     state.progress.finish();

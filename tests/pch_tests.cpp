@@ -61,8 +61,8 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
 
     BuildGraph graph;
     auto txn = graph.begin();
-    lib->generate_tasks(txn, interp.get_toolchain(), interp.get_targets(), interp);
-    txn.commit();
+    REQUIRE(lib->generate_tasks(txn, interp.get_toolchain(), interp.get_targets(), interp));
+    REQUIRE(txn.commit());
 
     // Build directory as used by the interpreter
     std::string build_dir_abs = std::filesystem::absolute(temp_dir).lexically_normal().string();
