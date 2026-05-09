@@ -3,7 +3,7 @@
 C/C++ build system with CMake as an input language.
 
 > [!NOTE]
-> CMake compatibility is in best effort mode and does not attempt to fully support all CMake features at CMake head.
+> CMake compatibility is in best effort mode and only attempts to support the most common CMake features.
 
 ## Why
 
@@ -17,7 +17,7 @@ CMake is a mature and widely-supported build system generator, but the configure
 
 
 * **It's a build system** - CMakeLists.txt is interpreted directly on every build. Gone are stale cache surprises, better integration, no per-build system jank. With aggressively invalidated cache for heavy built-ins
-* **Faster interpretation** - kiln's interpreter is significantly faster than CMake's, with 10x+ speedups in some workloads
+* **Faster interpretation** - kiln's interpreter is significantly faster than CMake's, with 9x+ speedups in some workloads
 * **Better error messagess** - no more looking at cryptic errors and guessing where it originates from
 
 
