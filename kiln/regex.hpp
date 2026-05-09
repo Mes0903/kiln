@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 #include <expected>
+#include <memory>
 
 namespace kiln {
 
@@ -11,9 +12,9 @@ public:
     struct Impl;
 
 private:
-    Impl* impl_ = nullptr;
+    std::unique_ptr<Impl> impl_;
 
-    explicit Regex(Impl* impl) : impl_(impl) {}
+    explicit Regex(std::unique_ptr<Impl> impl);
 
 public:
     // Compile a PCRE2 regex pattern (no transformation)

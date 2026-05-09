@@ -4,14 +4,18 @@
 
 namespace kiln {
 
-struct Regex::Impl {
-    pcre2_code* code = nullptr;
-    pcre2_match_data* match_data = nullptr;
+namespace {
+struct CodeDeleter {
+    void operator()(pcre2_code* p) const noexcept { if (p) pcre2_code_free(p); }
+};
+struct MatchDataDeleter {
+    void operator()(pcre2_match_data* p) const noexcept { if (p) pcre2_match_data_free(p); }
+};
+}
 
-    ~Impl() {
-        if (match_data) pcre2_match_data_free(match_data);
-        if (code) pcre2_code_free(code);
-    }
+struct Regex::Impl {
+    std::unique_ptr<pcre2_code, CodeDeleter> code;
+    std::unique_ptr<pcre2_match_data, MatchDataDeleter> match_data;
 };
 
 // Normalize CMake regex patterns for PCRE2 compatibility.
@@ -100,15 +104,15 @@ static std::string normalize_cmake_regex(std::string_view pattern, std::string* 
     return result;
 }
 
-static std::expected<Regex::Impl*, std::string> compile_raw(std::string_view pattern) {
+static std::expected<std::unique_ptr<Regex::Impl>, std::string> compile_raw(std::string_view pattern) {
     int errcode;
     PCRE2_SIZE erroffset;
 
-    auto* code = pcre2_compile(
+    std::unique_ptr<pcre2_code, CodeDeleter> code(pcre2_compile(
         reinterpret_cast<PCRE2_SPTR>(pattern.data()),
         pattern.size(),
         PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_DOTALL,
-        &errcode, &erroffset, nullptr);
+        &errcode, &erroffset, nullptr));
 
     if (!code) {
         PCRE2_UCHAR buf[256];
@@ -117,11 +121,11 @@ static std::expected<Regex::Impl*, std::string> compile_raw(std::string_view pat
     }
 
     // JIT compile for speed (best-effort, fallback to interpreter on failure)
-    pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
+    pcre2_jit_compile(code.get(), PCRE2_JIT_COMPLETE);
 
-    auto* impl = new Regex::Impl;
-    impl->code = code;
-    impl->match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+    auto impl = std::make_unique<Regex::Impl>();
+    impl->match_data.reset(pcre2_match_data_create_from_pattern(code.get(), nullptr));
+    impl->code = std::move(code);
 
     return impl;
 }
@@ -129,7 +133,7 @@ static std::expected<Regex::Impl*, std::string> compile_raw(std::string_view pat
 std::expected<Regex, std::string> Regex::compile(std::string_view pattern) {
     auto result = compile_raw(pattern);
     if (!result) return std::unexpected(result.error());
-    return Regex(*result);
+    return Regex(std::move(*result));
 }
 
 std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern) {
@@ -138,14 +142,14 @@ std::expected<Regex, std::string> Regex::compile_match(std::string_view pattern)
     anchored += ")$";
     auto result = compile_raw(anchored);
     if (!result) return std::unexpected(result.error());
-    return Regex(*result);
+    return Regex(std::move(*result));
 }
 
 std::expected<Regex, std::string> Regex::from_cmake_regex(std::string_view pattern, std::string* warning) {
     std::string normalized = normalize_cmake_regex(pattern, warning);
     auto result = compile_raw(normalized);
     if (!result) return std::unexpected(result.error());
-    return Regex(*result);
+    return Regex(std::move(*result));
 }
 
 std::expected<Regex, std::string> Regex::from_cmake_regex_match(std::string_view pattern, std::string* warning) {
@@ -155,40 +159,28 @@ std::expected<Regex, std::string> Regex::from_cmake_regex_match(std::string_view
     anchored += ")$";
     auto result = compile_raw(anchored);
     if (!result) return std::unexpected(result.error());
-    return Regex(*result);
+    return Regex(std::move(*result));
 }
 
-Regex::~Regex() {
-    delete impl_;
-}
-
-Regex::Regex(Regex&& other) noexcept : impl_(other.impl_) {
-    other.impl_ = nullptr;
-}
-
-Regex& Regex::operator=(Regex&& other) noexcept {
-    if (this != &other) {
-        delete impl_;
-        impl_ = other.impl_;
-        other.impl_ = nullptr;
-    }
-    return *this;
-}
+Regex::Regex(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+Regex::~Regex() = default;
+Regex::Regex(Regex&&) noexcept = default;
+Regex& Regex::operator=(Regex&&) noexcept = default;
 
 static bool do_match(const Regex::Impl* impl, std::string_view input,
                      std::vector<std::string>* captures) {
     int rc = pcre2_match(
-        impl->code,
+        impl->code.get(),
         reinterpret_cast<PCRE2_SPTR>(input.data()),
         input.size(), 0, 0,
-        impl->match_data, nullptr);
+        impl->match_data.get(), nullptr);
 
     if (rc < 0) return false;
 
     if (captures) {
         captures->clear();
-        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl->match_data);
-        uint32_t count = pcre2_get_ovector_count(impl->match_data);
+        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl->match_data.get());
+        uint32_t count = pcre2_get_ovector_count(impl->match_data.get());
 
         for (uint32_t i = 0; i < count; ++i) {
             if (ovector[2 * i] == PCRE2_UNSET) {
@@ -205,19 +197,19 @@ static bool do_match(const Regex::Impl* impl, std::string_view input,
 }
 
 bool Regex::search(std::string_view input, std::vector<std::string>& captures) const {
-    return do_match(impl_, input, &captures);
+    return do_match(impl_.get(), input, &captures);
 }
 
 bool Regex::search(std::string_view input) const {
-    return do_match(impl_, input, nullptr);
+    return do_match(impl_.get(), input, nullptr);
 }
 
 bool Regex::match(std::string_view input, std::vector<std::string>& captures) const {
-    return do_match(impl_, input, &captures);
+    return do_match(impl_.get(), input, &captures);
 }
 
 bool Regex::match(std::string_view input) const {
-    return do_match(impl_, input, nullptr);
+    return do_match(impl_.get(), input, nullptr);
 }
 
 std::vector<std::vector<std::string>> Regex::match_all(std::string_view input) const {
@@ -226,15 +218,15 @@ std::vector<std::vector<std::string>> Regex::match_all(std::string_view input) c
 
     while (offset <= input.size()) {
         int rc = pcre2_match(
-            impl_->code,
+            impl_->code.get(),
             reinterpret_cast<PCRE2_SPTR>(input.data()),
             input.size(), offset, 0,
-            impl_->match_data, nullptr);
+            impl_->match_data.get(), nullptr);
 
         if (rc < 0) break;
 
-        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl_->match_data);
-        uint32_t count = pcre2_get_ovector_count(impl_->match_data);
+        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl_->match_data.get());
+        uint32_t count = pcre2_get_ovector_count(impl_->match_data.get());
 
         std::vector<std::string> groups;
         for (uint32_t i = 0; i < count; ++i) {
@@ -292,9 +284,9 @@ std::string Regex::replace_all(std::string_view input, std::string_view replacem
     // First call to determine output length
     PCRE2_SIZE out_len = 0;
     int rc = pcre2_substitute(
-        impl_->code, reinterpret_cast<PCRE2_SPTR>(input.data()), input.size(),
+        impl_->code.get(), reinterpret_cast<PCRE2_SPTR>(input.data()), input.size(),
         0, PCRE2_SUBSTITUTE_GLOBAL | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH,
-        impl_->match_data, nullptr,
+        impl_->match_data.get(), nullptr,
         reinterpret_cast<PCRE2_SPTR>(pcre2_repl.data()), pcre2_repl.size(),
         nullptr, &out_len);
 
@@ -311,9 +303,9 @@ std::string Regex::replace_all(std::string_view input, std::string_view replacem
     std::string result(result_len, '\0');
 
     rc = pcre2_substitute(
-        impl_->code, reinterpret_cast<PCRE2_SPTR>(input.data()), input.size(),
+        impl_->code.get(), reinterpret_cast<PCRE2_SPTR>(input.data()), input.size(),
         0, PCRE2_SUBSTITUTE_GLOBAL,
-        impl_->match_data, nullptr,
+        impl_->match_data.get(), nullptr,
         reinterpret_cast<PCRE2_SPTR>(pcre2_repl.data()), pcre2_repl.size(),
         reinterpret_cast<PCRE2_UCHAR*>(result.data()), &result_len);
 
