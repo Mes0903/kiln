@@ -732,6 +732,14 @@ void register_find_command(
 
         PARSE_OR_RETURN(parser, interp, args);
 
+        // CMAKE_FIND_REQUIRED (CMake >= 3.22) promotes any find_* call to REQUIRED.
+        if (!opts.required) {
+            std::string find_required_var = interp.get_variable("CMAKE_FIND_REQUIRED");
+            if (!find_required_var.empty() && !interp.is_falsy(find_required_var)) {
+                opts.required = true;
+            }
+        }
+
         // Handle short-hand syntax: find_program(VAR name [path1 path2...])
         if (opts.names.empty() && !default_args.empty()) {
             // First item is always the name to search for

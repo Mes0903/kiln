@@ -168,9 +168,13 @@ void register_find_package_builtins(Interpreter& interp) {
             return;
         }
 
-        // --- Step 2: CMAKE_REQUIRE_FIND_PACKAGE_<Name> ---
+        // --- Step 2: CMAKE_REQUIRE_FIND_PACKAGE_<Name> / CMAKE_FIND_REQUIRED ---
         std::string require_var = interp.get_variable("CMAKE_REQUIRE_FIND_PACKAGE_" + package_name);
         if (!require_var.empty() && !interp.is_falsy(require_var)) {
+            required = true;
+        }
+        std::string find_required_var = interp.get_variable("CMAKE_FIND_REQUIRED");
+        if (!find_required_var.empty() && !interp.is_falsy(find_required_var)) {
             required = true;
         }
 
