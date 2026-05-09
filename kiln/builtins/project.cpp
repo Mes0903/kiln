@@ -265,6 +265,14 @@ void register_project_builtins(Interpreter& interp) {
         interp.set_variable(project_name + "_SOURCE_DIR", interp.get_variable("CMAKE_CURRENT_SOURCE_DIR"));
         interp.set_variable(project_name + "_BINARY_DIR", interp.get_variable("CMAKE_CURRENT_BINARY_DIR"));
 
+        // PROJECT_IS_TOP_LEVEL / <ProjectName>_IS_TOP_LEVEL: TRUE iff this
+        // project() call is in the top source directory (i.e. not under
+        // add_subdirectory or FetchContent). Modern projects key install/test
+        // rules on this so they no-op when consumed as a subproject.
+        const std::string tl_value = interp.in_top_source_dir() ? "TRUE" : "FALSE";
+        interp.set_variable("PROJECT_IS_TOP_LEVEL", tl_value);
+        interp.set_variable(project_name + "_IS_TOP_LEVEL", tl_value);
+
         std::vector<std::string> languages;
         std::string version;
         std::string description;

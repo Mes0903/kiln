@@ -385,6 +385,14 @@ public:
     void mark_project_called() { get_root()->project_called_ = true; }
     bool no_project_warned() const { return get_root()->no_project_warned_; }
     void mark_no_project_warned() { get_root()->no_project_warned_ = true; }
+
+    // True iff the current scope sits in the top-level source directory.
+    // Drives PROJECT_IS_TOP_LEVEL and similar gates that should fire only
+    // when the current CMakeLists is not being consumed via add_subdirectory
+    // or FetchContent.
+    bool in_top_source_dir() {
+        return get_variable("CMAKE_CURRENT_SOURCE_DIR") == get_variable("CMAKE_SOURCE_DIR");
+    }
     CacheStore& get_cache_store() { return *get_root()->cache_store_; }
 
     // Enable a compiler for the given language (C, CXX, ASM).

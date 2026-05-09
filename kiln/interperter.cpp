@@ -1072,12 +1072,17 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_CURRENT_SOURCE_DIR", abs_script_dir.string());
     variables_.set("CMAKE_CURRENT_LIST_DIR", abs_script_dir.string());
     variables_.set("CMAKE_CURRENT_LIST_FILE", (abs_script_dir / "CMakeLists.txt").string()); // Default assumption
+    // For the top-level file CMake sets CMAKE_PARENT_LIST_FILE to the same
+    // path as CMAKE_CURRENT_LIST_FILE; include() swaps both on entry/exit.
+    variables_.set("CMAKE_PARENT_LIST_FILE", (abs_script_dir / "CMakeLists.txt").string());
 
     variables_.set("KILN_VERSION", std::string(kiln::version()));
 
     variables_.set("CMAKE_SOURCE_DIR", variables_.get("CMAKE_CURRENT_SOURCE_DIR"));
     variables_.set("CMAKE_BINARY_DIR", abs_binary_dir.string());
     variables_.set("CMAKE_CURRENT_BINARY_DIR", abs_binary_dir.string());
+    // Deprecated alias of CMAKE_SOURCE_DIR. Some legacy modules still read it.
+    variables_.set("CMAKE_HOME_DIRECTORY", variables_.get("CMAKE_CURRENT_SOURCE_DIR"));
     variables_.set("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
     // In config mode, create the binary directory at configure time (like CMake does)
@@ -1121,10 +1126,32 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 #endif
 #ifdef __linux__
     variables_.set("LINUX", "1");
+    variables_.set("CMAKE_HOST_LINUX", "1");
 #endif
 #ifdef __FreeBSD__
     variables_.set("BSD", "FreeBSD");
 #endif
+
+    // find_library and several Find modules consult these to enumerate which
+    // filename patterns count as a library on the host. Set sane Unix defaults
+    // here so projects that never explicitly configure them still work.
+    // The leading empty entry in PREFIXES lets find_library match libraries
+    // without a "lib" prefix (e.g. some vendor SDKs).
+#ifdef _WIN32
+    variables_.set("CMAKE_FIND_LIBRARY_PREFIXES", ";lib");
+    variables_.set("CMAKE_FIND_LIBRARY_SUFFIXES", ".lib;.dll.a;.a");
+#elif defined(__APPLE__)
+    variables_.set("CMAKE_FIND_LIBRARY_PREFIXES", "lib;");
+    variables_.set("CMAKE_FIND_LIBRARY_SUFFIXES", ".tbd;.dylib;.so;.a");
+#else
+    variables_.set("CMAKE_FIND_LIBRARY_PREFIXES", "lib;");
+    variables_.set("CMAKE_FIND_LIBRARY_SUFFIXES", ".so;.a");
+#endif
+
+    variables_.set("CMAKE_INSTALL_DEFAULT_COMPONENT_NAME", "Unspecified");
+    variables_.set("CMAKE_C_OUTPUT_EXTENSION", ".o");
+    variables_.set("CMAKE_CXX_OUTPUT_EXTENSION", ".o");
+    variables_.set("CMAKE_ASM_OUTPUT_EXTENSION", ".o");
 
     // Byte order detection
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -1189,6 +1216,40 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
             set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", uname_info.machine);
         }
 #endif
+    }
+
+    // Host system version + composite name strings. uname is cheap; the
+    // compiler-detection backup populates NAME/PROCESSOR but never .release,
+    // so populate the *_VERSION and *_SYSTEM vars unconditionally here.
+#ifdef __unix__
+    if (!skip_sys_init) {
+        struct utsname uname_info;
+        if (uname(&uname_info) == 0) {
+            set_variable("CMAKE_HOST_SYSTEM_VERSION", uname_info.release);
+            std::string host_system = std::string(uname_info.sysname) + "-" + uname_info.release;
+            set_variable("CMAKE_HOST_SYSTEM", host_system);
+            // CMAKE_SYSTEM_VERSION / CMAKE_SYSTEM mirror host until a toolchain
+            // file overrides them (cross-compile). Match CMake: the bare
+            // CMAKE_SYSTEM is "<name>-<version>".
+            if (get_variable("CMAKE_SYSTEM_VERSION").empty())
+                set_variable("CMAKE_SYSTEM_VERSION", uname_info.release);
+            if (get_variable("CMAKE_SYSTEM").empty())
+                set_variable("CMAKE_SYSTEM", host_system);
+        }
+    }
+#endif
+
+    // Debian/Ubuntu multiarch tuple (e.g. x86_64-linux-gnu). find_library and
+    // pkg-config search lib/${CMAKE_LIBRARY_ARCHITECTURE}; without it system
+    // libs on multiarch distros are missed. gcc/clang both implement this;
+    // empty output (Arch/Fedora/non-multiarch) leaves the var unset.
+    if (!skip_sys_init) {
+        std::string arch = detail::run_command("gcc -print-multiarch 2>/dev/null");
+        while (!arch.empty() && (arch.back() == '\n' || arch.back() == '\r' || arch.back() == ' '))
+            arch.pop_back();
+        if (!arch.empty()) {
+            set_variable("CMAKE_LIBRARY_ARCHITECTURE", arch);
+        }
     }
 
     // Initialize built-in global properties
@@ -2011,9 +2072,12 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     std::string old_list_file = get_variable("CMAKE_CURRENT_LIST_FILE");
     std::string old_list_dir = get_variable("CMAKE_CURRENT_LIST_DIR");
+    std::string old_parent_list_file = get_variable("CMAKE_PARENT_LIST_FILE");
 
     set_variable("CMAKE_CURRENT_LIST_FILE", abs_path);
     set_variable("CMAKE_CURRENT_LIST_DIR", abs_dir);
+    // While the included file runs, its parent is the file that included it.
+    set_variable("CMAKE_PARENT_LIST_FILE", old_list_file);
     set_current_file(abs_path);
 
     if (debugger_) debugger_->push_call_depth();
@@ -2037,6 +2101,7 @@ std::expected<void, InterpreterError> Interpreter::include_file(const std::strin
 
     set_variable("CMAKE_CURRENT_LIST_FILE", old_list_file);
     set_variable("CMAKE_CURRENT_LIST_DIR", old_list_dir);
+    set_variable("CMAKE_PARENT_LIST_FILE", old_parent_list_file);
     set_current_file(old_file);
 
     return res;

@@ -679,6 +679,30 @@ int run_test_action(const GlobalOptions& opt, kiln::Interpreter* interpreter, co
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // CMake script mode (`-P`) treats everything *after* the script path as
+    // arguments to the script (exposed via CMAKE_ARGC/CMAKE_ARGV0..N) — they
+    // must NOT be consumed by the option parser. Pre-scan argv: when -P is
+    // present, peel off the trailing tokens before CLI11 sees them and stash
+    // them for the script-mode branch. An optional `--` after the script path
+    // is consumed (CMake syntax: `cmake -P script.cmake -- arg1 arg2`).
+    std::vector<std::string> script_extra_args;
+    std::string script_argv0 = (argc > 0) ? argv[0] : "kiln";
+    for (int i = 1; i < argc; ++i) {
+        std::string_view a(argv[i]);
+        if (a == "-P" && i + 1 < argc) {
+            int script_end = i + 2;  // keep -P and the script path
+            int args_start = script_end;
+            if (args_start < argc && std::string_view(argv[args_start]) == "--") {
+                ++args_start;
+            }
+            for (int j = args_start; j < argc; ++j) {
+                script_extra_args.emplace_back(argv[j]);
+            }
+            argc = script_end;
+            break;
+        }
+    }
+
     CLI::App app{"kiln - A modern C++ build system with CMake compatibility.\n"
                   "  Use 'kiln <subcommand> --help' for subcommand-specific options."};
     app.set_version_flag("-v,--version",
@@ -916,6 +940,22 @@ Examples:
             std::string script_dir = std::filesystem::path(script_name).parent_path().string();
             interpreter.set_variable("CMAKE_CURRENT_LIST_DIR", script_dir);
             interpreter.set_variable("CMAKE_CURRENT_LIST_FILE", script_name);
+
+            // CMake script-mode argv: ARGV0 = path to the cmake binary,
+            // ARGV1 = "-P", ARGV2 = script path, ARGV3..N = user-supplied
+            // tokens after the script (and after an optional `--`). ARGC is
+            // the total count. Mirrors cmake.org/cmake/help/latest/manual/
+            // cmake.1.html#cmake-language-running-cmake-as-a-script.
+            std::vector<std::string> cmake_argv;
+            cmake_argv.reserve(3 + script_extra_args.size());
+            cmake_argv.push_back(script_argv0);
+            cmake_argv.push_back("-P");
+            cmake_argv.push_back(script_name);
+            for (auto& a : script_extra_args) cmake_argv.push_back(std::move(a));
+            interpreter.set_variable("CMAKE_ARGC", std::to_string(cmake_argv.size()));
+            for (size_t i = 0; i < cmake_argv.size(); ++i) {
+                interpreter.set_variable("CMAKE_ARGV" + std::to_string(i), cmake_argv[i]);
+            }
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
             if (!opt.log_level.empty()) {
