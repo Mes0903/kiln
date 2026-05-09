@@ -1522,25 +1522,40 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                 }
                             }
 
-                            // For custom_command tasks: verify declared OUTPUTs were
-                            // actually produced. CMake/Ninja errors out in this case;
-                            // without this check, a command that exits 0 but writes
-                            // nothing leaves downstream compiles to fail with confusing
-                            // "missing header" errors instead of pointing at the
-                            // upstream rule.
+                            // For custom_command tasks: warn if declared OUTPUTs
+                            // were not actually produced. CMake's Make/Ninja
+                            // generators do NOT error out here — they happily
+                            // accept rules whose touch lands somewhere other
+                            // than the declared OUTPUT (e.g. a relative OUTPUT
+                            // combined with a WORKING_DIRECTORY pointing at a
+                            // different binary subdir). A warning still flags
+                            // commands that exit 0 but write nothing, which
+                            // would otherwise cause confusing downstream
+                            // "missing header" errors.
                             if (std::holds_alternative<CustomCommandTask>(task.kind)) {
+                                auto color = [&](std::string_view code) -> std::string_view {
+                                    return state.stdout_is_tty ? code : std::string_view{};
+                                };
                                 for (const auto& out : task.outputs) {
                                     std::error_code ec;
-                                    if (!std::filesystem::exists(out, ec)) {
-                                        std::string detail = "Custom command did not produce declared output\n";
-                                        detail += "  expected: " + out + "\n";
-                                        detail += "  cd " + task.working_dir + "\n";
-                                        for (const auto& cmd : task.commands) {
-                                            detail += "  $ " + join_command(cmd) + "\n";
-                                        }
-                                        task_error = detail;
-                                        return;
+                                    if (std::filesystem::exists(out, ec)) continue;
+
+                                    std::filesystem::path expected(out);
+                                    std::string detail;
+                                    detail += std::string(color(kiln::colors::BOLD_YELLOW)) + "warning:" + std::string(color(kiln::colors::RESET));
+                                    detail += " custom_command rule for '" + expected.filename().string() + "' exited 0 but did not create its declared OUTPUT\n";
+                                    detail += "         declared OUTPUT: " + out + "\n";
+                                    detail += "         working dir:     " + task.working_dir + "\n";
+                                    detail += std::string(color(kiln::colors::DIM));
+                                    detail += "         downstream rules depending on this OUTPUT may fail, and this\n";
+                                    detail += "         rule will re-run on every build since its OUTPUT never appears.\n";
+                                    detail += std::string(color(kiln::colors::RESET));
+                                    detail += "         commands run:\n";
+                                    for (const auto& cmd : task.commands) {
+                                        detail += "           $ " + join_command(cmd) + "\n";
                                     }
+                                    std::lock_guard<std::mutex> lock(output_mutex_);
+                                    state.progress.print_line(detail);
                                 }
                             }
                         }
