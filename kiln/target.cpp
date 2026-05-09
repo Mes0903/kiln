@@ -1086,7 +1086,22 @@ std::string get_obj_path(const std::string& binary_dir, const std::string& targe
         obj_suffix = src.view();
     }
 
-    Path obj = (Path(binary_dir) / "objs") / target_name / std::string(obj_suffix);
+    // Replace ".." segments with "__" so a source like "../src/foo.c" doesn't
+    // walk out of the per-target objs/<target> directory after normalization
+    // and collide with other targets compiling the same source.
+    std::string sanitized(obj_suffix);
+    for (size_t i = 0; i < sanitized.size(); ) {
+        size_t end = sanitized.find('/', i);
+        size_t len = (end == std::string::npos ? sanitized.size() : end) - i;
+        if (len == 2 && sanitized[i] == '.' && sanitized[i + 1] == '.') {
+            sanitized[i] = '_';
+            sanitized[i + 1] = '_';
+        }
+        if (end == std::string::npos) break;
+        i = end + 1;
+    }
+
+    Path obj = (Path(binary_dir) / "objs") / target_name / sanitized;
     std::string obj_str = obj.str() + ".o";
     return binary_dir.empty() ? obj_str : Path(obj_str).lexically_normal().str();
 }
