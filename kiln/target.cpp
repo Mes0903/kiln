@@ -1884,13 +1884,17 @@ static std::expected<PchInfo, std::string> generate_pch_task(
     auto is_angle_bracketed = [](const std::string& h) {
         return h.size() >= 2 && h.front() == '<' && h.back() == '>';
     };
+    auto strip_quotes = [](const std::string& h) {
+        if (h.size() >= 2 && h.front() == '"' && h.back() == '"') return h.substr(1, h.size() - 2);
+        return h;
+    };
 
     std::ostringstream wrapper_content;
     for (const auto& hdr : pch_headers) {
         if (is_angle_bracketed(hdr)) {
             wrapper_content << "#include " << hdr << "\n";
         } else {
-            wrapper_content << "#include \"" << hdr << "\"\n";
+            wrapper_content << "#include \"" << strip_quotes(hdr) << "\"\n";
         }
     }
     std::string content = wrapper_content.str();
@@ -1963,7 +1967,12 @@ static std::expected<PchInfo, std::string> generate_pch_task(
     for (const auto& hdr : pch_headers) {
         // Angle-bracketed headers are system includes, not files on disk
         if (is_angle_bracketed(hdr)) continue;
-        pch_task.inputs.push_back(Path::make_absolute_and_normal(target->get_source_dir(), hdr));
+        std::string h = strip_quotes(hdr);
+        // Quoted-include headers ("foo/bar.h") are resolved against the include search path
+        // at compile time, not the source dir — we can't reliably locate them as inputs here,
+        // so skip adding them to task inputs (the .gch dependency on the wrapper is enough).
+        if (!Path(h).is_absolute() && hdr != h) continue;
+        pch_task.inputs.push_back(Path::make_absolute_and_normal(target->get_source_dir(), h));
     }
 
     pch_task.outputs.push_back(pch_gch_path);
@@ -2135,14 +2144,25 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
         if (provider_it == all_targets.end()) {
             throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' not found");
         }
-        auto& provider = provider_it->second;
-        if (provider->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD).empty()) {
-            throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' has no PRECOMPILE_HEADERS");
+        auto provider = provider_it->second;
+        // Follow the REUSE_FROM chain to the ultimate provider (the one with actual PCH headers).
+        std::set<std::string> visited{reuse_from};
+        while (true) {
+            std::string next = provider->get_property("PRECOMPILE_HEADERS_REUSE_FROM");
+            if (next.empty()) break;
+            if (!visited.insert(next).second) {
+                throw std::runtime_error("target_precompile_headers(REUSE_FROM): cycle detected via '" + next + "'");
+            }
+            auto next_it = all_targets.find(next);
+            if (next_it == all_targets.end()) {
+                throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + next + "' not found");
+            }
+            provider = next_it->second;
         }
-        if (!provider->get_property("PRECOMPILE_HEADERS_REUSE_FROM").empty()) {
-            throw std::runtime_error("target_precompile_headers(REUSE_FROM): provider target '" + reuse_from + "' itself uses REUSE_FROM (chaining not allowed)");
-        }
-        // Compute provider's PCH paths per language (same formula as generate_pch_task)
+        // Compute provider's PCH paths per language (same formula as generate_pch_task).
+        // If the provider has no PRECOMPILE_HEADERS, this is a silent no-op — matches CMake,
+        // where REUSE_FROM against a provider with conditionally-empty PCH simply produces
+        // no PCH for the consumer rather than failing configuration.
         auto own_pchs_raw = provider->get_property_list("PRECOMPILE_HEADERS", TargetPropertyScope::BUILD);
         for (Language lang : {Language::C, Language::CXX}) {
             if (!target_source_languages.contains(lang)) continue;
