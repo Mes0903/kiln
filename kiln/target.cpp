@@ -972,7 +972,27 @@ std::string Target::get_output_path(GenexEvaluator* evaluator) const {
         return evaluator ? evaluator->evaluate_target_property(*this, prop) : get_property(prop);
     };
 
-    std::string out_name = get_output_name();
+    // Per-artifact OUTPUT_NAME override (RUNTIME/ARCHIVE/LIBRARY) takes
+    // precedence over OUTPUT_NAME, which itself overrides target name.
+    std::string out_name;
+    const char* per_type_name_prop = nullptr;
+    if (type_ == TargetType::EXECUTABLE) per_type_name_prop = "RUNTIME_OUTPUT_NAME";
+    else if (type_ == TargetType::STATIC_LIBRARY) per_type_name_prop = "ARCHIVE_OUTPUT_NAME";
+    else if (type_ == TargetType::SHARED_LIBRARY) per_type_name_prop = "LIBRARY_OUTPUT_NAME";
+    if (per_type_name_prop) out_name = eval_prop(per_type_name_prop);
+    if (out_name.empty()) out_name = get_output_name();
+
+    // <CONFIG>_POSTFIX (and DEBUG_POSTFIX) — appended for libraries only,
+    // matching CMake. Single-config: build_type_ is captured at definition.
+    if (type_ == TargetType::SHARED_LIBRARY || type_ == TargetType::STATIC_LIBRARY) {
+        if (!build_type_.empty()) {
+            std::string upper;
+            upper.reserve(build_type_.size());
+            for (char c : build_type_) upper.push_back(std::toupper((unsigned char)c));
+            std::string postfix = eval_prop(upper + "_POSTFIX");
+            if (!postfix.empty()) out_name += postfix;
+        }
+    }
 
     // Determine output directory: per-target property overrides binary_dir_.
     // CMake mapping: EXECUTABLE → RUNTIME, STATIC → ARCHIVE, SHARED → LIBRARY.
@@ -2445,6 +2465,38 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             std::string skip = get_property("SKIP_BUILD_RPATH");
             if (skip.empty()) skip = interp.get_variable("CMAKE_SKIP_BUILD_RPATH");
             ctx.skip_build_rpath = !skip.empty() && !Interpreter::is_falsy(skip);
+        }
+
+        // BUILD_WITH_INSTALL_RPATH / BUILD_RPATH / INSTALL_RPATH.
+        // Per-target property overrides the corresponding CMAKE_* variable.
+        std::string bwir = get_property("BUILD_WITH_INSTALL_RPATH");
+        if (bwir.empty()) bwir = interp.get_variable("CMAKE_BUILD_WITH_INSTALL_RPATH");
+        ctx.build_with_install_rpath = !bwir.empty() && !Interpreter::is_falsy(bwir);
+
+        auto split_rpath = [](std::string val, std::vector<std::string>& out) {
+            if (val.empty()) return;
+            for (auto sv : CMakeArrayIterator(val)) {
+                if (!sv.empty()) out.emplace_back(sv);
+            }
+        };
+        std::string br = get_property("BUILD_RPATH");
+        if (br.empty()) br = interp.get_variable("CMAKE_BUILD_RPATH");
+        split_rpath(br, ctx.build_rpath);
+
+        std::string ir = get_property("INSTALL_RPATH");
+        if (ir.empty()) ir = interp.get_variable("CMAKE_INSTALL_RPATH");
+        split_rpath(ir, ctx.install_rpath);
+
+        // VERSION / SOVERSION → DT_SONAME for shared libraries.
+        // CMake: SOVERSION defaults to VERSION when only VERSION is set.
+        // We do not (yet) rename the on-disk file or emit symlinks; only
+        // the soname is embedded so consumers see the expected NEEDED entry.
+        if (type_ == TargetType::SHARED_LIBRARY) {
+            std::string soversion = get_property("SOVERSION");
+            if (soversion.empty()) soversion = get_property("VERSION");
+            if (!soversion.empty()) {
+                ctx.soname = "lib" + get_output_name() + ".so." + soversion;
+            }
         }
 
         {

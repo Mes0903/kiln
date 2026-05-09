@@ -104,6 +104,12 @@ public:
     void set_output_name(std::string output_name);
     const std::string& get_output_name() const;
 
+    // Active build configuration captured at target-definition time
+    // (CMAKE_BUILD_TYPE). Used by get_output_path() to apply
+    // <CONFIG>_POSTFIX/DEBUG_POSTFIX without threading interpreter state.
+    void set_build_type(std::string bt) { build_type_ = std::move(bt); }
+    const std::string& get_build_type() const { return build_type_; }
+
     void set_imported(bool imported) { is_imported_ = imported; }
     bool is_imported() const { return is_imported_; }
 
@@ -357,6 +363,7 @@ protected:
 
     std::string name_;
     std::string output_name_;
+    std::string build_type_;
     TargetType type_;
     std::string source_dir_;
     std::string binary_dir_;

@@ -240,3 +240,73 @@ TEST_CASE("COMPILE_DEFINITIONS propagation", "[resolve]") {
     REQUIRE(contains(defs, "FOO=1"));
     REQUIRE(contains(defs, "BAR"));
 }
+
+TEST_CASE("Per-artifact OUTPUT_NAME overrides OUTPUT_NAME", "[target][output]") {
+    auto [targets, err] = run_and_resolve(R"(
+        add_executable(myapp main.cpp)
+        set_target_properties(myapp PROPERTIES
+            OUTPUT_NAME generic_name
+            RUNTIME_OUTPUT_NAME runtime_name)
+        add_library(mystatic STATIC src.cpp)
+        set_target_properties(mystatic PROPERTIES
+            OUTPUT_NAME generic_static
+            ARCHIVE_OUTPUT_NAME archive_name)
+        add_library(myshared SHARED src.cpp)
+        set_target_properties(myshared PROPERTIES
+            OUTPUT_NAME generic_shared
+            LIBRARY_OUTPUT_NAME library_name)
+    )");
+
+    REQUIRE(targets["myapp"]->get_output_path().find("runtime_name") != std::string::npos);
+    REQUIRE(targets["mystatic"]->get_output_path().find("libarchive_name.a") != std::string::npos);
+    REQUIRE(targets["myshared"]->get_output_path().find("liblibrary_name.so") != std::string::npos);
+}
+
+TEST_CASE("DEBUG_POSTFIX appended for libraries only", "[target][output]") {
+    auto [targets, err] = run_and_resolve(R"(
+        add_library(mylib STATIC src.cpp)
+        set_target_properties(mylib PROPERTIES DEBUG_POSTFIX _d)
+        add_library(myshared SHARED src.cpp)
+        set_target_properties(myshared PROPERTIES DEBUG_POSTFIX _d)
+        add_executable(myapp main.cpp)
+        set_target_properties(myapp PROPERTIES DEBUG_POSTFIX _d)
+    )");
+
+    // Build type is Debug in the harness — postfix applies to libs.
+    REQUIRE(targets["mylib"]->get_output_path().find("libmylib_d.a") != std::string::npos);
+    REQUIRE(targets["myshared"]->get_output_path().find("libmyshared_d.so") != std::string::npos);
+    // Executables are not postfixed.
+    REQUIRE(targets["myapp"]->get_output_path().find("myapp_d") == std::string::npos);
+}
+
+TEST_CASE("Standard-required property is storable", "[target][std]") {
+    auto [targets, err] = run_and_resolve(R"(
+        add_executable(myapp main.cpp)
+        set_target_properties(myapp PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON
+            C_STANDARD_REQUIRED OFF)
+    )");
+    auto& t = targets["myapp"];
+    REQUIRE(t->get_property("CXX_STANDARD_REQUIRED") == "ON");
+    REQUIRE(t->get_property("C_STANDARD_REQUIRED") == "OFF");
+    REQUIRE(t->get_language_standard(Language::CXX) == "20");
+}
+
+TEST_CASE("VERSION/SOVERSION/RPATH properties stored", "[target][rpath]") {
+    auto [targets, err] = run_and_resolve(R"(
+        add_library(mylib SHARED src.cpp)
+        set_target_properties(mylib PROPERTIES
+            VERSION 1.2.3
+            SOVERSION 1
+            BUILD_RPATH "/opt/foo/lib;$ORIGIN/../lib"
+            INSTALL_RPATH "/opt/install/lib"
+            BUILD_WITH_INSTALL_RPATH TRUE)
+    )");
+    auto& t = targets["mylib"];
+    REQUIRE(t->get_property("VERSION") == "1.2.3");
+    REQUIRE(t->get_property("SOVERSION") == "1");
+    REQUIRE(t->get_property("BUILD_RPATH") == "/opt/foo/lib;$ORIGIN/../lib");
+    REQUIRE(t->get_property("INSTALL_RPATH") == "/opt/install/lib");
+    REQUIRE(t->get_property("BUILD_WITH_INSTALL_RPATH") == "TRUE");
+}

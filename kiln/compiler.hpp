@@ -88,6 +88,22 @@ struct LinkContext {
     // CMAKE_SKIP_BUILD_RPATH / SKIP_BUILD_RPATH target property.
     // When true, do not embed any link-path-derived RUNPATH entries.
     bool skip_build_rpath = false;
+    // BUILD_RPATH (target property / CMAKE_BUILD_RPATH variable). Extra
+    // RUNPATH entries to embed in the build-tree binary, in addition to the
+    // automatically derived ones (unless skip_build_rpath / build_with_install_rpath).
+    std::vector<std::string> build_rpath;
+    // INSTALL_RPATH (target property / CMAKE_INSTALL_RPATH variable). Used at
+    // build time only when build_with_install_rpath is set; otherwise reserved
+    // for the install step (kiln does not currently rewrite at install).
+    std::vector<std::string> install_rpath;
+    // BUILD_WITH_INSTALL_RPATH: when true, embed install_rpath in the build
+    // binary and skip the automatically derived link-dir RUNPATH entries.
+    bool build_with_install_rpath = false;
+    // SOVERSION-derived shared object name. Emitted as -Wl,-soname,<soname>.
+    // Empty means no explicit soname (linker uses output filename).
+    // NOTE: kiln does not currently rename the on-disk file or generate
+    // libfoo.so → libfoo.so.N symlinks; only DT_SONAME is set.
+    std::string soname;
     bool is_shared = false;
     bool is_pie = false;  // -pie for executables with POSITION_INDEPENDENT_CODE
     std::string standard;

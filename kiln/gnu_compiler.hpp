@@ -250,35 +250,46 @@ public:
 
         cmd.push_back("-Wl,-rpath,'$ORIGIN'");
 
-        if (!ctx.skip_build_rpath)
-        // Embed each non-system link directory as RUNPATH so that:
-        //   1. shared libs we produce can find their NEEDED entries at runtime
-        //   2. ld can resolve transitive symbol closure when downstream targets
-        //      link against this output (it follows the .so's RUNPATH to find
-        //      indirect deps with soname-only NEEDED entries).
-        // Mirrors CMake's default CMAKE_INSTALL_RPATH_USE_LINK_PATH=ON for the
-        // build tree. System dirs are skipped — embedding them is pointless
-        // and clutters RUNPATH.
-        {
-            // Canonicalize implicit link dirs once so prefix-stripped/symlinked
-            // forms (e.g. /usr/lib vs /usr/lib/../lib) compare equal.
-            std::unordered_set<std::string> system_dirs;
-            for (const auto& d : ctx.implicit_link_dirs) {
-                std::error_code ec;
-                auto canon = std::filesystem::weakly_canonical(d, ec);
-                system_dirs.insert(ec ? d : canon.string());
-            }
-            std::unordered_set<std::string> seen;
-            auto add_rpath = [&](std::string dir) {
-                if (dir.empty() || dir[0] != '/') return;
-                std::error_code ec;
-                auto canon = std::filesystem::weakly_canonical(dir, ec);
-                std::string key = ec ? dir : canon.string();
-                if (system_dirs.count(key)) return;
-                if (!seen.insert(key).second) return;
+        // Canonicalize implicit link dirs once so prefix-stripped/symlinked
+        // forms (e.g. /usr/lib vs /usr/lib/../lib) compare equal.
+        std::unordered_set<std::string> system_dirs;
+        for (const auto& d : ctx.implicit_link_dirs) {
+            std::error_code ec;
+            auto canon = std::filesystem::weakly_canonical(d, ec);
+            system_dirs.insert(ec ? d : canon.string());
+        }
+        std::unordered_set<std::string> seen;
+        auto add_rpath = [&](std::string dir) {
+            if (dir.empty()) return;
+            // User-provided rpaths may be relative or use $ORIGIN — keep verbatim
+            // and skip the system-dir filter (which only makes sense for
+            // absolute paths we derived from -L).
+            if (dir[0] != '/') {
+                if (!seen.insert(dir).second) return;
                 cmd.push_back("-Wl,-rpath," + dir);
-            };
-            // Explicit -L dirs.
+                return;
+            }
+            std::error_code ec;
+            auto canon = std::filesystem::weakly_canonical(dir, ec);
+            std::string key = ec ? dir : canon.string();
+            if (system_dirs.count(key)) return;
+            if (!seen.insert(key).second) return;
+            cmd.push_back("-Wl,-rpath," + dir);
+        };
+
+        if (ctx.build_with_install_rpath) {
+            // Bake the install-time RPATH into the build binary directly;
+            // skip auto-derived link-dir entries to mirror CMake.
+            for (const auto& dir : ctx.install_rpath) add_rpath(dir);
+        } else if (!ctx.skip_build_rpath) {
+            // Embed each non-system link directory as RUNPATH so that:
+            //   1. shared libs we produce can find their NEEDED entries at runtime
+            //   2. ld can resolve transitive symbol closure when downstream targets
+            //      link against this output (it follows the .so's RUNPATH to find
+            //      indirect deps with soname-only NEEDED entries).
+            // Mirrors CMake's default CMAKE_INSTALL_RPATH_USE_LINK_PATH=ON for the
+            // build tree. System dirs are skipped — embedding them is pointless
+            // and clutters RUNPATH.
             for (const auto& dir : ctx.lib_dirs) add_rpath(dir);
             // Absolute-path shared libraries: their directory must be on
             // RUNPATH so we (and downstream linkers) can find their indirect
@@ -290,6 +301,13 @@ public:
                 if (slash == std::string::npos) continue;
                 add_rpath(obj.substr(0, slash));
             }
+            // User-supplied BUILD_RPATH entries (target property /
+            // CMAKE_BUILD_RPATH variable). Added in addition to the auto ones.
+            for (const auto& dir : ctx.build_rpath) add_rpath(dir);
+        }
+
+        if (ctx.is_shared && !ctx.soname.empty()) {
+            cmd.push_back("-Wl,-soname," + ctx.soname);
         }
 
         if (ctx.is_shared) cmd.push_back("-shared");

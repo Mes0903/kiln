@@ -119,6 +119,10 @@ void register_target_builtins(Interpreter& interp) {
         target->capture_compiler_var("CMAKE_SYSROOT",
             interp.get_variable("CMAKE_SYSROOT"));
 
+        // Snapshot the active build configuration so get_output_path() can
+        // apply <CONFIG>_POSTFIX without threading the interpreter through.
+        target->set_build_type(interp.get_variable("CMAKE_BUILD_TYPE"));
+
         // Set VISIBILITY_INLINES_HIDDEN from CMAKE_VISIBILITY_INLINES_HIDDEN
         std::string vih = interp.get_variable("CMAKE_VISIBILITY_INLINES_HIDDEN");
         if (!vih.empty() && !interp.is_falsy(vih)) {
