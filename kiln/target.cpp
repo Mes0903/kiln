@@ -1021,6 +1021,14 @@ std::string Target::get_output_path(GenexEvaluator* evaluator) const {
         std::string prefix = has_prefix ? prefix_prop : "lib";
         std::string suffix = has_suffix ? suffix_prop : ".so";
         filename = prefix + out_name + suffix;
+        // VERSION/SOVERSION → real on-disk file is libfoo.so.<VERSION>
+        // (or .<SOVERSION> if only SOVERSION is set), with symlinks created
+        // by the link task. Matches CMake.
+        if (!has_suffix) {
+            std::string ver = eval_prop("VERSION");
+            if (ver.empty()) ver = eval_prop("SOVERSION");
+            if (!ver.empty()) filename += "." + ver;
+        }
     } else if (type_ == TargetType::STATIC_LIBRARY) {
         std::string prefix = has_prefix ? prefix_prop : "lib";
         std::string suffix = has_suffix ? suffix_prop : ".a";
@@ -2524,8 +2532,9 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
 
         // VERSION / SOVERSION → DT_SONAME for shared libraries.
         // CMake: SOVERSION defaults to VERSION when only VERSION is set.
-        // We do not (yet) rename the on-disk file or emit symlinks; only
-        // the soname is embedded so consumers see the expected NEEDED entry.
+        // The actual file is named libfoo.so.<VERSION> (see get_output_path);
+        // sibling symlinks libfoo.so.<SOVERSION> and libfoo.so are created
+        // after the link command below.
         if (type_ == TargetType::SHARED_LIBRARY) {
             std::string soversion = get_property("SOVERSION");
             if (soversion.empty()) soversion = get_property("VERSION");
@@ -2637,6 +2646,38 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
     }
 
     link.outputs.push_back(output_path);
+
+    // Shared library VERSION/SOVERSION symlinks.
+    // Real file (output_path) is libfoo.so.<VERSION>. Create:
+    //   libfoo.so.<SOVERSION> -> libfoo.so.<VERSION>   (matches DT_SONAME)
+    //   libfoo.so             -> libfoo.so.<SOVERSION> (or directly to real)
+    // Symlink contents are basenames so the chain is relocatable.
+    if (type_ == TargetType::SHARED_LIBRARY) {
+        std::string version = get_property("VERSION");
+        std::string soversion = get_property("SOVERSION");
+        if (soversion.empty()) soversion = version;
+        if (!version.empty() || !soversion.empty()) {
+            Path real_path(output_path);
+            std::string real_name(real_path.filename());
+            std::string dir(real_path.parent_path());
+            std::string base = "lib" + get_output_name() + ".so";
+
+            std::string soversion_name = base + (soversion.empty() ? "" : "." + soversion);
+            std::string unversioned_name = base;
+
+            auto add_symlink = [&](const std::string& target_name, const std::string& link_name) {
+                if (link_name == real_name) return;
+                std::string link_abs = dir.empty() ? link_name : (Path(dir) / link_name).str();
+                link.commands.push_back({"ln", "-sf", target_name, link_abs});
+                link.outputs.push_back(link_abs);
+            };
+
+            add_symlink(real_name, soversion_name);
+            if (unversioned_name != soversion_name) {
+                add_symlink(soversion_name, unversioned_name);
+            }
+        }
+    }
 
     // Register linker side-effect outputs (e.g. -Map= map files,
     // --out-implib= MinGW import libraries). The driver parses its own

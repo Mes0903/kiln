@@ -287,22 +287,14 @@ std::expected<void, std::string> execute_targets_rule(
         target_ctx.current_target = target;
         GenexEvaluator eval(target_ctx);
 
-        // For shared libraries with VERSION/SOVERSION, install with versioned filename
+        // artifact_path already carries the VERSION suffix for shared libs
+        // (see Target::get_output_path), so its basename is the right install name.
         std::string version, soversion;
         if (target->get_type() == TargetType::SHARED_LIBRARY) {
             version = eval.evaluate_target_property(*target, "VERSION");
             soversion = eval.evaluate_target_property(*target, "SOVERSION");
-
-            if (!version.empty()) {
-                final_dest /= "lib" + target->get_name() + ".so." + version;
-            } else if (!soversion.empty()) {
-                final_dest /= "lib" + target->get_name() + ".so." + soversion;
-            } else {
-                final_dest /= artifact_path.filename();
-            }
-        } else {
-            final_dest /= artifact_path.filename();
         }
+        final_dest /= artifact_path.filename();
 
         // Parse permissions
         mode_t perms = parse_permissions(dest->permissions, default_perms);
