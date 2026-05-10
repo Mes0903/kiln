@@ -33,14 +33,14 @@ if [ "$target" != "libmylib.so.27" ]; then
 fi
 
 # DT_SONAME embedded in the real file matches SOVERSION
-soname=$(readelf -d "$LIB_DIR/libmylib.so.1.9.7" | awk '/SONAME/ {gsub(/[\[\]]/,"",$NF); print $NF}')
+soname=$(readelf -d "$LIB_DIR/libmylib.so.1.9.7" | grep SONAME | tr -d '[]' | awk '{print $NF}')
 if [ "$soname" != "libmylib.so.27" ]; then
     echo "DT_SONAME should be libmylib.so.27, got: $soname"
     exit 1
 fi
 
 # Executable's NEEDED entry refers to the SOVERSION (DT_SONAME), and resolves at runtime
-needed=$(readelf -d "$LIB_DIR/app" | awk '/NEEDED/ && /libmylib/ {gsub(/[\[\]]/,"",$NF); print $NF}')
+needed=$(readelf -d "$LIB_DIR/app" | grep NEEDED | grep libmylib | tr -d '[]' | awk '{print $NF}')
 if [ "$needed" != "libmylib.so.27" ]; then
     echo "app NEEDED should be libmylib.so.27, got: $needed"
     exit 1
