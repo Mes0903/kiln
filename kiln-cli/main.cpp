@@ -791,7 +791,9 @@ Examples:
 
     auto* e_cmd = app.add_subcommand("tool", "CMake-compatible tool commands (echo, touch, copy, ...)");
     e_cmd->alias("-E");
-    e_cmd->prefix_command();
+    e_cmd->require_subcommand(1);
+    int tool_exit_code = 0;
+    kiln::register_tool_subcommands(e_cmd, tool_exit_code);
 
     // Default targets when no subcommand (positionals go to build_targets)
     std::vector<std::string> positionals;
@@ -898,8 +900,7 @@ Examples:
     }
 
     if (e_cmd->parsed()) {
-        auto e_args = e_cmd->remaining();
-        return kiln::run_tool_mode(e_args);
+        return tool_exit_code;
     }
 
     if (!opt.script_path.empty()) {
