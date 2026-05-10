@@ -1,0 +1,5 @@
+project(SharedLibSoversionTest)
+add_library(mylib SHARED mylib.cpp)
+set_target_properties(mylib PROPERTIES VERSION 1.9.7 SOVERSION 27)
+add_executable(app main.cpp)
+target_link_libraries(app PRIVATE mylib)
