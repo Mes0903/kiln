@@ -1201,14 +1201,39 @@ Examples:
     }
 
     if (run_cmd->parsed()) {
-        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {run_target});
+        // Resolve the run target up front so we can build by the real logical
+        // name. This lets `kiln run <output-name>` work when a target's
+        // OUTPUT_NAME differs from its logical name (e.g. target `app` whose
+        // output is `lagrange`).
+        std::string resolved_target = run_target;
+        GlobalOptions probe_opt = opt;
+        probe_opt.config_only = true;
+        auto pre_res = run_build_action(probe_opt, debug_controller, opt.project_dir_str, {}, false);
+        if (pre_res && !pre_res.value()->find_target(run_target)) {
+            std::vector<std::string> matches;
+            for (const auto& [name, tgt] : pre_res.value()->get_targets()) {
+                if (!tgt || tgt->get_type() != kiln::TargetType::EXECUTABLE) continue;
+                auto stem = std::filesystem::path(tgt->get_output_path()).stem().string();
+                if (stem == run_target) matches.push_back(name);
+            }
+            if (matches.size() == 1) {
+                resolved_target = matches.front();
+            } else if (matches.size() > 1) {
+                std::cerr << "Error: Output name '" << run_target << "' is ambiguous; matches targets:";
+                for (const auto& m : matches) std::cerr << ' ' << m;
+                std::cerr << std::endl;
+                return 1;
+            }
+        }
+
+        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {resolved_target});
         if (!build_res) {
             std::cerr << "Error: " << build_res.error() << std::endl;
             return 1;
         }
 
         auto& interpreter = build_res.value();
-        auto* target = interpreter->find_target(run_target);
+        auto* target = interpreter->find_target(resolved_target);
         if (!target) {
             std::cerr << "Error: Target '" << run_target << "' not found after build." << std::endl;
             return 1;
