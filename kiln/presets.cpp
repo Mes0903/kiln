@@ -82,10 +82,8 @@ load_file_into_index(const std::filesystem::path& file, PresetIndex& idx,
             auto nit = po.find("name");
             if (nit == po.end() || !nit->second.is_string()) continue;
             std::string name = nit->second.get<std::string>();
-            // First definition wins (the included files were loaded first, so
-            // the root file's later override would replace; but we want root
-            // to override includes — so we replace unconditionally here since
-            // recursion processed includes before reaching this point).
+            // Includes were processed above, so this assignment lets the
+            // current file override anything inherited from them.
             idx.presets[name] = RawPreset{file, p};
         }
     }
@@ -138,13 +136,8 @@ flatten_inherits(const PresetIndex& idx, const std::string& name,
 
 std::string host_system_name() {
     struct utsname u{};
-    if (uname(&u) == 0) {
-        std::string s = u.sysname;
-        if (s == "Darwin") return "Darwin";
-        if (s == "Linux") return "Linux";
-        return s;
-    }
-    return "Linux";
+    if (uname(&u) == 0) return u.sysname;
+    return {};
 }
 
 // Expand ${var} / $env{VAR} / $penv{VAR} in s.
@@ -301,25 +294,15 @@ eval_condition(const glz::generic& cond,
     return true;
 }
 
-std::filesystem::path find_root_presets_file(const std::filesystem::path& project_dir,
-                                             bool& has_user) {
-    has_user = std::filesystem::exists(project_dir / "CMakeUserPresets.json");
-    return project_dir / "CMakePresets.json";
-}
-
 std::expected<PresetIndex, std::string>
 build_index(const std::filesystem::path& project_dir) {
     PresetIndex idx;
     idx.root_dir = project_dir;
-    bool has_user = false;
-    auto root = find_root_presets_file(project_dir, has_user);
     std::unordered_set<std::string> visited;
-    if (std::filesystem::exists(root)) {
-        if (auto r = load_file_into_index(root, idx, visited); !r) return std::unexpected(r.error());
-    }
-    if (has_user) {
-        if (auto r = load_file_into_index(project_dir / "CMakeUserPresets.json", idx, visited); !r)
-            return std::unexpected(r.error());
+    for (const char* name : {"CMakePresets.json", "CMakeUserPresets.json"}) {
+        auto path = project_dir / name;
+        if (!std::filesystem::exists(path)) continue;
+        if (auto r = load_file_into_index(path, idx, visited); !r) return std::unexpected(r.error());
     }
     if (idx.presets.empty()) {
         return std::unexpected("no CMakePresets.json found in " + project_dir.string());
@@ -412,13 +395,11 @@ load_configure_preset(const std::filesystem::path& project_dir, const std::strin
     r.toolchain_file = expand_fully(r.toolchain_file, source_dir, file_dir, preset_name, r.environment);
 
     // Condition: check the *self* preset's condition (after expansion).
-    {
-        const auto& self_obj = self_it->second.data.get<glz::generic::object_t>();
-        if (auto cit = self_obj.find("condition"); cit != self_obj.end()) {
-            auto cr = eval_condition(cit->second, source_dir, file_dir, preset_name, r.environment);
-            if (!cr) return std::unexpected(cr.error());
-            if (!*cr) return std::unexpected("preset '" + preset_name + "' condition is false on this host");
-        }
+    const auto& self_obj = self_it->second.data.get<glz::generic::object_t>();
+    if (auto cit = self_obj.find("condition"); cit != self_obj.end()) {
+        auto cr = eval_condition(cit->second, source_dir, file_dir, preset_name, r.environment);
+        if (!cr) return std::unexpected(cr.error());
+        if (!*cr) return std::unexpected("preset '" + preset_name + "' condition is false on this host");
     }
 
     if (auto it = r.cache_variables.find("CMAKE_BUILD_TYPE"); it != r.cache_variables.end()) {
