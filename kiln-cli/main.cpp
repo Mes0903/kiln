@@ -268,6 +268,12 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
             interpreter->finalize_directory_targets();
             scope.stop();
 
+            if (auto err = interpreter->get_fatal_error()) {
+                print_error_context(*err);
+                save_cache();
+                return std::unexpected("Interpretation error");
+            }
+
             double config_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - config_start).count();
             std::ostringstream timing_msg;
             timing_msg << "Configuring done (" << std::fixed << std::setprecision(1) << config_s << "s)";
@@ -282,6 +288,11 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
                 std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_CYAN) << "Profile" << kiln::c(std::cerr, kiln::colors::RESET) << " written to " << profile_path << std::endl;
             }
             return interpreter;
+        }
+
+        if (interpreter->has_accumulated_errors()) {
+            save_cache();
+            return std::unexpected(std::string("Configuration incomplete, errors occurred"));
         }
 
         auto build_result = interpreter->run_build(opt.jobs, targets);
@@ -971,6 +982,9 @@ Examples:
             interpreter.execute_deferred_calls();
             if (auto err = interpreter.get_fatal_error()) {
                 print_error_context(*err);
+                return 1;
+            }
+            if (interpreter.has_accumulated_errors()) {
                 return 1;
             }
             return 0;
