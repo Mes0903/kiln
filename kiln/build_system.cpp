@@ -1046,7 +1046,13 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         };
 
                         std::ostringstream oss;
-                        std::string detail = "[" + artifact_name + "] " + std::string(target_display);
+                        // Dim the [artifact] bracket on TTY so the filename becomes the per-line headline
+                        // and the target context recedes to secondary status.
+                        std::string detail;
+                        detail.append(color(kiln::colors::DIM));
+                        detail.append("[").append(artifact_name).append("]");
+                        detail.append(color(kiln::colors::RESET));
+                        detail.append(" ").append(target_display);
                         if (state.stdout_is_tty) {
                             oss << kiln::format_action(verb, detail, true);
                         } else {

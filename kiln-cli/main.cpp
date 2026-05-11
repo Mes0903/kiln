@@ -722,6 +722,12 @@ int main(int argc, char* argv[]) {
     // is consumed (CMake syntax: `cmake -P script.cmake -- arg1 arg2`).
     std::vector<std::string> script_extra_args;
     std::string script_argv0 = (argc > 0) ? argv[0] : "kiln";
+    // We also rewrite "-P <path>" → "script <path>" (with -P stripped) so the
+    // CMake-style flags `-D`, `--log-level`, etc. parse against the dedicated
+    // `script` subcommand instead of being on the main app where they would
+    // leak into modes like `install`.
+    std::vector<char*> rewritten_argv;
+    static char script_cmd_literal[] = "script";
     for (int i = 1; i < argc; ++i) {
         std::string_view a(argv[i]);
         if (a == "-P" && i + 1 < argc) {
@@ -734,6 +740,17 @@ int main(int argc, char* argv[]) {
                 script_extra_args.emplace_back(argv[j]);
             }
             argc = script_end;
+
+            // Rewrite argv: insert "script" at position 1, drop the "-P" token.
+            rewritten_argv.reserve(argc + 1);
+            rewritten_argv.push_back(argv[0]);
+            rewritten_argv.push_back(script_cmd_literal);
+            for (int j = 1; j < argc; ++j) {
+                if (j == i) continue;  // skip "-P"
+                rewritten_argv.push_back(argv[j]);
+            }
+            argc = static_cast<int>(rewritten_argv.size());
+            argv = rewritten_argv.data();
             break;
         }
     }
@@ -766,7 +783,6 @@ int main(int argc, char* argv[]) {
         target->add_flag("--fresh", opt.fresh, "Skip loading persistent cache (fresh configure)");
         target->add_option("--log-level", opt.log_level, "Set message log level (ERROR, WARNING, NOTICE, STATUS, VERBOSE, DEBUG, TRACE)");
         target->add_option("--preset", opt.preset, "Use a configure preset from CMakePresets.json");
-        target->add_flag("--list-presets", opt.list_presets, "List available configure presets and exit");
         target->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
            ->default_val("debug")
            ->transform([](const std::string& value) -> std::string {
@@ -778,12 +794,9 @@ int main(int argc, char* argv[]) {
            }, "", "lowercase");
     };
 
-    // Add global options to main app
-    add_global_options(&app);
-
     // Special modes (only on main app)
-    app.add_option("-P", opt.script_path, "Run a CMake script (script mode)");
     app.add_option("-S", opt.source_dir_str, "Source directory (CMake compat, requires -B)");
+    app.add_flag("--list-presets", opt.list_presets, "List available configure presets and exit");
 
     app.footer(R"(
 Examples:
@@ -822,7 +835,30 @@ Examples:
     std::string install_component;
     install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
     install_cmd->add_option("--component", install_component, "Install only the specified component");
-    add_global_options(install_cmd);
+    // `install` reads the plan written by `kiln build`; it does not run the
+    // interpreter. Configure-time knobs (-D, --preset, --fresh, --debugger,
+    // etc.) would silently do nothing here, so only expose options that
+    // actually affect plan lookup and execution.
+    install_cmd->add_option("-C,--project", opt.project_dir_str, "Project directory (default: current directory)");
+    install_cmd->add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
+    install_cmd->add_option("-c,--config", opt.config, "Build configuration: debug, release, relwithdebinfo, minsizerel")
+       ->default_val("debug")
+       ->transform([](const std::string& value) -> std::string {
+           auto copy = kiln::to_lower(value);
+           if (copy == "debug" || copy == "release" || copy == "relwithdebinfo" || copy == "minsizerel") {
+               return copy;
+           }
+           throw CLI::ValidationError("Invalid configuration");
+       }, "", "lowercase");
+
+    // `script` subcommand: internal target of the `-P <file>` rewrite above.
+    // CMake-script mode needs -D and friends but does not run the build path,
+    // so it lives in its own subcommand.
+    auto* script_cmd = app.add_subcommand("script", "Run a CMake script (internal — invoked via -P)");
+    script_cmd->add_option("path", opt.script_path, "Script path")->required();
+    script_cmd->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
+    script_cmd->add_option("--log-level", opt.log_level, "Set message log level");
+    script_cmd->add_flag("--no-sys-init", opt.no_sys_init, "Skip compiler detection and system init");
 
     auto* e_cmd = app.add_subcommand("tool", "CMake-compatible tool commands (echo, touch, copy, ...)");
     e_cmd->alias("-E");
@@ -830,11 +866,59 @@ Examples:
     int tool_exit_code = 0;
     kiln::register_tool_subcommands(e_cmd, tool_exit_code);
 
-    // Default targets when no subcommand (positionals go to build_targets)
-    std::vector<std::string> positionals;
-    app.add_option("targets", positionals, "Target names to build (default: all)");
-
     app.require_subcommand(0, 1);
+
+    // Normalize argv so all options parse against the chosen subcommand:
+    //   1. If a known subcommand appears at index > 1 (e.g. `kiln --config
+    //      release install`), move it to argv[1] so the leading options apply
+    //      to it rather than the main app.
+    //   2. If no subcommand and no main-app-only mode (-S, --list-presets,
+    //      -v, -h) is present, inject `build` as argv[1].
+    // No configure-time flags live on the main app, so this is what makes
+    // `kiln -DFOO=bar`, `kiln --config release install`, etc. all parse
+    // unambiguously without bleeding -D/-c/-j into modes that don't use them.
+    // The recognized-token sets are derived from the registered CLI11 model
+    // so adding a subcommand or main-app option doesn't require updating
+    // anything here.
+    std::set<std::string> known_subcommands;
+    for (auto* sub : app.get_subcommands({})) {
+        known_subcommands.insert(sub->get_name());
+        for (const auto& alias : sub->get_aliases()) known_subcommands.insert(alias);
+    }
+    std::set<std::string> main_only;
+    for (auto* o : app.get_options()) {
+        for (const auto& sn : o->get_snames()) main_only.insert("-" + sn);
+        for (const auto& ln : o->get_lnames()) main_only.insert("--" + ln);
+    }
+    int sub_idx = -1;
+    bool has_main_only = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string a(argv[i]);
+        if (sub_idx < 0 && known_subcommands.count(a)) sub_idx = i;
+        // Strip `=value` suffix so `--log-level=foo` still matches `--log-level`.
+        if (auto eq = a.find('='); eq != std::string::npos) a.resize(eq);
+        if (main_only.count(a)) has_main_only = true;
+    }
+    std::vector<char*> normalized_argv;
+    if (sub_idx > 1) {
+        normalized_argv.reserve(argc);
+        normalized_argv.push_back(argv[0]);
+        normalized_argv.push_back(argv[sub_idx]);
+        for (int i = 1; i < argc; ++i) {
+            if (i == sub_idx) continue;
+            normalized_argv.push_back(argv[i]);
+        }
+        argc = static_cast<int>(normalized_argv.size());
+        argv = normalized_argv.data();
+    } else if (sub_idx < 0 && !has_main_only) {
+        normalized_argv.reserve(argc + 1);
+        if (argc > 0) normalized_argv.push_back(argv[0]);
+        static char build_literal[] = "build";
+        normalized_argv.push_back(build_literal);
+        for (int i = 1; i < argc; ++i) normalized_argv.push_back(argv[i]);
+        argc = static_cast<int>(normalized_argv.size());
+        argv = normalized_argv.data();
+    }
 
     CLI11_PARSE(app, argc, argv);
 
@@ -1049,8 +1133,7 @@ Examples:
     }
 
     if (install_cmd->parsed()) {
-        // Install reads the plan written by `kiln build`. It never runs the
-        // interpreter, so it never writes to the build dir - safe under sudo.
+
         std::filesystem::path project_path;
         try {
             project_path = std::filesystem::canonical(opt.project_dir_str);
@@ -1163,8 +1246,9 @@ Examples:
         return 0;
     }
 
-    // Determine targets: use build_targets if build subcommand, else positionals
-    std::vector<std::string> targets = build_cmd->parsed() ? build_targets : positionals;
+    // build_cmd is always parsed at this point (implicit build injection
+    // above ensures it), so positional targets always land in build_targets.
+    std::vector<std::string>& targets = build_targets;
 
     // Migration hint: if a target looks like a project directory, suggest -C
     for (const auto& target : targets) {
