@@ -35,6 +35,9 @@ public:
     void append(const CMakeArray& other);
     void push_back(const std::string& item) { append(item); }
     void erase(size_t idx) { items_.erase(items_.begin()+idx);  }
+    void erase_range(size_t idx, size_t count) {
+        items_.erase(items_.begin() + idx, items_.begin() + idx + count);
+    }
     void insert(size_t idx, const std::vector<std::string>& items);
 
     void reverse();

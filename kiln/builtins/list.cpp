@@ -5,6 +5,8 @@
 #include "../container_utils.hpp"
 #include "../parse_number.hpp"
 #include <algorithm>
+#include <cstring>
+#include <optional>
 #include <set>
 #include "../regex.hpp"
 #include "../clock_cache.hpp"
@@ -24,6 +26,54 @@ namespace {
             return path;
         }
         return path.substr(last_slash + 1);
+    }
+
+    // Locate the [start, sep_or_end) byte range of element `target` in a
+    // semicolon-separated list. `sep_or_end` is the position of the ';' that
+    // terminates the element, or src.size() if it is the last element.
+    // Returns nullopt if `target` is out of range. Respects \;-escaping.
+    std::optional<std::pair<size_t, size_t>>
+    element_extent(std::string_view src, size_t target) {
+        if (src.empty()) return std::nullopt;
+        size_t pos = 0, idx = 0, cur = 0;
+        while (cur <= src.size()) {
+            const void* f = (cur < src.size())
+                ? std::memchr(src.data() + cur, ';', src.size() - cur)
+                : nullptr;
+            if (!f) {
+                if (idx == target) return std::make_pair(pos, src.size());
+                return std::nullopt;
+            }
+            size_t s = static_cast<const char*>(f) - src.data();
+            if (s > 0 && src[s - 1] == '\\') { cur = s + 1; continue; }
+            if (idx == target) return std::make_pair(pos, s);
+            ++idx;
+            pos = s + 1;
+            cur = pos;
+        }
+        return std::nullopt;
+    }
+
+    // Locate the byte offset where element `target` begins. For
+    // target == element_count this returns src.size() (the append position).
+    // Returns nullopt if `target` is past one-after-last.
+    std::optional<size_t>
+    element_insert_pos(std::string_view src, size_t target) {
+        if (target == 0) return 0;
+        if (src.empty()) return std::nullopt;
+        size_t idx = 0, cur = 0;
+        while (cur < src.size()) {
+            const void* f = std::memchr(src.data() + cur, ';', src.size() - cur);
+            if (!f) break;
+            size_t s = static_cast<const char*>(f) - src.data();
+            if (s > 0 && src[s - 1] == '\\') { cur = s + 1; continue; }
+            ++idx;
+            cur = s + 1;
+            if (idx == target) return cur;
+        }
+        // Hit end of string. Element count is idx + 1; valid append index is that.
+        if (target == idx + 1) return src.size();
+        return std::nullopt;
     }
 }
 
@@ -66,12 +116,12 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
 
-            size_t total = CMakeArray::count_elements(list_str);
-
-            // Parse and resolve indices, keeping original request order
+            // Parse and resolve indices, keeping original request order.
+            // `total` is only needed to normalise negative indices, so it is
+            // computed lazily — for the common all-non-negative case we skip
+            // the full string scan that count_elements does.
             size_t num_indices = sub_args.size() - 2; // exclude list_var and out_var
             struct IndexRequest { size_t orig_pos; long resolved; };
-            // Use small buffer for typical case (1-3 indices)
             IndexRequest buf[8];
             std::vector<IndexRequest> heap_buf;
             IndexRequest* requests = buf;
@@ -80,6 +130,7 @@ void register_list_builtins(Interpreter& interp) {
                 requests = heap_buf.data();
             }
 
+            long total = -1; // lazily filled when the first negative index appears
             for (size_t i = 0; i < num_indices; ++i) {
                 auto idx_opt = parse_number<long>(sub_args[i + 1]);
                 if (!idx_opt) {
@@ -87,7 +138,10 @@ void register_list_builtins(Interpreter& interp) {
                     return;
                 }
                 long idx = *idx_opt;
-                if (idx < 0) idx = static_cast<long>(total) + idx;
+                if (idx < 0) {
+                    if (total < 0) total = static_cast<long>(CMakeArray::count_elements(list_str));
+                    idx = total + idx;
+                }
                 requests[i] = {i, idx};
             }
 
@@ -260,10 +314,8 @@ void register_list_builtins(Interpreter& interp) {
                 interp.set_variable(out_vars[i], "");
             }
 
-            // Remove elements from the front
-            for (size_t i = 0; i < num_to_pop; ++i) {
-                list.erase(0);
-            }
+
+            list.erase_range(0, num_to_pop);
 
             entry.set(list.to_string());
         } else if (operation == "INSERT") {
@@ -275,25 +327,61 @@ void register_list_builtins(Interpreter& interp) {
             parser.positionals(items, "items");
             PARSE_OR_RETURN(parser, interp, sub_args);
 
+            auto idx_opt = parse_number<long>(index_str);
+            if (!idx_opt) {
+                interp.set_fatal_error("list(INSERT) invalid index: " + index_str);
+                return;
+            }
             auto entry = interp.get_variables().entry(list_var);
-            CMakeArray list(entry.get());
-            {
-                auto idx_opt = parse_number<long>(index_str);
-                if (!idx_opt) {
-                    interp.set_fatal_error("list(INSERT) invalid index: " + index_str);
-                    return;
-                }
-                long idx = *idx_opt;
-                if (idx < 0) {
-                    idx = static_cast<long>(list.size()) + idx;
-                }
-                if (idx < 0 || static_cast<size_t>(idx) > list.size()) {
+
+            // Fast path for non-negative indices: splice the source string
+            // directly instead of splitting it into a vector<string> and
+            // rejoining. Avoids O(N) string allocations per call when the
+            // list is large (e.g. DP-table style code).
+            long idx = *idx_opt;
+            if (idx >= 0) {
+                std::string_view src = entry.get();
+                auto start = element_insert_pos(src, static_cast<size_t>(idx));
+                if (!start) {
                     interp.set_fatal_error("list(INSERT) index out of range: " + index_str);
                     return;
                 }
-                list.insert(static_cast<size_t>(idx), items);
+                size_t joined_size = items.empty() ? 0 : (items.size() - 1);
+                for (const auto& it : items) joined_size += it.size();
+
+                std::string result;
+                if (src.empty()) {
+                    result.reserve(joined_size);
+                    for (size_t i = 0; i < items.size(); ++i) {
+                        if (i > 0) result += ';';
+                        result += items[i];
+                    }
+                } else if (*start == src.size()) {
+                    result.reserve(src.size() + 1 + joined_size);
+                    result.append(src.data(), src.size());
+                    for (const auto& it : items) { result += ';'; result += it; }
+                } else {
+                    result.reserve(src.size() + joined_size + 1);
+                    result.append(src.data(), *start);
+                    for (size_t i = 0; i < items.size(); ++i) {
+                        if (i > 0) result += ';';
+                        result += items[i];
+                    }
+                    result += ';';
+                    result.append(src.data() + *start, src.size() - *start);
+                }
+                entry.set(std::move(result));
+            } else {
+                // Negative index: rare path, full materialize is fine.
+                CMakeArray list(entry.get());
+                long resolved = static_cast<long>(list.size()) + idx;
+                if (resolved < 0 || static_cast<size_t>(resolved) > list.size()) {
+                    interp.set_fatal_error("list(INSERT) index out of range: " + index_str);
+                    return;
+                }
+                list.insert(static_cast<size_t>(resolved), items);
+                entry.set(list.to_string());
             }
-            entry.set(list.to_string());
         } else if (operation == "REVERSE") {
             CommandParser parser("list", "REVERSE");
             std::string list_var;
@@ -471,8 +559,45 @@ void register_list_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             auto entry = interp.get_variables().entry(list_var);
-            CMakeArray list(entry.get());
 
+            // Fast path: single non-negative index, no list materialization.
+            // Hot for DP-table style code that does REMOVE_AT + INSERT to
+            // overwrite a slot — avoids splitting the list into a vector and
+            // rejoining it.
+            if (indices.size() == 1) {
+                auto idx_opt = parse_number<long>(indices[0]);
+                if (!idx_opt) {
+                    interp.set_fatal_error("list(REMOVE_AT) invalid index: " + indices[0]);
+                    return;
+                }
+                if (*idx_opt >= 0) {
+                    std::string_view src = entry.get();
+                    auto extent = element_extent(src, static_cast<size_t>(*idx_opt));
+                    if (!extent) {
+                        interp.set_fatal_error("list(REMOVE_AT) index out of range: " + indices[0]);
+                        return;
+                    }
+                    auto [start, sep_or_end] = *extent;
+                    std::string result;
+                    if (start == 0 && sep_or_end == src.size()) {
+                        // Only element — list becomes empty.
+                    } else if (sep_or_end == src.size()) {
+                        // Last element: drop the preceding ';' and the element.
+                        result.assign(src.data(), start - 1);
+                    } else {
+                        // Drop the element and its trailing ';'.
+                        result.reserve(src.size() - (sep_or_end + 1 - start));
+                        result.append(src.data(), start);
+                        result.append(src.data() + sep_or_end + 1,
+                                      src.size() - sep_or_end - 1);
+                    }
+                    entry.set(std::move(result));
+                    return;
+                }
+            }
+
+            // General path: multiple indices or negative indices.
+            CMakeArray list(entry.get());
             std::vector<size_t> positive_indices;
             for (const auto& idx_str : indices) {
                 auto idx_opt = parse_number<long>(idx_str);
