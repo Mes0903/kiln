@@ -7,8 +7,9 @@ INSTALL_PREFIX=$(mktemp -d)
 
 echo "Testing install(TARGETS ... LIBRARY) with versioning"
 
-# Build and install
+# Build first, then install reads the resulting plan
 cd "$TESTDIR"
+$KILN build
 $KILN install --prefix "$INSTALL_PREFIX"
 
 # Verify main library file exists

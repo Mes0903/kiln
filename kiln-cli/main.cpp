@@ -306,6 +306,30 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
 
         save_cache();
 
+        // Resolve install rules into a self-contained plan so `kiln install`
+        // can execute without re-entering the interpreter. The plan inlines
+        // all genex/target/export resolution so sudo-install never has to
+        // run interpretation (which could write to a user-owned build dir).
+        {
+            std::string default_prefix = interpreter->get_variable("CMAKE_INSTALL_PREFIX");
+            if (default_prefix.empty()) default_prefix = "/usr/local";
+            auto plan_or = kiln::build_install_plan(interpreter.get(),
+                                                   interpreter->get_install_rules(),
+                                                   default_prefix,
+                                                   to_cmake_case(opt.config));
+            if (!plan_or) {
+                std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW) << "warning:" << kiln::c(std::cerr, kiln::colors::RESET)
+                          << " failed to build install plan: " << plan_or.error() << std::endl;
+            } else {
+                plan_or->kiln_version = std::string(kiln::version_full());
+                auto write_res = kiln::save_install_plan(*plan_or, build_path / "install_plan.json");
+                if (!write_res) {
+                    std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_YELLOW) << "warning:" << kiln::c(std::cerr, kiln::colors::RESET)
+                              << " failed to write install plan: " << write_res.error() << std::endl;
+                }
+            }
+        }
+
         // Write profile if enabled
         if (kiln::g_profiling_enabled.load(std::memory_order_relaxed)) {
             auto profile_path = (build_path / "profile.json").string();
@@ -793,7 +817,7 @@ Examples:
     auto* clean_cmd = app.add_subcommand("clean", "Remove build artifacts for the current config");
     add_global_options(clean_cmd);
 
-    auto* install_cmd = app.add_subcommand("install", "Build and install project files");
+    auto* install_cmd = app.add_subcommand("install", "Install project files (requires prior `kiln build`)");
     std::string install_prefix;
     std::string install_component;
     install_cmd->add_option("--prefix", install_prefix, "Installation prefix (overrides CMAKE_INSTALL_PREFIX)");
@@ -1025,37 +1049,54 @@ Examples:
     }
 
     if (install_cmd->parsed()) {
-        // Build project first
-        auto build_res = run_build_action(opt, debug_controller, opt.project_dir_str, {});
-        if (!build_res) {
-            std::cerr << "Build failed: " << build_res.error() << std::endl;
+        // Install reads the plan written by `kiln build`. It never runs the
+        // interpreter, so it never writes to the build dir - safe under sudo.
+        std::filesystem::path project_path;
+        try {
+            project_path = std::filesystem::canonical(opt.project_dir_str);
+        } catch (const std::exception& e) {
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET)
+                      << " project directory not found: " << opt.project_dir_str << std::endl;
             return 1;
         }
 
-        auto& interpreter = build_res.value();
-
-        // Determine install prefix
-        std::string prefix = install_prefix.empty()
-            ? interpreter->get_variable("CMAKE_INSTALL_PREFIX")
-            : install_prefix;
-
-        if (prefix.empty()) {
-            prefix = "/usr/local";  // CMake default
+        std::filesystem::path build_path;
+        if (!opt.source_dir_str.empty() || opt.literal_build_dir) {
+            if (opt.build_dir_str.empty()) {
+                std::cerr << "error: -S/--preset requires a build directory" << std::endl;
+                return 1;
+            }
+            build_path = std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+        } else {
+            std::filesystem::path build_root = opt.build_dir_str.empty()
+                ? (project_path / "build")
+                : std::filesystem::absolute(opt.build_dir_str).lexically_normal();
+            build_path = build_root / opt.config;
         }
 
-        std::cout << kiln::c(std::cout, kiln::colors::BOLD_BLUE) << "Installing to:" << kiln::c(std::cout, kiln::colors::RESET) << " " << prefix << std::endl;
+        auto plan_or = kiln::load_install_plan(build_path / "install_plan.json");
+        if (!plan_or) {
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET)
+                      << " " << plan_or.error() << std::endl;
+            return 1;
+        }
+        auto& plan = plan_or.value();
 
-        // Execute install
-        auto result = kiln::execute_install_rules(
-            interpreter.get(),
-            interpreter->get_install_rules(),
-            prefix,
-            to_cmake_case(opt.config),
-            install_component
-        );
+        std::string prefix = !install_prefix.empty() ? install_prefix
+                           : (!plan.default_prefix.empty() ? plan.default_prefix : "/usr/local");
 
+        // DESTDIR support: prepend if set (standard packaging idiom).
+        if (const char* destdir = std::getenv("DESTDIR"); destdir && *destdir) {
+            prefix = std::string(destdir) + prefix;
+        }
+
+        std::cout << kiln::c(std::cout, kiln::colors::BOLD_BLUE) << "Installing to:"
+                  << kiln::c(std::cout, kiln::colors::RESET) << " " << prefix << std::endl;
+
+        auto result = kiln::execute_install_plan(plan, prefix, plan.config, install_component);
         if (!result) {
-            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET) << " " << result.error() << std::endl;
+            std::cerr << kiln::c(std::cerr, kiln::colors::BOLD_RED) << "error:" << kiln::c(std::cerr, kiln::colors::RESET)
+                      << " " << result.error() << std::endl;
             return 1;
         }
 

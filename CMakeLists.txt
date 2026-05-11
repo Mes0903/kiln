@@ -70,6 +70,7 @@ add_library(kiln
     kiln/intercept/external_project_target.cpp
     kiln/intercept/fetch_content.cpp
     kiln/install_executor.cpp
+    kiln/install_plan.cpp
     kiln/printing.cpp
     kiln/progress_bar.cpp
     kiln/profiler.cpp

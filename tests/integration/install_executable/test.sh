@@ -7,8 +7,9 @@ INSTALL_PREFIX=$(mktemp -d)
 
 echo "Testing install(TARGETS ... RUNTIME) with install prefix: $INSTALL_PREFIX"
 
-# Build and install
+# Build first, then install reads the resulting plan
 cd "$TESTDIR"
+$KILN build
 $KILN install --prefix "$INSTALL_PREFIX"
 
 # Verify executable was installed

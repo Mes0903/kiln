@@ -795,7 +795,12 @@ void BuildGraph::propagate_dirty_bfs(
 
     for (size_t i = 0; i < worklist.size(); ++i) {
         auto* t = worklist[i];
-        bool definite = dirty_state[t] == true;
+        // always_run tasks (add_custom_target ALL, pre/post-build) execute
+        // every build, but matching CMake/Ninja their edges to dependents are
+        // order-only: dependents must wait, not auto-rebuild. Propagate as
+        // maybe-dirty so each dependent gets a runtime sig recheck — a stable
+        // byproduct (e.g. copy_if_different version.cpp) won't cascade.
+        bool definite = (dirty_state[t] == true) && !t->always_run;
         for (auto* dependent : get_dependents(t)) {
             auto [it, inserted] = dirty_state.try_emplace(dependent,
                 definite ? std::optional<bool>(true) : std::nullopt);
@@ -1111,11 +1116,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                     if (install_prefix.empty())
                                         install_prefix = ep_target->get_ep_install_dir();
                                     std::string config = ep_target->get_pending_install_config();
-                                    auto install_result = execute_install_rules(ep_target->get_ep_interpreter(),
-                                                                                install_rules,
-                                                                                install_prefix, config,
-                                                                                /*component_filter=*/"",
-                                                                                ep_out);
+                                    auto plan_or = build_install_plan(ep_target->get_ep_interpreter(),
+                                                                      install_rules,
+                                                                      install_prefix, config, ep_out);
+                                    if (!plan_or) {
+                                        task_error = "EP " + ep.ep_name + " install plan failed: " + plan_or.error();
+                                        return;
+                                    }
+                                    auto install_result = execute_install_plan(*plan_or, install_prefix, config,
+                                                                              /*component_filter=*/"", ep_out);
                                     if (!install_result) {
                                         task_error = "EP " + ep.ep_name + " install failed: " + install_result.error();
                                         return;
@@ -2414,8 +2423,11 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(
             // Header-only EP or all tasks up-to-date - run install immediately
             if (!install_rules.empty()) {
                 print_prefixed_output("Installing...");
-                auto install_result = execute_install_rules(ep_interp.get(), install_rules,
-                                                            install_prefix, config);
+                auto plan_or = build_install_plan(ep_interp.get(), install_rules, install_prefix, config);
+                if (!plan_or) {
+                    return "EP " + ep_name + " install plan failed: " + plan_or.error();
+                }
+                auto install_result = execute_install_plan(*plan_or, install_prefix, config);
                 if (!install_result) {
                     return "EP " + ep_name + " install failed: " + install_result.error();
                 }
