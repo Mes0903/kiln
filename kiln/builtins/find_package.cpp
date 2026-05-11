@@ -314,9 +314,6 @@ void register_find_package_builtins(Interpreter& interp) {
 
         // --- Module mode search helpers ---
         auto try_find_module = [&](const std::filesystem::path& found_module) -> bool {
-            if (!quiet) {
-                interp.print_message("STATUS", "Found module: " + found_module.string());
-            }
             auto res = interp.include_file(found_module.string());
             if (!res) {
                 interp.set_fatal_error(res.error());

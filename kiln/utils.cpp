@@ -1,4 +1,5 @@
 #include "utils.hpp"
+#include "build_system.hpp"
 #include "container_utils.hpp"
 #include "inner/blake2b.h"
 #include "inner/sha256.h"
@@ -283,6 +284,17 @@ static kiln::CommandResult exec_resolved(const ResolvedCommand& rc, const std::s
     }
 
     if (pid == 0) {
+        // Put child in its own process group so the terminal's Ctrl-C goes
+        // only to kiln; kiln then forwards SIGINT explicitly. Reset signal
+        // dispositions so the forwarded signal actually terminates the child.
+        setpgid(0, 0);
+        // Ensure the child dies if kiln crashes (segfault, SIGKILL, etc.).
+        // Linux/FreeBSD only — see set_parent_death_signal.
+        kiln::set_parent_death_signal(SIGTERM);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGHUP, SIG_DFL);
+
         close(pipe_fd[0]);
 
         if (!working_dir.empty()) {
@@ -324,6 +336,12 @@ static kiln::CommandResult exec_resolved(const ResolvedCommand& rc, const std::s
         _exit(127);
     }
 
+    // Parent side of setpgid: avoid a race with the child's execvp by setting
+    // its pgrp here too. setpgid is idempotent and one of the two calls will
+    // win; if the child already exec'd, EACCES is ignored.
+    setpgid(pid, pid);
+    kiln::register_child_pid(pid);
+
     close(pipe_fd[1]);
 
     std::string output;
@@ -335,7 +353,8 @@ static kiln::CommandResult exec_resolved(const ResolvedCommand& rc, const std::s
     close(pipe_fd[0]);
 
     int status;
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    kiln::unregister_child_pid(pid);
     int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
     return {exit_code, output};
@@ -454,6 +473,13 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
     for (size_t i = 0; i < num_commands; ++i) {
         pids[i] = fork();
         if (pids[i] == 0) { // Child
+            // Own process group so terminal Ctrl-C doesn't reach the child;
+            // kiln forwards signals explicitly via the tracked-pid registry.
+            setpgid(0, 0);
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGHUP, SIG_DFL);
+
             close(setup_pipe[0]);
             auto report_setup_error = [&](const std::string& message) {
                 std::string msg = message + ": " + std::strerror(errno);
@@ -545,6 +571,10 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
             // "command not found" silently flow through RESULT_VARIABLE.
             report_setup_error(std::string("exec ") + argv[0]);
         }
+        // Parent-side setpgid mirrors the child's call to close the race window
+        // before exec. Then register so the signal handler can forward signals.
+        setpgid(pids[i], pids[i]);
+        kiln::register_child_pid(pids[i]);
     }
 
     // Parent
@@ -596,9 +626,11 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
                     finished[i] = true;
                     finished_count++;
                     any_progress = true;
-                } else if (res == -1) {
+                    kiln::unregister_child_pid(pids[i]);
+                } else if (res == -1 && errno != EINTR) {
                     finished[i] = true;
                     finished_count++;
+                    kiln::unregister_child_pid(pids[i]);
                 }
             }
         }
@@ -615,6 +647,7 @@ kiln::PipelineResult kiln::execute_pipeline(const std::vector<std::vector<std::s
                         kill(pids[i], SIGKILL);
                         int status;
                         waitpid(pids[i], &status, 0);
+                        kiln::unregister_child_pid(pids[i]);
                         result.exit_codes[i] = -1; // Or some other indicator
                     }
                 }

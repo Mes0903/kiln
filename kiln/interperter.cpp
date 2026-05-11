@@ -822,7 +822,6 @@ std::expected<kiln::Interpreter*, kiln::BuildError> kiln::Interpreter::run_build
         return std::unexpected(BuildError{current_file_, result.error()});
     }
 
-    print_message("STATUS", "Build finished.");
     return this;
 }
 
@@ -1908,6 +1907,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 
 std::expected<void, InterpreterError> Interpreter::interpret(const std::vector<AstNode>& ast) {
     for (const auto& node : ast) {
+        if (g_interrupted.load(std::memory_order_relaxed)) {
+            return std::unexpected(InterpreterError{"", 0, 0, 0, 0, "Interrupted", {}, std::nullopt});
+        }
         auto res = std::visit([this](const auto& n) -> std::expected<void, InterpreterError> {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CommandInvocation>) return execute_command(n);

@@ -1,5 +1,8 @@
 #include "kiln/tool_mode.hpp"
 #include "kiln/parse_number.hpp"
+#include "kiln/build_system.hpp"
+#include <signal.h>
+#include <cerrno>
 
 #include <CLI/CLI.hpp>
 
@@ -46,6 +49,11 @@ int exec_command(const std::vector<std::string>& cmd, const std::string& working
         return 1;
     }
     if (pid == 0) {
+        setpgid(0, 0);
+        kiln::set_parent_death_signal(SIGTERM);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGHUP, SIG_DFL);
         if (!working_dir.empty()) {
             if (chdir(working_dir.c_str()) != 0) {
                 _exit(127);
@@ -57,8 +65,11 @@ int exec_command(const std::vector<std::string>& cmd, const std::string& working
         execvp(argv[0], argv.data());
         _exit(127);
     }
+    setpgid(pid, pid);
+    register_child_pid(pid);
     int status = 0;
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    unregister_child_pid(pid);
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return 1;
 }
@@ -325,6 +336,11 @@ int cmd_env(const std::vector<std::string>& unsets, Args rest) {
         return 1;
     }
     if (pid == 0) {
+        setpgid(0, 0);
+        kiln::set_parent_death_signal(SIGTERM);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGHUP, SIG_DFL);
         for (auto& name : unsets) unsetenv(name.c_str());
         for (auto& [name, val] : sets) setenv(name.c_str(), val.c_str(), 1);
         std::vector<char*> argv;
@@ -334,8 +350,11 @@ int cmd_env(const std::vector<std::string>& unsets, Args rest) {
         execvp(argv[0], argv.data());
         _exit(127);
     }
+    setpgid(pid, pid);
+    register_child_pid(pid);
     int status = 0;
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    unregister_child_pid(pid);
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return 1;
 }

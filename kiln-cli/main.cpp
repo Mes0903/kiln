@@ -30,7 +30,15 @@
 namespace {
 
 void signal_handler(int sig) {
-    if (kiln::g_interrupted.exchange(true, std::memory_order_relaxed)) {
+    bool already = kiln::g_interrupted.exchange(true, std::memory_order_relaxed);
+    // Children are placed in their own process group, so the terminal's Ctrl-C
+    // is delivered only to kiln. Forward the signal to each tracked child so
+    // they exit promptly instead of running to completion.
+    for (auto& slot : kiln::g_child_pids) {
+        pid_t pid = slot.load(std::memory_order_relaxed);
+        if (pid > 0) kill(pid, sig);
+    }
+    if (already) {
         // Second signal — restore default handler and re-raise for hard kill
         signal(sig, SIG_DFL);
         raise(sig);
@@ -258,6 +266,10 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
             kiln::ProfileScope scope("interpret " + cmake_lists.filename().string(), "interpret");
             auto interpret_result = interpreter->interpret(ast_or_error.value());
             if (!interpret_result) {
+                if (kiln::g_interrupted.load(std::memory_order_relaxed)) {
+                    save_cache();
+                    return std::unexpected("Interrupted");
+                }
                 print_error_context(interpret_result.error());
                 save_cache();
                 return std::unexpected("Interpretation error");
@@ -1084,6 +1096,7 @@ Examples:
 
             auto result = interpreter.interpret(ast_or_error.value());
             if (!result) {
+                if (kiln::g_interrupted.load(std::memory_order_relaxed)) return 130;
                 print_error_context(result.error());
                 return 1;
             }
