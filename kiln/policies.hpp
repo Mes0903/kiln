@@ -16,6 +16,7 @@ struct PolicyInfo {
 };
 
 enum class CMakePolicy : uint8_t {
+    CMP0037,  // 3.0:  Target names should not be reserved and should match a validity pattern
     CMP0126,  // 3.21: set(CACHE) removes local variables
     CMP0148,  // 3.27: FindPythonInterp/FindPythonLibs removed
     CMP0167,  // 3.30: Boost find_package config-first
@@ -24,6 +25,7 @@ enum class CMakePolicy : uint8_t {
 };
 
 inline constexpr PolicyInfo policy_info[] = {
+    {"CMP0037", "3.0"},
     {"CMP0126", "3.21"},
     {"CMP0148", "3.27"},
     {"CMP0167", "3.30"},

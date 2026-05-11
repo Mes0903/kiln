@@ -414,6 +414,13 @@ public:
     std::vector<TestDefinition>& get_tests() { return get_root()->tests_; }
     bool is_testing_enabled() const { return !is_falsy(get_variable("BUILD_TESTING")); }
 
+    // Whether the project's CMakeLists called enable_testing() / include(CTest).
+    // Distinct from is_testing_enabled(), which also flips when the kiln CLI is
+    // invoked in test mode. CMP0037's `test`-target carve-out keys off this flag,
+    // not BUILD_TESTING, because the policy is about project intent.
+    bool project_enabled_testing() const { return get_root()->project_enabled_testing_; }
+    void mark_project_enabled_testing() { get_root()->project_enabled_testing_ = true; }
+
     // Deferred file(GENERATE) entries
     std::vector<PendingFileGenerate>& get_pending_file_generates() { return get_root()->pending_file_generates_; }
 
@@ -597,6 +604,7 @@ private:
     bool toolchain_file_loaded_ = false;
     bool project_called_ = false;
     bool no_project_warned_ = false;
+    bool project_enabled_testing_ = false;
     std::unique_ptr<CacheStore> cache_store_;
     AstCache ast_cache_;
     std::unique_ptr<Debugger> debugger_;

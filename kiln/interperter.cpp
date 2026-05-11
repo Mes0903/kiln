@@ -1360,6 +1360,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                 interp.print_message("WARN", "enable_testing() expects no arguments");
             }
             interp.set_variable("BUILD_TESTING", "ON");
+            interp.mark_project_enabled_testing();
         });
 
         add_builtin("add_test", [](Interpreter& interp, const std::vector<std::string>& args) {

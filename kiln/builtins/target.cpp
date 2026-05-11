@@ -34,6 +34,45 @@ static bool is_banned_target_name(std::string_view name) {
     return false;
 }
 
+// Returns true if the caller should abort (target name is reserved and unusable).
+// Gated by CMake policy CMP0037:
+//   NEW: reserved names are a hard error.
+//   OLD: emit a warning and allow the target.
+// "test" gets a further exemption per CMP0037: it is only reserved after
+// enable_testing() / include(CTest). Even when allowed under NEW, we warn that
+// shadowing the conventional `make test` target is a footgun.
+static bool reject_reserved_target_name(Interpreter& interp,
+                                        std::string_view command,
+                                        const std::string& name) {
+    if (!is_banned_target_name(name)) return false;
+
+    // CMP0037's `test` carve-out keys on whether the *project* called
+    // enable_testing(), not BUILD_TESTING — the latter may be flipped by the
+    // kiln CLI without the project ever intending to define test targets.
+    bool test_allowed_by_cmp0037 = (name == "test" && !interp.project_enabled_testing());
+    bool policy_new = interp.get_policy(CMakePolicy::CMP0037) == PolicyState::NEW;
+
+    if (test_allowed_by_cmp0037) {
+        interp.print_warning_with_context(
+            std::string(command) + "() target name 'test' shadows the conventional "
+            "test target. This is allowed because enable_testing() has not been "
+            "called, but is discouraged - calling enable_testing() later will "
+            "collide with this target.");
+        return false;
+    }
+
+    std::string msg = std::string(command) + "() target name '" + name
+                      + "' is reserved by the build system";
+    if (!policy_new) {
+        KILN_POLICY_OLD(CMP0037);
+        interp.print_warning_with_context(
+            msg + " (CMP0037 is set to OLD; treating as a warning)");
+        return false;
+    }
+    interp.set_fatal_error(msg);
+    return true;
+}
+
 // Warn once when a target-defining command runs without a prior project()
 // call. Without project(), no language has been enabled and the build will
 // later fail with a confusing "no compiler available" error. Mirrors CMake's
@@ -216,10 +255,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
 
-        if (is_banned_target_name(name)) {
-            interp.set_fatal_error("add_executable() target name '" + name + "' is reserved by the build system");
-            return;
-        }
+        if (reject_reserved_target_name(interp, "add_executable", name)) return;
 
         // Handle ALIAS targets
         if (is_alias) {
@@ -293,10 +329,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.positionals(sources, "sources");
         PARSE_OR_RETURN(parser, interp, args);
 
-        if (is_banned_target_name(name)) {
-            interp.set_fatal_error("add_library() target name '" + name + "' is reserved by the build system");
-            return;
-        }
+        if (reject_reserved_target_name(interp, "add_library", name)) return;
 
         // Handle ALIAS targets
         if (is_alias) {
@@ -732,10 +765,7 @@ void register_target_builtins(Interpreter& interp) {
         parser.value("JOB_POOL", job_pool);
         PARSE_OR_RETURN(parser, interp, normalized_args);
 
-        if (is_banned_target_name(name)) {
-            interp.set_fatal_error("add_custom_target() target name '" + name + "' is reserved by the build system");
-            return;
-        }
+        if (reject_reserved_target_name(interp, "add_custom_target", name)) return;
 
         std::string src_dir = interp.get_variable("CMAKE_CURRENT_SOURCE_DIR");
         std::string bin_dir = interp.get_variable("CMAKE_CURRENT_BINARY_DIR");
