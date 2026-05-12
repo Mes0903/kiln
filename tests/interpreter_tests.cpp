@@ -1666,6 +1666,38 @@ TEST_CASE("if condition: numeric comparisons", "[interpreter][if]") {
     REQUIRE(output == "pass\n");
 }
 
+TEST_CASE("if condition: binary comparisons auto-dereference boolean constant names", "[interpreter][if][bugfix]") {
+    auto output = run_script(R"(
+        set(n "7")
+        set(y "7")
+        set(N "8")
+        set(Y "8")
+        set(ON "11")
+        set(OFF "11")
+        set(FALSE "12")
+        set(TRUE "12")
+
+        if(n EQUAL y)
+            message("n_y")
+        endif()
+        if(N EQUAL Y)
+            message("N_Y")
+        endif()
+        if(ON EQUAL OFF)
+            message("ON_OFF")
+        endif()
+        if(FALSE EQUAL TRUE)
+            message("FALSE_TRUE")
+        endif()
+        if(N)
+            message("bare_N_true")
+        else()
+            message("bare_N_false")
+        endif()
+    )");
+    REQUIRE(output == "n_y\nN_Y\nON_OFF\nFALSE_TRUE\nbare_N_false\n");
+}
+
 TEST_CASE("if condition: numeric comparison with list values", "[interpreter][if]") {
     // file(DOWNLOAD ... STATUS status) sets status to a list like "0;\"No error\"".
     // CMake's EQUAL parses only the leading numeric portion (uses sscanf "%lg").

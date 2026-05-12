@@ -223,13 +223,12 @@ std::string_view eval_operand_sv(Interpreter& interp, const Argument& arg, std::
         return token;
     }
 
-    // Boolean constant → return as-is
-    if (is_boolean_constant_ci(token)) return token;
-
     // Numeric constant → return as-is
     if (is_numeric_constant(token)) return token;
 
-    // Dereference as variable. Undefined → keep literal.
+    // Dereference as variable. Undefined → keep literal. In binary
+    // expressions CMake auto-dereferences even names like N, Y, ON, and OFF
+    // before falling back to their literal boolean-constant spelling.
     auto view = interp.get_variable_view(token);
     return view.has_value() ? *view : std::string_view(token);
 }
@@ -490,8 +489,7 @@ private:
         const std::string& token = parser_get_token_string(arg);
 
         if (arg.quoted ||
-            std::find(keywords.begin(), keywords.end(), token) != keywords.end() ||
-            is_boolean_constant_ci(token)) {
+            std::find(keywords.begin(), keywords.end(), token) != keywords.end()) {
             return token;
         }
 
