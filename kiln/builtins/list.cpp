@@ -219,20 +219,33 @@ void register_list_builtins(Interpreter& interp) {
                 interp.set_fatal_error("list(APPEND) requires at least the list variable name");
                 return;
             }
-            // Read with cache fallback: when the local variable is unset, CMake
-            // exposes the cache value via `${VAR}` so list(APPEND) sees it. Going
-            // through get_variable() preserves that — reading the local entry
-            // directly would start from empty and silently drop cache-only
-            // values (e.g. CMAKE_MODULE_PATH seeded by a -C initial cache).
-            std::string val = interp.get_variable(sub_args[0]);
-            for (size_t i = 1; i < sub_args.size(); ++i) {
-                // CMake skips empty elements only when the list is empty.
-                // When non-empty, appending "" adds a semicolon (empty element).
-                if (sub_args[i].empty() && val.empty()) continue;
-                if (!val.empty()) val += ';';
-                val += sub_args[i];
+            // Fast path: when the variable already lives at the current scope depth,
+            // mutate the stored string directly. This turns a tight 100k-iter append
+            // loop from O(N^2) (copy-out + copy-back per call) into amortized O(1).
+            auto entry = interp.get_variables().entry(sub_args[0]);
+            if (std::string* val = entry.mutable_at_current_depth()) {
+                for (size_t i = 1; i < sub_args.size(); ++i) {
+                    if (sub_args[i].empty() && val->empty()) continue;
+                    if (!val->empty()) val->push_back(';');
+                    val->append(sub_args[i]);
+                }
+                if (interp.has_variable_watches()) {
+                    interp.fire_variable_watch(sub_args[0], "MODIFIED_ACCESS", *val);
+                }
+            } else {
+                // Slow path: must read with cache fallback (when the local variable
+                // is unset, CMake exposes the cache value via `${VAR}` so list(APPEND)
+                // sees it — reading the local entry directly would start from empty
+                // and silently drop cache-only values, e.g. CMAKE_MODULE_PATH seeded
+                // by a -C initial cache) and snapshot into the current scope.
+                std::string new_val = interp.get_variable(sub_args[0]);
+                for (size_t i = 1; i < sub_args.size(); ++i) {
+                    if (sub_args[i].empty() && new_val.empty()) continue;
+                    if (!new_val.empty()) new_val += ';';
+                    new_val += sub_args[i];
+                }
+                interp.set_variable(sub_args[0], new_val);
             }
-            interp.set_variable(sub_args[0], val);
         } else if (operation == "PREPEND") {
             CommandParser parser("list", "PREPEND");
             std::string list_var;

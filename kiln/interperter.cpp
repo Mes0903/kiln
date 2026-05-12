@@ -2427,16 +2427,16 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
     // (matches the dispatch order in execute_command_with_args).
     if (!debugger_) {
         if (cmd.pre_parsed_math) {
-            if (root->user_functions_.find("math") == root->user_functions_.end() &&
-                root->user_macros_.find("math") == root->user_macros_.end()) {
+            if (root->user_functions_.find(std::string_view("math")) == root->user_functions_.end() &&
+                root->user_macros_.find(std::string_view("math")) == root->user_macros_.end()) {
                 if (try_execute_pre_parsed_math(*this, *cmd.pre_parsed_math, cmd.arguments)) {
                     pop_trace_stack();
                     return {};
                 }
             }
         } else if (cmd.pre_parsed_substring) {
-            if (root->user_functions_.find("string") == root->user_functions_.end() &&
-                root->user_macros_.find("string") == root->user_macros_.end()) {
+            if (root->user_functions_.find(std::string_view("string")) == root->user_functions_.end() &&
+                root->user_macros_.find(std::string_view("string")) == root->user_macros_.end()) {
                 if (try_execute_pre_parsed_substring(*this, *cmd.pre_parsed_substring)) {
                     pop_trace_stack();
                     return {};

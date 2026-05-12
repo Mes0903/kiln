@@ -545,6 +545,9 @@ public:
     };
     void add_variable_watch(const std::string& var_name, std::optional<std::string> callback = std::nullopt);
     void fire_variable_watch(const std::string& name, const std::string& access_type, const std::string& value);
+    // Cheap check for hot paths (e.g. tight list/string APPEND loops) so they can
+    // skip building the value-for-watch when nobody's watching.
+    bool has_variable_watches() const { return !variable_watches_.empty(); }
 
     // Access fatal error state (used by condition evaluator and debugger)
     std::optional<InterpreterError> get_fatal_error() const;
@@ -587,7 +590,7 @@ private:
     bool force_colors_ = false;  // Force color output even when not writing to TTY
 
     // Global state (managed by root)
-    std::unordered_map<std::string, BuiltinFunction, TransparentStringHash, TransparentStringEqual> builtins_;
+    inner::ankerl::unordered_dense::map<std::string, BuiltinFunction, TransparentStringHash, TransparentStringEqual> builtins_;
     TargetMap targets_;
     std::unordered_map<std::string, std::string> target_aliases_;  // alias_name -> real_target_name
     std::vector<TestDefinition> tests_;
@@ -659,8 +662,8 @@ private:
 
     // Global functions and macros (stored at root, accessible everywhere)
     // CMake semantics: functions/macros are globally visible once defined
-    std::unordered_map<std::string, std::unique_ptr<FunctionBlock>> user_functions_;
-    std::unordered_map<std::string, std::unique_ptr<MacroBlock>> user_macros_;
+    inner::ankerl::unordered_dense::map<std::string, std::unique_ptr<FunctionBlock>, TransparentStringHash, TransparentStringEqual> user_functions_;
+    inner::ankerl::unordered_dense::map<std::string, std::unique_ptr<MacroBlock>, TransparentStringHash, TransparentStringEqual> user_macros_;
 
     // Deferred deletion for functions/macros replaced during their own execution.
     // Each entry records {delete_when_size_at_or_below, function_ptr}.

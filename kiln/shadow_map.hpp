@@ -164,6 +164,18 @@ public:
                 }
             }
         }
+        // Returns a pointer to the topmost value if it lives at current_depth and is defined,
+        // so callers can mutate it in place (avoiding the read-copy-write round-trip that
+        // makes list(APPEND)/string(APPEND) in a loop O(N^2)). Returns nullptr when the
+        // value must be snapshot-into-current-scope first (parent depth or tombstone), in
+        // which case the caller should fall back to set(get() + ...).
+        std::string* mutable_at_current_depth() {
+            if (versions_->empty()) return nullptr;
+            auto& top = versions_->back();
+            if (top.depth != map_.current_depth_) return nullptr;
+            if (!top.value.has_value()) return nullptr;
+            return &*top.value;
+        }
         operator ConstEntry() const { return ConstEntry(versions_); }
     };
 

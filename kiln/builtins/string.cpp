@@ -710,12 +710,26 @@ void register_string_builtins(Interpreter& interp) {
             PARSE_OR_RETURN(parser, interp, sub_args);
 
             auto entry = interp.get_variables().entry(var_name);
-            std::string current = entry.get();
-            for (const auto& s : inputs) {
-                current += s;
+            // Fast path: mutate the stored string in place when it already lives at
+            // the current scope depth. This makes a tight string(APPEND) loop
+            // amortized O(1) per call instead of O(current-length) per call.
+            if (std::string* p = entry.mutable_at_current_depth()) {
+                for (const auto& s : inputs) {
+                    p->append(s);
+                }
+                if (interp.has_variable_watches()) {
+                    interp.fire_variable_watch(var_name, "MODIFIED_ACCESS", *p);
+                }
+            } else {
+                std::string current = entry.get();
+                for (const auto& s : inputs) {
+                    current += s;
+                }
+                entry.set(std::move(current));
+                if (interp.has_variable_watches()) {
+                    interp.fire_variable_watch(var_name, "MODIFIED_ACCESS", entry.get());
+                }
             }
-
-            entry.set(std::move(current));
 
         } else if (ci_equals(operation, "PREPEND")) {
             CommandParser parser("string", "PREPEND");
