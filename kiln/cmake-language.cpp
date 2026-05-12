@@ -824,6 +824,17 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_body(
 
     cmd_inv.length = pos_ - cmd_offset;
 
+    // Parse-time fast-path classification for math(). Only kicks in when the
+    // expression has the simple shape <operand op operand ...>; runtime then
+    // skips arg expansion, dispatch, and the recursive-descent math parser.
+    if (cmd_inv.identifier.size() == 4) {
+        const auto& id = cmd_inv.identifier;
+        if ((id[0]=='m'||id[0]=='M') && (id[1]=='a'||id[1]=='A') &&
+            (id[2]=='t'||id[2]=='T') && (id[3]=='h'||id[3]=='H')) {
+            cmd_inv.pre_parsed_math = classify_math(cmd_inv.arguments);
+        }
+    }
+
     return cmd_inv;
 }
 

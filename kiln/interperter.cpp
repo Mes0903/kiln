@@ -2421,6 +2421,23 @@ std::expected<void, InterpreterError> Interpreter::execute_command(const Command
             "call stack depth limit exceeded (" + std::to_string(max_trace_depth_) + ")", {}});
     }
 
+    // Fast path: math(EXPR ...) whose shape was recognized at parse time.
+    // Skips arg-vector construction, the recursive-descent math parser, and
+    // builtin dispatch entirely. Only valid when neither a debugger trace
+    // nor a user-defined override of `math` is in play (matches the
+    // dispatch semantics in execute_command_with_args).
+    if (cmd.pre_parsed_math && !debugger_) {
+        Interpreter* mroot = root;
+        if (mroot->user_functions_.find("math") == mroot->user_functions_.end() &&
+            mroot->user_macros_.find("math") == mroot->user_macros_.end()) {
+            if (try_execute_pre_parsed_math(*this, *cmd.pre_parsed_math, cmd.arguments)) {
+                pop_trace_stack();
+                return {};
+            }
+            // Fall through to slow path on runtime failure (e.g., non-numeric var value)
+        }
+    }
+
     // Expand arguments once (reuse buffer to avoid per-call allocation)
     expanded_args_buf_.clear();
     expand_arguments_into(cmd.arguments, expanded_args_buf_);

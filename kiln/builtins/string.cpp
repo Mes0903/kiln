@@ -732,7 +732,10 @@ void register_string_builtins(Interpreter& interp) {
             const auto& op_str = sub_args[0];
             std::span<const std::string> cmp_args(sub_args.begin() + 1, sub_args.end());
 
-            CommandParser parser("string", "COMPARE " + std::string(op_str));
+            // Hold the assembled subcommand label in a named local — the
+            // parser stores it as string_view, so the buffer must outlive it.
+            std::string compare_label = "COMPARE " + std::string(op_str);
+            CommandParser parser("string", compare_label);
             std::string str1, str2, out_var;
 
             parser.positional(str1, "string1");

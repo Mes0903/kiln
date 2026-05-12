@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
 #include <map>
 #include <optional>
@@ -21,20 +22,25 @@ class Interpreter;
  */
 class CommandParser {
 public:
-    explicit CommandParser(std::string cmd_name);
-    CommandParser(std::string cmd_name, std::string subcommand);
+    // cmd_name and subcommand are stored as views — callers must keep the
+    // underlying buffer alive for the parser's lifetime. String literals and
+    // local std::strings declared in the same scope as the parser are fine;
+    // temporaries (e.g., `"a" + std::string(b)`) are NOT — bind to a named
+    // local first.
+    explicit CommandParser(std::string_view cmd_name);
+    CommandParser(std::string_view cmd_name, std::string_view subcommand);
 
     /**
      * @brief Add a single positional argument (filled in order before keywords).
      * @param required If false, this positional is optional.
      */
-    void positional(std::string& var, std::string label, bool required = true);
+    void positional(std::string& var, std::string_view label, bool required = true);
 
     /**
      * @brief Add a positional list (collects remaining args until first keyword).
      * @param required If true, parse() fails if the list is empty.
      */
-    void positionals(std::vector<std::string>& var, std::string label, bool required = false);
+    void positionals(std::vector<std::string>& var, std::string_view label, bool required = false);
 
     /**
      * @brief Add a boolean flag keyword (e.g., VERBATIM).
@@ -86,19 +92,19 @@ private:
 
     struct SinglePositional {
         std::string* var;
-        std::string label;
+        std::string_view label;
         bool required;
         bool filled = false;
     };
 
     struct PositionalList {
         std::vector<std::string>* var;
-        std::string label;
+        std::string_view label;
         bool required;
     };
 
-    std::string cmd_name_;
-    std::string subcommand_;
+    std::string_view cmd_name_;
+    std::string_view subcommand_;
     std::vector<SinglePositional> single_positionals_;
     std::optional<PositionalList> positional_list_;
     std::map<std::string, KeywordInfo> keywords_;

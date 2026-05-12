@@ -183,6 +183,23 @@ struct BlockBlock {
     size_t length = 0;
 };
 
+// Pre-classified math(EXPR ...) shape. Built at parse time when the
+// expression is a flat chain of var-refs and decimal literals separated by
+// + - * / %. Lets execute_command skip string concatenation, MathEvaluator's
+// recursive descent, and the builtin dispatch on the hot path. Same idea as
+// PreParsedCondition for if/while.
+struct PreParsedMath {
+    struct Operand {
+        bool is_literal;       // true: use `literal`; false: resolve var ref at `var_part_idx`
+        uint16_t var_part_idx; // index into expression Argument's parts
+        int64_t literal;
+    };
+    std::vector<Operand> operands;       // operands.size() == ops.size() + 1
+    std::vector<char> ops;               // each one of + - * / %
+    std::string out_var;                 // destination variable name (parse-time literal)
+    bool hex_output = false;             // OUTPUT_FORMAT HEXADECIMAL
+};
+
 struct CommandInvocation {
     std::string identifier;
     std::vector<Argument> arguments;
@@ -190,7 +207,12 @@ struct CommandInvocation {
     size_t col = 0;
     size_t offset = 0;
     size_t length = 0;
+    std::optional<PreParsedMath> pre_parsed_math;  // engaged only for math() fast path
 };
+
+// Classify a math() invocation at parse time. Returns nullopt unless the
+// shape is exactly the fast-path subset (defined in math.cpp).
+std::optional<PreParsedMath> classify_math(const std::vector<Argument>& args);
 
 class Parser {
 public:

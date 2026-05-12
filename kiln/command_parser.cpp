@@ -2,18 +2,18 @@
 
 namespace kiln {
 
-CommandParser::CommandParser(std::string cmd_name)
-    : cmd_name_(std::move(cmd_name)) {}
+CommandParser::CommandParser(std::string_view cmd_name)
+    : cmd_name_(cmd_name) {}
 
-CommandParser::CommandParser(std::string cmd_name, std::string subcommand)
-    : cmd_name_(std::move(cmd_name)), subcommand_(std::move(subcommand)) {}
+CommandParser::CommandParser(std::string_view cmd_name, std::string_view subcommand)
+    : cmd_name_(cmd_name), subcommand_(subcommand) {}
 
-void CommandParser::positional(std::string& var, std::string label, bool required) {
-    single_positionals_.push_back({&var, std::move(label), required, false});
+void CommandParser::positional(std::string& var, std::string_view label, bool required) {
+    single_positionals_.push_back({&var, label, required, false});
 }
 
-void CommandParser::positionals(std::vector<std::string>& var, std::string label, bool required) {
-    positional_list_ = PositionalList{&var, std::move(label), required};
+void CommandParser::positionals(std::vector<std::string>& var, std::string_view label, bool required) {
+    positional_list_ = PositionalList{&var, label, required};
 }
 
 void CommandParser::flag(std::string keyword, bool& var) {
@@ -39,9 +39,11 @@ void CommandParser::unparsed(std::vector<std::string>& var) {
 
 std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::span<const std::string> args) {
     // Build error prefix: "cmd(subcmd)" or "cmd"
-    std::string error_prefix = cmd_name_;
+    std::string error_prefix(cmd_name_);
     if (!subcommand_.empty()) {
-        error_prefix += "(" + subcommand_ + ")";
+        error_prefix += '(';
+        error_prefix.append(subcommand_);
+        error_prefix += ')';
     } else {
         error_prefix += "()";
     }
@@ -60,11 +62,15 @@ std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::s
                 for (size_t i = single_pos_idx; i < single_positionals_.size(); ++i) {
                     if (single_positionals_[i].required) {
                         if (!missing.empty()) missing += ", ";
-                        missing += "<" + single_positionals_[i].label + ">";
+                        missing += '<';
+                        missing.append(single_positionals_[i].label);
+                        missing += '>';
                     }
                 }
                 if (missing.empty() && positional_list_ && positional_list_->required && positional_list_->var->empty()) {
-                    missing = "<" + positional_list_->label + ">...";
+                    missing = "<";
+                    missing.append(positional_list_->label);
+                    missing += ">...";
                 }
                 if (!missing.empty()) {
                     warnings.push_back("While parsing " + error_prefix +
@@ -138,25 +144,26 @@ std::expected<std::vector<std::string>, std::string> CommandParser::parse(std::s
     // Validate required single positionals are filled
     for (const auto& pos : single_positionals_) {
         if (pos.required && !pos.filled) {
-            return make_error(error_prefix + ": missing required argument <" + pos.label + ">");
+            return make_error(error_prefix + ": missing required argument <" + std::string(pos.label) + ">");
         }
     }
 
     // Validate positional list if required
     if (positional_list_ && positional_list_->required && positional_list_->var->empty()) {
-        return make_error(error_prefix + ": requires at least one <" + positional_list_->label + ">");
+        return make_error(error_prefix + ": requires at least one <" + std::string(positional_list_->label) + ">");
     }
 
     return warnings;
 }
 
 std::string CommandParser::get_syntax() const {
-    std::string syntax = cmd_name_ + "(";
+    std::string syntax(cmd_name_);
+    syntax += '(';
     bool first = true;
 
     // Subcommand comes first if present
     if (!subcommand_.empty()) {
-        syntax += subcommand_;
+        syntax.append(subcommand_);
         first = false;
     }
 
@@ -164,7 +171,9 @@ std::string CommandParser::get_syntax() const {
     for (const auto& pos : single_positionals_) {
         if (!first) syntax += " ";
         if (!pos.required) syntax += "[";
-        syntax += "<" + pos.label + ">";
+        syntax += '<';
+        syntax.append(pos.label);
+        syntax += '>';
         if (!pos.required) syntax += "]";
         first = false;
     }
@@ -173,7 +182,9 @@ std::string CommandParser::get_syntax() const {
     if (positional_list_) {
         if (!first) syntax += " ";
         if (!positional_list_->required) syntax += "[";
-        syntax += "<" + positional_list_->label + ">...";
+        syntax += '<';
+        syntax.append(positional_list_->label);
+        syntax += ">...";
         if (!positional_list_->required) syntax += "]";
         first = false;
     }
