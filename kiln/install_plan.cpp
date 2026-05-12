@@ -3,6 +3,39 @@
 #include <sys/stat.h>
 #include "glaze/glaze.hpp"
 
+template <>
+struct glz::meta<kiln::InstallOp> {
+    using T = kiln::InstallOp;
+    static constexpr auto value = glz::object(
+        "kind", &T::kind,
+        "dest", &T::dest,
+        "component", &T::component,
+        "configurations", &T::configurations,
+        "exclude_from_all", &T::exclude_from_all,
+        "optional", &T::optional,
+        "src", &T::src,
+        "perms", &T::perms,
+        "content", &T::content,
+        "symlink_target", &T::symlink_target,
+        "patterns", &T::patterns,
+        "excludes", &T::excludes,
+        "use_source_permissions", &T::use_source_permissions,
+        "preserve_dir_name", &T::preserve_dir_name,
+        "file_perms", &T::file_perms,
+        "dir_perms", &T::dir_perms);
+};
+
+template <>
+struct glz::meta<kiln::InstallPlan> {
+    using T = kiln::InstallPlan;
+    static constexpr auto value = glz::object(
+        "version", &T::version,
+        "kiln_version", &T::kiln_version,
+        "config", &T::config,
+        "default_prefix", &T::default_prefix,
+        "ops", &T::ops);
+};
+
 namespace kiln {
 
 std::string mode_to_rwx(mode_t mode) {
@@ -105,36 +138,3 @@ std::expected<InstallPlan, std::string> load_install_plan(const std::filesystem:
 }
 
 } // namespace kiln
-
-template <>
-struct glz::meta<kiln::InstallOp> {
-    using T = kiln::InstallOp;
-    static constexpr auto value = glz::object(
-        "kind", &T::kind,
-        "dest", &T::dest,
-        "component", &T::component,
-        "configurations", &T::configurations,
-        "exclude_from_all", &T::exclude_from_all,
-        "optional", &T::optional,
-        "src", &T::src,
-        "perms", &T::perms,
-        "content", &T::content,
-        "symlink_target", &T::symlink_target,
-        "patterns", &T::patterns,
-        "excludes", &T::excludes,
-        "use_source_permissions", &T::use_source_permissions,
-        "preserve_dir_name", &T::preserve_dir_name,
-        "file_perms", &T::file_perms,
-        "dir_perms", &T::dir_perms);
-};
-
-template <>
-struct glz::meta<kiln::InstallPlan> {
-    using T = kiln::InstallPlan;
-    static constexpr auto value = glz::object(
-        "version", &T::version,
-        "kiln_version", &T::kiln_version,
-        "config", &T::config,
-        "default_prefix", &T::default_prefix,
-        "ops", &T::ops);
-};
