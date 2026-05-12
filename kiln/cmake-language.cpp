@@ -824,14 +824,20 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_body(
 
     cmd_inv.length = pos_ - cmd_offset;
 
-    // Parse-time fast-path classification for math(). Only kicks in when the
-    // expression has the simple shape <operand op operand ...>; runtime then
-    // skips arg expansion, dispatch, and the recursive-descent math parser.
-    if (cmd_inv.identifier.size() == 4) {
+    // Parse-time fast-path classification. Each classifier returns nullopt
+    // unless the invocation matches its tight recognized shape; runtime then
+    // skips arg expansion, dispatch, and the per-builtin parser overhead.
+    {
         const auto& id = cmd_inv.identifier;
-        if ((id[0]=='m'||id[0]=='M') && (id[1]=='a'||id[1]=='A') &&
+        if (id.size() == 4 &&
+            (id[0]=='m'||id[0]=='M') && (id[1]=='a'||id[1]=='A') &&
             (id[2]=='t'||id[2]=='T') && (id[3]=='h'||id[3]=='H')) {
             cmd_inv.pre_parsed_math = classify_math(cmd_inv.arguments);
+        } else if (id.size() == 6 &&
+            (id[0]=='s'||id[0]=='S') && (id[1]=='t'||id[1]=='T') &&
+            (id[2]=='r'||id[2]=='R') && (id[3]=='i'||id[3]=='I') &&
+            (id[4]=='n'||id[4]=='N') && (id[5]=='g'||id[5]=='G')) {
+            cmd_inv.pre_parsed_substring = classify_substring(cmd_inv.arguments);
         }
     }
 

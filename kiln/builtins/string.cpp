@@ -316,6 +316,174 @@ std::string find_program_in_path(const std::string& program_name) {
     return "";
 }
 
+// ---------------------------------------------------------------------------
+// Parse-time classification + runtime fast path for string(SUBSTRING ...).
+// ---------------------------------------------------------------------------
+//
+// Recognized: string(SUBSTRING <input> <begin> <length> <out_var>) where
+//   - <out_var> is a single parse-time string literal,
+//   - <input>/<begin>/<length> are each either a parse-time string literal
+//     OR a single bare ${VAR} reference with a literal name (no namespace,
+//     no nested-name expansion).
+// On the bench's hex-decode loop, 9 of every 10 SUBSTRING index args are
+// static literals, so the runtime path skips parse_number entirely on those.
+
+static std::optional<std::string_view> single_literal(const Argument& a) {
+    if (a.parts.size() != 1) return std::nullopt;
+    auto* s = std::get_if<std::string>(&a.parts[0]);
+    if (!s) return std::nullopt;
+    return std::string_view(*s);
+}
+
+// "Simple var ref" = exactly one Argument part, which is a VariableReference
+// with no namespace and a name that is a single string literal.
+static const std::string* single_simple_var_name(const Argument& a) {
+    if (a.parts.size() != 1) return nullptr;
+    auto* ref = std::get_if<VariableReference>(&a.parts[0]);
+    if (!ref || !ref->namespace_prefix.empty()) return nullptr;
+    if (ref->name_parts.size() != 1) return nullptr;
+    return std::get_if<std::string>(&ref->name_parts[0]);
+}
+
+// Decode an Argument that's expected to be either a literal int or a simple
+// var ref. Sets `*is_var` + `var_name` (when var) or `*literal` (when not).
+// Returns false if neither shape fits.
+static bool decode_index_arg(const Argument& a, bool& is_var,
+                              std::string& var_name, int64_t& literal) {
+    if (auto vn = single_simple_var_name(a)) {
+        is_var = true;
+        var_name = *vn;
+        return true;
+    }
+    auto lit = single_literal(a);
+    if (!lit) return false;
+    // Strip ASCII whitespace.
+    std::string_view s = *lit;
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+    if (s.empty()) return false;
+    bool neg = false;
+    if (s.front() == '-') { neg = true; s.remove_prefix(1); }
+    else if (s.front() == '+') { s.remove_prefix(1); }
+    if (s.empty()) return false;
+    int64_t v = 0;
+    for (char c : s) {
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + (c - '0');
+    }
+    is_var = false;
+    literal = neg ? -v : v;
+    return true;
+}
+
+std::optional<PreParsedSubstring> classify_substring(const std::vector<Argument>& args) {
+    // args[0] is the subcommand "SUBSTRING" (case-insensitive, parse-time literal).
+    if (args.size() != 5) return std::nullopt;
+    auto sub = single_literal(args[0]);
+    if (!sub) return std::nullopt;
+    if (!ci_equals(*sub, "SUBSTRING")) return std::nullopt;
+
+    auto out_var = single_literal(args[4]);
+    if (!out_var) return std::nullopt;
+
+    PreParsedSubstring pp;
+    pp.out_var = std::string(*out_var);
+
+    // input: literal or simple var
+    if (auto vn = single_simple_var_name(args[1])) {
+        pp.input_is_var = true;
+        pp.input = *vn;
+    } else if (auto lit = single_literal(args[1])) {
+        pp.input_is_var = false;
+        pp.input = std::string(*lit);
+    } else {
+        return std::nullopt;
+    }
+
+    if (!decode_index_arg(args[2], pp.begin_is_var, pp.begin_var, pp.begin_literal)) {
+        return std::nullopt;
+    }
+    if (!decode_index_arg(args[3], pp.length_is_var, pp.length_var, pp.length_literal)) {
+        return std::nullopt;
+    }
+    return pp;
+}
+
+// Parse a CMake-style decimal int from a string_view holding a variable's
+// value. Returns false on any malformation. Tight loop, no allocations.
+static bool parse_index_value(std::string_view s, int64_t& out) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+    if (s.empty()) return false;
+    bool neg = false;
+    if (s.front() == '-') { neg = true; s.remove_prefix(1); }
+    else if (s.front() == '+') { s.remove_prefix(1); }
+    if (s.empty()) return false;
+    int64_t v = 0;
+    for (char c : s) {
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + (c - '0');
+    }
+    out = neg ? -v : v;
+    return true;
+}
+
+bool try_execute_pre_parsed_substring(Interpreter& interp,
+                                       const PreParsedSubstring& pp) {
+    // Resolve input. When input is a var, view its storage directly.
+    std::string_view input;
+    std::string input_buf;  // only used in the literal/copy branch (rare)
+    if (pp.input_is_var) {
+        auto v = interp.get_variable_view(pp.input);
+        if (!v) {
+            // Match the slow path: undefined vars expand to empty.
+            input = std::string_view{};
+        } else {
+            input = *v;
+        }
+    } else {
+        input = pp.input;
+    }
+
+    int64_t begin;
+    if (pp.begin_is_var) {
+        auto v = interp.get_variable_view(pp.begin_var);
+        if (!v) return false;
+        if (!parse_index_value(*v, begin)) return false;
+    } else {
+        begin = pp.begin_literal;
+    }
+
+    int64_t length;
+    if (pp.length_is_var) {
+        auto v = interp.get_variable_view(pp.length_var);
+        if (!v) return false;
+        if (!parse_index_value(*v, length)) return false;
+    } else {
+        length = pp.length_literal;
+    }
+
+    // Match the slow path's bounds policy: begin must be in [0, size]; out-of-
+    // range is a fatal error, not a silent fallback. We could replicate the
+    // fatal_error here, but it's simpler to drop to the slow path for the
+    // failure case so error formatting stays in one place.
+    if (begin < 0) return false;
+    if (static_cast<size_t>(begin) > input.size()) return false;
+
+    std::string result;
+    if (length < 0) {
+        result.assign(input.data() + begin, input.size() - static_cast<size_t>(begin));
+    } else {
+        size_t take = static_cast<size_t>(length);
+        size_t avail = input.size() - static_cast<size_t>(begin);
+        if (take > avail) take = avail;
+        result.assign(input.data() + begin, take);
+    }
+
+    interp.set_variable(pp.out_var, result);
+    return true;
+}
+
 void register_string_builtins(Interpreter& interp) {
     interp.add_builtin("string", [](Interpreter& interp, const std::vector<std::string>& args) {
         if (args.empty()) {

@@ -200,6 +200,28 @@ struct PreParsedMath {
     bool hex_output = false;             // OUTPUT_FORMAT HEXADECIMAL
 };
 
+// Pre-classified string(SUBSTRING <input> <begin> <length> <out_var>) shape.
+// Recognized when each of input/begin/length is either a parse-time literal
+// or a simple bare ${VAR} reference (no nested names, no namespaces), and
+// out_var is a parse-time literal. Lets execute_command bypass argument
+// expansion, dispatch, parse_number on the index args, and the SUBSTRING
+// handler entirely on the dominant case in the matmul bench (1.9M+ calls).
+struct PreParsedSubstring {
+    // input: either a literal string or a single bare ${VAR}
+    bool input_is_var = false;
+    std::string input;          // value (when !is_var) or var name (when is_var)
+    // begin: literal int or single bare ${VAR}
+    bool begin_is_var = false;
+    int64_t begin_literal = 0;
+    std::string begin_var;
+    // length: same; -1 means to-end
+    bool length_is_var = false;
+    int64_t length_literal = 0;
+    std::string length_var;
+    // out_var name (parse-time literal)
+    std::string out_var;
+};
+
 struct CommandInvocation {
     std::string identifier;
     std::vector<Argument> arguments;
@@ -207,12 +229,14 @@ struct CommandInvocation {
     size_t col = 0;
     size_t offset = 0;
     size_t length = 0;
-    std::optional<PreParsedMath> pre_parsed_math;  // engaged only for math() fast path
+    std::optional<PreParsedMath> pre_parsed_math;            // math() fast path
+    std::optional<PreParsedSubstring> pre_parsed_substring;  // string(SUBSTRING) fast path
 };
 
-// Classify a math() invocation at parse time. Returns nullopt unless the
-// shape is exactly the fast-path subset (defined in math.cpp).
+// Parse-time classification. Returns nullopt unless the shape fits the
+// fast-path subset (defined in math.cpp / string.cpp).
 std::optional<PreParsedMath> classify_math(const std::vector<Argument>& args);
+std::optional<PreParsedSubstring> classify_substring(const std::vector<Argument>& args);
 
 class Parser {
 public:
