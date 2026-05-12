@@ -213,6 +213,14 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
                 break;
             }
         }
+        // Env-supplied compiler overrides have the same effect as -D: host
+        // detection would target the wrong compiler.
+        if (!skip_host_detect) {
+            auto env_set = [](const char* n) { const char* v = std::getenv(n); return v && *v; };
+            if (env_set("CC") || env_set("CXX") || env_set("ASM")) {
+                skip_host_detect = true;
+            }
+        }
 
         auto interpreter = std::make_unique<kiln::Interpreter>(project_path.string(), &std::cout, &std::cerr, build_path.string(), opt.no_sys_init, opt.fresh, skip_host_detect);
         interpreter->set_current_file(cmake_lists.string());
@@ -234,6 +242,25 @@ std::expected<std::unique_ptr<kiln::Interpreter>, std::string> run_build_action(
         // would be invisible to it and projects using include(CTest) would
         // have their option(BUILD_TESTING ... ON) override our default.
         interpreter->set_cache_variable("BUILD_TESTING", is_test_mode ? "ON" : "OFF");
+
+        // Seed compiler/flag vars from environment, matching CMake's behavior
+        // for $CC, $CXX, $ASM, $CFLAGS, $CXXFLAGS, $LDFLAGS. -D applied below
+        // overrides on the (user-error) case where both are supplied.
+        auto seed_env = [&](const char* env_name, const char* var) {
+            if (const char* v = std::getenv(env_name); v && *v)
+                interpreter->set_cache_variable(var, v);
+        };
+        seed_env("CC",       "CMAKE_C_COMPILER");
+        seed_env("CXX",      "CMAKE_CXX_COMPILER");
+        seed_env("ASM",      "CMAKE_ASM_COMPILER");
+        seed_env("CFLAGS",   "CMAKE_C_FLAGS");
+        seed_env("CXXFLAGS", "CMAKE_CXX_FLAGS");
+        if (const char* ld = std::getenv("LDFLAGS"); ld && *ld) {
+            interpreter->set_cache_variable("CMAKE_EXE_LINKER_FLAGS",    ld);
+            interpreter->set_cache_variable("CMAKE_SHARED_LINKER_FLAGS", ld);
+            interpreter->set_cache_variable("CMAKE_MODULE_LINKER_FLAGS", ld);
+        }
+
         apply_definitions(*interpreter, opt.definitions);
 
         if (!opt.log_level.empty()) {
@@ -780,7 +807,9 @@ int main(int argc, char* argv[]) {
         target->add_option("-j,--parallel", opt.jobs, "Number of parallel jobs (0 = all cores)")
            ->default_val(0);
         target->add_option("-B", opt.build_dir_str, "Build directory (default: <project>/build/<config>)");
-        target->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
+        target->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)")
+           ->type_size(1)
+           ->allow_extra_args(false);
         target->add_option("-G", ignored_generator, "Generator (ignored, CMake compatibility)");
         target->add_flag("--profile", opt.profile, "Generate build profile (Chrome trace event format)");
         target->add_flag("--trace", opt.trace, "Print each command as it is executed (raw arguments)");
@@ -868,7 +897,9 @@ Examples:
     // so it lives in its own subcommand.
     auto* script_cmd = app.add_subcommand("script", "Run a CMake script (internal — invoked via -P)");
     script_cmd->add_option("path", opt.script_path, "Script path")->required();
-    script_cmd->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)");
+    script_cmd->add_option("-D", opt.definitions, "Define a CMake variable (-DVAR=VALUE or -DVAR)")
+       ->type_size(1)
+       ->allow_extra_args(false);
     script_cmd->add_option("--log-level", opt.log_level, "Set message log level");
     script_cmd->add_flag("--no-sys-init", opt.no_sys_init, "Skip compiler detection and system init");
 

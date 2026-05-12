@@ -12,26 +12,12 @@ TEMP_DIR=$(mktemp -d -t kiln-tests-XXXXXXXXXX)
 
 # Optional compiler selection — passed positionally:
 #   run_tests.sh <kiln-binary> [<cxx>] [<cc>]
-# When supplied, we (a) export CXX/CC for per-test gates that conditionally
-# skip on compiler family, and (b) wrap the kiln binary so every invocation
-# gets -DCMAKE_CXX_COMPILER / -DCMAKE_C_COMPILER without each test.sh having
-# to forward extra args.
+# Exported as CXX/CC; kiln picks these up natively (same as CMake) and
+# per-test gates that branch on compiler family read them too.
 USER_CXX="${2:-}"
+[ -n "$USER_CXX" ] && export CXX="$USER_CXX"
 USER_CC="${3:-}"
-if [ -n "$USER_CXX" ] || [ -n "$USER_CC" ]; then
-    [ -n "$USER_CXX" ] && export CXX="$USER_CXX"
-    [ -n "$USER_CC" ]  && export CC="$USER_CC"
-    WRAPPER="$TEMP_DIR/kiln-wrapper.sh"
-    {
-        echo '#!/bin/bash'
-        echo -n "exec \"$KILN_BIN\""
-        [ -n "$USER_CXX" ] && echo -n " -DCMAKE_CXX_COMPILER=\"$USER_CXX\""
-        [ -n "$USER_CC" ]  && echo -n " -DCMAKE_C_COMPILER=\"$USER_CC\""
-        echo ' "$@"'
-    } > "$WRAPPER"
-    chmod +x "$WRAPPER"
-    KILN_BIN="$WRAPPER"
-fi
+[ -n "$USER_CC" ] && export CC="$USER_CC"
 
 echo "Using kiln: $KILN_BIN"
 [ -n "$USER_CXX$USER_CC" ] && echo "Compiler override: CC=${CC:-} CXX=${CXX:-}"
