@@ -280,6 +280,11 @@ public:
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
     void print_warning_with_context(const std::string& message);
+
+    // Non-owning view of the top-level source being interpreted. Used to render
+    // code context in diagnostics when no on-disk file backs the script (e.g.
+    // tests). The view must outlive any diagnostic that may consult it.
+    void set_source_view(std::string_view source) { source_view_ = source; }
     std::ostream* error_stream() const { return err_; }
 
     // CHECK_* message support
@@ -677,6 +682,7 @@ private:
     static constexpr size_t max_trace_depth_ = 2000;
     std::string current_file_;
     const std::string* current_file_interned_ = nullptr;  // Points into interned_files_
+    std::string_view source_view_;  // Non-owning; set by set_source_view() when source is in-memory
     std::unordered_set<std::string> interned_files_;       // Owns file path strings
     std::optional<InterpreterError> fatal_error_;
     size_t current_cmd_row_ = 0;

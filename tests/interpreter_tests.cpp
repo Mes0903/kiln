@@ -23,6 +23,7 @@ std::string run_script(std::string src) {
         output << std::endl;
     });
 
+    interpreter->set_source_view(src);
     kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
@@ -4984,6 +4985,7 @@ TEST_CASE("get_property TARGET TYPE", "[interpreter][property]") {
         message(STATUS "custom=${CUSTOM_TYPE}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5029,6 +5031,7 @@ TEST_CASE("get_target_property TYPE", "[interpreter][property]") {
         message(STATUS "lib=${LIB_TYPE}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5067,6 +5070,7 @@ TEST_CASE("get_property TARGET other properties", "[interpreter][property]") {
         message(STATUS "imported=${IMPORTED_VAL}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5104,6 +5108,7 @@ TEST_CASE("get_property TARGET SET mode", "[interpreter][property]") {
         message(STATUS "unknown_set=${UNKNOWN_SET}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5139,6 +5144,7 @@ TEST_CASE("get_target_property NOTFOUND for missing property", "[interpreter][pr
         message(STATUS "unknown=${UNKNOWN_PROP}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5174,6 +5180,7 @@ TEST_CASE("get_property TARGET IMPORTED target", "[interpreter][property]") {
         message(STATUS "location=${LOCATION_VAL}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5220,6 +5227,7 @@ TEST_CASE("Built-in global properties", "[interpreter][property]") {
         message("lib64=${LIB64}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5269,6 +5277,7 @@ TEST_CASE("set/get_property INSTALL scope", "[interpreter][property]") {
         message("missing=${MISSING}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5311,6 +5320,7 @@ TEST_CASE("project() updates ENABLED_LANGUAGES", "[interpreter][property]") {
         message("c_loaded=${CMAKE_C_COMPILER_LOADED}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5390,6 +5400,7 @@ TEST_CASE("enable_language() updates ENABLED_LANGUAGES", "[interpreter][language
         message("final=${FINAL}")
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5421,6 +5432,7 @@ TEST_CASE("enable_language() with OPTIONAL", "[interpreter][language]") {
         get_property(LANGS GLOBAL PROPERTY ENABLED_LANGUAGES)
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -5448,6 +5460,7 @@ TEST_CASE("enable_language() error on unsupported language", "[interpreter][lang
         enable_language(Fortran)
     )";
 
+    interp.set_source_view(script);
     kiln::Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());

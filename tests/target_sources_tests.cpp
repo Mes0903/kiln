@@ -33,6 +33,7 @@ TEST_CASE("target_sources basic", "[target][target_sources]") {
         target_sources(myapp PRIVATE source1.cpp source2.cpp)
     )";
 
+    interp.set_source_view(script);
     Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -81,6 +82,7 @@ TEST_CASE("target_sources with FILE_SET HEADERS", "[target][target_sources][file
         )
     )";
 
+    interp.set_source_view(script);
     Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -136,6 +138,7 @@ TEST_CASE("target_sources with FILE_SET CXX_MODULES", "[target][target_sources][
         )
     )";
 
+    interp.set_source_view(script);
     Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
@@ -190,6 +193,7 @@ TEST_CASE("target_sources with multiple visibility scopes", "[target][target_sou
         )
     )";
 
+    interp.set_source_view(script);
     Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());

@@ -22,6 +22,7 @@ static auto run_and_resolve(const std::string& script) {
     interp.set_variable("CMAKE_CXX_COMPILER_ID", "GNU");
     interp.set_variable("CMAKE_C_COMPILER_ID", "GNU");
 
+    interp.set_source_view(script);
     Parser parser(script);
     auto ast = parser.parse();
     REQUIRE(ast.has_value());

@@ -11,6 +11,7 @@ static std::string run_script(const std::string& src) {
     std::stringstream output;
     kiln::Interpreter interpreter("", &output);
 
+    interpreter.set_source_view(src);
     kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
@@ -31,6 +32,7 @@ static std::string get_variable(const std::string& src, const std::string& var_n
     std::stringstream output;
     kiln::Interpreter interpreter("", &output);
 
+    interpreter.set_source_view(src);
     kiln::Parser parser(src);
     auto ast_or_error = parser.parse();
     if (!ast_or_error.has_value()) {
@@ -67,7 +69,8 @@ TEST_CASE("set_source_files_properties basic", "[source_properties]") {
             get_source_file_property(flags test.cpp COMPILE_FLAGS)
         )";
 
-        kiln::Parser parser(src);
+        interpreter.set_source_view(src);
+    kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -88,7 +91,8 @@ TEST_CASE("set_source_files_properties basic", "[source_properties]") {
             get_source_file_property(c_gen c.cpp GENERATED)
         )";
 
-        kiln::Parser parser(src);
+        interpreter.set_source_view(src);
+    kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -192,7 +196,8 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
             set_source_files_properties(test.cpp GENERATED TRUE)
         )";
 
-        kiln::Parser parser(src);
+        interpreter.set_source_view(src);
+    kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -209,7 +214,8 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
             set_source_files_properties(PROPERTIES GENERATED TRUE)
         )";
 
-        kiln::Parser parser(src);
+        interpreter.set_source_view(src);
+    kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -224,7 +230,8 @@ TEST_CASE("set_source_files_properties error handling", "[source_properties]") {
             set_source_files_properties(test.cpp PROPERTIES GENERATED)
         )";
 
-        kiln::Parser parser(src);
+        interpreter.set_source_view(src);
+    kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);
@@ -245,7 +252,8 @@ TEST_CASE("Path normalization", "[source_properties]") {
             get_source_file_property(val file.cpp GENERATED)
         )";
 
-        kiln::Parser parser(src);
+        interpreter.set_source_view(src);
+    kiln::Parser parser(src);
         auto ast = parser.parse();
         REQUIRE(ast.has_value());
         auto result = interpreter.interpret(*ast);

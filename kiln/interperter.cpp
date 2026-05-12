@@ -3555,10 +3555,14 @@ void Interpreter::print_warning_with_context(const std::string& msg) {
             backtrace.push_back({te.file ? *te.file : std::string(), te.row, te.col, te.offset, te.length, std::string(te.command)});
         }
         const auto& current = root->trace_stack_.back();
+        std::optional<std::string> source_content;
+        if (!root->source_view_.empty()) {
+            source_content = std::string(root->source_view_);
+        }
         print_diagnostic(*err_, DiagnosticSeverity::Warning, msg,
                          current.file ? *current.file : std::string(),
                          current.row, current.col, current.offset, current.length,
-                         backtrace);
+                         backtrace, source_content);
     } else {
         print_message("WARNING", msg, true);
     }

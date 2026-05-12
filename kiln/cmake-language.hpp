@@ -198,6 +198,8 @@ public:
 
     std::expected<std::vector<AstNode>, ParseError> parse();
 
+    std::string_view source() const { return content_; }
+
 private:
     std::string_view content_;
     std::string filename_;  // Current file being parsed

@@ -186,7 +186,7 @@ void print_diagnostic(std::ostream& os,
     } else {
         os << "  --> ";
     }
-    os << file_path << ":" << row << ":" << col << std::endl;
+    os << (file_path.empty() ? "<dummy>" : file_path) << ":" << row << ":" << col << std::endl;
 
     // Source context
     std::string file_content;
@@ -271,7 +271,7 @@ void print_diagnostic(std::ostream& os,
     if (!backtrace.empty()) {
         os << "Call Stack (most recent call first):" << std::endl;
         for (auto it = backtrace.rbegin(); it != backtrace.rend(); ++it) {
-            os << "  " << it->file << ":" << it->row << " (" << it->command << ")" << std::endl;
+            os << "  " << (it->file.empty() ? "<dummy>" : it->file) << ":" << it->row << " (" << it->command << ")" << std::endl;
         }
     }
 }

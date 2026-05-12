@@ -45,6 +45,7 @@ TEST_CASE("PCH Task Generation", "[target][pch]") {
         target_precompile_headers(my_lib PRIVATE my_pch.h)
     )";
 
+    interp.set_source_view(script);
     Parser parser(script);
     auto ast_or_error = parser.parse();
     REQUIRE(ast_or_error.has_value());
