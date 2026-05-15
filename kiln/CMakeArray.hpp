@@ -187,6 +187,87 @@ inline bool cmake_list_contains(std::string_view list, std::string_view item) {
     return false;
 }
 
+// Progressive (lazy, monotone-forward) index over a semicolon-separated list.
+// Owns no source — call sites pass the source string_view, which must point to
+// stable storage and the same buffer/content between calls until the index is
+// reset. The index records each element's start offset as it scans forward;
+// repeated random-access on the same value is amortized O(N+queries) instead
+// of O(queries * avg_idx).
+//
+// Lifetime contract: the owner (e.g. VariableVersion) MUST reset the index
+// whenever the underlying string is mutated (in-place append, assign, etc.).
+struct ProgressiveListIndex {
+    // offsets_[i] = byte offset of element i's first char in source.
+    // Always starts with 0 once any scan happens.
+    std::vector<uint32_t> offsets;
+    // Bytes of source consumed so far. Equal to source.size() once exhausted.
+    uint32_t scan_pos = 0;
+    bool exhausted = false;
+
+    // Advance the scan until offsets.size() > target_idx, or the source is
+    // exhausted. Honors '\;' escapes the same way CMakeArrayIterator does.
+    void scan_to(std::string_view source, size_t target_idx) {
+        if (exhausted) return;
+        if (source.empty()) {
+            // CMake: empty string => 0 elements (matches CMakeArray::count_elements).
+            exhausted = true;
+            return;
+        }
+        if (offsets.empty()) {
+            offsets.push_back(0);
+        }
+        const char* data = source.data();
+        size_t len = source.size();
+        while (offsets.size() <= target_idx + 1 && scan_pos < len) {
+            const void* found = std::memchr(data + scan_pos, ';', len - scan_pos);
+            if (!found) {
+                scan_pos = static_cast<uint32_t>(len);
+                exhausted = true;
+                return;
+            }
+            size_t semi = static_cast<const char*>(found) - data;
+            // Skip escaped semicolons (\;): keep scanning, don't record a boundary.
+            if (semi > offsets.back() && data[semi - 1] == '\\') {
+                scan_pos = static_cast<uint32_t>(semi + 1);
+                continue;
+            }
+            offsets.push_back(static_cast<uint32_t>(semi + 1));
+            scan_pos = static_cast<uint32_t>(semi + 1);
+        }
+        if (scan_pos >= len) exhausted = true;
+    }
+
+    // Returns the element at idx, or empty view if out of bounds. Caller is
+    // responsible for scan_to() before this call.
+    std::string_view element(std::string_view source, size_t idx) const {
+        if (idx >= offsets.size()) return {};
+        uint32_t start = offsets[idx];
+        uint32_t end = (idx + 1 < offsets.size()) ? offsets[idx + 1] - 1
+                                                  : static_cast<uint32_t>(source.size());
+        return source.substr(start, end - start);
+    }
+
+    // Total element count. Requires a full scan; safe to call but may walk
+    // the rest of the string.
+    size_t total(std::string_view source) {
+        scan_to(source, static_cast<size_t>(-2));
+        // offsets contains one entry per element, plus possibly one trailing if
+        // the source ends with a ';' (empty trailing element). Actual count is:
+        // - if source is empty: still 1 element (the empty string)
+        // - else: offsets.size(), unless source ended with ';' in which case +0
+        //   (we already record the position after the trailing ';' as a starts).
+        // Simpler: rely on count_elements semantics — but to stay consistent
+        // with how the scan records starts, count == offsets.size().
+        return offsets.size();
+    }
+
+    void reset() {
+        offsets.clear();
+        scan_pos = 0;
+        exhausted = false;
+    }
+};
+
 // Unescape \; to ; in a list element extracted via CMakeArrayIterator/View.
 // Only call when sv contains '\\' (caller should check to avoid allocation).
 inline std::string unescape_list_element(std::string_view sv) {

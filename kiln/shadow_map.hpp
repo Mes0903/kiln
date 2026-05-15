@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "inner/unordered_dense.h"
+#include "CMakeArray.hpp"
 
 namespace kiln {
 
@@ -46,6 +47,13 @@ class ShadowMap {
     struct VariableVersion {
         std::optional<std::string> value;  // nullopt = tombstone (unset masking parent)
         int depth;
+        // Lazy progressive list-element index. Built on first list random-access
+        // op; reset on every mutation (the macros below funnel through reset_list_index()).
+        // unique_ptr keeps the per-version overhead at 8 bytes for variables that are
+        // never used as lists (the vast majority).
+        mutable std::unique_ptr<ProgressiveListIndex> list_index;
+
+        void reset_list_index() { list_index.reset(); }
     };
 
 public:
@@ -53,6 +61,24 @@ public:
     class Entry;
 
     ShadowMap() = default;
+
+    /**
+     * Returns the topmost version's progressive list index, lazily creating
+     * it on first call. Returns nullptr if the variable is undefined or a
+     * tombstone. Safe to call through a const ShadowMap because `list_index`
+     * is a `mutable` member on `VariableVersion`. The index is automatically
+     * invalidated by all mutation paths via `reset_list_index()`.
+     */
+    ProgressiveListIndex* const_list_index_for_read(std::string_view name) const {
+        auto it = variables_.find(name);
+        if (it == variables_.end() || it->second->empty()) return nullptr;
+        auto& top = it->second->back();
+        if (!top.value.has_value()) return nullptr;
+        if (!top.list_index) {
+            top.list_index = std::make_unique<ProgressiveListIndex>();
+        }
+        return top.list_index.get();
+    }
 
     /**
      * Single-lookup read. Returns nullptr if undefined/tombstone.
@@ -119,7 +145,9 @@ public:
             int depth = map_.current_depth_;
             if (!versions_->empty() && versions_->back().depth == depth) {
                 // Reuse existing string allocation when possible
-                auto& opt = versions_->back().value;
+                auto& top = versions_->back();
+                top.reset_list_index();
+                auto& opt = top.value;
                 if (opt.has_value())
                     opt->assign(value);
                 else
@@ -134,7 +162,9 @@ public:
         void set(std::string&& value) {
             int depth = map_.current_depth_;
             if (!versions_->empty() && versions_->back().depth == depth) {
-                auto& opt = versions_->back().value;
+                auto& top = versions_->back();
+                top.reset_list_index();
+                auto& opt = top.value;
                 if (opt.has_value())
                     *opt = std::move(value);
                 else
@@ -174,7 +204,25 @@ public:
             auto& top = versions_->back();
             if (top.depth != map_.current_depth_) return nullptr;
             if (!top.value.has_value()) return nullptr;
+            // Caller is about to mutate the string — any cached list index
+            // would be invalidated by reallocation or content change.
+            top.reset_list_index();
             return &*top.value;
+        }
+
+        // Returns the variable's progressive list-element index, building it
+        // lazily on first access. The index lives with the value and is reset
+        // by every mutation path, so it is always consistent with the value.
+        // Cheaper than CMakeArrayIterator for repeated random access against
+        // the same value (matmul-shaped workloads, list(GET) loops).
+        ProgressiveListIndex* list_index_for_read() const {
+            if (versions_->empty()) return nullptr;
+            auto& top = versions_->back();
+            if (!top.value.has_value()) return nullptr;
+            if (!top.list_index) {
+                top.list_index = std::make_unique<ProgressiveListIndex>();
+            }
+            return top.list_index.get();
         }
         operator ConstEntry() const { return ConstEntry(versions_); }
     };
@@ -222,6 +270,7 @@ public:
         if (it != variables_.end()) {
             auto* versions = it->second.get();
             if (!versions->empty() && versions->back().depth == current_depth_) {
+                versions->back().reset_list_index();
                 versions->back().value = value;
                 return;
             }
@@ -284,6 +333,7 @@ public:
         // Search for existing entry at parent depth and modify
         for (auto& ver : *versions) {
             if (ver.depth == target_depth) {
+                ver.reset_list_index();
                 ver.value = value;
                 return true;  // Replaced existing
             }

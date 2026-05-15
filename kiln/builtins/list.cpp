@@ -96,8 +96,16 @@ void register_list_builtins(Interpreter& interp) {
                 return;
             }
             auto len_view = interp.get_variable_view(sub_args[0]);
-            interp.set_variable(sub_args[1], std::to_string(
-                len_view ? CMakeArray::count_elements(*len_view) : 0));
+            if (!len_view) {
+                interp.set_variable(sub_args[1], "0");
+                return;
+            }
+            // Use the progressive index: first call scans (same cost as
+            // count_elements), repeated LENGTH on the same value is O(1).
+            auto* lidx = interp.get_variables().const_list_index_for_read(sub_args[0]);
+            size_t count = lidx ? lidx->total(*len_view)
+                                : CMakeArray::count_elements(*len_view);
+            interp.set_variable(sub_args[1], std::to_string(count));
         } else if (operation == "GET") {
             // list(GET <list> <index> [<index> ...] <output variable>)
             if (sub_args.size() < 3) {
@@ -107,6 +115,39 @@ void register_list_builtins(Interpreter& interp) {
 
             const std::string& list_var = sub_args[0];
             const std::string& out_var = sub_args.back();
+
+            // Fast path: single non-negative index. Use the variable's progressive
+            // list-element index — amortizes element-boundary scans across calls
+            // on the same value (random-access loops become O(N + queries)).
+            if (sub_args.size() == 3) {
+                auto entry_opt = interp.get_variables().const_entry(list_var);
+                if (entry_opt && entry_opt->is_defined()) {
+                    auto idx_opt = parse_number<long>(sub_args[1]);
+                    if (idx_opt && *idx_opt >= 0) {
+                        const std::string& src = entry_opt->get();
+                        if (src.empty()) {
+                            interp.set_variable(out_var, "NOTFOUND");
+                            return;
+                        }
+                        auto* idx = interp.get_variables().const_list_index_for_read(list_var);
+                        if (idx) {
+                            std::string_view sv(src);
+                            idx->scan_to(sv, static_cast<size_t>(*idx_opt));
+                            if (static_cast<size_t>(*idx_opt) >= idx->offsets.size()) {
+                                interp.set_variable(out_var, "NOTFOUND");
+                                return;
+                            }
+                            std::string_view elem = idx->element(sv, static_cast<size_t>(*idx_opt));
+                            if (elem.find('\\') != std::string_view::npos) {
+                                interp.set_variable(out_var, unescape_list_element(elem));
+                            } else {
+                                interp.set_variable(out_var, std::string(elem));
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
 
             auto list_view = interp.get_variable_view(list_var);
             std::string_view list_str = list_view.value_or("");
@@ -496,29 +537,71 @@ void register_list_builtins(Interpreter& interp) {
                 long start = *start_opt;
                 long length = *length_opt;
 
-                size_t total = CMakeArray::count_elements(list_str);
+                auto* lidx = list_sv ? interp.get_variables().const_list_index_for_read(list_var) : nullptr;
 
-                // Handle negative start index
-                if (start < 0) {
-                    start = static_cast<long>(total) + start;
+                // Negative start or length<0 requires the total; both progressive
+                // index and count_elements pay the same scan, so let the
+                // progressive path do it (and memoize for future calls).
+                size_t total;
+                bool need_total = (start < 0) || (length < 0);
+                if (need_total) {
+                    total = lidx ? lidx->total(list_str)
+                                 : CMakeArray::count_elements(list_str);
+                    if (start < 0) start = static_cast<long>(total) + start;
+                } else {
+                    total = 0; // computed on demand below if needed for the range check
                 }
 
-                if (start < 0 || static_cast<size_t>(start) > total) {
+                if (start < 0) {
                     interp.set_fatal_error("list(SUBLIST) start index out of range");
                     return;
                 }
 
-                // Build sublist by iterating and skipping/collecting
                 size_t s = static_cast<size_t>(start);
-                size_t count = (length < 0) ? total - s
-                             : std::min(static_cast<size_t>(length), total - s);
+                // Resolve `count` and validate `s` against the actual size.
+                size_t count;
+                if (need_total) {
+                    if (s > total) {
+                        interp.set_fatal_error("list(SUBLIST) start index out of range");
+                        return;
+                    }
+                    count = (length < 0) ? total - s
+                                         : std::min(static_cast<size_t>(length), total - s);
+                } else {
+                    count = static_cast<size_t>(length);
+                }
+
+                if (count == 0) {
+                    interp.set_variable(out_var, "");
+                    return;
+                }
+
                 std::string result_str;
-                size_t idx = 0;
-                for (auto it = CMakeArrayIterator::iterator(list_str); it != CMakeArrayIterator::sentinel{}; ++it, ++idx) {
-                    if (idx < s) continue;
-                    if (idx >= s + count) break;
-                    if (!result_str.empty()) result_str += ';';
-                    result_str += *it;
+                if (lidx) {
+                    // Scan only as far as we actually need.
+                    lidx->scan_to(list_str, s + count - 1);
+                    // Validate the upper bound now that we may have learned the size.
+                    if (s >= lidx->offsets.size()) {
+                        if (!need_total) {
+                            interp.set_fatal_error("list(SUBLIST) start index out of range");
+                            return;
+                        }
+                        interp.set_variable(out_var, "");
+                        return;
+                    }
+                    size_t end_idx = std::min(s + count, lidx->offsets.size());
+                    for (size_t i = s; i < end_idx; ++i) {
+                        if (i != s) result_str += ';';
+                        result_str += lidx->element(list_str, i);
+                    }
+                } else {
+                    size_t idx = 0;
+                    for (auto it = CMakeArrayIterator::iterator(list_str); it != CMakeArrayIterator::sentinel{}; ++it, ++idx) {
+                        if (idx < s) continue;
+                        if (idx >= s + count) break;
+                        if (idx != s) result_str += ';';
+                        result_str += *it;
+                    }
                 }
                 interp.set_variable(out_var, result_str);
             }

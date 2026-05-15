@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <cstring>
 #include <sys/stat.h>
 
 namespace kiln {
@@ -31,6 +32,49 @@ bool matches_glob(const std::string& text, const std::string& pattern) {
     }
     while (pi < pattern.size() && pattern[pi] == '*') ++pi;
     return pi == pattern.size();
+}
+
+bool files_have_same_content(const std::filesystem::path& a, const std::filesystem::path& b) {
+    std::error_code ec;
+    auto sa = std::filesystem::file_size(a, ec);
+    if (ec) return false;
+    auto sb = std::filesystem::file_size(b, ec);
+    if (ec) return false;
+    if (sa != sb) return false;
+    std::ifstream fa(a, std::ios::binary);
+    std::ifstream fb(b, std::ios::binary);
+    if (!fa || !fb) return false;
+    constexpr size_t BUF = 64 * 1024;
+    std::vector<char> ba(BUF), bb(BUF);
+    while (fa && fb) {
+        fa.read(ba.data(), BUF);
+        fb.read(bb.data(), BUF);
+        auto na = fa.gcount();
+        auto nb = fb.gcount();
+        if (na != nb) return false;
+        if (na == 0) break;
+        if (std::memcmp(ba.data(), bb.data(), static_cast<size_t>(na)) != 0) return false;
+    }
+    return true;
+}
+
+bool file_has_perms(const std::filesystem::path& path, mode_t perms) {
+    struct stat st;
+    if (stat(path.string().c_str(), &st) != 0) return false;
+    return (st.st_mode & 0777) == (perms & 0777);
+}
+
+bool string_matches_file_content(const std::filesystem::path& path, const std::string& content) {
+    std::error_code ec;
+    auto sz = std::filesystem::file_size(path, ec);
+    if (ec) return false;
+    if (sz != content.size()) return false;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    std::vector<char> buf(content.size());
+    f.read(buf.data(), static_cast<std::streamsize>(content.size()));
+    if (static_cast<size_t>(f.gcount()) != content.size()) return false;
+    return std::memcmp(buf.data(), content.data(), content.size()) == 0;
 }
 
 mode_t parse_cmake_perms(const std::vector<std::string>& cmake_perms, mode_t default_mode) {
@@ -359,6 +403,10 @@ std::expected<void, std::string> copy_one_file(
         print_action(out, "Up-to-date", dest.string());
         return {};
     }
+    if (std::filesystem::exists(dest) && file_has_perms(dest, perms) && files_have_same_content(src, dest)) {
+        print_action(out, "Up-to-date", dest.string());
+        return {};
+    }
     std::filesystem::path dest_dir = dest.parent_path();
     if (!dest_dir.empty()) {
         std::error_code ec;
@@ -381,6 +429,16 @@ std::expected<void, std::string> execute_copy_file(const InstallOp& op, const st
 
 std::expected<void, std::string> execute_symlink(const InstallOp& op, const std::filesystem::path& prefix, const OutputCtx& out) {
     std::filesystem::path dest = prefix / op.dest;
+    {
+        std::error_code ec;
+        if (std::filesystem::is_symlink(dest, ec)) {
+            auto existing = std::filesystem::read_symlink(dest, ec);
+            if (!ec && existing == std::filesystem::path(op.symlink_target)) {
+                print_action(out, "Up-to-date", dest.string());
+                return {};
+            }
+        }
+    }
     std::filesystem::path dest_dir = dest.parent_path();
     if (!dest_dir.empty()) {
         std::error_code ec;
@@ -397,6 +455,18 @@ std::expected<void, std::string> execute_symlink(const InstallOp& op, const std:
 
 std::expected<void, std::string> execute_write_content(const InstallOp& op, const std::filesystem::path& prefix, const OutputCtx& out) {
     std::filesystem::path dest = prefix / op.dest;
+    std::optional<mode_t> want_perms;
+    if (!op.perms.empty()) {
+        auto perms_or = rwx_to_mode(op.perms);
+        if (!perms_or) return std::unexpected(perms_or.error());
+        want_perms = *perms_or;
+    }
+    if (std::filesystem::exists(dest)
+        && string_matches_file_content(dest, op.content)
+        && (!want_perms || file_has_perms(dest, *want_perms))) {
+        print_action(out, "Up-to-date", dest.string());
+        return {};
+    }
     std::filesystem::path dest_dir = dest.parent_path();
     if (!dest_dir.empty()) {
         std::error_code ec;
@@ -408,10 +478,8 @@ std::expected<void, std::string> execute_write_content(const InstallOp& op, cons
     f << op.content;
     if (!f) return std::unexpected("failed to write " + dest.string());
     f.close();
-    if (!op.perms.empty()) {
-        auto perms_or = rwx_to_mode(op.perms);
-        if (!perms_or) return std::unexpected(perms_or.error());
-        if (auto r = chmod_path(dest, *perms_or); !r) return r;
+    if (want_perms) {
+        if (auto r = chmod_path(dest, *want_perms); !r) return r;
     }
     print_action(out, "Installing", dest.string());
     return {};

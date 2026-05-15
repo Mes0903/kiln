@@ -17,6 +17,7 @@
 #include <chrono>
 #include <iomanip>
 #include <array>
+#include <charconv>
 #ifdef __unix__
 #include <sys/utsname.h>
 #endif
@@ -583,6 +584,12 @@ DirectoryContext* Interpreter::get_directory_context(const std::string& dir) {
     auto it = directory_contexts_.find(abs_dir);
     if (it != directory_contexts_.end()) {
         return &it->second;
+    }
+    // CMake also accepts the directory's binary dir as a key for DEFER.
+    for (auto& [src, ctx] : directory_contexts_) {
+        if (ctx.binary_dir == abs_dir) {
+            return &ctx;
+        }
     }
     return nullptr;
 }
@@ -2819,6 +2826,54 @@ std::expected<void, InterpreterError> Interpreter::execute_foreach_block(const F
     if (block.body.empty()) {
         // CMake sets loop var to empty string after loop if it wasn't defined before
         if (!loop_var_was_set) set_variable(loop_var_name, "");
+        if (loop_depth_ <= 0) {
+            std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when trying to decrement in foreach\n";
+            std::abort();
+        }
+        loop_depth_--;
+        pop_trace_stack();
+        return {};
+    }
+
+    // RANGE fast path: skip building items_raw and re-parsing it. Iterate the
+    // integer counter directly and write each value into the loop variable via
+    // to_chars + an Entry handle (one hash lookup amortized over the loop).
+    // Skipped when variable watches are active (they need the slow set path).
+    if (std::holds_alternative<ForeachRange>(block.params) && variable_watches_.empty()) {
+        const auto& r = std::get<ForeachRange>(block.params);
+        long start = r.start ? parse_number<long>(evaluate_argument(*r.start)).value_or(0) : 0;
+        long stop = parse_number<long>(evaluate_argument(r.stop)).value_or(0);
+        long step;
+        if (r.step) {
+            step = parse_number<long>(evaluate_argument(*r.step)).value_or(0);
+        } else {
+            step = (start <= stop) ? 1 : -1;
+        }
+        auto loop_entry = variables_.entry(loop_var_name);
+        char buf[24];
+        for (long i = start; (step > 0) ? (i <= stop) : (i >= stop); i += step) {
+            auto rc = std::to_chars(buf, buf + sizeof(buf), i);
+            loop_entry.set(std::string(buf, rc.ptr - buf));
+            auto res = interpret(block.body);
+            if (!res) {
+                set_fatal_error(res.error());
+                if (loop_depth_ <= 0) {
+                    std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when handling foreach body error\n";
+                    std::abort();
+                }
+                loop_depth_--;
+                if (loop_var_was_set) loop_entry.set(loop_var_old_value);
+                else loop_entry.set("");
+                pop_trace_stack();
+                return res;
+            }
+            if (loop_control_ == LoopControl::BREAK) { clear_loop_control(); break; }
+            if (loop_control_ == LoopControl::CONTINUE) clear_loop_control();
+            if (return_requested_) break;
+        }
+        if (loop_var_was_set) loop_entry.set(loop_var_old_value);
+        else loop_entry.set("");
+
         if (loop_depth_ <= 0) {
             std::cerr << "FATAL: loop_depth_ is " << loop_depth_ << " when trying to decrement in foreach\n";
             std::abort();
