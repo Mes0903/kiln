@@ -1736,6 +1736,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
                  }
                  std::string code;
                  for (size_t i = 2; i < args.size(); ++i) {
+                     if (i > 2) code += ' ';
                      code += args[i];
                  }
 

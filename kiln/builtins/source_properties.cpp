@@ -69,9 +69,9 @@ void register_source_properties_builtins(Interpreter& interp) {
             }
         }
 
-        // Expect PROPERTIES keyword
+        // Expect PROPERTIES keyword. Real CMake silently no-ops when it is
+        // absent (e.g. Qt6QmlMacros calls the legacy short form). Match that.
         if (i >= args.size() || args[i] != "PROPERTIES") {
-            interp.set_fatal_error("set_source_files_properties() requires PROPERTIES keyword");
             return;
         }
         ++i;
@@ -234,8 +234,10 @@ void register_source_properties_builtins(Interpreter& interp) {
             }
         }
 
-        // Property not found - return <PROP>-NOTFOUND
-        interp.set_variable(variable, property_name + "-NOTFOUND");
+        // Property not found - CMake returns literal "NOTFOUND" for
+        // get_source_file_property (unlike get_target_property which uses
+        // <PROP>-NOTFOUND).
+        interp.set_variable(variable, "NOTFOUND");
     });
 }
 

@@ -347,13 +347,15 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_EXISTS requires all_targets context");
             }
-            return find_target(node.raw_content) ? "1" : "0";
+            auto name = evaluate(node.raw_content);
+            if (!name) return name;
+            return find_target(*name) ? "1" : "0";
         }
 
         case GenexNodeType::TARGET_NAME: {
             // $<TARGET_NAME:target> returns the target name (resolves aliases)
             // For now, just pass through the name since kiln doesn't have alias resolution
-            return node.raw_content;
+            return evaluate(node.raw_content);
         }
 
         case GenexNodeType::TARGET_NAME_IF_EXISTS: {
@@ -361,7 +363,9 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_NAME_IF_EXISTS requires all_targets context");
             }
-            return find_target(node.raw_content) ? node.raw_content : "";
+            auto name = evaluate(node.raw_content);
+            if (!name) return name;
+            return find_target(*name) ? *name : "";
         }
 
         case GenexNodeType::TARGET_FILE: {
@@ -369,9 +373,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_FILE requires all_targets context");
             }
-            auto* target = find_target(node.raw_content);
+            auto name = evaluate(node.raw_content);
+            if (!name) return name;
+            auto* target = find_target(*name);
             if (!target) {
-                return std::unexpected("TARGET_FILE: target '" + node.raw_content + "' not found");
+                return std::unexpected("TARGET_FILE: target '" + *name + "' not found");
             }
             return target->get_output_path();
         }
@@ -381,9 +387,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_FILE_NAME requires all_targets context");
             }
-            auto* target = find_target(node.raw_content);
+            auto name = evaluate(node.raw_content);
+            if (!name) return name;
+            auto* target = find_target(*name);
             if (!target) {
-                return std::unexpected("TARGET_FILE_NAME: target '" + node.raw_content + "' not found");
+                return std::unexpected("TARGET_FILE_NAME: target '" + *name + "' not found");
             }
             return std::string(Path(target->get_output_path()).filename());
         }
@@ -393,9 +401,11 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
             if (!ctx_.all_targets) {
                 return std::unexpected("TARGET_FILE_DIR requires all_targets context");
             }
-            auto* target = find_target(node.raw_content);
+            auto name = evaluate(node.raw_content);
+            if (!name) return name;
+            auto* target = find_target(*name);
             if (!target) {
-                return std::unexpected("TARGET_FILE_DIR: target '" + node.raw_content + "' not found");
+                return std::unexpected("TARGET_FILE_DIR: target '" + *name + "' not found");
             }
             return std::string(Path(target->get_output_path()).parent_path());
         }
@@ -578,11 +588,16 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 prop_value = target->get_property_combined(property_name);
             }
 
-            // Recursively evaluate any nested genex in individual list elements
+            // Recursively evaluate any nested genex in individual list elements.
+            // Per CMake semantics, the looked-up target becomes the "head target"
+            // for nested genexes (e.g. the single-arg $<TARGET_PROPERTY:prop>
+            // forms that appear in INTERFACE_SOURCES of linked Qt targets).
             if (prop_value.find("$<") != std::string::npos) {
+                GenexEvaluator nested(ctx_);
+                nested.ctx_.current_target = target;
                 std::string result;
                 for (auto sv : CMakeArrayIterator(prop_value)) {
-                    auto eval = evaluate(std::string(sv));
+                    auto eval = nested.evaluate(std::string(sv));
                     if (!eval) return eval;
                     if (!eval->empty()) {
                         if (!result.empty()) result += ';';

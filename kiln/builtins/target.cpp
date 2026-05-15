@@ -487,6 +487,11 @@ void register_target_builtins(Interpreter& interp) {
                     cmd_args = std::move(expanded_args);
                 }
             }
+            // CMake drops empty arguments from COMMAND (e.g. Qt's tool-wrapper
+            // path is empty on non-Windows hosts and prefixes the real exe).
+            for (auto& cmd_args : commands) {
+                std::erase(cmd_args, std::string());
+            }
 
             // MAIN_DEPENDENCY is treated as an additional dependency
             if (!main_dependency.empty()) {
@@ -652,6 +657,9 @@ void register_target_builtins(Interpreter& interp) {
                     cmd_args = std::move(expanded_args);
                 }
             }
+            for (auto& cmd_args : commands) {
+                std::erase(cmd_args, std::string());
+            }
 
             // Default working directory
             if (working_dir.empty()) {
@@ -795,6 +803,9 @@ void register_target_builtins(Interpreter& interp) {
                 }
                 cmd_args = std::move(expanded_args);
             }
+        }
+        for (auto& cmd_args : commands) {
+            std::erase(cmd_args, std::string());
         }
 
         for (const auto& cmd_args : commands) {
