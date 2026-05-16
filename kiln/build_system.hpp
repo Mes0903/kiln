@@ -247,7 +247,11 @@ public:
     std::optional<std::string> check_for_cycles();
 
     // Executes the graph.
-    std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0);
+    // If output_capture is non-null, command stdout/stderr that would normally
+    // be printed to the terminal is appended there instead (used by
+    // try_compile to populate OUTPUT_VARIABLE).
+    std::expected<void, std::string> execute(const std::string& build_dir, int jobs = 0,
+                                             std::string* output_capture = nullptr);
 
     std::expected<void, std::string> generate_compile_commands(const std::string& build_dir);
 

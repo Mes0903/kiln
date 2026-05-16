@@ -152,6 +152,11 @@ struct ExecutionState {
     std::map<std::string, std::string> new_cache;
     std::map<std::string, std::map<std::string, std::string>> ep_caches;
 
+    // If non-null, command stdout (lines that would otherwise be printed via
+    // progress.print_line) is appended here instead. Used by try_compile to
+    // route the sub-build's command output back into OUTPUT_VARIABLE.
+    std::string* output_capture = nullptr;
+
     ExecutionState(std::string build_dir_, bool is_tty, int task_count,
                    std::map<std::string, std::string> loaded_cache)
         : build_dir(std::move(build_dir_)), stdout_is_tty(is_tty)
@@ -823,7 +828,8 @@ void BuildGraph::report_command_failure(ExecutionState& state, std::string_view 
     if (!captured_output.empty()) std::cerr << "[t=" << std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() << "] " << captured_output << std::endl;
 }
 
-std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir, int jobs) {
+std::expected<void, std::string> BuildGraph::execute(const std::string& build_dir, int jobs,
+                                                     std::string* output_capture) {
     // Graph setup (dep resolution, cmake compat, reverse edges, validation) is now
     // handled by transaction commit + post-transaction methods before execute() is called.
 
@@ -876,6 +882,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     ExecutionState state(build_dir, stdout_is_tty,
                          dirty_task_count + maybe_dirty_count, std::move(cache));
     state.dirty_state = std::move(dirty_state);
+    state.output_capture = output_capture;
 
     // Pre-populate completed with clean tasks (not in dirty_state).
     //
@@ -1064,7 +1071,12 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                         }
 
                         std::lock_guard<std::mutex> lock(output_mutex_);
-                        state.progress.print_line(oss.str());
+                        if (state.output_capture) {
+                            state.output_capture->append(oss.str());
+                            state.output_capture->push_back('\n');
+                        } else {
+                            state.progress.print_line(oss.str());
+                        }
                     };
 
                     // Dispatch based on task kind
@@ -1533,7 +1545,15 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                     return;
                                 } else if (!result.output.empty()) {
                                     std::lock_guard<std::mutex> lock(output_mutex_);
-                                    state.progress.print_line(result.output);
+                                    if (state.output_capture) {
+                                        state.output_capture->append(result.output);
+                                        if (state.output_capture->empty() ||
+                                            state.output_capture->back() != '\n') {
+                                            state.output_capture->push_back('\n');
+                                        }
+                                    } else {
+                                        state.progress.print_line(result.output);
+                                    }
                                 }
                             }
 

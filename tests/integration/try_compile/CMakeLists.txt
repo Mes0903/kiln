@@ -92,3 +92,24 @@ try_compile(RESULT9 ${CMAKE_BINARY_DIR}
 if(NOT RESULT9)
     message(FATAL_ERROR "Test 9 failed: CMAKE_FLAGS with multiple entries should work")
 endif()
+
+# Test 10: project-mode try_compile must capture command stdout into
+# OUTPUT_VARIABLE. qtbase's QtSeparateDebugInfo.cmake relies on this to fish a
+# built library path out of build_output via regex; without capture, the
+# regex extracts nothing and Qt's configure fails.
+try_compile(RESULT10
+    ${CMAKE_BINARY_DIR}/proj_with_echo_build
+    ${CMAKE_CURRENT_SOURCE_DIR}/proj_with_echo
+    proj_with_echo
+    OUTPUT_VARIABLE PROJ_BUILD_OUTPUT
+)
+if(NOT RESULT10)
+    message(FATAL_ERROR "Test 10 failed: project-mode try_compile should succeed.\nOutput was:\n${PROJ_BUILD_OUTPUT}")
+endif()
+string(REGEX REPLACE ".+###(.+)###.+" "\\1" TEST10_EXTRACTED "${PROJ_BUILD_OUTPUT}")
+if("${TEST10_EXTRACTED}" STREQUAL "${PROJ_BUILD_OUTPUT}")
+    message(FATAL_ERROR "Test 10 failed: ###...### markers not found in OUTPUT_VARIABLE.\nOutput was:\n${PROJ_BUILD_OUTPUT}")
+endif()
+if(NOT EXISTS "${TEST10_EXTRACTED}")
+    message(FATAL_ERROR "Test 10 failed: extracted path does not exist: '${TEST10_EXTRACTED}'")
+endif()

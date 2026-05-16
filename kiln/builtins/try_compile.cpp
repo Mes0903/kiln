@@ -766,8 +766,10 @@ void register_try_compile_builtins(Interpreter& interp) {
             auto& graph = *graph_result;
             graph.apply_cmake_compat_deps();
 
-            auto exec_result = graph.execute(build_dir.string(), 1);
+            std::string captured_build_output;
+            auto exec_result = graph.execute(build_dir.string(), 1, &captured_build_output);
             full_output += child_output.str();
+            full_output += captured_build_output;
 
             bool success = exec_result.has_value();
             interp.set_variable(result_var, success ? "TRUE" : "FALSE");
