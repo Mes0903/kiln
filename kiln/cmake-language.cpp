@@ -8,6 +8,20 @@
 
 namespace {
 
+// Compute (row, col) of byte `off` in `text`, treating CRLF and LF as line breaks.
+std::pair<size_t, size_t> locate(std::string_view text, size_t off) {
+    size_t r = 1, c = 1;
+    for (size_t i = 0; i < off && i < text.size(); ++i) {
+        if (text[i] == '\n') { r++; c = 1; }
+        else c++;
+    }
+    return {r, c};
+}
+
+} // namespace
+
+namespace {
+
 inline bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
@@ -638,13 +652,41 @@ std::expected<BlockBlock, ParseError> Parser::parse_block_block(const CommandInv
 }
 
 std::expected<std::vector<AstNode>, ParseError> Parser::parse() {
-    // Skip UTF-8 BOM if present at the start of the file
-    if (content_.length() >= 3 &&
-        static_cast<unsigned char>(content_[0]) == 0xEF &&
-        static_cast<unsigned char>(content_[1]) == 0xBB &&
-        static_cast<unsigned char>(content_[2]) == 0xBF) {
-        pos_ = 3;
+    // BOM handling: accept UTF-8, reject UTF-16/UTF-32 with a clear message
+    // instead of letting them cascade into "expected identifier" noise.
+    if (content_.length() >= 2) {
+        auto b0 = static_cast<unsigned char>(content_[0]);
+        auto b1 = static_cast<unsigned char>(content_[1]);
+        if (content_.length() >= 3 && b0 == 0xEF && b1 == 0xBB &&
+            static_cast<unsigned char>(content_[2]) == 0xBF) {
+            pos_ = 3;
+        } else if (b0 == 0xFF && b1 == 0xFE) {
+            if (content_.length() >= 4 && content_[2] == 0 && content_[3] == 0) {
+                return std::unexpected(ParseError{1, 1, 0, 4,
+                    "File starts with a UTF-32 LE byte-order mark; only UTF-8 is supported"});
+            }
+            return std::unexpected(ParseError{1, 1, 0, 2,
+                "File starts with a UTF-16 LE byte-order mark; only UTF-8 is supported"});
+        } else if (b0 == 0xFE && b1 == 0xFF) {
+            return std::unexpected(ParseError{1, 1, 0, 2,
+                "File starts with a UTF-16 BE byte-order mark; only UTF-8 is supported"});
+        } else if (content_.length() >= 4 && b0 == 0 && b1 == 0 &&
+                   static_cast<unsigned char>(content_[2]) == 0xFE &&
+                   static_cast<unsigned char>(content_[3]) == 0xFF) {
+            return std::unexpected(ParseError{1, 1, 0, 4,
+                "File starts with a UTF-32 BE byte-order mark; only UTF-8 is supported"});
+        }
     }
+
+    // Reject embedded NUL bytes; they almost always indicate a binary file
+    // misfed to the parser, and silently truncating identifiers downstream
+    // produces baffling errors. One up-front scan is cheaper than the parse.
+    if (size_t nul = content_.find('\0'); nul != std::string_view::npos) {
+        auto [r, c] = locate(content_, nul);
+        return std::unexpected(ParseError{r, c, nul, 1,
+            "Null byte in source file (binary content?)"});
+    }
+
     return parse_block({});
 }
 
@@ -757,8 +799,18 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_body(
     int genex_depth = 0;
     size_t genex_start_row = 0, genex_start_col = 0, genex_start_offset = 0;
 
+    // Separation tracking. CMake warns when two arguments are not separated
+    // by whitespace ("foo""bar"), and errors when a bracket argument touches
+    // any neighbor. Paren-as-arg tokens (when nesting > 0) don't require
+    // separation from their neighbors - they're structural.
+    enum class ArgKind { Unquoted, Quoted, Bracket, Paren };
+    ArgKind prev_kind = ArgKind::Unquoted;
+    bool has_prev = false;
+
     while (pos_ < content_.length()) {
+        size_t ws_start = pos_;
         consume_whitespace();
+        bool whitespace_seen = pos_ > ws_start;
         if (pos_ >= content_.length()) {
             break;  // EOF reached - will be caught by closing paren check below
         }
@@ -768,6 +820,32 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_body(
 
         // Record position before parsing this argument (for genex tracking)
         size_t arg_start_row = row_, arg_start_col = col_, arg_start_offset = pos_;
+
+        // Classify the upcoming argument so we can diagnose adjacent tokens
+        // before parsing consumes them.
+        ArgKind cur_kind;
+        {
+            char ch = content_[pos_];
+            if (ch == '"') cur_kind = ArgKind::Quoted;
+            else if (ch == '[' && pos_ + 1 < content_.length() &&
+                     (content_[pos_ + 1] == '[' || content_[pos_ + 1] == '='))
+                cur_kind = ArgKind::Bracket;
+            else if (ch == '(' || ch == ')') cur_kind = ArgKind::Paren;
+            else cur_kind = ArgKind::Unquoted;
+        }
+
+        if (has_prev && !whitespace_seen &&
+            prev_kind != ArgKind::Paren && cur_kind != ArgKind::Paren) {
+            bool is_error = (prev_kind == ArgKind::Bracket || cur_kind == ArgKind::Bracket);
+            std::string msg = "Argument not separated from preceding token by whitespace";
+            if (is_error) {
+                return std::unexpected(ParseError{arg_start_row, arg_start_col,
+                    arg_start_offset, 1, std::move(msg)});
+            }
+            kiln::print_diagnostic(std::cerr, DiagnosticSeverity::Warning,
+                msg, filename_, arg_start_row, arg_start_col,
+                arg_start_offset, 1, {}, std::string(content_), "");
+        }
 
         auto arg_or_error = parse_argument();
         if (arg_or_error) {
@@ -800,6 +878,8 @@ std::expected<CommandInvocation, ParseError> Parser::parse_command_body(
             }
 
             cmd_inv.arguments.push_back(std::move(arg_or_error.value()));
+            prev_kind = cur_kind;
+            has_prev = true;
         } else {
             return std::unexpected(arg_or_error.error());
         }
@@ -1189,7 +1269,15 @@ std::expected<std::vector<ArgumentPart>, ParseError> Parser::parse_quoted_argume
                 continue;
             }
         }
-        
+
+        // CRLF normalization: drop '\r' when it's the first half of '\r\n'.
+        // Windows checkouts otherwise smuggle stray CR into string literals.
+        if (current == '\r' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '\n') {
+            pos_++;
+            // col not advanced; the '\n' branch below will reset it
+            continue;
+        }
+
         current_literal += current;
         pos_++;
         if (current == '\n') {
@@ -1224,7 +1312,15 @@ std::expected<std::string, ParseError> Parser::parse_bracket_argument() {
     size_t start_pos = pos_;
     while (pos_ + equals_count + 1 < content_.length()) {
         if (content_[pos_] == ']' && match_equals(content_, pos_ + 1, equals_count) && content_[pos_ + equals_count + 1] == ']') {
-            std::string value(content_.substr(start_pos, pos_ - start_pos));
+            std::string_view raw = content_.substr(start_pos, pos_ - start_pos);
+            std::string value;
+            // CRLF normalization: collapse '\r\n' -> '\n'. Reserve to skip
+            // reallocation; the common case has no '\r' so we just copy.
+            value.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '\r' && i + 1 < raw.size() && raw[i + 1] == '\n') continue;
+                value += raw[i];
+            }
             pos_ += equals_count + 2;
             col_ += equals_count + 2;
             return value;
@@ -1325,6 +1421,12 @@ std::expected<VariableReference, ParseError> Parser::parse_variable_reference(bo
         // Handle quotes inside variable references (for quoted argument context)
         if (inside_quotes && c == '"') {
             return std::unexpected(ParseError{row_, col_, pos_, 1, "Unexpected '\"' inside variable reference"});
+        }
+
+        // CRLF normalization
+        if (c == '\r' && pos_ + 1 < content_.length() && content_[pos_ + 1] == '\n') {
+            pos_++;
+            continue;
         }
 
         // Regular character - add to literal

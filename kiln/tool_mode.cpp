@@ -109,12 +109,15 @@ int cmd_touch(Args args, bool nocreate) {
     return 0;
 }
 
-int cmd_remove_paths(Args args) {
+int cmd_remove_paths(Args args, bool force) {
+    int rc = 0;
     for (auto& a : args) {
         std::error_code ec;
+        bool existed = fs::exists(a, ec);
         fs::remove_all(a, ec);
+        if (!force && !existed) rc = 1;
     }
-    return 0;
+    return rc;
 }
 
 int cmd_remove_directory(Args args) {
@@ -550,6 +553,7 @@ struct ToolOpts {
     std::vector<std::string> touch_files;
     std::vector<std::string> touch_nocreate_files;
     std::vector<std::string> remove_files;
+    bool remove_force = false;
     std::vector<std::string> remove_directory_dirs;
     std::vector<std::string> make_directory_dirs;
     std::string symlink_old, symlink_new;
@@ -602,8 +606,9 @@ void register_tool_subcommands(CLI::App* tool, int& rc) {
     c->callback([&]{ rc = cmd_touch(o.touch_nocreate_files, /*nocreate=*/true); });
 
     c = add("remove", "Remove the given files (deprecated: use rm)");
+    c->add_flag("-f", o.remove_force, "Continue and exit 0 even if files do not exist");
     c->add_option("files", o.remove_files, "Files to remove")->required();
-    c->callback([&]{ rc = cmd_remove_paths(o.remove_files); });
+    c->callback([&]{ rc = cmd_remove_paths(o.remove_files, o.remove_force); });
 
     c = add("remove_directory", "Remove directories and their contents (deprecated: use rm -r)");
     c->add_option("dirs", o.remove_directory_dirs, "Directories to remove")->required();
