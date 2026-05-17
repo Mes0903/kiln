@@ -35,6 +35,30 @@ The project has a few dependencies:
 * C++23 capable compiler (GCC 13+)
 * CMake (kiln is an execution engine, you still need the CMake shipped modules)
 
+For users on ARch Linux. Dependencies can be installed via
+
+```bash
+pacman -S cli11 catch2 pcre2 glaze pugixml curl libarchive cmake
+```
+
+For Ubuntu 26.04, all dependencies are available via apt:
+
+```bash
+sudo apt install cmake libpcre2-dev libcurl4-openssl-dev libarchive-dev \
+                 libpugixml-dev libcli11-dev catch2 libglaze-dev
+```
+
+On Ubuntu 24.04, the default GCC is too old and glaze is not packaged. Install `gcc-14`/`g++-14` explicitly and build glaze from source:
+
+```bash
+sudo apt install g++-14 cmake libpcre2-dev libcurl4-openssl-dev libarchive-dev \
+                 libpugixml-dev libcli11-dev catch2
+
+git clone --depth 1 https://github.com/stephenberry/glaze.git
+cmake -S glaze -B glaze/build -DCMAKE_BUILD_TYPE=Release -Dglaze_BUILD_EXAMPLES=OFF
+sudo cmake --install glaze/build
+```
+
 To build `kiln` for the first time using CMake:
 
 ```bash
