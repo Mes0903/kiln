@@ -582,7 +582,7 @@ public:
 
     // Platform detection
     // Runs subprocess calls in parallel.
-    // Identifies GCC vs Clang vs IntelLLVM via predefined macros (-dM -E).
+    // Identifies GCC vs Clang vs Intel (classic / LLVM) via predefined macros (-dM -E).
     // When sysroot_/compiler_target_ are set, all probes inherit them so
     // implicit include/link dirs reflect the target environment, not the host.
     PlatformInfo detect_platform() const override {
@@ -641,7 +641,9 @@ public:
             return macros.find(name) != macros.end();
         };
 
-        // Compiler ID + version (priority: IntelLLVM > Clang > GNU > Unknown)
+        // Compiler ID + version (priority: IntelLLVM > Clang > classic Intel
+        // ICC > GNU > …). Classic ICC defines __GNUC__ for compatibility, so
+        // __INTEL_COMPILER must be checked before __GNUC__.
         if (has_macro("__INTEL_LLVM_COMPILER")) {
             info.compiler_id = "IntelLLVM";
             info.compiler_version = macro("__INTEL_LLVM_COMPILER");
@@ -654,6 +656,11 @@ public:
                 info.compiler_version = maj + "." + (min.empty() ? "0" : min)
                                               + "." + (pat.empty() ? "0" : pat);
             }
+        } else if (has_macro("__INTEL_COMPILER")) {
+            info.compiler_id = "Intel";
+            std::string maj = macro("__INTEL_COMPILER");
+            std::string pat = macro("__INTEL_COMPILER_UPDATE");
+            info.compiler_version = maj + "." + (pat.empty() ? "0" : pat);
         } else if (has_macro("__GNUC__")) {
             info.compiler_id = "GNU";
             std::string maj = macro("__GNUC__");
@@ -866,6 +873,8 @@ private:
         static constexpr const char* probe_tu = R"PROBE(
 #if defined(__INTEL_LLVM_COMPILER)
 const char info_compiler[] = "INFO:compiler[IntelLLVM]";
+#elif defined(__INTEL_COMPILER)
+const char info_compiler[] = "INFO:compiler[Intel]";
 #elif defined(__clang__)
 const char info_compiler[] = "INFO:compiler[Clang]";
 #elif defined(__GNUC__)
@@ -881,6 +890,8 @@ const char info_compiler[] = "INFO:compiler[Unknown]";
 #if defined(__clang_major__) && defined(__clang_minor__) && defined(__clang_patchlevel__)
 const char info_version[] = "INFO:version["
     INFO_STR(__clang_major__) "." INFO_STR(__clang_minor__) "." INFO_STR(__clang_patchlevel__) "]";
+#elif defined(__INTEL_COMPILER)
+const char info_version[] = "INFO:version[" INFO_STR(__INTEL_COMPILER) "]";
 #elif defined(__GNUC__) && defined(__GNUC_MINOR__) && defined(__GNUC_PATCHLEVEL__)
 const char info_version[] = "INFO:version["
     INFO_STR(__GNUC__) "." INFO_STR(__GNUC_MINOR__) "." INFO_STR(__GNUC_PATCHLEVEL__) "]";
@@ -1407,6 +1418,20 @@ protected:
     }
 };
 
+// Intel classic ICC / ICPC. Mostly GCC-compatible for flags we emit, but
+// rejects `-fdiagnostics-color=*` (warning #10148), unlike GCC/Clang.
+class IccCompiler : public GnuCompiler {
+public:
+    using GnuCompiler::GnuCompiler;
+
+protected:
+    void emit_color_flag(std::vector<std::string>& cmd,
+                         std::vector<size_t>& cosmetic) const override {
+        (void)cmd;
+        (void)cosmetic;
+    }
+};
+
 // True for compiler IDs whose driver honors `--target=<triple>`. The
 // Clang family does; GCC, TCC, and (future) MSVC error on it. Used to
 // decide whether `CMAKE_<LANG>_COMPILER_TARGET` should be threaded into
@@ -1419,6 +1444,7 @@ inline bool compiler_honors_target_flag(std::string_view id) {
 // Construct a Compiler driver for a detected compiler id. Dispatch:
 //   - Clang/AppleClang/IntelLLVM/ARMClang -> ClangCompiler (modules differ)
 //   - TCC                                 -> TccCompiler
+//   - Intel / ICC (classic)               -> IccCompiler
 //   - GNU/Unknown/everything else         -> GnuCompiler
 // Future: MSVC will branch off to its own non-gnu-derived class.
 inline std::unique_ptr<Compiler> make_compiler(
@@ -1431,6 +1457,10 @@ inline std::unique_ptr<Compiler> make_compiler(
     }
     if (compiler_id == "TCC") {
         return std::make_unique<TccCompiler>(
+            std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
+    }
+    if (compiler_id == "Intel" || compiler_id == "ICC") {
+        return std::make_unique<IccCompiler>(
             std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
     }
     return std::make_unique<GnuCompiler>(
