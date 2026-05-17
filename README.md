@@ -169,7 +169,7 @@ This will produce a release binary at `build/release/kiln`.
 
 - [x] clang support
 - [x] TCC (Tiny C Compiler) support
-- [ ] ICC support
+- [x] ICC support
 - [ ] Full CMake properties and default variables support
 - Alternative language support
    - [ ] CUDA
