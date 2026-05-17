@@ -109,7 +109,7 @@ TEST_CASE("get_source_file_property", "[source_properties]") {
         auto result = get_variable(R"(
             get_source_file_property(val test.cpp SOME_PROPERTY)
         )", "val");
-        REQUIRE(result == "SOME_PROPERTY-NOTFOUND");
+        REQUIRE(result == "NOTFOUND");
     }
 
     SECTION("Returns value for set property") {

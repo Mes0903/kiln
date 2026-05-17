@@ -69,9 +69,8 @@ void register_source_properties_builtins(Interpreter& interp) {
             }
         }
 
-        // Expect PROPERTIES keyword. Real CMake silently no-ops when it is
-        // absent (e.g. Qt6QmlMacros calls the legacy short form). Match that.
         if (i >= args.size() || args[i] != "PROPERTIES") {
+            interp.set_fatal_error("set_source_files_properties called with illegal arguments, maybe missing a PROPERTIES specifier?");
             return;
         }
         ++i;
