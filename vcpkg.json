@@ -1,0 +1,13 @@
+{
+  "name": "kiln",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "catch2",
+    "cli11",
+    "curl",
+    "glaze",
+    "libarchive",
+    "pcre2",
+    "pugixml"
+  ]
+}

@@ -5,13 +5,20 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
+find_package(pcre2 CONFIG QUIET)
+if(TARGET PCRE2::8BIT)
+  set(KILN_PCRE2_TARGET PCRE2::8BIT)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
+  set(KILN_PCRE2_TARGET PkgConfig::PCRE2)
+endif()
 
 find_package(CURL REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(pugixml REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
+find_package(glaze CONFIG REQUIRED)
 
 # version.cpp is regenerated every build via a custom target, but only
 set(KILN_VERSION_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/version.cpp")
@@ -89,10 +96,11 @@ add_dependencies(kiln kiln_version_gen)
 
 target_include_directories(kiln PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kiln PUBLIC
-    PkgConfig::PCRE2
+    ${KILN_PCRE2_TARGET}
     CURL::libcurl
     LibArchive::LibArchive
     pugixml::pugixml
+    glaze::glaze
 )
 
 target_precompile_headers(kiln PRIVATE kiln/pch.hpp)
