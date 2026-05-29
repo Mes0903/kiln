@@ -4,7 +4,6 @@
 #include <expected>
 #include <filesystem>
 #include <string>
-#include <sys/types.h>
 #include <vector>
 
 namespace kiln {
@@ -60,12 +59,14 @@ struct InstallPlan {
     std::vector<InstallOp> ops;
 };
 
-// rwx <-> mode_t helpers. rwx is the canonical wire format for permissions.
+using PermissionBits = std::uint32_t;
+
+// rwx <-> permission-bit helpers. rwx is the canonical wire format for permissions.
 //   mode_to_rwx(0755) -> "rwxr-xr-x"
 //   rwx_to_mode("rwxr-xr-x") -> 0755
 // A dash in any position means the bit is cleared (e.g. "rw-r--r--" == 0644).
-std::string mode_to_rwx(mode_t mode);
-std::expected<mode_t, std::string> rwx_to_mode(const std::string& rwx);
+std::string mode_to_rwx(PermissionBits mode);
+std::expected<PermissionBits, std::string> rwx_to_mode(const std::string& rwx);
 
 std::expected<void, std::string> save_install_plan(const InstallPlan& plan, const std::filesystem::path& path);
 std::expected<InstallPlan, std::string> load_install_plan(const std::filesystem::path& path);

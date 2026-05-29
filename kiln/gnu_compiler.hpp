@@ -25,12 +25,30 @@ namespace kiln {
 
 namespace detail {
 
+#if defined(_WIN32)
+inline FILE* open_command_pipe(const char* command) {
+    return _popen(command, "r");
+}
+
+inline int close_command_pipe(FILE* pipe) {
+    return _pclose(pipe);
+}
+#else
+inline FILE* open_command_pipe(const char* command) {
+    return popen(command, "r");
+}
+
+inline int close_command_pipe(FILE* pipe) {
+    return pclose(pipe);
+}
+#endif
+
 // Execute a command and capture stdout
 inline std::string run_command(const std::string& command) {
     std::array<char, 128> buffer;
     std::string result;
 
-    std::unique_ptr<FILE, int (*)(FILE*)> pipe(popen(command.c_str(), "r"), pclose);
+    std::unique_ptr<FILE, int (*)(FILE*)> pipe(open_command_pipe(command.c_str()), close_command_pipe);
     if (!pipe) { return ""; }
 
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) { result += buffer.data(); }
@@ -1287,7 +1305,7 @@ private:
         if (binary_.empty()) return {};
         std::filesystem::path p(binary_);
         std::string dir = p.parent_path().string();
-        std::string name(p.filename());
+        std::string name = p.filename().string();
 
         // Extract version suffix from the binary basename (e.g. "-18" from
         // "clang++-18"). If absent, suffix is empty.

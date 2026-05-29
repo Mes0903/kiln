@@ -16,12 +16,6 @@
 #include <variant>
 #include <span>
 #include <array>
-#include <sys/types.h>
-#if defined(__linux__)
-#include <sys/prctl.h>
-#elif defined(__FreeBSD__)
-#include <sys/procctl.h>
-#endif
 #include "utils.hpp"
 #include "language.hpp"
 
@@ -95,39 +89,17 @@ inline std::atomic<bool> g_interrupted{false};
 // kill()s registered children. Slot=0 means free. Bounded array avoids any
 // allocation/locking in the async-signal-safe handler.
 inline constexpr std::size_t kMaxTrackedChildren = 256;
-inline std::array<std::atomic<pid_t>, kMaxTrackedChildren> g_child_pids{};
+using ProcessId = int;
+inline std::array<std::atomic<ProcessId>, kMaxTrackedChildren> g_child_pids{};
 
-inline void register_child_pid(pid_t pid) {
-    for (auto& slot : g_child_pids) {
-        pid_t expected = 0;
-        if (slot.compare_exchange_strong(expected, pid, std::memory_order_acq_rel)) return;
-    }
-}
-
-inline void unregister_child_pid(pid_t pid) {
-    for (auto& slot : g_child_pids) {
-        pid_t expected = pid;
-        if (slot.compare_exchange_strong(expected, 0, std::memory_order_acq_rel)) return;
-    }
-}
+void register_child_pid(ProcessId pid);
+void unregister_child_pid(ProcessId pid);
 
 // Ask the kernel to send `sig` to this process when its parent dies. Closes
 // the orphan-on-crash window: if kiln segfaults or is SIGKILL'd, the child
 // gets killed too instead of being reparented to init. Called from the child
 // right after fork. No-op (with no error) on platforms that lack a primitive.
-inline void set_parent_death_signal(int sig) {
-#if defined(__linux__)
-    ::prctl(PR_SET_PDEATHSIG, sig);
-#elif defined(__FreeBSD__)
-    int s = sig;
-    ::procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &s);
-#else
-    // macOS, OpenBSD, NetBSD: no kernel primitive. Children orphan on parent
-    // crash; they typically die soon after via SIGPIPE on the closed stdout
-    // pipe. Matches CMake/ninja/make behavior on these platforms.
-    (void) sig;
-#endif
-}
+void set_parent_death_signal(int sig);
 
 class Target;
 class Interpreter;

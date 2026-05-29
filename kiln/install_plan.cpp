@@ -1,6 +1,5 @@
 #include "install_plan.hpp"
 #include <fstream>
-#include <sys/stat.h>
 #include "glaze/glaze.hpp"
 
 template <> struct glz::meta<kiln::InstallOp> {
@@ -20,26 +19,40 @@ template <> struct glz::meta<kiln::InstallPlan> {
 
 namespace kiln {
 
-std::string mode_to_rwx(mode_t mode) {
+namespace {
+
+constexpr PermissionBits kOwnerRead = 0400;
+constexpr PermissionBits kOwnerWrite = 0200;
+constexpr PermissionBits kOwnerExecute = 0100;
+constexpr PermissionBits kGroupRead = 0040;
+constexpr PermissionBits kGroupWrite = 0020;
+constexpr PermissionBits kGroupExecute = 0010;
+constexpr PermissionBits kOtherRead = 0004;
+constexpr PermissionBits kOtherWrite = 0002;
+constexpr PermissionBits kOtherExecute = 0001;
+
+} // namespace
+
+std::string mode_to_rwx(PermissionBits mode) {
     std::string s(9, '-');
-    if (mode & S_IRUSR) s[0] = 'r';
-    if (mode & S_IWUSR) s[1] = 'w';
-    if (mode & S_IXUSR) s[2] = 'x';
-    if (mode & S_IRGRP) s[3] = 'r';
-    if (mode & S_IWGRP) s[4] = 'w';
-    if (mode & S_IXGRP) s[5] = 'x';
-    if (mode & S_IROTH) s[6] = 'r';
-    if (mode & S_IWOTH) s[7] = 'w';
-    if (mode & S_IXOTH) s[8] = 'x';
+    if (mode & kOwnerRead) s[0] = 'r';
+    if (mode & kOwnerWrite) s[1] = 'w';
+    if (mode & kOwnerExecute) s[2] = 'x';
+    if (mode & kGroupRead) s[3] = 'r';
+    if (mode & kGroupWrite) s[4] = 'w';
+    if (mode & kGroupExecute) s[5] = 'x';
+    if (mode & kOtherRead) s[6] = 'r';
+    if (mode & kOtherWrite) s[7] = 'w';
+    if (mode & kOtherExecute) s[8] = 'x';
     return s;
 }
 
-std::expected<mode_t, std::string> rwx_to_mode(const std::string& rwx) {
+std::expected<PermissionBits, std::string> rwx_to_mode(const std::string& rwx) {
     if (rwx.size() != 9) { return std::unexpected("invalid rwx string (expected 9 chars): " + rwx); }
-    mode_t mode = 0;
+    PermissionBits mode = 0;
     constexpr char expected[9] = {'r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x'};
-    constexpr mode_t bits[9] = {
-        S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH,
+    constexpr PermissionBits bits[9] = {
+        kOwnerRead, kOwnerWrite, kOwnerExecute, kGroupRead, kGroupWrite, kGroupExecute, kOtherRead, kOtherWrite, kOtherExecute,
     };
     for (size_t i = 0; i < 9; ++i) {
         if (rwx[i] == expected[i]) {

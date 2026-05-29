@@ -61,6 +61,18 @@ static std::unordered_map<std::string, std::string> backup_vars;
 static std::mutex backup_vars_mu;
 static std::once_flag backup_vars_once;
 
+static std::chrono::system_clock::time_point file_time_to_system_clock(std::filesystem::file_time_type file_time) {
+    using FileClock = std::filesystem::file_time_type::clock;
+    const auto file_now = FileClock::now();
+    const auto system_now = std::chrono::system_clock::now();
+    return std::chrono::time_point_cast<std::chrono::system_clock::duration>(system_now + (file_time - file_now));
+}
+
+static int64_t file_time_to_epoch_seconds(std::filesystem::file_time_type file_time) {
+    const auto system_time = file_time_to_system_clock(file_time);
+    return std::chrono::duration_cast<std::chrono::seconds>(system_time.time_since_epoch()).count();
+}
+
 static bool backup_vars_empty() {
     std::lock_guard lk(backup_vars_mu);
     return backup_vars.empty();
@@ -2111,8 +2123,7 @@ const Interpreter::DirectoryCacheEntry* Interpreter::get_directory_cache_entry(s
     }
 
     // Convert file_time_type to epoch seconds for persistent cache comparison
-    auto sys_tp = std::chrono::file_clock::to_sys(current_mtime);
-    int64_t mtime_sec = std::chrono::duration_cast<std::chrono::seconds>(sys_tp.time_since_epoch()).count();
+    int64_t mtime_sec = file_time_to_epoch_seconds(current_mtime);
 
     // Check persistent cache
     if (root->cache_store_) {
@@ -3689,10 +3700,7 @@ std::optional<int64_t> Interpreter::get_dir_mtime_cached(const std::string& path
     std::error_code ec;
     std::optional<int64_t> mtime;
     auto ft = std::filesystem::last_write_time(path, ec);
-    if (!ec) {
-        auto sys_tp = std::chrono::file_clock::to_sys(ft);
-        mtime = std::chrono::duration_cast<std::chrono::seconds>(sys_tp.time_since_epoch()).count();
-    }
+    if (!ec) { mtime = file_time_to_epoch_seconds(ft); }
 
     root->dir_mtime_cache_[path] = mtime;
     return mtime;

@@ -8,6 +8,9 @@
 #include <filesystem>
 #include <iomanip>
 #include <atomic>
+#if !defined(_WIN32)
+#include <signal.h>
+#endif
 
 namespace kiln {
 
@@ -17,6 +20,12 @@ static std::atomic<bool> g_sigint_received{false};
 static void sigint_handler(int) {
     g_sigint_received.store(true, std::memory_order_relaxed);
 }
+
+struct Debugger::SignalState {
+#if !defined(_WIN32)
+    struct sigaction old_sigint_action {};
+#endif
+};
 
 // Default input function using std::getline (no line editing)
 static std::optional<std::string> default_input(const char* prompt, int& key_type) {
@@ -61,18 +70,22 @@ std::string serialize_argument(const Argument& arg) {
     return result;
 }
 
-Debugger::Debugger(Interpreter& interp) : interp_(interp), input_fn_(default_input) {
+Debugger::Debugger(Interpreter& interp) : interp_(interp), signal_state_(std::make_unique<SignalState>()), input_fn_(default_input) {
+#if !defined(_WIN32)
     // Install SIGINT handler so Ctrl+C drops to debugger instead of killing
     struct sigaction sa{};
     sa.sa_handler = sigint_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    sigaction(SIGINT, &sa, &old_sigint_action_);
+    sigaction(SIGINT, &sa, &signal_state_->old_sigint_action);
+#endif
 }
 
 Debugger::~Debugger() {
+#if !defined(_WIN32)
     // Restore original SIGINT handler
-    sigaction(SIGINT, &old_sigint_action_, nullptr);
+    if (signal_state_) sigaction(SIGINT, &signal_state_->old_sigint_action, nullptr);
+#endif
 }
 
 void Debugger::on_command(const std::string& file, size_t row, size_t col, const std::string& identifier,

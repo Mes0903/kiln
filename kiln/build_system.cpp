@@ -29,8 +29,43 @@
 #include <type_traits>
 #include <unordered_map>
 #include <cassert>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#elif defined(__FreeBSD__)
+#include <sys/procctl.h>
+#include <sys/types.h>
+#endif
+#include <unistd.h>
 
 namespace kiln {
+
+void register_child_pid(ProcessId pid) {
+    for (auto& slot : g_child_pids) {
+        ProcessId expected = 0;
+        if (slot.compare_exchange_strong(expected, pid, std::memory_order_acq_rel)) return;
+    }
+}
+
+void unregister_child_pid(ProcessId pid) {
+    for (auto& slot : g_child_pids) {
+        ProcessId expected = pid;
+        if (slot.compare_exchange_strong(expected, 0, std::memory_order_acq_rel)) return;
+    }
+}
+
+void set_parent_death_signal(int sig) {
+#if defined(__linux__)
+    ::prctl(PR_SET_PDEATHSIG, sig);
+#elif defined(__FreeBSD__)
+    int s = sig;
+    ::procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &s);
+#else
+    // macOS, OpenBSD, NetBSD: no kernel primitive. Children orphan on parent
+    // crash; they typically die soon after via SIGPIPE on the closed stdout
+    // pipe. Matches CMake/ninja/make behavior on these platforms.
+    (void) sig;
+#endif
+}
 
 struct CompileCommand {
     std::string directory;

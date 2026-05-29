@@ -3,7 +3,6 @@
 #include "parse_number.hpp"
 #include <cctype>
 #include <cstddef>
-#include <unistd.h>
 #include <string>
 #include <string_view>
 #include <vector>

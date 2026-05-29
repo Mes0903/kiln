@@ -5,8 +5,8 @@
 #include <vector>
 #include <optional>
 #include <functional>
+#include <memory>
 #include <utility>
-#include <csignal>
 
 namespace kiln {
 
@@ -78,6 +78,8 @@ public:
     const std::vector<Breakpoint>& get_breakpoints() const { return breakpoints_; }
 
 private:
+    struct SignalState;
+
     enum class Action { STEP, NEXT, CONTINUE };
 
     void print_trace(const std::string& file, size_t row, const std::string& identifier, const std::vector<std::string>& expanded_args,
@@ -113,7 +115,7 @@ private:
     std::string current_cmd_;                                 // Set on entering on_command / interactive_loop
     const std::vector<Argument>* current_raw_args_ = nullptr; // Valid during on_command scope
     int selected_frame_ = 0;                                  // 0 = current command, 1..N = callers
-    struct sigaction old_sigint_action_{};                    // Saved for restoration in destructor
+    std::unique_ptr<SignalState> signal_state_;               // Platform signal state, if available
     InputFunction input_fn_;                                  // Pluggable input (default: std::getline)
 };
 
