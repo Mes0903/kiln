@@ -3,14 +3,13 @@
 #include "../command_parser.hpp"
 #include "../container_utils.hpp"
 #include "../parse_number.hpp"
+#include "../platform/host.hpp"
 #include <string>
 #include <vector>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
 #include <set>
-#include <unistd.h>
-#include <sys/utsname.h>
 
 namespace kiln {
 
@@ -114,7 +113,7 @@ bool has_cpu_flag(const std::string& flags, const std::string& flag) {
 std::string query_system_info(const std::string& key) {
     // CPU info
     if (key == "NUMBER_OF_LOGICAL_CORES") {
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        long n = platform::logical_core_count();
         return n > 0 ? std::to_string(n) : "1";
     }
     if (key == "NUMBER_OF_PHYSICAL_CORES") { return std::to_string(count_physical_cores()); }
@@ -129,14 +128,10 @@ std::string query_system_info(const std::string& key) {
 
     // Network
     if (key == "HOSTNAME") {
-        char buf[256];
-        if (gethostname(buf, sizeof(buf)) == 0) return buf;
-        return "";
+        return platform::host_name();
     }
     if (key == "FQDN") {
-        char buf[256];
-        if (gethostname(buf, sizeof(buf)) == 0) return buf;
-        return "";
+        return platform::host_name();
     }
 
     // Memory (CMake reports in MiB)
@@ -167,24 +162,18 @@ std::string query_system_info(const std::string& key) {
 
     // OS info via uname
     if (key == "OS_NAME") {
-        struct utsname u;
-        if (uname(&u) == 0) return u.sysname;
+        auto info = platform::host_info();
+        if (!info.system_name.empty()) return info.system_name;
         return "Linux";
     }
     if (key == "OS_RELEASE") {
-        struct utsname u;
-        if (uname(&u) == 0) return u.release;
-        return "";
+        return platform::host_info().system_release;
     }
     if (key == "OS_VERSION") {
-        struct utsname u;
-        if (uname(&u) == 0) return u.version;
-        return "";
+        return platform::host_info().system_version;
     }
     if (key == "OS_PLATFORM") {
-        struct utsname u;
-        if (uname(&u) == 0) return u.machine;
-        return "";
+        return platform::host_info().machine;
     }
 
     // Linux distro info

@@ -7,6 +7,8 @@
 #include "kiln/tool_mode.hpp"
 #include "kiln/debugger.hpp"
 #include "kiln/parse_number.hpp"
+#include "kiln/platform/env.hpp"
+#include "kiln/platform/process.hpp"
 #include "kiln/version.hpp"
 #include <linenoise.h>
 #include <algorithm>
@@ -14,8 +16,8 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <cstring>
 #include <CLI/CLI.hpp>
-#include <unistd.h>
 #include <future>
 #include "kiln/regex.hpp"
 #include "kiln/genex_evaluator.hpp"
@@ -35,8 +37,8 @@ void signal_handler(int sig) {
     // is delivered only to kiln. Forward the signal to each tracked child so
     // they exit promptly instead of running to completion.
     for (auto& slot : kiln::g_child_pids) {
-        pid_t pid = slot.load(std::memory_order_relaxed);
-        if (pid > 0) kill(pid, sig);
+        int pid = slot.load(std::memory_order_relaxed);
+        if (pid > 0) kiln::platform::terminate_process(pid, sig);
     }
     if (already) {
         // Second signal — restore default handler and re-raise for hard kill
@@ -942,7 +944,7 @@ Examples:
             // Don't clobber values already set in this process — $penv{} would
             // not have been able to see them otherwise. Use overwrite=1 anyway
             // since CMake's preset env semantics is to set, not append.
-            ::setenv(k.c_str(), v.c_str(), /*overwrite=*/1);
+            kiln::platform::set_env(k, v);
         }
 
         // Cache variables: prepend so user -D wins (apply_definitions iterates
@@ -968,7 +970,9 @@ Examples:
     // Install signal handlers for graceful interruption (cache saving on Ctrl-C, etc.)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+#ifdef SIGHUP
     signal(SIGHUP, signal_handler);
+#endif
 
     if (debug_opts.any_enabled()) {
         // Set up linenoise-based input for interactive debugger
@@ -1213,16 +1217,15 @@ Examples:
             return 1;
         }
 
-        std::vector<char*> argv_exec;
-        argv_exec.push_back(const_cast<char*>(exec_path.c_str()));
-        for (const auto& arg : run_args) { argv_exec.push_back(const_cast<char*>(arg.c_str())); }
-        argv_exec.push_back(nullptr);
-
         std::cout << kiln::c(std::cout, kiln::colors::BOLD_GREEN) << "Running" << kiln::c(std::cout, kiln::colors::RESET) << " "
                   << exec_path << "..." << std::endl;
-        execvp(argv_exec[0], argv_exec.data());
+        std::vector<std::string> command;
+        command.reserve(1 + run_args.size());
+        command.push_back(exec_path);
+        for (const auto& arg : run_args) command.push_back(arg);
+        int exec_error = kiln::platform::replace_current_process(command);
 
-        std::cerr << "Error: Failed to execute " << exec_path << ": " << strerror(errno) << std::endl;
+        std::cerr << "Error: Failed to execute " << exec_path << ": " << strerror(exec_error) << std::endl;
         return 1;
     }
 

@@ -1,5 +1,5 @@
 #include "kiln/path.hpp"
-#include <unistd.h>
+#include "kiln/platform/host.hpp"
 
 namespace kiln {
 
@@ -241,9 +241,9 @@ std::string Path::make_absolute_and_normal(std::string_view base, std::string_vi
 
 std::string Path::absolute(std::string_view path) {
     if (Path(path).is_absolute()) return std::string(path);
-    char buf[4096];
-    if (!getcwd(buf, sizeof(buf))) return {};
-    return join(std::string_view(buf), path);
+    std::string cwd = platform::current_working_directory();
+    if (cwd.empty()) return {};
+    return join(cwd, path);
 }
 
 } // namespace kiln

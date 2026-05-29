@@ -1,5 +1,6 @@
 #pragma once
 
+#include "platform/process.hpp"
 #include "parse_number.hpp"
 #include <cctype>
 #include <cstddef>
@@ -58,10 +59,7 @@ inline Hash128 md5(std::string_view str) {
     return md5(str.data(), str.size());
 }
 
-struct CommandResult {
-    int exit_code;
-    std::string output;
-};
+using CommandResult = platform::CommandResult;
 
 /**
  * @brief Escapes a string for use as a shell argument.
@@ -103,25 +101,8 @@ CommandResult run_command(const std::vector<std::string>& command, const std::st
  */
 std::string get_executable_path();
 
-struct ProcessOptions {
-    std::string working_dir;
-    std::string input_file;
-    std::string output_file;
-    std::string error_file;
-    bool output_quiet = false;
-    bool error_quiet = false;
-    double timeout = 0.0; // Seconds, 0 means no timeout
-    // If not empty, stdout/stderr will be captured here
-    std::string* output_variable = nullptr;
-    std::string* error_variable = nullptr;
-};
-
-struct PipelineResult {
-    std::vector<int> exit_codes;
-    std::string captured_stdout;
-    std::string captured_stderr;
-    std::string setup_error;
-};
+using ProcessOptions = platform::ProcessOptions;
+using PipelineResult = platform::PipelineResult;
 
 /**
  * @brief Execute a pipeline of commands.

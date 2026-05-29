@@ -1,8 +1,7 @@
 #include "progress_bar.hpp"
+#include "platform/host.hpp"
 #include <iostream>
 #include <algorithm>
-#include <unistd.h>
-#include <sys/ioctl.h>
 
 namespace kiln {
 
@@ -147,9 +146,7 @@ void ProgressBar::finish() {
 }
 
 int ProgressBar::get_terminal_width() const {
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) { return ws.ws_col; }
-    return 80;
+    return platform::terminal_width(platform::StandardStream::output);
 }
 
 void ProgressBar::draw_locked() {

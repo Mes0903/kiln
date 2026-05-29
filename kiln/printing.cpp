@@ -1,15 +1,16 @@
 #include "printing.hpp"
+#include "platform/host.hpp"
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <algorithm>
-#include <unistd.h>
 
 namespace kiln {
 
 bool is_color_enabled(std::ostream& os) {
-    static const bool stdout_tty = isatty(STDOUT_FILENO);
-    static const bool stderr_tty = isatty(STDERR_FILENO);
+    static const bool stdout_tty = platform::is_terminal(platform::StandardStream::output);
+    static const bool stderr_tty = platform::is_terminal(platform::StandardStream::error);
     if (&os == &std::cout) return stdout_tty;
     if (&os == &std::cerr) return stderr_tty;
     return false;

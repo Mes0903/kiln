@@ -1,4 +1,5 @@
 #include "kiln/presets.hpp"
+#include "kiln/platform/host.hpp"
 
 #include <glaze/json/read.hpp>
 #include <glaze/json/generic.hpp>
@@ -8,7 +9,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cstdlib>
-#include <sys/utsname.h>
 
 namespace kiln {
 
@@ -122,9 +122,7 @@ std::expected<std::vector<const RawPreset*>, std::string> flatten_inherits(const
 }
 
 std::string host_system_name() {
-    struct utsname u{};
-    if (uname(&u) == 0) return u.sysname;
-    return {};
+    return platform::host_info().system_name;
 }
 
 // Expand ${var} / $env{VAR} / $penv{VAR} in s.

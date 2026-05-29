@@ -15,6 +15,7 @@
 #include "compiler.hpp"
 #include "install_executor.hpp"
 #include "path.hpp"
+#include "platform/host.hpp"
 #include <glaze/core/reflect.hpp>
 #include <iostream>
 #include <fstream>
@@ -22,6 +23,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <thread>
 #include <condition_variable>
 #include <functional>
@@ -35,7 +37,6 @@
 #include <sys/procctl.h>
 #include <sys/types.h>
 #endif
-#include <unistd.h>
 
 namespace kiln {
 
@@ -841,7 +842,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
     }
     pre_scan_profile.stop();
 
-    bool stdout_is_tty = isatty(STDOUT_FILENO);
+    bool stdout_is_tty = platform::is_terminal(platform::StandardStream::output);
 
     // 3. Parallel execution with fixed worker threads
     // Bundle all execution-phase state into a single struct.
@@ -1754,7 +1755,11 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
     std::array<char, 256> buffer;
     std::vector<std::string> headers;
 
+#if defined(_WIN32)
+    FILE* pipe = _popen(full_cmd.c_str(), "r");
+#else
     FILE* pipe = popen(full_cmd.c_str(), "r");
+#endif
     if (!pipe) return std::unexpected("Failed to execute " + scan_cmd[0] + " for header scanning");
 
     std::string full_output;
@@ -1772,7 +1777,11 @@ static std::expected<std::vector<std::string>, std::string> get_headers_via_h_fl
         }
     }
 
+#if defined(_WIN32)
+    int status = _pclose(pipe);
+#else
     int status = pclose(pipe);
+#endif
     if (status != 0) {
         return std::unexpected("Header scanning failed for " + source + " with exit code " + std::to_string(status) + "\nOutput:\n"
                                + full_output);
@@ -1971,7 +1980,7 @@ void BuildGraph::inject_header_unit_tasks(Target& parent_target, const Compiler*
         hctx.includes.assign(include_dirs.begin(), include_dirs.end());
         hctx.system_includes.assign(sys_include_dirs.begin(), sys_include_dirs.end());
         hctx.definitions.assign(definitions.begin(), definitions.end());
-        hctx.color_diagnostics = isatty(STDOUT_FILENO);
+        hctx.color_diagnostics = platform::is_terminal(platform::StandardStream::output);
 
         auto cmd = cxx_compiler->get_header_unit_compile_command(hctx);
         if (cmd.argv.empty()) {

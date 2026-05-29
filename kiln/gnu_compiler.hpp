@@ -4,6 +4,7 @@
 #include "language.hpp"
 #include "path.hpp"
 #include "parse_number.hpp"
+#include "platform/host.hpp"
 #include <sstream>
 #include <array>
 #include <cstdio>
@@ -16,10 +17,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "regex.hpp"
-
-#ifdef __unix__
-#include <sys/utsname.h>
-#endif
 
 namespace kiln {
 
@@ -800,13 +797,9 @@ public:
                 if (!ps.empty() && ps != "unknown") info.sizeof_void_p = ps;
             }
         } else {
-#ifdef __unix__
-            struct utsname uname_info;
-            if (uname(&uname_info) == 0) {
-                info.system_name = uname_info.sysname;
-                info.system_processor = uname_info.machine;
-            }
-#endif
+            auto host = platform::host_info();
+            info.system_name = host.system_name;
+            info.system_processor = host.machine;
         }
 
         // Implicit link libraries. For GCC libstdc++ is the canonical set.

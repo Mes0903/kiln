@@ -41,6 +41,21 @@ add_custom_target(kiln_version_gen ALL
     VERBATIM
 )
 
+set(KILN_PLATFORM_SOURCES)
+if(WIN32)
+  list(APPEND KILN_PLATFORM_SOURCES
+    kiln/platform/env_win32.cpp
+    kiln/platform/host_win32.cpp
+    kiln/platform/process_win32.cpp
+  )
+else()
+  list(APPEND KILN_PLATFORM_SOURCES
+    kiln/platform/env_posix.cpp
+    kiln/platform/host_posix.cpp
+    kiln/platform/process_posix.cpp
+  )
+endif()
+
 add_library(kiln
     kiln/cmake-language.cpp
     kiln/interperter.cpp
@@ -94,6 +109,7 @@ add_library(kiln
     kiln/debugger.cpp
     kiln/autogen.cpp
     kiln/presets.cpp
+    ${KILN_PLATFORM_SOURCES}
     ${KILN_VERSION_CPP}
 )
 add_dependencies(kiln kiln_version_gen)
@@ -151,6 +167,7 @@ if(BUILD_TESTING)
         tests/cmake_array_tests.cpp
         tests/resolve_tests.cpp
         tests/path_tests.cpp
+        tests/platform_tests.cpp
         tests/version_compare_tests.cpp
         tests/p1689_parse_tests.cpp)
   target_link_libraries(kiln_tests PRIVATE kiln Catch2::Catch2WithMain)

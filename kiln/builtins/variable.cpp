@@ -4,9 +4,10 @@
 #include "../command_parser.hpp"
 #include "../utils.hpp"
 #include "../parse_number.hpp"
+#include "../platform/env.hpp"
+#include "../platform/host.hpp"
 #include <algorithm>
-#include <unistd.h>
-#include <limits.h>
+#include <cstdlib>
 
 namespace kiln {
 
@@ -32,12 +33,12 @@ void register_variable_builtins(Interpreter& interp) {
 
             if (args.size() == 1) {
                 // set(ENV{VAR}) with no value = unset
-                unsetenv(env_var_name.c_str());
+                platform::unset_env(env_var_name);
             } else {
                 // Combine remaining arguments into value
                 std::vector<std::string> value_args(args.begin() + 1, args.end());
                 CMakeArray value_list(value_args);
-                setenv(env_var_name.c_str(), value_list.to_string().c_str(), 1);
+                platform::set_env(env_var_name, value_list.to_string());
             }
             return;
         }
@@ -163,7 +164,7 @@ void register_variable_builtins(Interpreter& interp) {
         if (var_name.size() > 5 && ci_equals(std::string_view(var_name).substr(0, 4), "ENV{") && var_name.back() == '}') {
             // Extract variable name (preserve original case from inside {})
             std::string env_var_name = var_name.substr(4, var_name.size() - 5);
-            unsetenv(env_var_name.c_str());
+            platform::unset_env(env_var_name);
             return;
         }
 
@@ -426,15 +427,8 @@ void register_variable_builtins(Interpreter& interp) {
         std::string var_name = args[0];
         std::string hostname;
 
-        // Get hostname using gethostname()
-#ifdef __FreeBSD__
-        char buffer[_POSIX_HOST_NAME_MAX + 1];
-#else
-        char buffer[HOST_NAME_MAX + 1];
-#endif
-        if (gethostname(buffer, sizeof(buffer)) == 0) {
-            hostname = buffer;
-        } else {
+        hostname = platform::host_name();
+        if (hostname.empty()) {
             // Fallback: try HOSTNAME environment variable
             if (const char* env_hostname = std::getenv("HOSTNAME")) { hostname = env_hostname; }
             // If both fail, hostname remains empty

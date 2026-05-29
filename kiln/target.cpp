@@ -11,11 +11,11 @@
 #include "printing.hpp"
 #include "CMakeArray.hpp"
 #include "parse_number.hpp"
+#include "platform/host.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <unistd.h>
 #include <algorithm>
 #include "container_utils.hpp"
 #include "utils.hpp"
@@ -1208,8 +1208,8 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
     const auto& source_props = interp.get_source_properties();
     const auto& custom_rules = interp.get_custom_command_rules();
 
-    // Cache isatty result (syscall)
-    const bool color_diag = isatty(STDOUT_FILENO);
+    // Cache terminal result (syscall)
+    const bool color_diag = platform::is_terminal(platform::StandardStream::output);
 
     // Pre-compute compile features standard requirement (same for all sources)
     const auto& compile_features = get_resolved_property("COMPILE_FEATURES");
@@ -1828,7 +1828,7 @@ generate_pch_task(GraphTransaction& txn, const Toolchain& toolchain, const Targe
         ctx.standard = compute_effective_standard(target->get_language_standard(pch_lang), required_std, compiler_default_standard);
     }
     ctx.extensions_enabled = target->get_language_extensions(pch_lang);
-    ctx.color_diagnostics = isatty(STDOUT_FILENO);
+    ctx.color_diagnostics = platform::is_terminal(platform::StandardStream::output);
     ctx.options.push_back("-x");
     ctx.options.push_back(pch_lang == Language::C ? "c-header" : "c++-header");
 
@@ -2289,7 +2289,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             ctx.standard = compute_effective_standard(get_language_standard(linker_lang), required_std, compiler_default);
         }
         ctx.extensions_enabled = get_language_extensions(linker_lang);
-        ctx.color_diagnostics = isatty(STDOUT_FILENO);
+        ctx.color_diagnostics = platform::is_terminal(platform::StandardStream::output);
         ctx.linker_flags = is_shared ? shared_linker_flags : exe_linker_flags;
 
         // CMake passes CMAKE_<LANG>_FLAGS to both compile AND link commands.
@@ -2847,7 +2847,7 @@ std::expected<bool, std::string> Target::generate_module_scanner_tasks(GraphTran
             ctx.standard = compute_effective_standard(get_language_standard(lang_info.lang), required_std, cxx_default_std);
         }
         ctx.extensions_enabled = get_language_extensions(lang_info.lang);
-        ctx.color_diagnostics = isatty(STDOUT_FILENO);
+        ctx.color_diagnostics = platform::is_terminal(platform::StandardStream::output);
 
         // Note: Do NOT automatically add source_dir - only add what's explicitly in INCLUDE_DIRECTORIES
         for (const auto& dir : get_resolved_property("INCLUDE_DIRECTORIES")) { ctx.includes.push_back(dir); }

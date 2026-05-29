@@ -1,34 +1,28 @@
 #include "kiln/tool_mode.hpp"
 #include "kiln/parse_number.hpp"
 #include "kiln/build_system.hpp"
-#include <signal.h>
-#include <cerrno>
+#include "kiln/platform/env.hpp"
+#include "kiln/platform/process.hpp"
 
 #include <CLI/CLI.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
 #include <vector>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/wait.h>
 #include <archive.h>
 #include <archive_entry.h>
 
 namespace fs = std::filesystem;
-
-static char** get_environ_ptr() {
-    extern char** environ;
-    return environ;
-}
 
 namespace kiln {
 
@@ -41,35 +35,9 @@ using Args = std::span<const std::string>;
 // ---------------------------------------------------------------------------
 
 int exec_command(const std::vector<std::string>& cmd, const std::string& working_dir = "") {
-    if (cmd.empty()) return 1;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        std::cerr << "Error: fork failed: " << strerror(errno) << std::endl;
-        return 1;
-    }
-    if (pid == 0) {
-        setpgid(0, 0);
-        kiln::set_parent_death_signal(SIGTERM);
-        signal(SIGINT, SIG_DFL);
-        signal(SIGTERM, SIG_DFL);
-        signal(SIGHUP, SIG_DFL);
-        if (!working_dir.empty()) {
-            if (chdir(working_dir.c_str()) != 0) { _exit(127); }
-        }
-        std::vector<char*> argv;
-        for (auto& s : cmd) argv.push_back(const_cast<char*>(s.c_str()));
-        argv.push_back(nullptr);
-        execvp(argv[0], argv.data());
-        _exit(127);
-    }
-    setpgid(pid, pid);
-    register_child_pid(pid);
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-    unregister_child_pid(pid);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return 1;
+    kiln::platform::ForegroundOptions options;
+    options.working_dir = working_dir;
+    return kiln::platform::run_foreground(cmd, options);
 }
 
 bool copy_file_impl(const fs::path& src, const fs::path& dst) {
@@ -336,36 +304,17 @@ int cmd_env(const std::vector<std::string>& unsets, Args rest) {
         return 1;
     }
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        std::cerr << "Error: fork failed: " << strerror(errno) << std::endl;
-        return 1;
-    }
-    if (pid == 0) {
-        setpgid(0, 0);
-        kiln::set_parent_death_signal(SIGTERM);
-        signal(SIGINT, SIG_DFL);
-        signal(SIGTERM, SIG_DFL);
-        signal(SIGHUP, SIG_DFL);
-        for (auto& name : unsets) unsetenv(name.c_str());
-        for (auto& [name, val] : sets) setenv(name.c_str(), val.c_str(), 1);
-        std::vector<char*> argv;
-        for (size_t j = i; j < rest.size(); ++j) argv.push_back(const_cast<char*>(rest[j].c_str()));
-        argv.push_back(nullptr);
-        execvp(argv[0], argv.data());
-        _exit(127);
-    }
-    setpgid(pid, pid);
-    register_child_pid(pid);
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-    unregister_child_pid(pid);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return 1;
+    kiln::platform::ForegroundOptions options;
+    options.environment.reserve(unsets.size() + sets.size());
+    for (const auto& name : unsets) options.environment.push_back({name, std::nullopt});
+    for (const auto& [name, val] : sets) options.environment.push_back({name, val});
+
+    std::vector<std::string> cmd(rest.begin() + static_cast<std::ptrdiff_t>(i), rest.end());
+    return kiln::platform::run_foreground(cmd, options);
 }
 
 int cmd_environment() {
-    for (char** env = get_environ_ptr(); *env; ++env) { std::cout << *env << '\n'; }
+    for (const auto& env : kiln::platform::current_environment()) { std::cout << env << '\n'; }
     return 0;
 }
 
@@ -519,12 +468,14 @@ int cmd_tar(const std::string& flags, const std::string& archive_path, Args file
             archive_read_disk_descend(disk);
             if (verbose) { std::cout << archive_entry_pathname(entry) << std::endl; }
             archive_write_header(a, entry);
-            int fd = open(archive_entry_sourcepath(entry), O_RDONLY);
-            if (fd >= 0) {
-                char buff[16384];
-                ssize_t len;
-                while ((len = read(fd, buff, sizeof(buff))) > 0) { archive_write_data(a, buff, len); }
-                close(fd);
+            std::ifstream source(archive_entry_sourcepath(entry), std::ios::binary);
+            if (source) {
+                std::array<char, 16384> buff{};
+                while (source) {
+                    source.read(buff.data(), buff.size());
+                    std::streamsize len = source.gcount();
+                    if (len > 0) archive_write_data(a, buff.data(), static_cast<size_t>(len));
+                }
             }
             archive_entry_free(entry);
         }

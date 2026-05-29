@@ -9,6 +9,7 @@
 #include "printing.hpp"
 #include "parse_number.hpp"
 #include "version.hpp"
+#include "platform/host.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -18,9 +19,6 @@
 #include <iomanip>
 #include <array>
 #include <charconv>
-#ifdef __unix__
-#include <sys/utsname.h>
-#endif
 #include "regex.hpp"
 #include "builtins/registry.hpp"
 #include "intercept/external_project.hpp"
@@ -1165,7 +1163,7 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     // toolchain file or -DCMAKE_<LANG>_COMPILER override will redirect us;
     // the host detection would just be wasted subprocess work. Lazy on-demand
     // detection inside enable_compiler_for_language picks up the slack and
-    // also seeds CMAKE_HOST_SYSTEM_NAME/_PROCESSOR via uname() below.
+    // also seeds CMAKE_HOST_SYSTEM_NAME/_PROCESSOR below.
     if (!skip_sys_init && !skip_host_compiler_detection) {
         ProfileScope compiler_profile("compiler detection", "init");
         fake_cmake_compiler_checks_and_init(*this, *cache_store_);
@@ -1173,33 +1171,27 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         // Still seed the cheap host-info vars (no subprocesses) so that
         // CMakeLists / toolchain files can read CMAKE_HOST_SYSTEM_NAME etc.
         // before any enable_language runs.
-#ifdef __unix__
-        struct utsname uname_info;
-        if (uname(&uname_info) == 0) {
-            set_variable("CMAKE_HOST_SYSTEM_NAME", uname_info.sysname);
-            set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", uname_info.machine);
-        }
-#endif
+        auto host = platform::host_info();
+        if (!host.system_name.empty()) set_variable("CMAKE_HOST_SYSTEM_NAME", host.system_name);
+        if (!host.machine.empty()) set_variable("CMAKE_HOST_SYSTEM_PROCESSOR", host.machine);
     }
 
-    // Host system version + composite name strings. uname is cheap; the
+    // Host system version + composite name strings. Host lookup is cheap; the
     // compiler-detection backup populates NAME/PROCESSOR but never .release,
     // so populate the *_VERSION and *_SYSTEM vars unconditionally here.
-#ifdef __unix__
     if (!skip_sys_init) {
-        struct utsname uname_info;
-        if (uname(&uname_info) == 0) {
-            set_variable("CMAKE_HOST_SYSTEM_VERSION", uname_info.release);
-            std::string host_system = std::string(uname_info.sysname) + "-" + uname_info.release;
+        auto host = platform::host_info();
+        if (!host.system_name.empty()) {
+            set_variable("CMAKE_HOST_SYSTEM_VERSION", host.system_release);
+            std::string host_system = host.system_name + "-" + host.system_release;
             set_variable("CMAKE_HOST_SYSTEM", host_system);
             // CMAKE_SYSTEM_VERSION / CMAKE_SYSTEM mirror host until a toolchain
             // file overrides them (cross-compile). Match CMake: the bare
             // CMAKE_SYSTEM is "<name>-<version>".
-            if (get_variable("CMAKE_SYSTEM_VERSION").empty()) set_variable("CMAKE_SYSTEM_VERSION", uname_info.release);
+            if (get_variable("CMAKE_SYSTEM_VERSION").empty()) set_variable("CMAKE_SYSTEM_VERSION", host.system_release);
             if (get_variable("CMAKE_SYSTEM").empty()) set_variable("CMAKE_SYSTEM", host_system);
         }
     }
-#endif
 
     // Debian/Ubuntu multiarch tuple (e.g. x86_64-linux-gnu). find_library and
     // pkg-config search lib/${CMAKE_LIBRARY_ARCHITECTURE}; without it system

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <unistd.h>
+#include <stddef.h>
 
 extern "C" {
 void kiln_blake2b(void* output,
