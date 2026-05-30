@@ -80,6 +80,45 @@ TEST_CASE("Interpreter variable substitution", "[interpreter]") {
     REQUIRE(output == "Goodbye World\n");
 }
 
+TEST_CASE("Interpreter refreshes platform prefix snapshots after install prefix changes", "[interpreter][platform]") {
+    std::stringstream output;
+    auto interpreter = std::make_unique<kiln::Interpreter>("", &output, &output, std::nullopt, true, true);
+
+    interpreter->set_variable("CMAKE_INSTALL_PREFIX", "/opt/kiln-refresh-test");
+    interpreter->set_variable("CMAKE_STAGING_PREFIX", "/stage/kiln-refresh-test");
+    interpreter->set_variable("CMAKE_EXECUTABLE_SUFFIX", ".custom");
+    interpreter->set_variable("CMAKE_SYSTEM_INCLUDE_PATH", "/custom/include");
+    interpreter->refresh_platform_profile();
+
+    auto system_prefix_path = interpreter->get_variable("CMAKE_SYSTEM_PREFIX_PATH");
+    REQUIRE(system_prefix_path.find("/opt/kiln-refresh-test") != std::string::npos);
+    REQUIRE(system_prefix_path.find("/stage/kiln-refresh-test") != std::string::npos);
+    REQUIRE(interpreter->get_variable("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_VALUE") == "/opt/kiln-refresh-test");
+    REQUIRE(interpreter->get_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE") == "/stage/kiln-refresh-test");
+    REQUIRE(interpreter->get_variable("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_COUNT") == "1");
+    REQUIRE(interpreter->get_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_COUNT") == "1");
+    REQUIRE(interpreter->get_variable("CMAKE_EXECUTABLE_SUFFIX") == ".custom");
+    REQUIRE(interpreter->get_variable("CMAKE_SYSTEM_INCLUDE_PATH") == "/custom/include");
+}
+
+TEST_CASE("Interpreter initializes platform profile defaults", "[interpreter][platform]") {
+    std::stringstream output;
+    auto interpreter = std::make_unique<kiln::Interpreter>("", &output, &output, std::nullopt, true, true);
+
+#ifdef _WIN32
+    REQUIRE(interpreter->get_variable("CMAKE_C_OUTPUT_EXTENSION") == ".obj");
+    REQUIRE(interpreter->get_variable("CMAKE_EXECUTABLE_SUFFIX") == ".exe");
+    REQUIRE(interpreter->get_variable("CMAKE_FIND_LIBRARY_SUFFIXES") == ".dll.lib;.lib;.a");
+    REQUIRE(interpreter->get_variable("CMAKE_SHARED_LIBRARY_C_FLAGS").empty());
+#else
+    REQUIRE(interpreter->get_variable("CMAKE_C_OUTPUT_EXTENSION") == ".o");
+    REQUIRE(interpreter->get_variable("CMAKE_EXECUTABLE_SUFFIX").empty());
+    REQUIRE(interpreter->get_variable("CMAKE_FIND_LIBRARY_SUFFIXES").find(".a") != std::string::npos);
+    REQUIRE(interpreter->get_variable("CMAKE_SHARED_LIBRARY_C_FLAGS") == "-fPIC");
+#endif
+    REQUIRE_FALSE(interpreter->get_variable("CMAKE_SYSTEM_PREFIX_PATH").empty());
+}
+
 TEST_CASE("Interpreter math command", "[interpreter][math]") {
     SECTION("Basic arithmetic") {
         auto output = run_script(R"(

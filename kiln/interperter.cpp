@@ -10,6 +10,7 @@
 #include "parse_number.hpp"
 #include "version.hpp"
 #include "platform/host.hpp"
+#include "platform/profile.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -69,6 +70,90 @@ static std::chrono::system_clock::time_point file_time_to_system_clock(std::file
 static int64_t file_time_to_epoch_seconds(std::filesystem::file_time_type file_time) {
     const auto system_time = file_time_to_system_clock(file_time);
     return std::chrono::duration_cast<std::chrono::seconds>(system_time.time_since_epoch()).count();
+}
+
+static std::string join_cmake_list(const std::vector<std::string>& values) {
+    std::string result;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) { result += ';'; }
+        result += values[i];
+    }
+    return result;
+}
+
+static void record_system_prefix_path(Interpreter& interp, const std::string& system_prefix_path) {
+    std::string install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+    std::string staging_prefix = interp.get_variable("CMAKE_STAGING_PREFIX");
+
+    interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_VALUE", install_prefix);
+    interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE", staging_prefix);
+
+    int icount = 0, scount = 0;
+    CMakeArrayIterator path_view(system_prefix_path);
+    for (auto entry : path_view) {
+        if (!install_prefix.empty() && entry == install_prefix) ++icount;
+        if (!staging_prefix.empty() && entry == staging_prefix) ++scount;
+    }
+    interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_COUNT", std::to_string(icount));
+    interp.set_variable("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_COUNT", std::to_string(scount));
+}
+
+static void refresh_profile_paths(Interpreter& interp, const platform::PlatformProfile& profile) {
+    std::string system_prefix_path = join_cmake_list(profile.system_prefix_paths);
+    const std::string install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
+    const std::string staging_prefix = interp.get_variable("CMAKE_STAGING_PREFIX");
+    if (interp.get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "1" && interp.get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "ON"
+        && interp.get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "TRUE") {
+        if (!install_prefix.empty()) {
+            if (!system_prefix_path.empty()) { system_prefix_path += ';'; }
+            system_prefix_path += install_prefix;
+        }
+        if (!staging_prefix.empty()) {
+            if (!system_prefix_path.empty()) { system_prefix_path += ';'; }
+            system_prefix_path += staging_prefix;
+        }
+    }
+    interp.set_variable("CMAKE_SYSTEM_PREFIX_PATH", system_prefix_path);
+    record_system_prefix_path(interp, system_prefix_path);
+
+    for (const auto& prefix : profile.system_prefix_post_paths) {
+        if (!system_prefix_path.empty()) { system_prefix_path += ';'; }
+        system_prefix_path += prefix;
+    }
+    interp.set_variable("CMAKE_SYSTEM_PREFIX_PATH", system_prefix_path);
+}
+
+static void apply_platform_profile(Interpreter& interp, const platform::PlatformProfile& profile) {
+    if (interp.get_variable("CMAKE_INSTALL_PREFIX").empty()) {
+        interp.set_variable("CMAKE_INSTALL_PREFIX", profile.default_install_prefix);
+    }
+
+    interp.set_variable("CMAKE_C_OUTPUT_EXTENSION", profile.object_suffix);
+    interp.set_variable("CMAKE_CXX_OUTPUT_EXTENSION", profile.object_suffix);
+    interp.set_variable("CMAKE_ASM_OUTPUT_EXTENSION", profile.object_suffix);
+    interp.set_variable("CMAKE_OBJECT_FILE_SUFFIX", profile.object_suffix);
+
+    interp.set_variable("CMAKE_EXECUTABLE_SUFFIX", profile.executable_suffix);
+    interp.set_variable("CMAKE_SHARED_LIBRARY_PREFIX", profile.shared_library_prefix);
+    interp.set_variable("CMAKE_SHARED_LIBRARY_SUFFIX", profile.shared_library_suffix);
+    interp.set_variable("CMAKE_SHARED_MODULE_PREFIX", profile.shared_module_prefix);
+    interp.set_variable("CMAKE_SHARED_MODULE_SUFFIX", profile.shared_module_suffix);
+    interp.set_variable("CMAKE_STATIC_LIBRARY_PREFIX", profile.static_library_prefix);
+    interp.set_variable("CMAKE_STATIC_LIBRARY_SUFFIX", profile.static_library_suffix);
+    interp.set_variable("CMAKE_IMPORT_LIBRARY_PREFIX", profile.import_library_prefix);
+    interp.set_variable("CMAKE_IMPORT_LIBRARY_SUFFIX", profile.import_library_suffix);
+    interp.set_variable("CMAKE_LINK_LIBRARY_SUFFIX", profile.link_library_suffix);
+    interp.set_variable("CMAKE_DL_LIBS", profile.dl_libs);
+    interp.set_variable("CMAKE_FIND_LIBRARY_PREFIXES", join_cmake_list(profile.find_library_prefixes));
+    interp.set_variable("CMAKE_FIND_LIBRARY_SUFFIXES", join_cmake_list(profile.find_library_suffixes));
+    interp.set_variable("CMAKE_NULL_DEVICE", profile.null_device);
+    interp.set_variable("CMAKE_SHARED_LIBRARY_C_FLAGS", profile.shared_library_c_flags);
+    interp.set_variable("CMAKE_SHARED_LIBRARY_CXX_FLAGS", profile.shared_library_cxx_flags);
+
+    refresh_profile_paths(interp, profile);
+    interp.set_variable("CMAKE_SYSTEM_INCLUDE_PATH", join_cmake_list(profile.system_include_paths));
+    interp.set_variable("CMAKE_SYSTEM_LIBRARY_PATH", join_cmake_list(profile.system_library_paths));
+    interp.set_variable("CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES", join_cmake_list(profile.platform_implicit_link_directories));
 }
 
 static bool backup_vars_empty() {
@@ -1055,9 +1140,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
         std::filesystem::create_directories(abs_binary_dir, ec);
     }
 
-    // Set default install prefix if not already set
-    if (get_variable("CMAKE_INSTALL_PREFIX").empty()) { variables_.set("CMAKE_INSTALL_PREFIX", "/usr/local"); }
-
     if (build_dir.has_value() && abs_binary_dir == abs_script_dir) {
         set_fatal_error("Build directory cannot be the same as the source directory: " + abs_script_dir.string());
     }
@@ -1094,26 +1176,9 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("BSD", "FreeBSD");
 #endif
 
-    // find_library and several Find modules consult these to enumerate which
-    // filename patterns count as a library on the host. Set sane Unix defaults
-    // here so projects that never explicitly configure them still work.
-    // The leading empty entry in PREFIXES lets find_library match libraries
-    // without a "lib" prefix (e.g. some vendor SDKs).
-#ifdef _WIN32
-    variables_.set("CMAKE_FIND_LIBRARY_PREFIXES", ";lib");
-    variables_.set("CMAKE_FIND_LIBRARY_SUFFIXES", ".lib;.dll.a;.a");
-#elif defined(__APPLE__)
-    variables_.set("CMAKE_FIND_LIBRARY_PREFIXES", "lib;");
-    variables_.set("CMAKE_FIND_LIBRARY_SUFFIXES", ".tbd;.dylib;.so;.a");
-#else
-    variables_.set("CMAKE_FIND_LIBRARY_PREFIXES", "lib;");
-    variables_.set("CMAKE_FIND_LIBRARY_SUFFIXES", ".so;.a");
-#endif
+    apply_platform_profile(*this, platform::host_profile());
 
     variables_.set("CMAKE_INSTALL_DEFAULT_COMPONENT_NAME", "Unspecified");
-    variables_.set("CMAKE_C_OUTPUT_EXTENSION", ".o");
-    variables_.set("CMAKE_CXX_OUTPUT_EXTENSION", ".o");
-    variables_.set("CMAKE_ASM_OUTPUT_EXTENSION", ".o");
 
     // Byte order detection
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -1122,19 +1187,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     variables_.set("CMAKE_C_BYTE_ORDER", "BIG_ENDIAN");
     variables_.set("CMAKE_CXX_BYTE_ORDER", "BIG_ENDIAN");
-#endif
-
-    variables_.set("CMAKE_EXECUTABLE_SUFFIX", "");
-    variables_.set("CMAKE_SHARED_LIBRARY_PREFIX", "lib");
-    variables_.set("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
-    variables_.set("CMAKE_SHARED_MODULE_PREFIX", "");
-    variables_.set("CMAKE_SHARED_MODULE_SUFFIX", ".so");
-    variables_.set("CMAKE_STATIC_LIBRARY_PREFIX", "lib");
-    variables_.set("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
-    variables_.set("CMAKE_SHARED_LIBRARY_C_FLAGS", "-fPIC");
-    variables_.set("CMAKE_SHARED_LIBRARY_CXX_FLAGS", "-fPIC");
-#ifdef __linux__
-    variables_.set("CMAKE_DL_LIBS", "dl");
 #endif
 
     variables_.set("CMAKE_COMMAND", get_executable_path());
@@ -1216,47 +1268,6 @@ Interpreter::Interpreter(std::string script_dir, std::ostream* out, std::ostream
     variables_.set("CMAKE_INSTALL_BINDIR", "bin");
     variables_.set("CMAKE_INSTALL_LIBDIR", "lib");
     variables_.set("CMAKE_INSTALL_INCLUDEDIR", "include");
-
-    // Build CMAKE_SYSTEM_PREFIX_PATH (mirrors CMake's UnixPaths.cmake)
-    // Standard system prefixes first
-    std::string system_prefix_path = "/usr/local;/usr;/";
-
-    // Append install prefix and staging prefix (unless CMAKE_FIND_NO_INSTALL_PREFIX)
-    std::string install_prefix = get_variable("CMAKE_INSTALL_PREFIX");
-    std::string staging_prefix = get_variable("CMAKE_STAGING_PREFIX");
-    if (get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "1" && get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "ON"
-        && get_variable("CMAKE_FIND_NO_INSTALL_PREFIX") != "TRUE") {
-        if (!install_prefix.empty()) { system_prefix_path += ";" + install_prefix; }
-        if (!staging_prefix.empty()) { system_prefix_path += ";" + staging_prefix; }
-    }
-    variables_.set("CMAKE_SYSTEM_PREFIX_PATH", system_prefix_path);
-
-    // Record install prefix snapshot (_cmake_record_install_prefix equivalent)
-    // This snapshots which occurrence of the install/staging prefix in
-    // CMAKE_SYSTEM_PREFIX_PATH was added because it IS the install prefix,
-    // so find_package() can later remove/add it precisely.
-    {
-        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_VALUE", install_prefix);
-        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_VALUE", staging_prefix);
-
-        int icount = 0, scount = 0;
-        CMakeArrayIterator path_view(system_prefix_path);
-        for (auto entry : path_view) {
-            if (!install_prefix.empty() && entry == install_prefix) ++icount;
-            if (!staging_prefix.empty() && entry == staging_prefix) ++scount;
-        }
-        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_INSTALL_PREFIX_COUNT", std::to_string(icount));
-        variables_.set("_CMAKE_SYSTEM_PREFIX_PATH_STAGING_PREFIX_COUNT", std::to_string(scount));
-    }
-
-    // Append non-standard but common prefixes (after recording, matching CMake's order)
-    system_prefix_path += ";/usr/X11R6;/usr/pkg;/opt";
-    variables_.set("CMAKE_SYSTEM_PREFIX_PATH", system_prefix_path);
-
-    // CMAKE_SYSTEM_LIBRARY_PATH and CMAKE_SYSTEM_INCLUDE_PATH
-    variables_.set("CMAKE_SYSTEM_INCLUDE_PATH", "/usr/include/X11");
-    variables_.set("CMAKE_SYSTEM_LIBRARY_PATH", "/usr/lib/X11");
-    variables_.set("CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES", "/lib;/lib32;/lib64;/usr/lib;/usr/lib32;/usr/lib64");
 
     // Initialize root directory context
     push_directory(abs_script_dir.string(), abs_binary_dir.string());
@@ -3441,6 +3452,10 @@ std::expected<void, std::string> Interpreter::unset_variable_parent_scope(const 
 
 void Interpreter::set_cache_variable(const std::string& var_name, const std::string& value) {
     get_root()->cache_variables_[var_name] = value;
+}
+
+void Interpreter::refresh_platform_profile() {
+    refresh_profile_paths(*this, platform::host_profile());
 }
 
 bool Interpreter::unset_variable(const std::string& name) {

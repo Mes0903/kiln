@@ -46,6 +46,9 @@ add_custom_target(kiln_version_gen ALL
 )
 
 set(KILN_PLATFORM_SOURCES)
+list(APPEND KILN_PLATFORM_SOURCES
+  kiln/platform/profile.cpp
+)
 if(WIN32)
   list(APPEND KILN_PLATFORM_SOURCES
     kiln/platform/command_line_win32.cpp

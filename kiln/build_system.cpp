@@ -2222,6 +2222,7 @@ std::optional<std::string> BuildGraph::run_ep_orchestrator(BuildTask& task, Exec
 
         // Set CMAKE_INSTALL_PREFIX if not already set
         if (ep_interp->get_variable("CMAKE_INSTALL_PREFIX").empty()) { ep_interp->set_variable("CMAKE_INSTALL_PREFIX", install_dir); }
+        ep_interp->refresh_platform_profile();
 
         // Pre-load any initial-cache scripts from -C<file>. CMake interprets
         // these before CMakeLists.txt; projects use this to seed cache vars

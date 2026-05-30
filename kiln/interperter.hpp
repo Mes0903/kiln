@@ -256,6 +256,7 @@ public:
     static bool is_falsy(std::string_view val);
     static bool is_truthy(const std::string& val);
     void set_cache_variable(const std::string& var_name, const std::string& value);
+    void refresh_platform_profile();
 
     void print_message(const std::string& mode, const std::string& message, bool is_error = false);
     void print_warning_with_context(const std::string& message);

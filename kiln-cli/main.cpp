@@ -252,6 +252,7 @@ run_build_action(const GlobalOptions& opt, kiln::DebugController& debug_controll
         }
 
         apply_definitions(*interpreter, opt.definitions);
+        interpreter->refresh_platform_profile();
 
         if (!opt.log_level.empty()) { interpreter->set_variable("CMAKE_MESSAGE_LOG_LEVEL", opt.log_level); }
 
@@ -1058,6 +1059,7 @@ Examples:
             for (size_t i = 0; i < cmake_argv.size(); ++i) { interpreter.set_variable("CMAKE_ARGV" + std::to_string(i), cmake_argv[i]); }
             debug_controller.attach(interpreter);
             apply_definitions(interpreter, opt.definitions);
+            interpreter.refresh_platform_profile();
             if (!opt.log_level.empty()) { interpreter.set_variable("CMAKE_MESSAGE_LOG_LEVEL", opt.log_level); }
 
             auto result = interpreter.interpret(ast_or_error.value());

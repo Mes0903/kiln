@@ -1,5 +1,6 @@
 #include "kiln/platform/env.hpp"
 #include "kiln/platform/host.hpp"
+#include "kiln/platform/profile.hpp"
 #include "kiln/platform/process.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -18,6 +19,97 @@
 #else
 #include <unistd.h>
 #endif
+
+TEST_CASE("platform profile exposes Windows MSVC naming and search defaults", "[platform][profile]") {
+    auto profile = kiln::platform::profile_for("Windows", "MSVC");
+
+    REQUIRE(profile.profile_id == "Windows-MSVC");
+    REQUIRE(profile.executable_suffix == ".exe");
+    REQUIRE(profile.object_suffix == ".obj");
+    REQUIRE(profile.static_library_prefix.empty());
+    REQUIRE(profile.static_library_suffix == ".lib");
+    REQUIRE(profile.shared_library_prefix.empty());
+    REQUIRE(profile.shared_library_suffix == ".dll");
+    REQUIRE(profile.shared_module_prefix.empty());
+    REQUIRE(profile.shared_module_suffix == ".dll");
+    REQUIRE(profile.import_library_prefix.empty());
+    REQUIRE(profile.import_library_suffix == ".lib");
+    REQUIRE(profile.link_library_suffix == ".lib");
+    REQUIRE(profile.path_list_separator == ";");
+    REQUIRE(profile.null_device == "NUL");
+    REQUIRE(profile.default_install_prefix == "C:/Program Files");
+    REQUIRE(profile.system_prefix_paths == std::vector<std::string>{"C:/Program Files", "C:/Program Files (x86)"});
+    REQUIRE(profile.find_library_prefixes == std::vector<std::string>{"", "lib"});
+    REQUIRE(profile.find_library_suffixes == std::vector<std::string>{".dll.lib", ".lib", ".a"});
+    REQUIRE(profile.shared_library_c_flags.empty());
+    REQUIRE(profile.shared_library_cxx_flags.empty());
+    REQUIRE(profile.dl_libs.empty());
+}
+
+TEST_CASE("platform profile keeps Windows GNU ABI distinct from MSVC", "[platform][profile]") {
+    auto profile = kiln::platform::profile_for("Windows", "GNU");
+
+    REQUIRE(profile.profile_id == "Windows-GNU");
+    REQUIRE(profile.executable_suffix == ".exe");
+    REQUIRE(profile.static_library_prefix == "lib");
+    REQUIRE(profile.static_library_suffix == ".a");
+    REQUIRE(profile.shared_library_prefix == "lib");
+    REQUIRE(profile.shared_library_suffix == ".dll");
+    REQUIRE(profile.import_library_prefix == "lib");
+    REQUIRE(profile.import_library_suffix == ".dll.a");
+    REQUIRE(profile.find_library_prefixes == std::vector<std::string>{"lib", ""});
+    REQUIRE(profile.find_library_suffixes == std::vector<std::string>{".dll.a", ".a", ".lib"});
+    REQUIRE(profile.shared_library_c_flags.empty());
+    REQUIRE(profile.shared_library_cxx_flags.empty());
+}
+
+TEST_CASE("platform profile preserves Linux library and startup defaults", "[platform][profile]") {
+    auto profile = kiln::platform::profile_for("Linux", "GNU");
+
+    REQUIRE(profile.profile_id == "Linux");
+    REQUIRE(profile.executable_suffix.empty());
+    REQUIRE(profile.object_suffix == ".o");
+    REQUIRE(profile.static_library_prefix == "lib");
+    REQUIRE(profile.static_library_suffix == ".a");
+    REQUIRE(profile.shared_library_prefix == "lib");
+    REQUIRE(profile.shared_library_suffix == ".so");
+    REQUIRE(profile.shared_module_prefix.empty());
+    REQUIRE(profile.shared_module_suffix == ".so");
+    REQUIRE(profile.import_library_prefix.empty());
+    REQUIRE(profile.import_library_suffix.empty());
+    REQUIRE(profile.link_library_suffix.empty());
+    REQUIRE(profile.path_list_separator == ":");
+    REQUIRE(profile.null_device == "/dev/null");
+    REQUIRE(profile.default_install_prefix == "/usr/local");
+    REQUIRE(profile.system_prefix_paths == std::vector<std::string>{"/usr/local", "/usr", "/"});
+    REQUIRE(profile.find_library_prefixes == std::vector<std::string>{"lib", ""});
+    REQUIRE(profile.find_library_suffixes == std::vector<std::string>{".so", ".a"});
+    REQUIRE(profile.shared_library_c_flags == "-fPIC");
+    REQUIRE(profile.shared_library_cxx_flags == "-fPIC");
+    REQUIRE(profile.dl_libs == "dl");
+}
+
+TEST_CASE("platform profile preserves Darwin find library suffix order", "[platform][profile]") {
+    auto profile = kiln::platform::profile_for("Darwin", "AppleClang");
+
+    REQUIRE(profile.profile_id == "Darwin");
+    REQUIRE(profile.executable_suffix.empty());
+    REQUIRE(profile.object_suffix == ".o");
+    REQUIRE(profile.static_library_prefix == "lib");
+    REQUIRE(profile.static_library_suffix == ".a");
+    REQUIRE(profile.shared_library_prefix == "lib");
+    REQUIRE(profile.shared_library_suffix == ".dylib");
+    REQUIRE(profile.shared_module_prefix.empty());
+    REQUIRE(profile.shared_module_suffix == ".so");
+    REQUIRE(profile.path_list_separator == ":");
+    REQUIRE(profile.null_device == "/dev/null");
+    REQUIRE(profile.default_install_prefix == "/usr/local");
+    REQUIRE(profile.find_library_prefixes == std::vector<std::string>{"lib", ""});
+    REQUIRE(profile.find_library_suffixes == std::vector<std::string>{".tbd", ".dylib", ".so", ".a"});
+    REQUIRE(profile.shared_library_c_flags == "-fPIC");
+    REQUIRE(profile.shared_library_cxx_flags == "-fPIC");
+    REQUIRE(profile.dl_libs.empty());
+}
 
 TEST_CASE("platform environment helpers mutate the current process environment", "[platform]") {
     const std::string name = "KILN_PLATFORM_ENV_TEST_VALUE";
