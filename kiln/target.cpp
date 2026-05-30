@@ -144,7 +144,7 @@ std::vector<std::string> Target::get_property_list(const std::string& name, Targ
     case TargetPropertyScope::INTERFACE:
         return get_property_list(name, {PropertyVisibility::PUBLIC, PropertyVisibility::INTERFACE});
     }
-    __builtin_unreachable();
+    return {};
 }
 
 std::string Target::get_property_combined(const std::string& name) const {

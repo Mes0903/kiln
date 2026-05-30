@@ -1223,10 +1223,14 @@ Examples:
         command.reserve(1 + run_args.size());
         command.push_back(exec_path);
         for (const auto& arg : run_args) command.push_back(arg);
+#ifdef _WIN32
+        return kiln::platform::replace_current_process(command);
+#else
         int exec_error = kiln::platform::replace_current_process(command);
 
         std::cerr << "Error: Failed to execute " << exec_path << ": " << strerror(exec_error) << std::endl;
         return 1;
+#endif
     }
 
     if (test_cmd->parsed()) {

@@ -9,6 +9,10 @@ if(MSVC)
   add_compile_options(/utf-8)
 endif()
 
+if(WIN32)
+  add_compile_definitions(NOMINMAX)
+endif()
+
 find_package(pcre2 CONFIG QUIET)
 if(TARGET PCRE2::8BIT)
   set(KILN_PCRE2_TARGET PCRE2::8BIT)
@@ -44,6 +48,7 @@ add_custom_target(kiln_version_gen ALL
 set(KILN_PLATFORM_SOURCES)
 if(WIN32)
   list(APPEND KILN_PLATFORM_SOURCES
+    kiln/platform/command_line_win32.cpp
     kiln/platform/env_win32.cpp
     kiln/platform/host_win32.cpp
     kiln/platform/process_win32.cpp
