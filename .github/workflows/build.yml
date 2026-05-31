@@ -74,7 +74,6 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Configure, build, and test
@@ -83,8 +82,13 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%\scripts\buildsystems\vcpkg.cmake
+          if errorlevel 1 exit /b %errorlevel%
           cmake --build build --parallel
+          if errorlevel 1 exit /b %errorlevel%
           ctest --test-dir build --output-on-failure
+          if errorlevel 1 exit /b %errorlevel%
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\integration\windows\run_tests.ps1 -Kiln build\kiln.exe
+          if errorlevel 1 exit /b %errorlevel%
 
   build-alpine:
     runs-on: ubuntu-24.04

@@ -79,6 +79,12 @@ build/
 
 Switching between them is just a matter of passing a different `--config`.
 
+## Windows support
+
+Kiln has v1 Windows CI smoke coverage for basic MSVC projects that build executables, static libraries, shared libraries, custom commands, `execute_process`, `find_program`, and `find_library`. On Windows the default debug outputs are under `build/debug/`, with executables ending in `.exe`, static libraries and import libraries ending in `.lib`, and shared library runtimes ending in `.dll`.
+
+The Linux integration suite remains broader. Windows support for install/export workflows and `try_compile` migration is still outside the v1 smoke surface.
+
 ## Setting variables
 
 CMake variables are set the same way as in CMake, with `-D`:
