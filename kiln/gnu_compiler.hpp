@@ -2,6 +2,7 @@
 #include "compiler.hpp"
 #include "genex_parser.hpp"
 #include "language.hpp"
+#include "msvc_compiler.hpp"
 #include "path.hpp"
 #include "parse_number.hpp"
 #include "platform/host.hpp"
@@ -1400,7 +1401,7 @@ protected:
 };
 
 // True for compiler IDs whose driver honors `--target=<triple>`. The
-// Clang family does; GCC, TCC, and (future) MSVC error on it. Used to
+// Clang family does; GCC, TCC, and MSVC error on it. Used to
 // decide whether `CMAKE_<LANG>_COMPILER_TARGET` should be threaded into
 // the Compiler constructor or dropped on the floor.
 inline bool compiler_honors_target_flag(std::string_view id) {
@@ -1411,10 +1412,15 @@ inline bool compiler_honors_target_flag(std::string_view id) {
 //   - Clang/AppleClang/IntelLLVM/ARMClang -> ClangCompiler (modules differ)
 //   - TCC                                 -> TccCompiler
 //   - Intel / ICC (classic)               -> IccCompiler
+//   - MSVC                                -> MsvcCompiler
 //   - GNU/Unknown/everything else         -> GnuCompiler
-// Future: MSVC will branch off to its own non-gnu-derived class.
 inline std::unique_ptr<Compiler> make_compiler(const std::string& compiler_id, std::string binary, Language lang, std::string sysroot = {},
                                                std::string compiler_target = {}) {
+    if (compiler_id == "MSVC") {
+        (void) sysroot;
+        (void) compiler_target;
+        return std::make_unique<MsvcCompiler>(std::move(binary), lang);
+    }
     if (compiler_id == "Clang" || compiler_id == "AppleClang" || compiler_id == "IntelLLVM" || compiler_id == "ARMClang") {
         return std::make_unique<ClangCompiler>(std::move(binary), lang, std::move(sysroot), std::move(compiler_target));
     }

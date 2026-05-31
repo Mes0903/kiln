@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <array>
 #include <charconv>
+#include <cstdlib>
 #include "regex.hpp"
 #include "builtins/registry.hpp"
 #include "intercept/external_project.hpp"
@@ -80,6 +81,46 @@ static std::string join_cmake_list(const std::vector<std::string>& values) {
     }
     return result;
 }
+
+static bool compiler_binary_has_path_separator(std::string_view binary) {
+    return binary.find('/') != std::string_view::npos || binary.find('\\') != std::string_view::npos;
+}
+
+static bool env_var_has_value(const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0';
+}
+
+#if defined(_WIN32)
+static std::string unquote_path_entry(std::string_view entry) {
+    if (entry.size() >= 2 && entry.front() == '"' && entry.back() == '"') return std::string(entry.substr(1, entry.size() - 2));
+    return std::string(entry);
+}
+
+static bool executable_on_path(std::string_view executable) {
+    const char* path_env = std::getenv("PATH");
+    if (path_env == nullptr || *path_env == '\0') return false;
+
+    std::string_view path_value(path_env);
+    std::size_t pos = 0;
+    while (pos <= path_value.size()) {
+        const auto sep = path_value.find(';', pos);
+        const auto end = sep == std::string_view::npos ? path_value.size() : sep;
+        if (end > pos) {
+            std::filesystem::path dir(unquote_path_entry(path_value.substr(pos, end - pos)));
+            std::error_code ec;
+            if (std::filesystem::exists(dir / std::string(executable), ec)) return true;
+        }
+        if (sep == std::string_view::npos) break;
+        pos = sep + 1;
+    }
+    return false;
+}
+
+static bool msvc_environment_looks_initialized() {
+    return executable_on_path("cl.exe") && env_var_has_value("INCLUDE") && env_var_has_value("LIB") && env_var_has_value("LIBPATH");
+}
+#endif
 
 static void record_system_prefix_path(Interpreter& interp, const std::string& system_prefix_path) {
     std::string install_prefix = interp.get_variable("CMAKE_INSTALL_PREFIX");
@@ -156,6 +197,29 @@ static void apply_platform_profile(Interpreter& interp, const platform::Platform
     interp.set_variable("CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES", join_cmake_list(profile.platform_implicit_link_directories));
 }
 
+static std::string current_compiler_id(const Interpreter& interp) {
+    std::string compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+    if (compiler_id.empty()) compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    return compiler_id;
+}
+
+static std::string current_system_name(const Interpreter& interp) {
+    std::string system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+    if (system_name.empty()) {
+        auto host = platform::host_info();
+        system_name = host.system_name;
+    }
+    return system_name;
+}
+
+static platform::PlatformProfile platform_profile_for(const Interpreter& interp, std::string_view compiler_id) {
+    return platform::profile_for(current_system_name(interp), compiler_id);
+}
+
+static platform::PlatformProfile current_platform_profile(const Interpreter& interp) {
+    return platform_profile_for(interp, current_compiler_id(interp));
+}
+
 static bool backup_vars_empty() {
     std::lock_guard lk(backup_vars_mu);
     return backup_vars.empty();
@@ -217,30 +281,43 @@ static constexpr std::array asm_lang_vars = {
 // Build a cache key for a compiler binary: "<binary>:<realpath>:<mtime>:<sysroot>:<target>"
 // Cheap to compute (no subprocesses), changes when binary is updated or swapped via
 // symlink, or when sysroot / compiler-target alters the implicit dirs of detection.
-std::string make_compiler_cache_key(const std::string& binary, const std::string& sysroot = {}, const std::string& compiler_target = {}) {
+std::string make_compiler_cache_key(const std::string& binary, const std::string& sysroot = {}, const std::string& compiler_target = {},
+                                    std::string_view lang = {}) {
     // Resolve to absolute path via which(1)-style lookup
     std::error_code ec;
     auto resolved = std::filesystem::canonical(
         // If binary is just a name (e.g. "g++"), we need the full path.
         // /usr/bin/<binary> is the common case on Linux.
-        binary.find('/') != std::string::npos ? binary : "/usr/bin/" + binary, ec);
-    if (ec) return binary + ":unresolved:0:" + sysroot + ":" + compiler_target;
+        compiler_binary_has_path_separator(binary) ? binary : "/usr/bin/" + binary, ec);
+    if (ec) return binary + ":unresolved:0:" + sysroot + ":" + compiler_target + ":" + std::string(lang);
 
     auto mtime = std::filesystem::last_write_time(resolved, ec);
-    if (ec) return binary + ":" + resolved.string() + ":0:" + sysroot + ":" + compiler_target;
+    if (ec) return binary + ":" + resolved.string() + ":0:" + sysroot + ":" + compiler_target + ":" + std::string(lang);
 
     auto mtime_val = mtime.time_since_epoch().count();
-    return binary + ":" + resolved.string() + ":" + std::to_string(mtime_val) + ":" + sysroot + ":" + compiler_target;
+    return binary + ":" + resolved.string() + ":" + std::to_string(mtime_val) + ":" + sysroot + ":" + compiler_target + ":"
+           + std::string(lang);
+}
+
+std::string compiler_version_probe_output(const std::string& binary, const PlatformInfo& info) {
+    if (info.compiler_id == "MSVC") return MsvcCompiler::version_probe_output(binary);
+    return detail::run_command(binary + " --version 2>&1");
 }
 
 // Try to load compiler detection from disk cache. Returns nullopt on miss.
-// On hit, validates by running --version and comparing output.
+// On hit, validates by comparing the compiler family's version probe output.
 std::optional<PlatformInfo> try_cached_compiler_detection(CacheStore& cache, const std::string& binary, const std::string& cache_key) {
     auto cached = cache.lookup<CacheSubsystem::CompilerDetection>(cache_key);
     if (!cached) return std::nullopt;
+    if (cached->info.compiler_id == "MSVC") {
+        // MSVC detection depends on the current Developer PowerShell / Native
+        // Tools environment, not just the cl.exe binary. Revalidate live so a
+        // stale cache cannot hide missing INCLUDE/LIB/LIBPATH setup.
+        return std::nullopt;
+    }
 
-    // Validate: run --version and compare (1 subprocess)
-    std::string version_output = detail::run_command(binary + " --version 2>&1");
+    // Validate: run the compiler-family version probe and compare (1 subprocess).
+    std::string version_output = compiler_version_probe_output(binary, cached->info);
     if (version_output != cached->version_output) {
         return std::nullopt; // Compiler changed (e.g. shim switched target)
     }
@@ -252,17 +329,46 @@ std::optional<PlatformInfo> try_cached_compiler_detection(CacheStore& cache, con
 // Disk-cached, validates with --version. On miss, runs the full detection.
 // This is the on-demand path used when the user specifies a non-default
 // CMAKE_<LANG>_COMPILER (toolchain file, -DCMAKE_<LANG>_COMPILER=, etc.).
-PlatformInfo detect_compiler_for(CacheStore& cache, const std::string& binary, Language lang, const std::string& sysroot,
-                                 const std::string& compiler_target) {
-    std::string key = make_compiler_cache_key(binary, sysroot, compiler_target);
+std::expected<PlatformInfo, std::string> detect_compiler_for(CacheStore& cache, const std::string& binary, Language lang,
+                                                            const std::string& sysroot, const std::string& compiler_target) {
+    const std::string lang_name = lang == Language::C ? "C" : (lang == Language::CXX ? "CXX" : "ASM");
+    std::string key = make_compiler_cache_key(binary, sysroot, compiler_target, lang_name);
     if (auto hit = try_cached_compiler_detection(cache, binary, key)) { return *hit; }
-    GnuCompiler probe(binary, lang, sysroot, compiler_target);
-    PlatformInfo info = probe.detect_platform();
+    std::unique_ptr<Compiler> probe;
+    if (is_msvc_compiler_binary(binary)) {
+        probe = std::make_unique<MsvcCompiler>(binary, lang);
+    } else {
+        probe = std::make_unique<GnuCompiler>(binary, lang, sysroot, compiler_target);
+    }
+
+    PlatformInfo info;
+    try {
+        info = probe->detect_platform();
+    } catch (const std::exception& e) {
+        return std::unexpected(e.what());
+    }
     CompilerDetectionCacheEntry entry;
     entry.info = info;
-    entry.version_output = detail::run_command(binary + " --version 2>&1");
+    entry.version_output = compiler_version_probe_output(binary, info);
     cache.insert<CacheSubsystem::CompilerDetection>(key, entry);
     return info;
+}
+
+std::string default_compiler_binary_for(Language lang) {
+#if defined(_WIN32)
+    if ((lang == Language::C || lang == Language::CXX) && msvc_environment_looks_initialized()) return "cl.exe";
+#endif
+    return lang == Language::C ? "gcc" : "g++";
+}
+
+PlatformInfo detect_uncached_compiler(const std::string& binary, Language lang, const std::string& sysroot = {},
+                                      const std::string& compiler_target = {}) {
+    if (is_msvc_compiler_binary(binary)) {
+        MsvcCompiler compiler(binary, lang);
+        return compiler.detect_platform();
+    }
+    GnuCompiler compiler(binary, lang, sysroot, compiler_target);
+    return compiler.detect_platform();
 }
 
 // Set CMAKE_<LANG><STD>_STANDARD_COMPILE_OPTION variables from the driver.
@@ -304,6 +410,8 @@ void populate_lang_vars(Interpreter& interp, const std::string& lang, const std:
     if (!info.system_processor.empty()) interp.set_variable("CMAKE_SYSTEM_PROCESSOR", info.system_processor);
     if (!info.sizeof_void_p.empty()) interp.set_variable("CMAKE_SIZEOF_VOID_P", info.sizeof_void_p);
 
+    apply_platform_profile(interp, platform_profile_for(interp, info.compiler_id));
+
     // CMAKE_CROSSCOMPILING is TRUE when the target system differs from host.
     // CMake sets this in CMakeDetermineSystem; mirroring it here means
     // try_run, find_package's root_path filtering, and user-side
@@ -324,12 +432,15 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
     // detection block and the rest block until it finishes — no torn
     // reads of an in-flight unordered_map.
     std::call_once(backup_vars_once, [&cache] {
+        try {
         // Try disk cache first, fall back to full detection
-        std::string cxx_cache_key = make_compiler_cache_key("g++");
-        std::string c_cache_key = make_compiler_cache_key("gcc");
+        const std::string cxx_binary = default_compiler_binary_for(Language::CXX);
+        const std::string c_binary = default_compiler_binary_for(Language::C);
+        std::string cxx_cache_key = make_compiler_cache_key(cxx_binary, {}, {}, "CXX");
+        std::string c_cache_key = make_compiler_cache_key(c_binary, {}, {}, "C");
 
-        auto cxx_cached = try_cached_compiler_detection(cache, "g++", cxx_cache_key);
-        auto c_cached = try_cached_compiler_detection(cache, "gcc", c_cache_key);
+        auto cxx_cached = try_cached_compiler_detection(cache, cxx_binary, cxx_cache_key);
+        auto c_cached = try_cached_compiler_detection(cache, c_binary, c_cache_key);
 
         PlatformInfo cxx_info, c_info;
 
@@ -342,53 +453,61 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
             auto detect_and_cache = [&cache](const std::string& binary, Language lang, const std::string& cache_key,
                                              std::optional<PlatformInfo> cached) -> PlatformInfo {
                 if (cached) return std::move(*cached);
-                GnuCompiler compiler(binary, lang);
-                auto info = compiler.detect_platform();
+                auto info = detect_uncached_compiler(binary, lang);
                 CompilerDetectionCacheEntry entry;
                 entry.info = info;
-                entry.version_output = detail::run_command(binary + " --version 2>&1");
+                entry.version_output = compiler_version_probe_output(binary, info);
                 cache.insert<CacheSubsystem::CompilerDetection>(cache_key, entry);
                 return info;
             };
 
-            auto cxx_future = std::async(std::launch::async, detect_and_cache, "g++", Language::CXX, cxx_cache_key, std::move(cxx_cached));
-            auto c_future = std::async(std::launch::async, detect_and_cache, "gcc", Language::C, c_cache_key, std::move(c_cached));
+            auto cxx_future =
+                std::async(std::launch::async, detect_and_cache, cxx_binary, Language::CXX, cxx_cache_key, std::move(cxx_cached));
+            auto c_future = std::async(std::launch::async, detect_and_cache, c_binary, Language::C, c_cache_key, std::move(c_cached));
             cxx_info = cxx_future.get();
             c_info = c_future.get();
         }
 
         // Cache CXX data in-process
-        backup_vars_set("CMAKE_CXX_COMPILER", "g++");
+        backup_vars_set("CMAKE_CXX_COMPILER", cxx_binary);
         backup_vars_set("CMAKE_CXX_COMPILER_ID", cxx_info.compiler_id);
         backup_vars_set("CMAKE_CXX_COMPILER_VERSION", cxx_info.compiler_version);
         backup_vars_set("CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(cxx_info.implicit_includes).to_string());
         backup_vars_set("CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES", CMakeArray(cxx_info.implicit_link_dirs).to_string());
         backup_vars_set("CMAKE_CXX_IMPLICIT_LINK_LIBRARIES", CMakeArray(cxx_info.implicit_link_libs).to_string());
         if (cxx_info.default_cxx_standard > 0) backup_vars_set("CMAKE_CXX_STANDARD_DEFAULT", std::to_string(cxx_info.default_cxx_standard));
-        // Host-default backup uses gcc-style -std= strings unconditionally:
-        // this block fires only when host detection resolved gcc/g++ (the
-        // default binary). User-pinned non-GCC compilers go through the
-        // on-demand path which queries the driver for std_compile_option().
-        backup_vars_set("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
-        backup_vars_set("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
-        backup_vars_set("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
-        backup_vars_set("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
-        backup_vars_set("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
-        backup_vars_set("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
+        if (cxx_info.compiler_id == "MSVC") {
+            backup_vars_set("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "/std:c++14");
+            backup_vars_set("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "/std:c++17");
+            backup_vars_set("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "/std:c++20");
+            backup_vars_set("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "/std:c++latest");
+        } else {
+            backup_vars_set("CMAKE_CXX98_STANDARD_COMPILE_OPTION", "-std=c++98");
+            backup_vars_set("CMAKE_CXX11_STANDARD_COMPILE_OPTION", "-std=c++11");
+            backup_vars_set("CMAKE_CXX14_STANDARD_COMPILE_OPTION", "-std=c++14");
+            backup_vars_set("CMAKE_CXX17_STANDARD_COMPILE_OPTION", "-std=c++17");
+            backup_vars_set("CMAKE_CXX20_STANDARD_COMPILE_OPTION", "-std=c++20");
+            backup_vars_set("CMAKE_CXX23_STANDARD_COMPILE_OPTION", "-std=c++23");
+        }
 
         // Cache C data in-process
-        backup_vars_set("CMAKE_C_COMPILER", "gcc");
+        backup_vars_set("CMAKE_C_COMPILER", c_binary);
         backup_vars_set("CMAKE_C_COMPILER_ID", c_info.compiler_id);
         backup_vars_set("CMAKE_C_COMPILER_VERSION", c_info.compiler_version);
         backup_vars_set("CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES", CMakeArray(c_info.implicit_includes).to_string());
         backup_vars_set("CMAKE_C_IMPLICIT_LINK_DIRECTORIES", CMakeArray(c_info.implicit_link_dirs).to_string());
         backup_vars_set("CMAKE_C_IMPLICIT_LINK_LIBRARIES", CMakeArray(c_info.implicit_link_libs).to_string());
         if (c_info.default_c_standard > 0) backup_vars_set("CMAKE_C_STANDARD_DEFAULT", std::to_string(c_info.default_c_standard));
-        backup_vars_set("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
-        backup_vars_set("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
-        backup_vars_set("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
-        backup_vars_set("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
-        backup_vars_set("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+        if (c_info.compiler_id == "MSVC") {
+            backup_vars_set("CMAKE_C11_STANDARD_COMPILE_OPTION", "/std:c11");
+            backup_vars_set("CMAKE_C17_STANDARD_COMPILE_OPTION", "/std:c17");
+        } else {
+            backup_vars_set("CMAKE_C90_STANDARD_COMPILE_OPTION", "-std=c90");
+            backup_vars_set("CMAKE_C99_STANDARD_COMPILE_OPTION", "-std=c99");
+            backup_vars_set("CMAKE_C11_STANDARD_COMPILE_OPTION", "-std=c11");
+            backup_vars_set("CMAKE_C17_STANDARD_COMPILE_OPTION", "-std=c17");
+            backup_vars_set("CMAKE_C23_STANDARD_COMPILE_OPTION", "-std=c23");
+        }
 
         // Cache system-level data (same for both compilers)
         backup_vars_set("CMAKE_SYSTEM_NAME", cxx_info.system_name);
@@ -396,6 +515,15 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
         backup_vars_set("CMAKE_SIZEOF_VOID_P", cxx_info.sizeof_void_p);
         backup_vars_set("CMAKE_HOST_SYSTEM_NAME", cxx_info.system_name);
         backup_vars_set("CMAKE_HOST_SYSTEM_PROCESSOR", cxx_info.system_processor);
+        } catch (const std::exception& e) {
+            backup_vars_set("KILN_HOST_COMPILER_DETECTION_ERROR", e.what());
+            auto host = platform::host_info();
+            backup_vars_set("CMAKE_SYSTEM_NAME", host.system_name);
+            backup_vars_set("CMAKE_SYSTEM_PROCESSOR", host.machine);
+            backup_vars_set("CMAKE_SIZEOF_VOID_P", std::to_string(sizeof(void*)));
+            backup_vars_set("CMAKE_HOST_SYSTEM_NAME", host.system_name);
+            backup_vars_set("CMAKE_HOST_SYSTEM_PROCESSOR", host.machine);
+        }
     });
 
     // Per-Interpreter: copy system-level vars out of the populated cache.
@@ -403,6 +531,9 @@ void fake_cmake_compiler_checks_and_init(Interpreter& interp, CacheStore& cache)
          {"CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR", "CMAKE_SIZEOF_VOID_P", "CMAKE_HOST_SYSTEM_NAME", "CMAKE_HOST_SYSTEM_PROCESSOR"}) {
         if (auto v = backup_vars_lookup(name)) { interp.set_variable(name, *v); }
     }
+    std::string compiler_id = backup_vars_get("CMAKE_CXX_COMPILER_ID");
+    if (compiler_id.empty()) compiler_id = backup_vars_get("CMAKE_C_COMPILER_ID");
+    apply_platform_profile(interp, platform_profile_for(interp, compiler_id));
     interp.set_variable("CMAKE_CFG_INTDIR", ".");
 }
 
@@ -414,7 +545,7 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
 
     if (lang == "C" || lang == "CXX") {
         const Language lang_enum = (lang == "C") ? Language::C : Language::CXX;
-        const std::string default_binary = (lang == "C") ? "gcc" : "g++";
+        const std::string default_binary = default_compiler_binary_for(lang_enum);
 
         // Resolve effective compiler and target options from current scope.
         // User-supplied values (toolchain file, -D, set() in CMakeLists)
@@ -476,6 +607,7 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         std::string detected_id;
         std::optional<PlatformInfo> on_demand_info;
         if (host_path) {
+            if (auto e = backup_vars_lookup("KILN_HOST_COMPILER_DETECTION_ERROR"); e && !e->empty()) return *e;
             auto apply_backup = [&](auto const& vars) {
                 for (const auto& var : vars) {
                     if (auto v = backup_vars_lookup(var); v && !v->empty()) set_variable(var, *v);
@@ -489,7 +621,9 @@ std::string Interpreter::enable_compiler_for_language(const std::string& lang) {
         } else {
             // On-demand detection against the user's compiler + sysroot/target.
             // Cache-keyed so repeat invocations are cheap.
-            on_demand_info = detect_compiler_for(*cache_store_, effective_binary, lang_enum, probe_sysroot, compiler_target);
+            auto detected = detect_compiler_for(*cache_store_, effective_binary, lang_enum, probe_sysroot, compiler_target);
+            if (!detected) return detected.error();
+            on_demand_info = std::move(*detected);
             detected_id = on_demand_info->compiler_id;
         }
 
@@ -3455,7 +3589,7 @@ void Interpreter::set_cache_variable(const std::string& var_name, const std::str
 }
 
 void Interpreter::refresh_platform_profile() {
-    refresh_profile_paths(*this, platform::host_profile());
+    refresh_profile_paths(*this, current_platform_profile(*this));
 }
 
 bool Interpreter::unset_variable(const std::string& name) {

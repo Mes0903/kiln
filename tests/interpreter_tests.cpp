@@ -168,6 +168,33 @@ TEST_CASE("Interpreter refreshes platform prefix snapshots after install prefix 
     REQUIRE(interpreter->get_variable("CMAKE_SYSTEM_INCLUDE_PATH") == "/custom/include");
 }
 
+TEST_CASE("Interpreter refreshes platform prefixes from the current compiler profile", "[interpreter][platform]") {
+    std::stringstream output;
+    auto interpreter = std::make_unique<kiln::Interpreter>("", &output, &output, std::nullopt, true, true);
+
+    interpreter->set_variable("CMAKE_INSTALL_PREFIX", "/opt/kiln-refresh-test");
+    interpreter->set_variable("CMAKE_EXECUTABLE_SUFFIX", ".custom");
+    interpreter->set_variable("CMAKE_SYSTEM_INCLUDE_PATH", "/custom/include");
+
+#ifdef _WIN32
+    interpreter->set_variable("CMAKE_SYSTEM_NAME", "Linux");
+    interpreter->set_variable("CMAKE_CXX_COMPILER_ID", "GNU");
+    const std::string expected_profile_prefix = "/usr/local";
+#else
+    interpreter->set_variable("CMAKE_SYSTEM_NAME", "Windows");
+    interpreter->set_variable("CMAKE_CXX_COMPILER_ID", "MSVC");
+    const std::string expected_profile_prefix = "C:/Program Files";
+#endif
+
+    interpreter->refresh_platform_profile();
+
+    const auto system_prefix_path = interpreter->get_variable("CMAKE_SYSTEM_PREFIX_PATH");
+    REQUIRE(system_prefix_path.find(expected_profile_prefix) != std::string::npos);
+    REQUIRE(system_prefix_path.find("/opt/kiln-refresh-test") != std::string::npos);
+    REQUIRE(interpreter->get_variable("CMAKE_EXECUTABLE_SUFFIX") == ".custom");
+    REQUIRE(interpreter->get_variable("CMAKE_SYSTEM_INCLUDE_PATH") == "/custom/include");
+}
+
 TEST_CASE("Interpreter initializes platform profile defaults", "[interpreter][platform]") {
     std::stringstream output;
     auto interpreter = std::make_unique<kiln::Interpreter>("", &output, &output, std::nullopt, true, true);

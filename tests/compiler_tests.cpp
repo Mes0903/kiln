@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include "kiln/gnu_compiler.hpp"
+#include "kiln/msvc_compiler.hpp"
 #include "kiln/utils.hpp"
+#include <stdexcept>
 #include <vector>
 
 using namespace kiln;
@@ -57,6 +60,120 @@ TEST_CASE("make_compiler handles Intel ICC with GNU-style driver", "[compiler][i
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-std=gnu++17") != cmd_vec.end());
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "-DICC_BUILD") != cmd_vec.end());
     CHECK(std::find(cmd_vec.begin(), cmd_vec.end(), "main.cpp") != cmd_vec.end());
+}
+
+TEST_CASE("MsvcCompiler: CXX compile command", "[compiler][msvc]") {
+    auto compiler = make_compiler("MSVC", "cl.exe", Language::CXX);
+    REQUIRE(compiler != nullptr);
+
+    CompileContext ctx;
+    ctx.source = "main.cpp";
+    ctx.output = "main.obj";
+    ctx.standard = "23";
+    ctx.includes = {"include"};
+    ctx.system_includes = {"sdk/include"};
+    ctx.definitions = {"DEBUG", "-DVERSION=1"};
+    ctx.options = {"/W4"};
+
+    auto cmd_vec = compiler->get_compile_command(ctx).argv;
+    auto has = [&](const std::string& s) { return std::find(cmd_vec.begin(), cmd_vec.end(), s) != cmd_vec.end(); };
+
+    CHECK(cmd_vec[0] == "cl.exe");
+    CHECK(has("/nologo"));
+    CHECK(has("/c"));
+    CHECK(has("/Fomain.obj"));
+    CHECK(has("/std:c++latest"));
+    CHECK(has("/Iinclude"));
+    CHECK(has("/external:Isdk/include"));
+    CHECK(has("/DDEBUG"));
+    CHECK(has("/DVERSION=1"));
+    CHECK(has("/W4"));
+    CHECK(has("main.cpp"));
+    CHECK_FALSE(has("-MMD"));
+    CHECK_FALSE(has("-fPIC"));
+}
+
+TEST_CASE("MsvcCompiler: version probe command quotes paths with spaces", "[compiler][msvc]") {
+    const std::string binary = "C:\\Program Files\\Microsoft Visual Studio\\VC\\Tools\\MSVC\\14.40\\bin\\Hostx64\\x64\\cl.exe";
+    const std::string command = msvc_detail::version_probe_command(binary);
+
+#if defined(_WIN32)
+    CHECK(command == "\"" + binary + "\" 2>&1");
+#else
+    CHECK(command == "'" + binary + "' 2>&1");
+#endif
+}
+
+TEST_CASE("MsvcCompiler: backslash compiler paths are path-like", "[compiler][msvc]") {
+    CHECK(msvc_detail::has_path_separator("C:\\toolchain\\bin\\cl.exe"));
+    CHECK(msvc_detail::has_path_separator("bin\\cl.exe"));
+    CHECK_FALSE(msvc_detail::has_path_separator("cl.exe"));
+}
+
+TEST_CASE("MsvcCompiler: C compile command", "[compiler][msvc]") {
+    auto compiler = make_compiler("MSVC", "cl.exe", Language::C);
+    REQUIRE(compiler != nullptr);
+
+    CompileContext ctx;
+    ctx.source = "main.c";
+    ctx.output = "main.obj";
+    ctx.standard = "17";
+
+    auto cmd_vec = compiler->get_compile_command(ctx).argv;
+    auto has = [&](const std::string& s) { return std::find(cmd_vec.begin(), cmd_vec.end(), s) != cmd_vec.end(); };
+
+    CHECK(cmd_vec[0] == "cl.exe");
+    CHECK(has("/std:c17"));
+    CHECK(has("main.c"));
+}
+
+TEST_CASE("MsvcCompiler: executable link command uses link.exe", "[compiler][msvc]") {
+    auto compiler = make_compiler("MSVC", "cl.exe", Language::CXX);
+    REQUIRE(compiler != nullptr);
+
+    LinkContext ctx;
+    ctx.output = "app.exe";
+    ctx.objects = {"main.obj", "util.obj"};
+    ctx.lib_dirs = {"build/lib"};
+    ctx.libs = {"user32", "C:/sdk/kernel32.lib", "/DEFAULTLIB:legacy"};
+    ctx.linker_flags = {"/DEBUG"};
+
+    auto cmd_vec = compiler->get_link_command(ctx).argv;
+    auto has = [&](const std::string& s) { return std::find(cmd_vec.begin(), cmd_vec.end(), s) != cmd_vec.end(); };
+
+    CHECK(cmd_vec[0] == "link.exe");
+    CHECK(has("/NOLOGO"));
+    CHECK(has("/OUT:app.exe"));
+    CHECK(has("main.obj"));
+    CHECK(has("util.obj"));
+    CHECK(has("/LIBPATH:build/lib"));
+    CHECK(has("user32.lib"));
+    CHECK(has("C:/sdk/kernel32.lib"));
+    CHECK(has("/DEFAULTLIB:legacy"));
+    CHECK(has("/DEBUG"));
+}
+
+TEST_CASE("MsvcCompiler: shared link command is not implemented", "[compiler][msvc]") {
+    auto compiler = make_compiler("MSVC", "cl.exe", Language::CXX);
+    REQUIRE(compiler != nullptr);
+
+    LinkContext ctx;
+    ctx.output = "mylib.dll";
+    ctx.objects = {"main.obj"};
+    ctx.is_shared = true;
+
+    CHECK_THROWS_AS(compiler->get_link_command(ctx), std::runtime_error);
+    CHECK_THROWS_WITH(compiler->get_link_command(ctx),
+                      Catch::Matchers::ContainsSubstring("MSVC shared-library linking is not implemented yet"));
+}
+
+TEST_CASE("MsvcCompiler: static archive command uses lib.exe", "[compiler][msvc]") {
+    auto compiler = make_compiler("MSVC", "cl.exe", Language::CXX);
+    REQUIRE(compiler != nullptr);
+
+    auto cmd = compiler->get_archive_command("mylib.lib", {"a.obj", "b.obj"});
+
+    REQUIRE(cmd == std::vector<std::string>{"lib.exe", "/NOLOGO", "/OUT:mylib.lib", "a.obj", "b.obj"});
 }
 
 TEST_CASE("GnuCompiler: Link command", "[compiler]") {
