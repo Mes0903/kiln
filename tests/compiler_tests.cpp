@@ -153,7 +153,7 @@ TEST_CASE("MsvcCompiler: executable link command uses link.exe", "[compiler][msv
     CHECK(has("/DEBUG"));
 }
 
-TEST_CASE("MsvcCompiler: shared link command is not implemented", "[compiler][msvc]") {
+TEST_CASE("MsvcCompiler: shared link command emits dll and import library", "[compiler][msvc]") {
     auto compiler = make_compiler("MSVC", "cl.exe", Language::CXX);
     REQUIRE(compiler != nullptr);
 
@@ -161,10 +161,21 @@ TEST_CASE("MsvcCompiler: shared link command is not implemented", "[compiler][ms
     ctx.output = "mylib.dll";
     ctx.objects = {"main.obj"};
     ctx.is_shared = true;
+    ctx.import_library = "mylib.lib";
+    ctx.libs = {"user32"};
+    ctx.linker_flags = {"/DEBUG"};
 
-    CHECK_THROWS_AS(compiler->get_link_command(ctx), std::runtime_error);
-    CHECK_THROWS_WITH(compiler->get_link_command(ctx),
-                      Catch::Matchers::ContainsSubstring("MSVC shared-library linking is not implemented yet"));
+    auto cmd_vec = compiler->get_link_command(ctx).argv;
+    auto has = [&](const std::string& s) { return std::find(cmd_vec.begin(), cmd_vec.end(), s) != cmd_vec.end(); };
+
+    CHECK(cmd_vec[0] == "link.exe");
+    CHECK(has("/NOLOGO"));
+    CHECK(has("/DLL"));
+    CHECK(has("/OUT:mylib.dll"));
+    CHECK(has("/IMPLIB:mylib.lib"));
+    CHECK(has("main.obj"));
+    CHECK(has("user32.lib"));
+    CHECK(has("/DEBUG"));
 }
 
 TEST_CASE("MsvcCompiler: static archive command uses lib.exe", "[compiler][msvc]") {

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <optional>
 #include "language.hpp"
+#include "target_artifacts.hpp"
 #include "shadow_map.hpp"
 
 namespace kiln {
@@ -198,6 +199,11 @@ public:
     void set_cxx_standard(const std::string& standard) { set_language_standard(Language::CXX, standard); }
     const std::string& get_cxx_standard() const { return get_language_standard(Language::CXX); }
 
+    virtual TargetArtifacts get_artifacts(class GenexEvaluator* evaluator = nullptr) const;
+    virtual std::string get_runtime_artifact_path(class GenexEvaluator* evaluator = nullptr) const;
+    virtual std::string get_linker_artifact_path(class GenexEvaluator* evaluator = nullptr) const;
+    virtual std::string get_archive_artifact_path(class GenexEvaluator* evaluator = nullptr) const;
+    virtual std::string get_import_library_path(class GenexEvaluator* evaluator = nullptr) const;
     virtual std::string get_output_path(class GenexEvaluator* evaluator = nullptr) const;
 
     // The core task generation logic
@@ -283,8 +289,8 @@ protected:
                                    class GenexEvaluator& evaluator);
 
     // Handle a circular dependency detected during resolve().
-    void handle_circular_dep(const Target& dep, bool is_public, bool is_interface_only, std::vector<std::string>& res_libs,
-                             std::vector<std::string>& res_iface_libs);
+    void handle_circular_dep(const Target& dep, class GenexEvaluator& evaluator, bool is_public, bool is_interface_only,
+                             std::vector<std::string>& res_libs, std::vector<std::string>& res_iface_libs);
 
     // Circular static lib deps recorded during resolve() for deferred property pickup.
     std::vector<std::string> deferred_circular_deps_;
@@ -431,7 +437,8 @@ private:
 
 // Compute the object file path for a source file within a target.
 // Single source of truth — used by target task generation, genex evaluator, and module collator.
-std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path);
+std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path,
+                         std::string_view object_suffix = ".o");
 
 // Generate a task for an add_custom_command rule (and its custom-command DEPENDS chain).
 // Used by the missing-dependency resolver when a target's input/dep is the OUTPUT of a
@@ -439,6 +446,7 @@ std::string get_obj_path(const std::string& binary_dir, const std::string& targe
 std::expected<void, std::string>
 generate_custom_command_task_for_rule(GraphTransaction& txn, const CustomCommandRule& rule, const TargetMap& all_targets,
                                       const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
-                                      std::set<std::string>& generated, const std::unordered_map<std::string, std::string>& target_aliases);
+                                      std::set<std::string>& generated, class GenexEvaluator& evaluator,
+                                      const std::unordered_map<std::string, std::string>& target_aliases);
 
 } // namespace kiln

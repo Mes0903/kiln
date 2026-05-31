@@ -684,20 +684,20 @@ void Target::propagate_from_dependency(const Target& dep, const std::vector<Prop
 
     // 2. Add dependency's own artifact + transitive link deps to LINK_LIBRARIES
     auto& output_libs = output_props["LINK_LIBRARIES"];
-    std::string dep_path = dep.get_output_path();
+    std::string dep_path = dep.get_linker_artifact_path(&evaluator);
     if (!dep_path.empty()) { output_libs.push_back(std::move(dep_path)); }
     merge_dedup(output_libs, collect_link_deps(dep));
 }
 
-void Target::handle_circular_dep(const Target& dep, bool is_public, bool is_interface_only, std::vector<std::string>& res_libs,
-                                 std::vector<std::string>& res_iface_libs) {
+void Target::handle_circular_dep(const Target& dep, GenexEvaluator& evaluator, bool is_public, bool is_interface_only,
+                                 std::vector<std::string>& res_libs, std::vector<std::string>& res_iface_libs) {
     if (dep.get_type() != TargetType::STATIC_LIBRARY && dep.get_type() != TargetType::OBJECT_LIBRARY) {
         throw std::runtime_error("Circular dependency: " + name_ + " -> " + dep.get_name());
     }
     kiln::print_message(std::cerr, "WARNING",
                         "Circular dependency between static libraries '" + name_ + "' and '" + dep.get_name()
                             + "'. Consider restructuring.");
-    std::string dep_path = dep.get_output_path();
+    std::string dep_path = dep.get_linker_artifact_path(&evaluator);
     if (!dep_path.empty()) {
         if (!is_interface_only) res_libs.push_back(dep_path);
         if (is_public || is_interface_only) res_iface_libs.push_back(dep_path);
@@ -762,7 +762,7 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
         resolved_target_deps_.push_back(lib_name);
 
         if (dep->is_visiting()) {
-            handle_circular_dep(*dep, is_public, is_interface_only, res_libs, res_iface_libs);
+            handle_circular_dep(*dep, evaluator, is_public, is_interface_only, res_libs, res_iface_libs);
             return;
         }
 
@@ -894,11 +894,16 @@ void Target::resolve(const TargetMap& all_targets, const Interpreter& interp) {
 
 // --- Task Generation ---
 
-std::string Target::get_output_path(GenexEvaluator* evaluator) const {
+TargetArtifacts Target::get_artifacts(GenexEvaluator* evaluator) const {
     // Interface libraries have no linkable output - they only propagate properties
-    if (type_ == TargetType::INTERFACE_LIBRARY) { return ""; }
+    if (type_ == TargetType::INTERFACE_LIBRARY) { return {}; }
 
-    if (is_imported_ && !imported_location_.empty()) { return imported_location_; }
+    if (is_imported_ && !imported_location_.empty()) {
+        TargetArtifacts artifacts;
+        artifacts.runtime = imported_location_;
+        artifacts.linker = imported_location_;
+        return artifacts;
+    }
 
     // Helper: read a property, evaluating genex if an evaluator is available
     auto eval_prop = [&](const std::string& prop) -> std::string {
@@ -907,40 +912,41 @@ std::string Target::get_output_path(GenexEvaluator* evaluator) const {
 
     // Per-artifact OUTPUT_NAME override (RUNTIME/ARCHIVE/LIBRARY) takes
     // precedence over OUTPUT_NAME, which itself overrides target name.
-    std::string out_name;
-    const char* per_type_name_prop = nullptr;
-    if (type_ == TargetType::EXECUTABLE)
-        per_type_name_prop = "RUNTIME_OUTPUT_NAME";
-    else if (type_ == TargetType::STATIC_LIBRARY)
-        per_type_name_prop = "ARCHIVE_OUTPUT_NAME";
-    else if (type_ == TargetType::SHARED_LIBRARY)
-        per_type_name_prop = "LIBRARY_OUTPUT_NAME";
-    if (per_type_name_prop) out_name = eval_prop(per_type_name_prop);
-    if (out_name.empty()) out_name = get_output_name();
+    const GenexEvaluationContext* ctx = evaluator ? &evaluator->context() : nullptr;
+    const bool has_import_library = type_ == TargetType::SHARED_LIBRARY && ctx && !ctx->import_library_suffix.empty()
+                                    && (ctx->cxx_compiler_id == "MSVC" || ctx->c_compiler_id == "MSVC");
+
+    auto context_value_or = [&](const std::string GenexEvaluationContext::*member, std::string fallback) {
+        if (!ctx) return fallback;
+        // Empty prefixes/suffixes are meaningful on Windows, so a populated
+        // context is authoritative even when the selected value is empty.
+        return ctx->*member;
+    };
+
+    auto output_name = [&](std::string_view per_artifact_prop) {
+        std::string out_name = eval_prop(std::string(per_artifact_prop));
+        if (out_name.empty()) out_name = eval_prop("OUTPUT_NAME");
+        if (out_name.empty()) out_name = get_output_name();
+
+        if (type_ == TargetType::SHARED_LIBRARY || type_ == TargetType::STATIC_LIBRARY) {
+            if (!build_type_.empty()) {
+                std::string upper;
+                upper.reserve(build_type_.size());
+                for (char c : build_type_) upper.push_back(std::toupper(static_cast<unsigned char>(c)));
+                std::string postfix = eval_prop(upper + "_POSTFIX");
+                if (!postfix.empty()) out_name += postfix;
+            }
+        }
+        return out_name;
+    };
 
     // <CONFIG>_POSTFIX (and DEBUG_POSTFIX) — appended for libraries only,
-    // matching CMake. Single-config: build_type_ is captured at definition.
-    if (type_ == TargetType::SHARED_LIBRARY || type_ == TargetType::STATIC_LIBRARY) {
-        if (!build_type_.empty()) {
-            std::string upper;
-            upper.reserve(build_type_.size());
-            for (char c : build_type_) upper.push_back(std::toupper((unsigned char) c));
-            std::string postfix = eval_prop(upper + "_POSTFIX");
-            if (!postfix.empty()) out_name += postfix;
-        }
-    }
-
     // Determine output directory: per-target property overrides binary_dir_.
     // CMake mapping: EXECUTABLE → RUNTIME, STATIC → ARCHIVE, SHARED → LIBRARY.
-    std::string output_dir;
-    if (type_ == TargetType::EXECUTABLE) {
-        output_dir = eval_prop("RUNTIME_OUTPUT_DIRECTORY");
-    } else if (type_ == TargetType::STATIC_LIBRARY) {
-        output_dir = eval_prop("ARCHIVE_OUTPUT_DIRECTORY");
-    } else if (type_ == TargetType::SHARED_LIBRARY) {
-        output_dir = eval_prop("LIBRARY_OUTPUT_DIRECTORY");
-    }
-    const auto& dir = output_dir.empty() ? binary_dir_ : output_dir;
+    auto output_dir = [&](std::string_view prop) {
+        std::string dir = eval_prop(std::string(prop));
+        return dir.empty() ? binary_dir_ : dir;
+    };
 
     // Determine prefix and suffix, respecting target properties
     std::string prefix_prop = eval_prop("PREFIX");
@@ -948,33 +954,72 @@ std::string Target::get_output_path(GenexEvaluator* evaluator) const {
     bool has_prefix = !prefix_prop.empty() || properties_.count("PREFIX");
     bool has_suffix = !suffix_prop.empty() || properties_.count("SUFFIX");
 
+    auto prefixed_filename = [&](const std::string& name, const std::string& prefix, const std::string& suffix) {
+        return (has_prefix ? prefix_prop : prefix) + name + (has_suffix ? suffix_prop : suffix);
+    };
+
+    auto make_path = [](const std::string& dir, const std::string& filename) {
+        Path path = Path(dir) / filename;
+        return dir.empty() ? path.str() : path.lexically_normal().str();
+    };
+
+    TargetArtifacts artifacts;
     std::string filename;
     if (type_ == TargetType::EXECUTABLE) {
-        std::string prefix = has_prefix ? prefix_prop : "";
-        std::string suffix = has_suffix ? suffix_prop : "";
-        filename = prefix + out_name + suffix;
+        filename = prefixed_filename(output_name("RUNTIME_OUTPUT_NAME"), "", context_value_or(&GenexEvaluationContext::executable_suffix, ""));
+        artifacts.runtime = make_path(output_dir("RUNTIME_OUTPUT_DIRECTORY"), filename);
+        artifacts.linker = artifacts.runtime;
     } else if (type_ == TargetType::SHARED_LIBRARY) {
-        std::string prefix = has_prefix ? prefix_prop : "lib";
-        std::string suffix = has_suffix ? suffix_prop : ".so";
-        filename = prefix + out_name + suffix;
+        filename = prefixed_filename(output_name(has_import_library ? "RUNTIME_OUTPUT_NAME" : "LIBRARY_OUTPUT_NAME"),
+                                     context_value_or(&GenexEvaluationContext::shared_library_prefix, "lib"),
+                                     context_value_or(&GenexEvaluationContext::shared_library_suffix, ".so"));
         // VERSION/SOVERSION → real on-disk file is libfoo.so.<VERSION>
         // (or .<SOVERSION> if only SOVERSION is set), with symlinks created
         // by the link task. Matches CMake.
-        if (!has_suffix) {
+        if (!has_import_library && !has_suffix) {
             std::string ver = eval_prop("VERSION");
             if (ver.empty()) ver = eval_prop("SOVERSION");
             if (!ver.empty()) filename += "." + ver;
         }
+        artifacts.runtime = make_path(output_dir(has_import_library ? "RUNTIME_OUTPUT_DIRECTORY" : "LIBRARY_OUTPUT_DIRECTORY"), filename);
+        artifacts.linker = artifacts.runtime;
+        if (has_import_library) {
+            auto import_filename =
+                prefixed_filename(output_name("ARCHIVE_OUTPUT_NAME"), context_value_or(&GenexEvaluationContext::import_library_prefix, ""),
+                                  context_value_or(&GenexEvaluationContext::import_library_suffix, ""));
+            artifacts.import_library = make_path(output_dir("ARCHIVE_OUTPUT_DIRECTORY"), import_filename);
+            artifacts.linker = artifacts.import_library;
+        }
     } else if (type_ == TargetType::STATIC_LIBRARY) {
-        std::string prefix = has_prefix ? prefix_prop : "lib";
-        std::string suffix = has_suffix ? suffix_prop : ".a";
-        filename = prefix + out_name + suffix;
+        filename = prefixed_filename(output_name("ARCHIVE_OUTPUT_NAME"), context_value_or(&GenexEvaluationContext::static_library_prefix, "lib"),
+                                     context_value_or(&GenexEvaluationContext::static_library_suffix, ".a"));
+        artifacts.archive = make_path(output_dir("ARCHIVE_OUTPUT_DIRECTORY"), filename);
+        artifacts.linker = artifacts.archive;
     } else {
-        return "";
+        return {};
     }
 
-    Path path = Path(dir) / filename;
-    return dir.empty() ? path.str() : path.lexically_normal().str();
+    return artifacts;
+}
+
+std::string Target::get_runtime_artifact_path(GenexEvaluator* evaluator) const {
+    return get_artifacts(evaluator).runtime;
+}
+
+std::string Target::get_linker_artifact_path(GenexEvaluator* evaluator) const {
+    return get_artifacts(evaluator).linker;
+}
+
+std::string Target::get_archive_artifact_path(GenexEvaluator* evaluator) const {
+    return get_artifacts(evaluator).archive;
+}
+
+std::string Target::get_import_library_path(GenexEvaluator* evaluator) const {
+    return get_artifacts(evaluator).import_library;
+}
+
+std::string Target::get_output_path(GenexEvaluator* evaluator) const {
+    return get_artifacts(evaluator).default_path();
 }
 
 // --- Qt Autogen Helpers ---
@@ -1016,7 +1061,8 @@ static std::string normalize_include(const std::string& dir) {
     return dir.substr(0, end);
 }
 
-std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path) {
+std::string get_obj_path(const std::string& binary_dir, const std::string& target_name, const std::string& source_path,
+                         std::string_view object_suffix) {
     Path src(source_path);
     std::string_view obj_suffix;
 
@@ -1044,14 +1090,20 @@ std::string get_obj_path(const std::string& binary_dir, const std::string& targe
     }
 
     Path obj = (Path(binary_dir) / "objs") / target_name / sanitized;
-    std::string obj_str = obj.str() + ".o";
+    std::string suffix(object_suffix.empty() ? ".o" : object_suffix);
+    std::string obj_str = obj.str() + suffix;
     return binary_dir.empty() ? obj_str : Path(obj_str).lexically_normal().str();
 }
 
 // Resolve executable target names in the first argument of COMMAND clauses.
 // CMake replaces bare target names with the built binary path and adds an implicit dependency.
+static std::string executable_runtime_artifact(const Target& target, GenexEvaluator& evaluator) {
+    std::string output = target.get_runtime_artifact_path(&evaluator);
+    return output.empty() ? target.get_output_path(&evaluator) : output;
+}
+
 static void resolve_command_target_references(std::vector<std::vector<std::string>>& commands, BuildTask& task,
-                                              const TargetMap& all_targets,
+                                              const TargetMap& all_targets, GenexEvaluator& evaluator,
                                               const std::unordered_map<std::string, std::string>& target_aliases = {}) {
     for (auto& cmd : commands) {
         if (cmd.empty()) continue;
@@ -1070,33 +1122,22 @@ static void resolve_command_target_references(std::vector<std::vector<std::strin
 
         // Fall back: executable whose OUTPUT_NAME or output path matches the command
         if (!resolved) {
-            // thread_local: parallel EP orchestrators each pass a different
-            // all_targets map; sharing this cache across threads races.
-            thread_local const TargetMap* cached_source = nullptr;
-            thread_local std::unordered_map<std::string, std::shared_ptr<Target>> output_name_map;
-            thread_local std::unordered_map<std::string, std::shared_ptr<Target>> output_path_map;
-            if (&all_targets != cached_source) {
-                cached_source = &all_targets;
-                output_name_map.clear();
-                output_path_map.clear();
-                for (const auto& [name, target] : all_targets) {
-                    if (target->get_type() == TargetType::EXECUTABLE) {
-                        output_name_map.emplace(target->get_output_name(), target);
-                        auto path = target->get_output_path();
-                        if (!path.empty()) output_path_map.emplace(path, target);
-                    }
+            for (const auto& [name, target] : all_targets) {
+                if (target->get_type() != TargetType::EXECUTABLE) continue;
+                if (target->get_output_name() == cmd[0]) {
+                    resolved = target;
+                    break;
                 }
-            }
-            auto oit = output_name_map.find(cmd[0]);
-            if (oit != output_name_map.end()) resolved = oit->second;
-            if (!resolved) {
-                auto pit = output_path_map.find(cmd[0]);
-                if (pit != output_path_map.end()) resolved = pit->second;
+                auto path = executable_runtime_artifact(*target, evaluator);
+                if (!path.empty() && path == cmd[0]) {
+                    resolved = target;
+                    break;
+                }
             }
         }
 
         if (resolved) {
-            std::string output = resolved->get_output_path();
+            std::string output = executable_runtime_artifact(*resolved, evaluator);
             if (!output.empty()) {
                 cmd[0] = output;
                 task.explicit_deps.push_back(output);
@@ -1110,20 +1151,22 @@ static void resolve_command_target_references(std::vector<std::vector<std::strin
 static std::expected<void, std::string>
 generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule, const TargetMap& all_targets,
                              const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
-                             std::set<std::string>& generated, const std::unordered_map<std::string, std::string>& target_aliases);
+                             std::set<std::string>& generated, GenexEvaluator& evaluator,
+                             const std::unordered_map<std::string, std::string>& target_aliases);
 
 std::expected<void, std::string>
 generate_custom_command_task_for_rule(GraphTransaction& txn, const CustomCommandRule& rule, const TargetMap& all_targets,
                                       const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
-                                      std::set<std::string>& generated,
+                                      std::set<std::string>& generated, GenexEvaluator& evaluator,
                                       const std::unordered_map<std::string, std::string>& target_aliases) {
-    return generate_custom_command_task(txn, rule, all_targets, custom_rules, generated, target_aliases);
+    return generate_custom_command_task(txn, rule, all_targets, custom_rules, generated, evaluator, target_aliases);
 }
 
 static std::expected<void, std::string>
 generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rule, const TargetMap& all_targets,
                              const std::map<std::string, std::shared_ptr<CustomCommandRule>>& custom_rules,
-                             std::set<std::string>& generated, const std::unordered_map<std::string, std::string>& target_aliases) {
+                             std::set<std::string>& generated, GenexEvaluator& evaluator,
+                             const std::unordered_map<std::string, std::string>& target_aliases) {
     if (generated.count(rule.outputs[0]) || txn.has_task(rule.outputs[0])) return {};
     generated.insert(rule.outputs[0]);
 
@@ -1134,7 +1177,7 @@ generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rul
 
     for (const auto& cmd : rule.commands) { task.commands.push_back(cmd); }
 
-    resolve_command_target_references(task.commands, task, all_targets, target_aliases);
+    resolve_command_target_references(task.commands, task, all_targets, evaluator, target_aliases);
 
     for (const auto& out : rule.outputs) { task.outputs.push_back(out); }
 
@@ -1150,7 +1193,7 @@ generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rul
         const std::string& resolved_dep = (alias_it != target_aliases.end()) ? alias_it->second : dep;
         auto dep_it = all_targets.find(resolved_dep);
         if (dep_it != all_targets.end()) {
-            std::string dep_out = dep_it->second->get_output_path();
+            std::string dep_out = dep_it->second->get_output_path(&evaluator);
             if (!dep_out.empty()) {
                 task.explicit_deps.push_back(dep_out);
                 task.inputs.push_back(dep_out);
@@ -1176,7 +1219,9 @@ generate_custom_command_task(GraphTransaction& txn, const CustomCommandRule& rul
                 if (cc_it != custom_rules.end()) { normalized = bin_normalized; }
             }
             if (cc_it != custom_rules.end()) {
-                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated, target_aliases); !r)
+                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated, evaluator,
+                                                          target_aliases);
+                    !r)
                     return std::unexpected(std::move(r.error()));
                 task.explicit_deps.push_back(cc_it->second->outputs[0]);
             }
@@ -1207,6 +1252,8 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
 
     const auto& source_props = interp.get_source_properties();
     const auto& custom_rules = interp.get_custom_command_rules();
+    std::string object_suffix = interp.get_variable("CMAKE_OBJECT_FILE_SUFFIX");
+    if (object_suffix.empty()) object_suffix = ".o";
 
     // Cache terminal result (syscall)
     const bool color_diag = platform::is_terminal(platform::StandardStream::output);
@@ -1352,7 +1399,7 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
         if (cc_it == custom_rules.end()) cc_it = custom_rules.find(norm_bin);
         if (cc_it != custom_rules.end()) {
             if (!generated_custom_tasks.count(cc_it->second->outputs[0])) {
-                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_custom_tasks,
+                if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_custom_tasks, evaluator,
                                                           interp.get_target_aliases());
                     !r)
                     return std::unexpected(std::move(r.error()));
@@ -1385,7 +1432,7 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
 
             for (const auto& [name, target] : all_targets) {
                 if (target->is_imported()) continue;
-                std::string out = target->get_output_path();
+                std::string out = target->get_linker_artifact_path(&evaluator);
                 if (!out.empty()) lib_to_target[out] = target.get();
 
                 // Precompute custom command outputs for this target's sources
@@ -1425,7 +1472,7 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
                     auto rule_it = custom_rules.find(key);
                     if (rule_it != custom_rules.end()) {
                         if (auto r = generate_custom_command_task(txn, *rule_it->second, all_targets, custom_rules, generated_custom_tasks,
-                                                                  interp.get_target_aliases());
+                                                                  evaluator, interp.get_target_aliases());
                             !r)
                             return std::unexpected(std::move(r.error()));
                     }
@@ -1555,7 +1602,7 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
             throw std::runtime_error("No compiler available for language " + std::string(lang_info.name) + " in target '" + name_ + "'");
         }
 
-        std::string obj = get_obj_path(binary_dir_, name_, src);
+        std::string obj = get_obj_path(binary_dir_, name_, src, object_suffix);
         obj_files.push_back(obj);
 
         // src_abs_str already computed above
@@ -1722,7 +1769,7 @@ Target::generate_object_tasks(GraphTransaction& txn, const Toolchain& toolchain,
                     if (od_cc_it != custom_rules.end()) {
                         if (!generated_custom_tasks.count(od_cc_it->second->outputs[0])) {
                             if (auto r = generate_custom_command_task(txn, *od_cc_it->second, all_targets, custom_rules,
-                                                                      generated_custom_tasks, interp.get_target_aliases());
+                                                                      generated_custom_tasks, evaluator, interp.get_target_aliases());
                                 !r)
                                 return std::unexpected(std::move(r.error()));
                         }
@@ -1924,7 +1971,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             if (!cmd.working_dir.empty()) { pre_build.working_dir = cmd.working_dir; }
         }
 
-        resolve_command_target_references(pre_build.commands, pre_build, all_targets, interp.get_target_aliases());
+        resolve_command_target_references(pre_build.commands, pre_build, all_targets, evaluator, interp.get_target_aliases());
 
         if (auto r = txn.add(std::move(pre_build)); !r) return std::unexpected(std::move(r.error()));
     }
@@ -1938,7 +1985,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             for (const auto& dep_name : deps) {
                 auto it = all_targets.find(dep_name);
                 if (it != all_targets.end()) {
-                    std::string dep_out = it->second->get_output_path();
+                    std::string dep_out = it->second->get_output_path(&evaluator);
                     std::string id = dep_out.empty() ? dep_name : std::move(dep_out);
                     if (seen_dep_outputs.insert(id).second) { resolved_manual_deps.push_back({id}); }
                 }
@@ -2141,6 +2188,8 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
     // target names (transitively through static libs), so we just need to
     // gather their .o files here.
     {
+        std::string object_suffix = interp.get_variable("CMAKE_OBJECT_FILE_SUFFIX");
+        if (object_suffix.empty()) object_suffix = ".o";
         std::set<std::string> seen;
         for (const auto& obj_lib_name : resolved_object_lib_deps_) {
             if (!seen.insert(obj_lib_name).second) continue;
@@ -2158,7 +2207,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
                         auto hfo = sp_it->second.find("HEADER_FILE_ONLY");
                         if (hfo != sp_it->second.end() && !Interpreter::is_falsy(hfo->second)) { continue; }
                     }
-                    obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src));
+                    obj_files.push_back(get_obj_path(dep->get_binary_dir(), dep->get_name(), src, object_suffix));
                 }
             }
         }
@@ -2204,7 +2253,8 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
         }
     }
 
-    std::string output_path = get_output_path(&evaluator);
+    TargetArtifacts artifacts = get_artifacts(&evaluator);
+    std::string output_path = artifacts.default_path();
     BuildTask link;
     link.id = output_path;
     link.kind = LinkTask{};
@@ -2243,7 +2293,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
                 cached_source = &all_targets;
                 output_has_cxx.clear();
                 for (const auto& [name, tgt] : all_targets) {
-                    std::string tgt_output = tgt->get_output_path();
+                    std::string tgt_output = tgt->get_linker_artifact_path(&evaluator);
                     if (tgt_output.empty()) continue;
                     bool has_cxx = false;
                     for (const auto& src : tgt->get_property_list("SOURCES", TargetPropertyScope::BUILD)) {
@@ -2276,6 +2326,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
     } else {
         LinkContext ctx;
         ctx.output = output_path;
+        ctx.import_library = artifacts.import_library;
         ctx.objects = obj_files;
         ctx.is_shared = is_shared;
         ctx.is_pie = is_pie;
@@ -2319,8 +2370,9 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
                         ctx.libs.push_back(std::move(part));
                     }
                 }
-            } else if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") || lib.find(".so") != std::string::npos
-                       || lib.find(".a") != std::string::npos) {
+            } else if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") || lib.find('/') != std::string::npos
+                       || lib.find('\\') != std::string::npos || lib.find(".so") != std::string::npos
+                       || lib.find(".a") != std::string::npos || lib.find(".lib") != std::string::npos) {
                 ctx.objects.push_back(lib);
             } else {
                 ctx.libs.push_back(lib);
@@ -2367,7 +2419,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
         // The actual file is named libfoo.so.<VERSION> (see get_output_path);
         // sibling symlinks libfoo.so.<SOVERSION> and libfoo.so are created
         // after the link command below.
-        if (type_ == TargetType::SHARED_LIBRARY) {
+        if (type_ == TargetType::SHARED_LIBRARY && artifacts.import_library.empty()) {
             std::string soversion = get_property("SOVERSION");
             if (soversion.empty()) soversion = get_property("VERSION");
             if (!soversion.empty()) { ctx.soname = "lib" + get_output_name() + ".so." + soversion; }
@@ -2401,7 +2453,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             non_imported_outputs.clear();
             imported_by_output.clear();
             for (const auto& [name, target] : all_targets) {
-                std::string out = target->get_output_path();
+                std::string out = target->get_linker_artifact_path(&evaluator);
                 if (out.empty()) continue;
                 if (target->is_imported()) {
                     imported_by_output[out] = target.get();
@@ -2411,8 +2463,14 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             }
         }
 
+        auto is_link_artifact_path = [](const std::string& lib) {
+            return lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../") || lib.find('/') != std::string::npos
+                   || lib.find('\\') != std::string::npos || lib.find(".so") != std::string::npos || lib.find(".a") != std::string::npos
+                   || lib.find(".lib") != std::string::npos;
+        };
+
         for (const auto& lib : full_link_libs) {
-            if (lib.starts_with("/") || lib.starts_with("./") || lib.starts_with("../")) {
+            if (is_link_artifact_path(lib)) {
                 link.inputs.push_back(lib);
 
                 // Only add to dependencies if a non-imported target produces this.
@@ -2430,7 +2488,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             for (const auto& dep_name : imp_it->second->get_manually_added_dependencies()) {
                 auto dep_it = all_targets.find(dep_name);
                 if (dep_it != all_targets.end()) {
-                    std::string dep_out = dep_it->second->get_output_path();
+                    std::string dep_out = dep_it->second->get_output_path(&evaluator);
                     if (!dep_out.empty()) {
                         link.explicit_deps.push_back(dep_out);
                     } else {
@@ -2445,7 +2503,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
     for (const auto& dep_name : manually_added_dependencies_) {
         auto dep_it = all_targets.find(dep_name);
         if (dep_it != all_targets.end()) {
-            std::string dep_out = dep_it->second->get_output_path();
+            std::string dep_out = dep_it->second->get_output_path(&evaluator);
             if (!dep_out.empty()) {
                 link.explicit_deps.push_back(dep_out);
             } else {
@@ -2463,20 +2521,21 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
         // Add PRE_LINK commands first
         for (const auto& cmd : pre_link_commands_) { link.commands.push_back(cmd.command); }
 
-        resolve_command_target_references(link.commands, link, all_targets, interp.get_target_aliases());
+        resolve_command_target_references(link.commands, link, all_targets, evaluator, interp.get_target_aliases());
 
         // Then add the actual link command(s)
         for (auto& cmd : link_cmds) { link.commands.push_back(std::move(cmd)); }
     }
 
     link.outputs.push_back(output_path);
+    if (!artifacts.import_library.empty() && artifacts.import_library != output_path) { link.outputs.push_back(artifacts.import_library); }
 
     // Shared library VERSION/SOVERSION symlinks.
     // Real file (output_path) is libfoo.so.<VERSION>. Create:
     //   libfoo.so.<SOVERSION> -> libfoo.so.<VERSION>   (matches DT_SONAME)
     //   libfoo.so             -> libfoo.so.<SOVERSION> (or directly to real)
     // Symlink contents are basenames so the chain is relocatable.
-    if (type_ == TargetType::SHARED_LIBRARY) {
+    if (type_ == TargetType::SHARED_LIBRARY && artifacts.import_library.empty()) {
         std::string version = get_property("VERSION");
         std::string soversion = get_property("SOVERSION");
         if (soversion.empty()) soversion = version;
@@ -2532,7 +2591,7 @@ std::expected<void, std::string> Target::generate_tasks(GraphTransaction& txn, c
             if (!cmd.working_dir.empty()) { post_build.working_dir = cmd.working_dir; }
         }
 
-        resolve_command_target_references(post_build.commands, post_build, all_targets, interp.get_target_aliases());
+        resolve_command_target_references(post_build.commands, post_build, all_targets, evaluator, interp.get_target_aliases());
 
         // POST_BUILD depends on the link task completing
         post_build.explicit_deps.push_back(output_path);
@@ -2555,13 +2614,15 @@ std::expected<void, std::string> CustomTarget::generate_tasks(GraphTransaction& 
 
     const auto& custom_rules = interp.get_custom_command_rules();
     std::set<std::string> generated_cc_tasks;
+    auto genex_ctx = make_genex_context(this, interp, all_targets);
+    GenexEvaluator evaluator(genex_ctx);
 
     for (const auto& custom_cmd : custom_commands_) {
         task.commands.push_back(custom_cmd.command);
         if (!custom_cmd.working_dir.empty()) { task.working_dir = custom_cmd.working_dir; }
     }
 
-    resolve_command_target_references(task.commands, task, all_targets, interp.get_target_aliases());
+    resolve_command_target_references(task.commands, task, all_targets, evaluator, interp.get_target_aliases());
 
     // Handle DEPENDS from add_custom_target
     const auto& target_aliases = interp.get_target_aliases();
@@ -2581,7 +2642,7 @@ std::expected<void, std::string> CustomTarget::generate_tasks(GraphTransaction& 
         const std::string& resolved_dep = (alias_it != target_aliases.end()) ? alias_it->second : dep_name;
         auto dep_it = all_targets.find(resolved_dep);
         if (dep_it != all_targets.end()) {
-            std::string dep_out = dep_it->second->get_output_path();
+            std::string dep_out = dep_it->second->get_output_path(&evaluator);
             if (!dep_out.empty()) {
                 task.explicit_deps.push_back(dep_out);
                 task.inputs.push_back(dep_out);
@@ -2607,7 +2668,7 @@ std::expected<void, std::string> CustomTarget::generate_tasks(GraphTransaction& 
             }
             if (cc_it != custom_rules.end()) {
                 if (auto r = generate_custom_command_task(txn, *cc_it->second, all_targets, custom_rules, generated_cc_tasks,
-                                                          interp.get_target_aliases());
+                                                          evaluator, interp.get_target_aliases());
                     !r)
                     return std::unexpected(std::move(r.error()));
                 task.explicit_deps.push_back(cc_it->second->outputs[0]);
@@ -2620,7 +2681,7 @@ std::expected<void, std::string> CustomTarget::generate_tasks(GraphTransaction& 
     for (const auto& dep_name : manually_added_dependencies_) {
         auto dep_it = all_targets.find(dep_name);
         if (dep_it != all_targets.end()) {
-            std::string dep_out = dep_it->second->get_output_path();
+            std::string dep_out = dep_it->second->get_output_path(&evaluator);
             if (!dep_out.empty()) {
                 task.explicit_deps.push_back(dep_out);
             } else {
@@ -2789,6 +2850,8 @@ std::expected<bool, std::string> Target::generate_module_scanner_tasks(GraphTran
                                                                        const TargetMap& all_targets, const Interpreter& interp,
                                                                        int cxx_default_std) {
     std::vector<std::string> scanner_ids;
+    std::string object_suffix = interp.get_variable("CMAKE_OBJECT_FILE_SUFFIX");
+    if (object_suffix.empty()) object_suffix = ".o";
 
     auto sources = get_property_list("SOURCES", TargetPropertyScope::BUILD);
 
@@ -2831,7 +2894,7 @@ std::expected<bool, std::string> Target::generate_module_scanner_tasks(GraphTran
         // The obj path the compile task will produce. P1689 -fdeps-target
         // emits this as the rule's primary-output, which the collator uses
         // to re-join DDIs to obj task ids without path-relativizing.
-        std::string obj_path = get_obj_path(binary_dir_, name_, src);
+        std::string obj_path = get_obj_path(binary_dir_, name_, src, object_suffix);
 
         ModuleScanContext ctx;
         ctx.source = src_abs;

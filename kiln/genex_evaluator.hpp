@@ -40,7 +40,10 @@ struct GenexEvaluationContext {
     std::string static_library_suffix;      // CMAKE_STATIC_LIBRARY_SUFFIX
     std::string shared_library_prefix;      // CMAKE_SHARED_LIBRARY_PREFIX
     std::string shared_library_suffix;      // CMAKE_SHARED_LIBRARY_SUFFIX
+    std::string import_library_prefix;      // CMAKE_IMPORT_LIBRARY_PREFIX
+    std::string import_library_suffix;      // CMAKE_IMPORT_LIBRARY_SUFFIX
     std::string executable_suffix;          // CMAKE_EXECUTABLE_SUFFIX
+    std::string object_suffix;              // CMAKE_OBJECT_FILE_SUFFIX
     enum class Phase { BUILD, INSTALL } phase = Phase::BUILD;
     bool allow_deferred_compile_language = false; // For deferred evaluation
     const std::map<std::string, std::map<std::string, std::string>>* source_properties = nullptr;
@@ -65,6 +68,8 @@ public:
     // Evaluate a link library entry, returning structured result with metadata
     // Use this for LINK_LIBRARIES to properly handle $<LINK_ONLY:...>
     std::expected<LinkLibraryResult, std::string> evaluate_link_library(const std::string& input);
+
+    const GenexEvaluationContext& context() const { return ctx_; }
 
     // Convenience: read a scalar target property and evaluate genex if present.
     // Returns the raw value if no genex, evaluated value if genex, or "" on eval failure.

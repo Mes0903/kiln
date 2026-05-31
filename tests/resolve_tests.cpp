@@ -1,10 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include "kiln/target.hpp"
+#include "kiln/genex_evaluator.hpp"
 #include "kiln/interperter.hpp"
+#include "kiln/build_system.hpp"
 #include "kiln/cmake-language.hpp"
+#include "kiln/msvc_compiler.hpp"
 #include "kiln/builtins/registry.hpp"
 #include <filesystem>
 #include <sstream>
+#include <variant>
 
 using namespace kiln;
 
@@ -19,8 +23,17 @@ static auto run_and_resolve(const std::string& script) {
 
     // Set variables that resolve/genex evaluation needs
     interp.set_variable("CMAKE_BUILD_TYPE", "Debug");
+    interp.set_variable("CMAKE_SYSTEM_NAME", "Linux");
     interp.set_variable("CMAKE_CXX_COMPILER_ID", "GNU");
     interp.set_variable("CMAKE_C_COMPILER_ID", "GNU");
+    interp.set_variable("CMAKE_OBJECT_FILE_SUFFIX", ".o");
+    interp.set_variable("CMAKE_EXECUTABLE_SUFFIX", "");
+    interp.set_variable("CMAKE_SHARED_LIBRARY_PREFIX", "lib");
+    interp.set_variable("CMAKE_SHARED_LIBRARY_SUFFIX", ".so");
+    interp.set_variable("CMAKE_IMPORT_LIBRARY_PREFIX", "");
+    interp.set_variable("CMAKE_IMPORT_LIBRARY_SUFFIX", "");
+    interp.set_variable("CMAKE_STATIC_LIBRARY_PREFIX", "lib");
+    interp.set_variable("CMAKE_STATIC_LIBRARY_SUFFIX", ".a");
 
     interp.set_source_view(script);
     Parser parser(script);
@@ -42,6 +55,270 @@ static auto run_and_resolve(const std::string& script) {
 
 static bool contains(const std::vector<std::string>& vec, const std::string& val) {
     return std::find(vec.begin(), vec.end(), val) != vec.end();
+}
+
+static void configure_windows_msvc(Interpreter& interp) {
+    interp.set_variable("CMAKE_BUILD_TYPE", "Debug");
+    interp.set_variable("CMAKE_SYSTEM_NAME", "Windows");
+    interp.set_variable("CMAKE_CXX_COMPILER_ID", "MSVC");
+    interp.set_variable("CMAKE_C_COMPILER_ID", "MSVC");
+    interp.set_variable("CMAKE_OBJECT_FILE_SUFFIX", ".obj");
+    interp.set_variable("CMAKE_EXECUTABLE_SUFFIX", ".exe");
+    interp.set_variable("CMAKE_SHARED_LIBRARY_PREFIX", "");
+    interp.set_variable("CMAKE_SHARED_LIBRARY_SUFFIX", ".dll");
+    interp.set_variable("CMAKE_IMPORT_LIBRARY_PREFIX", "");
+    interp.set_variable("CMAKE_IMPORT_LIBRARY_SUFFIX", ".lib");
+    interp.set_variable("CMAKE_STATIC_LIBRARY_PREFIX", "");
+    interp.set_variable("CMAKE_STATIC_LIBRARY_SUFFIX", ".lib");
+    interp.get_toolchain().set_compiler(Language::CXX, make_compiler("MSVC", "cl.exe", Language::CXX));
+}
+
+TEST_CASE("Target artifacts expose Windows MSVC shared runtime and import library", "[target][artifacts][windows]") {
+    Target target("core", TargetType::SHARED_LIBRARY, "/src", "/build");
+    Target static_target("core_static", TargetType::STATIC_LIBRARY, "/src", "/build");
+
+    GenexEvaluationContext ctx;
+    ctx.cxx_compiler_id = "MSVC";
+    ctx.shared_library_prefix = "";
+    ctx.shared_library_suffix = ".dll";
+    ctx.import_library_prefix = "";
+    ctx.import_library_suffix = ".lib";
+    ctx.static_library_prefix = "";
+    ctx.static_library_suffix = ".lib";
+    GenexEvaluator eval(ctx);
+
+    auto artifacts = target.get_artifacts(&eval);
+    REQUIRE(artifacts.runtime == "/build/core.dll");
+    REQUIRE(artifacts.import_library == "/build/core.lib");
+    REQUIRE(artifacts.linker == "/build/core.lib");
+    REQUIRE(target.get_runtime_artifact_path(&eval) == "/build/core.dll");
+    REQUIRE(target.get_linker_artifact_path(&eval) == "/build/core.lib");
+    REQUIRE(target.get_import_library_path(&eval) == "/build/core.lib");
+    REQUIRE(target.get_output_path(&eval) == "/build/core.dll");
+
+    auto static_artifacts = static_target.get_artifacts(&eval);
+    REQUIRE(static_artifacts.archive == "/build/core_static.lib");
+    REQUIRE(static_artifacts.linker == "/build/core_static.lib");
+    REQUIRE(static_target.get_output_path(&eval) == "/build/core_static.lib");
+}
+
+TEST_CASE("Windows MSVC shared library consumers link the import library artifact", "[target][artifacts][windows]") {
+    std::string temp_dir = "build_test_windows_import_artifact";
+    std::filesystem::create_directories(temp_dir);
+
+    std::ostringstream out, err;
+    Interpreter interp(".", &out, &err, temp_dir);
+    register_target_builtins(interp);
+    configure_windows_msvc(interp);
+
+    const std::string script = R"(
+        add_library(core SHARED core.cpp)
+        add_executable(app main.cpp)
+        target_link_libraries(app PRIVATE core)
+    )";
+    interp.set_source_view(script);
+    Parser parser(script);
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+    REQUIRE(interp.interpret(*ast).has_value());
+
+    auto graph_result = interp.generate_build_graph({"app"});
+    REQUIRE(graph_result.has_value());
+
+    auto& targets = interp.get_targets();
+    auto genex_ctx = GenexEvaluationContext::from_interpreter(interp, targets);
+    GenexEvaluator eval(genex_ctx);
+    const std::string runtime_dll = targets["core"]->get_runtime_artifact_path(&eval);
+    const std::string import_lib = targets["core"]->get_linker_artifact_path(&eval);
+    REQUIRE(runtime_dll == (std::filesystem::path(temp_dir) / "core.dll").generic_string());
+    REQUIRE(import_lib == (std::filesystem::path(temp_dir) / "core.lib").generic_string());
+
+    const BuildTask* core_link = nullptr;
+    const BuildTask* app_link = nullptr;
+    for (const auto& task : graph_result->get_tasks()) {
+        if (!std::holds_alternative<LinkTask>(task->kind) || !task->parent_target) continue;
+        if (task->parent_target->get_name() == "core") core_link = task.get();
+        if (task->parent_target->get_name() == "app") app_link = task.get();
+    }
+
+    REQUIRE(core_link != nullptr);
+    REQUIRE(app_link != nullptr);
+    REQUIRE(contains(core_link->outputs, runtime_dll));
+    REQUIRE(contains(core_link->outputs, import_lib));
+    REQUIRE_FALSE(contains(app_link->commands.front(), runtime_dll));
+    REQUIRE(contains(app_link->commands.front(), import_lib));
+    REQUIRE(contains(app_link->inputs, import_lib));
+    REQUIRE(contains(app_link->explicit_deps, import_lib));
+
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("Windows MSVC versioned shared libraries do not add POSIX soname symlink artifacts", "[target][artifacts][windows]") {
+    std::string temp_dir = "build_test_windows_versioned_shared";
+    std::filesystem::create_directories(temp_dir);
+
+    std::ostringstream out, err;
+    Interpreter interp(".", &out, &err, temp_dir);
+    register_target_builtins(interp);
+    configure_windows_msvc(interp);
+
+    const std::string script = R"(
+        add_library(core SHARED core.cpp)
+        set_target_properties(core PROPERTIES VERSION 1.2.3 SOVERSION 1)
+    )";
+    interp.set_source_view(script);
+    Parser parser(script);
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+    REQUIRE(interp.interpret(*ast).has_value());
+
+    auto graph_result = interp.generate_build_graph({"core"});
+    REQUIRE(graph_result.has_value());
+
+    const std::string runtime_dll = (std::filesystem::path(temp_dir) / "core.dll").generic_string();
+    const std::string import_lib = (std::filesystem::path(temp_dir) / "core.lib").generic_string();
+
+    const BuildTask* core_link = nullptr;
+    for (const auto& task : graph_result->get_tasks()) {
+        if (std::holds_alternative<LinkTask>(task->kind) && task->parent_target && task->parent_target->get_name() == "core") {
+            core_link = task.get();
+            break;
+        }
+    }
+
+    REQUIRE(core_link != nullptr);
+    REQUIRE(contains(core_link->outputs, runtime_dll));
+    REQUIRE(contains(core_link->outputs, import_lib));
+    for (const auto& output : core_link->outputs) { REQUIRE(output.find(".so") == std::string::npos); }
+    for (const auto& command : core_link->commands) {
+        const bool is_ln_command = !command.empty() && command.front() == "ln";
+        REQUIRE_FALSE(is_ln_command);
+    }
+
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("Windows MSVC custom command COMMAND target resolves to executable artifact", "[target][artifacts][windows]") {
+    std::string temp_dir = "build_test_windows_custom_command_tool";
+    std::filesystem::create_directories(temp_dir);
+
+    std::ostringstream out, err;
+    Interpreter interp(".", &out, &err, temp_dir);
+    register_target_builtins(interp);
+    configure_windows_msvc(interp);
+
+    const std::string script = R"(
+        add_executable(tool tool.cpp)
+        add_custom_command(
+            OUTPUT generated.cpp
+            COMMAND tool --emit generated.cpp
+            DEPENDS tool)
+        add_executable(app generated.cpp)
+    )";
+    interp.set_source_view(script);
+    Parser parser(script);
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+    REQUIRE(interp.interpret(*ast).has_value());
+
+    auto graph_result = interp.generate_build_graph({"app"});
+    REQUIRE(graph_result.has_value());
+
+    const std::string tool_exe = (std::filesystem::path(temp_dir) / "tool.exe").generic_string();
+    const std::string generated_cpp = (std::filesystem::path(temp_dir) / "generated.cpp").generic_string();
+
+    const BuildTask* custom_command = nullptr;
+    for (const auto& task : graph_result->get_tasks()) {
+        if (std::holds_alternative<CustomCommandTask>(task->kind) && contains(task->outputs, generated_cpp)) {
+            custom_command = task.get();
+            break;
+        }
+    }
+
+    REQUIRE(custom_command != nullptr);
+    REQUIRE_FALSE(custom_command->commands.empty());
+    REQUIRE_FALSE(custom_command->commands.front().empty());
+    REQUIRE(custom_command->commands.front().front() == tool_exe);
+    REQUIRE(contains(custom_command->inputs, tool_exe));
+    REQUIRE(graph_result->has_task(tool_exe));
+
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("Windows MSVC add_dependencies uses static library artifact graph dependency", "[target][artifacts][windows]") {
+    std::string temp_dir = "build_test_windows_manual_static_dep";
+    std::filesystem::create_directories(temp_dir);
+
+    std::ostringstream out, err;
+    Interpreter interp(".", &out, &err, temp_dir);
+    register_target_builtins(interp);
+    configure_windows_msvc(interp);
+
+    const std::string script = R"(
+        add_library(core_static STATIC core.cpp)
+        add_executable(app main.cpp)
+        add_dependencies(app core_static)
+    )";
+    interp.set_source_view(script);
+    Parser parser(script);
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+    REQUIRE(interp.interpret(*ast).has_value());
+
+    auto graph_result = interp.generate_build_graph({"app"});
+    REQUIRE(graph_result.has_value());
+
+    const std::string core_lib = (std::filesystem::path(temp_dir) / "core_static.lib").generic_string();
+    const std::string posix_archive = (std::filesystem::path(temp_dir) / "libcore_static.a").generic_string();
+
+    REQUIRE(graph_result->has_task(core_lib));
+
+    bool app_task_depends_on_core_lib = false;
+    for (const auto& task : graph_result->get_tasks()) {
+        if (task->parent_target && task->parent_target->get_name() == "app") {
+            REQUIRE_FALSE(contains(task->inputs, posix_archive));
+            REQUIRE_FALSE(contains(task->explicit_deps, posix_archive));
+            for (const auto* dep : task->dependencies) {
+                if (dep->id == core_lib) app_task_depends_on_core_lib = true;
+            }
+        }
+    }
+    REQUIRE(app_task_depends_on_core_lib);
+
+    std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("Windows MSVC circular static dependencies use static library artifacts", "[target][artifacts][windows]") {
+    std::string temp_dir = "build_test_windows_circular_static_dep";
+    std::filesystem::create_directories(temp_dir);
+
+    std::ostringstream out, err;
+    Interpreter interp(".", &out, &err, temp_dir);
+    register_target_builtins(interp);
+    configure_windows_msvc(interp);
+
+    const std::string script = R"(
+        add_library(alpha STATIC alpha.cpp)
+        add_library(beta STATIC beta.cpp)
+        target_link_libraries(alpha PRIVATE beta)
+        target_link_libraries(beta PRIVATE alpha)
+    )";
+    interp.set_source_view(script);
+    Parser parser(script);
+    auto ast = parser.parse();
+    REQUIRE(ast.has_value());
+    REQUIRE(interp.interpret(*ast).has_value());
+
+    auto& targets = interp.get_targets();
+    targets["alpha"]->resolve(targets, interp);
+
+    const std::string alpha_lib = (std::filesystem::path(temp_dir) / "alpha.lib").generic_string();
+    const std::string posix_archive = (std::filesystem::path(temp_dir) / "libalpha.a").generic_string();
+    const auto& beta_link_libs = targets["beta"]->get_resolved_property("LINK_LIBRARIES");
+    REQUIRE(contains(beta_link_libs, alpha_lib));
+    REQUIRE_FALSE(contains(beta_link_libs, posix_archive));
+
+    std::filesystem::remove_all(temp_dir);
 }
 
 TEST_CASE("PUBLIC include propagation", "[resolve]") {

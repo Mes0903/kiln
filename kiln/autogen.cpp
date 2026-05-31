@@ -451,7 +451,7 @@ std::expected<void, std::string> generate_autogen_tasks(Target& target, GraphTra
                 // If it's a target name, resolve to its output path (or use name for custom targets)
                 auto it = all_targets.find(dep);
                 if (it != all_targets.end()) {
-                    std::string out = it->second->get_output_path();
+                    std::string out = it->second->get_output_path(&evaluator);
                     autogen_target_deps.push_back(out.empty() ? dep : std::move(out));
                 } else {
                     // Might be a file path

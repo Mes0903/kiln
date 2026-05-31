@@ -78,6 +78,7 @@ struct ModuleScanContext {
 
 struct LinkContext {
     std::string output;
+    std::string import_library;
     std::vector<std::string> objects;
     std::vector<std::string> lib_dirs;
     std::vector<std::string> libs;

@@ -13,6 +13,42 @@
 
 namespace kiln {
 
+namespace {
+
+bool uses_msvc_import_library(const GenexEvaluationContext& ctx, const Target& target) {
+    return target.get_type() == TargetType::SHARED_LIBRARY && !ctx.import_library_suffix.empty()
+           && (ctx.cxx_compiler_id == "MSVC" || ctx.c_compiler_id == "MSVC");
+}
+
+std::string target_artifact_base_name(GenexEvaluator& eval, const Target& target, bool linker_artifact) {
+    const bool import_library = uses_msvc_import_library(eval.context(), target);
+    std::string artifact_property;
+
+    switch (target.get_type()) {
+    case TargetType::EXECUTABLE:
+        artifact_property = "RUNTIME_OUTPUT_NAME";
+        break;
+    case TargetType::STATIC_LIBRARY:
+        artifact_property = "ARCHIVE_OUTPUT_NAME";
+        break;
+    case TargetType::SHARED_LIBRARY:
+        artifact_property = linker_artifact && import_library ? "ARCHIVE_OUTPUT_NAME"
+                            : import_library                 ? "RUNTIME_OUTPUT_NAME"
+                                                             : "LIBRARY_OUTPUT_NAME";
+        break;
+    default:
+        break;
+    }
+
+    std::string base;
+    if (!artifact_property.empty()) base = eval.evaluate_target_property(target, artifact_property);
+    if (base.empty()) base = eval.evaluate_target_property(target, "OUTPUT_NAME");
+    if (base.empty()) base = target.get_name();
+    return base;
+}
+
+} // namespace
+
 GenexEvaluationContext GenexEvaluationContext::from_interpreter(const Interpreter& interp, const TargetMap& all_targets) {
     GenexEvaluationContext ctx;
     ctx.build_type = interp.get_variable("CMAKE_BUILD_TYPE");
@@ -28,7 +64,10 @@ GenexEvaluationContext GenexEvaluationContext::from_interpreter(const Interprete
     ctx.static_library_suffix = interp.get_variable("CMAKE_STATIC_LIBRARY_SUFFIX");
     ctx.shared_library_prefix = interp.get_variable("CMAKE_SHARED_LIBRARY_PREFIX");
     ctx.shared_library_suffix = interp.get_variable("CMAKE_SHARED_LIBRARY_SUFFIX");
+    ctx.import_library_prefix = interp.get_variable("CMAKE_IMPORT_LIBRARY_PREFIX");
+    ctx.import_library_suffix = interp.get_variable("CMAKE_IMPORT_LIBRARY_SUFFIX");
     ctx.executable_suffix = interp.get_variable("CMAKE_EXECUTABLE_SUFFIX");
+    ctx.object_suffix = interp.get_variable("CMAKE_OBJECT_FILE_SUFFIX");
     ctx.phase = Phase::BUILD;
     ctx.source_properties = &interp.get_source_properties();
     ctx.interp = &interp;
@@ -305,7 +344,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         if (!name) return name;
         auto* target = find_target(*name);
         if (!target) { return std::unexpected("TARGET_FILE: target '" + *name + "' not found"); }
-        return target->get_output_path();
+        return target->get_output_path(this);
     }
 
     case GenexNodeType::TARGET_FILE_NAME: {
@@ -315,7 +354,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         if (!name) return name;
         auto* target = find_target(*name);
         if (!target) { return std::unexpected("TARGET_FILE_NAME: target '" + *name + "' not found"); }
-        return std::string(Path(target->get_output_path()).filename());
+        return std::string(Path(target->get_output_path(this)).filename());
     }
 
     case GenexNodeType::TARGET_FILE_DIR: {
@@ -325,7 +364,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         if (!name) return name;
         auto* target = find_target(*name);
         if (!target) { return std::unexpected("TARGET_FILE_DIR: target '" + *name + "' not found"); }
-        return std::string(Path(target->get_output_path()).parent_path());
+        return std::string(Path(target->get_output_path(this)).parent_path());
     }
 
     case GenexNodeType::TARGET_LINKER_FILE: {
@@ -333,7 +372,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         if (!ctx_.all_targets) { return std::unexpected("TARGET_LINKER_FILE requires all_targets context"); }
         auto* target = find_target(node.raw_content);
         if (!target) { return std::unexpected("TARGET_LINKER_FILE: target '" + node.raw_content + "' not found"); }
-        return target->get_output_path();
+        return target->get_linker_artifact_path(this);
     }
 
     case GenexNodeType::TARGET_LINKER_FILE_NAME: {
@@ -341,7 +380,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         if (!ctx_.all_targets) { return std::unexpected("TARGET_LINKER_FILE_NAME requires all_targets context"); }
         auto* target = find_target(node.raw_content);
         if (!target) { return std::unexpected("TARGET_LINKER_FILE_NAME: target '" + node.raw_content + "' not found"); }
-        return std::string(Path(target->get_output_path()).filename());
+        return std::string(Path(target->get_linker_artifact_path(this)).filename());
     }
 
     case GenexNodeType::TARGET_LINKER_FILE_DIR: {
@@ -349,7 +388,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         if (!ctx_.all_targets) { return std::unexpected("TARGET_LINKER_FILE_DIR requires all_targets context"); }
         auto* target = find_target(node.raw_content);
         if (!target) { return std::unexpected("TARGET_LINKER_FILE_DIR: target '" + node.raw_content + "' not found"); }
-        return std::string(Path(target->get_output_path()).parent_path());
+        return std::string(Path(target->get_linker_artifact_path(this)).parent_path());
     }
 
     case GenexNodeType::TARGET_OBJECTS: {
@@ -391,7 +430,7 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
                 }
             }
 
-            std::string obj_str = get_obj_path(binary_dir, target_name, src);
+            std::string obj_str = get_obj_path(binary_dir, target_name, src, ctx_.object_suffix.empty() ? ".o" : ctx_.object_suffix);
 
             if (!result.empty()) { result += ";"; }
             result += obj_str;
@@ -485,23 +524,26 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         return prop_value;
     }
 
-    case GenexNodeType::TARGET_FILE_BASE_NAME:
-    case GenexNodeType::TARGET_LINKER_FILE_BASE_NAME: {
-        // $<TARGET_FILE_BASE_NAME:target> / $<TARGET_LINKER_FILE_BASE_NAME:target>
+    case GenexNodeType::TARGET_FILE_BASE_NAME: {
+        // $<TARGET_FILE_BASE_NAME:target>
         if (!ctx_.all_targets) { return std::unexpected("TARGET_FILE_BASE_NAME requires all_targets context"); }
         auto* target = find_target(node.raw_content);
         if (!target) { return std::unexpected("TARGET_FILE_BASE_NAME: target '" + node.raw_content + "' not found"); }
-        std::string base = target->get_property("OUTPUT_NAME");
-        if (base.empty()) { base = target->get_name(); }
-        return base;
+        return target_artifact_base_name(*this, *target, false);
     }
 
-    case GenexNodeType::TARGET_FILE_PREFIX:
-    case GenexNodeType::TARGET_LINKER_FILE_PREFIX: {
+    case GenexNodeType::TARGET_LINKER_FILE_BASE_NAME: {
+        if (!ctx_.all_targets) { return std::unexpected("TARGET_LINKER_FILE_BASE_NAME requires all_targets context"); }
+        auto* target = find_target(node.raw_content);
+        if (!target) { return std::unexpected("TARGET_LINKER_FILE_BASE_NAME: target '" + node.raw_content + "' not found"); }
+        return target_artifact_base_name(*this, *target, true);
+    }
+
+    case GenexNodeType::TARGET_FILE_PREFIX: {
         if (!ctx_.all_targets) { return std::unexpected("TARGET_FILE_PREFIX requires all_targets context"); }
         auto* target = find_target(node.raw_content);
         if (!target) { return std::unexpected("TARGET_FILE_PREFIX: target '" + node.raw_content + "' not found"); }
-        std::string prefix_prop = target->get_property("PREFIX");
+        std::string prefix_prop = evaluate_target_property(*target, "PREFIX");
         if (!prefix_prop.empty()) { return prefix_prop; }
         auto ttype = target->get_type();
         if (ttype == TargetType::STATIC_LIBRARY) {
@@ -512,18 +554,53 @@ std::expected<std::string, std::string> GenexEvaluator::evaluate_node(const Gene
         return std::string("");
     }
 
-    case GenexNodeType::TARGET_FILE_SUFFIX:
-    case GenexNodeType::TARGET_LINKER_FILE_SUFFIX: {
+    case GenexNodeType::TARGET_LINKER_FILE_PREFIX: {
+        if (!ctx_.all_targets) { return std::unexpected("TARGET_LINKER_FILE_PREFIX requires all_targets context"); }
+        auto* target = find_target(node.raw_content);
+        if (!target) { return std::unexpected("TARGET_LINKER_FILE_PREFIX: target '" + node.raw_content + "' not found"); }
+        std::string prefix_prop = evaluate_target_property(*target, "PREFIX");
+        if (!prefix_prop.empty()) { return prefix_prop; }
+        auto ttype = target->get_type();
+        if (ttype == TargetType::STATIC_LIBRARY) {
+            return ctx_.static_library_prefix;
+        } else if (ttype == TargetType::SHARED_LIBRARY) {
+            const bool use_import_library =
+                !ctx_.import_library_suffix.empty() && (ctx_.cxx_compiler_id == "MSVC" || ctx_.c_compiler_id == "MSVC");
+            return use_import_library ? ctx_.import_library_prefix : ctx_.shared_library_prefix;
+        }
+        return std::string("");
+    }
+
+    case GenexNodeType::TARGET_FILE_SUFFIX: {
         if (!ctx_.all_targets) { return std::unexpected("TARGET_FILE_SUFFIX requires all_targets context"); }
         auto* target = find_target(node.raw_content);
         if (!target) { return std::unexpected("TARGET_FILE_SUFFIX: target '" + node.raw_content + "' not found"); }
         auto ttype = target->get_type();
-        std::string suffix_prop = target->get_property("SUFFIX");
+        std::string suffix_prop = evaluate_target_property(*target, "SUFFIX");
         if (!suffix_prop.empty()) { return suffix_prop; }
         if (ttype == TargetType::STATIC_LIBRARY) {
             return ctx_.static_library_suffix;
         } else if (ttype == TargetType::SHARED_LIBRARY) {
             return ctx_.shared_library_suffix;
+        } else if (ttype == TargetType::EXECUTABLE) {
+            return ctx_.executable_suffix;
+        }
+        return std::string("");
+    }
+
+    case GenexNodeType::TARGET_LINKER_FILE_SUFFIX: {
+        if (!ctx_.all_targets) { return std::unexpected("TARGET_LINKER_FILE_SUFFIX requires all_targets context"); }
+        auto* target = find_target(node.raw_content);
+        if (!target) { return std::unexpected("TARGET_LINKER_FILE_SUFFIX: target '" + node.raw_content + "' not found"); }
+        auto ttype = target->get_type();
+        std::string suffix_prop = evaluate_target_property(*target, "SUFFIX");
+        if (!suffix_prop.empty()) { return suffix_prop; }
+        if (ttype == TargetType::STATIC_LIBRARY) {
+            return ctx_.static_library_suffix;
+        } else if (ttype == TargetType::SHARED_LIBRARY) {
+            const bool use_import_library =
+                !ctx_.import_library_suffix.empty() && (ctx_.cxx_compiler_id == "MSVC" || ctx_.c_compiler_id == "MSVC");
+            return use_import_library ? ctx_.import_library_suffix : ctx_.shared_library_suffix;
         } else if (ttype == TargetType::EXECUTABLE) {
             return ctx_.executable_suffix;
         }

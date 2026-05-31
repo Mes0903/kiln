@@ -200,12 +200,16 @@ public:
     }
 
     CompilerCommand get_link_command(const LinkContext& ctx) const override {
-        if (ctx.is_shared) { throw std::runtime_error("MSVC shared-library linking is not implemented yet"); }
+        if (ctx.is_shared && ctx.import_library.empty()) {
+            throw std::runtime_error("MSVC shared-library linking requires an import library path");
+        }
 
         std::vector<std::string> cmd;
         cmd.push_back("link.exe");
         cmd.push_back("/NOLOGO");
+        if (ctx.is_shared) cmd.push_back("/DLL");
         cmd.push_back("/OUT:" + ctx.output);
+        if (ctx.is_shared) cmd.push_back("/IMPLIB:" + ctx.import_library);
 
         for (const auto& obj : ctx.objects) cmd.push_back(obj);
         for (const auto& dir : ctx.lib_dirs) cmd.push_back("/LIBPATH:" + dir);

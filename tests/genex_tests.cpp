@@ -343,6 +343,27 @@ TEST_CASE("GenexEvaluator - TARGET_FILE", "[genex][evaluator]") {
     REQUIRE(bad.error().find("not found") != std::string::npos);
 }
 
+TEST_CASE("GenexEvaluator - Windows MSVC shared artifacts split runtime and linker files", "[genex][evaluator][windows]") {
+    TargetMap targets;
+    targets["core"] = std::make_shared<Target>("core", TargetType::SHARED_LIBRARY, "/src", "/build");
+
+    GenexEvaluationContext ctx;
+    ctx.all_targets = &targets;
+    ctx.cxx_compiler_id = "MSVC";
+    ctx.shared_library_prefix = "";
+    ctx.shared_library_suffix = ".dll";
+    ctx.import_library_prefix = "";
+    ctx.import_library_suffix = ".lib";
+    ctx.executable_suffix = ".exe";
+    GenexEvaluator eval(ctx);
+
+    REQUIRE(eval.evaluate("$<TARGET_FILE:core>").value() == "/build/core.dll");
+    REQUIRE(eval.evaluate("$<TARGET_FILE_NAME:core>").value() == "core.dll");
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE:core>").value() == "/build/core.lib");
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_NAME:core>").value() == "core.lib");
+    REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_SUFFIX:core>").value() == ".lib");
+}
+
 TEST_CASE("GenexEvaluator - COMPILE_LANGUAGE", "[genex][evaluator]") {
     GenexEvaluationContext ctx;
     ctx.compile_language = Language::CXX;
@@ -839,8 +860,75 @@ TEST_CASE("GenexEvaluator - TARGET_FILE_BASE_NAME", "[genex][evaluator]") {
 
     // CMake ref: "custom_mylib"
     REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:mylib>").value() == "custom_mylib");
-    // No OUTPUT_NAME — falls back to target name
+    // No OUTPUT_NAME falls back to target name
     REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:plain>").value() == "plain");
+}
+
+TEST_CASE("GenexEvaluator - TARGET_FILE_BASE_NAME uses artifact-specific output names", "[genex][evaluator]") {
+    SECTION("POSIX static library uses ARCHIVE_OUTPUT_NAME") {
+        TargetMap targets;
+        auto target = std::make_shared<Target>("core", TargetType::STATIC_LIBRARY, "/src", "/build");
+        target->set_property("ARCHIVE_OUTPUT_NAME", "core_archive");
+        targets["core"] = target;
+
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        ctx.static_library_prefix = "lib";
+        ctx.static_library_suffix = ".a";
+        GenexEvaluator eval(ctx);
+
+        REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:core>").value() == "core_archive");
+        REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_BASE_NAME:core>").value() == "core_archive");
+    }
+
+    SECTION("POSIX shared library uses LIBRARY_OUTPUT_NAME") {
+        TargetMap targets;
+        auto target = std::make_shared<Target>("core", TargetType::SHARED_LIBRARY, "/src", "/build");
+        target->set_property("LIBRARY_OUTPUT_NAME", "core_shared");
+        targets["core"] = target;
+
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        ctx.shared_library_prefix = "lib";
+        ctx.shared_library_suffix = ".so";
+        GenexEvaluator eval(ctx);
+
+        REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:core>").value() == "core_shared");
+        REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_BASE_NAME:core>").value() == "core_shared");
+    }
+
+    SECTION("Windows MSVC shared library splits runtime and import library names") {
+        TargetMap targets;
+        auto target = std::make_shared<Target>("core", TargetType::SHARED_LIBRARY, "/src", "/build");
+        target->set_property("RUNTIME_OUTPUT_NAME", "core_runtime");
+        target->set_property("ARCHIVE_OUTPUT_NAME", "core_import");
+        targets["core"] = target;
+
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        ctx.cxx_compiler_id = "MSVC";
+        ctx.shared_library_prefix = "";
+        ctx.shared_library_suffix = ".dll";
+        ctx.import_library_prefix = "";
+        ctx.import_library_suffix = ".lib";
+        GenexEvaluator eval(ctx);
+
+        REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:core>").value() == "core_runtime");
+        REQUIRE(eval.evaluate("$<TARGET_LINKER_FILE_BASE_NAME:core>").value() == "core_import");
+    }
+
+    SECTION("Executable uses RUNTIME_OUTPUT_NAME") {
+        TargetMap targets;
+        auto target = std::make_shared<Target>("tool", TargetType::EXECUTABLE, "/src", "/build");
+        target->set_property("RUNTIME_OUTPUT_NAME", "tool_runtime");
+        targets["tool"] = target;
+
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        GenexEvaluator eval(ctx);
+
+        REQUIRE(eval.evaluate("$<TARGET_FILE_BASE_NAME:tool>").value() == "tool_runtime");
+    }
 }
 
 TEST_CASE("GenexEvaluator - TARGET_FILE_PREFIX", "[genex][evaluator]") {
@@ -1471,6 +1559,35 @@ TEST_CASE("BuildGraph::evaluate_genex evaluates genex in commands", "[genex][eva
         REQUIRE(finalized.inputs.size() == 2);
         REQUIRE(finalized.inputs[0] == "/path/to/debug_dep");
         REQUIRE(finalized.inputs[1] == "/always_dep");
+    }
+
+    SECTION("inputs with genex target names use evaluator-aware artifact paths") {
+        TargetMap targets;
+        targets["core_static"] = std::make_shared<Target>("core_static", TargetType::STATIC_LIBRARY, "/src", "/build");
+
+        BuildGraph graph;
+        BuildTask task;
+        task.id = "test_task";
+        task.commands = {{"echo", "hello"}};
+        task.inputs = {"$<IF:1,core_static,missing>"};
+
+        auto txn = graph.begin();
+        REQUIRE(txn.add(std::move(task)));
+        REQUIRE(txn.commit());
+
+        GenexEvaluationContext ctx;
+        ctx.all_targets = &targets;
+        ctx.cxx_compiler_id = "MSVC";
+        ctx.static_library_prefix = "";
+        ctx.static_library_suffix = ".lib";
+        ctx.phase = GenexEvaluationContext::Phase::BUILD;
+
+        auto result = graph.evaluate_genex(ctx);
+        REQUIRE(result.has_value());
+
+        auto& finalized = graph.get_task("test_task");
+        REQUIRE(finalized.inputs.size() == 1);
+        REQUIRE(finalized.inputs[0] == "/build/core_static.lib");
     }
 
     SECTION("inputs - empty genex results are dropped") {

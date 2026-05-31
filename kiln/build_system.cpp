@@ -396,7 +396,7 @@ std::expected<void, std::string> BuildGraph::evaluate_genex(const GenexEvaluatio
                             if (alias_it != ctx.target_aliases->end()) { it = ctx.all_targets->find(alias_it->second); }
                         }
                         if (it != ctx.all_targets->end()) {
-                            std::string out = it->second->get_output_path();
+                            std::string out = it->second->get_output_path(&evaluator);
                             if (!out.empty()) {
                                 new_inputs.push_back(std::move(out));
                             } else {
@@ -1468,7 +1468,7 @@ std::expected<void, std::string> BuildGraph::execute(const std::string& build_di
                                            verb = "  Uic'ing";
                                        } else if (std::holds_alternative<RccTask>(task.kind)) {
                                            verb = "  Rcc'ing";
-                                       } else if (task.parent_target && id == task.parent_target->get_output_path()
+                                       } else if (task.parent_target && std::holds_alternative<LinkTask>(task.kind)
                                                   && task.parent_target->get_type() != TargetType::CUSTOM) {
                                            verb = "  Linking";
                                        }

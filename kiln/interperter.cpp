@@ -1145,10 +1145,14 @@ std::expected<BuildGraph, BuildError> Interpreter::generate_build_graph(const st
         auto commit_result = txn.commit();
         if (!commit_result) { return std::unexpected(BuildError{current_file_, commit_result.error()}); }
 
+        auto output_genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
+        GenexEvaluator output_evaluator(output_genex_ctx);
         std::unordered_map<std::string, std::string> output_to_target;
         for (const auto& [name, target] : targets_) {
-            auto path = target->get_output_path();
-            if (!path.empty()) output_to_target[path] = name;
+            auto artifacts = target->get_artifacts(&output_evaluator);
+            for (const auto& path : {artifacts.runtime, artifacts.linker, artifacts.archive, artifacts.import_library}) {
+                if (!path.empty()) output_to_target[path] = name;
+            }
             if (auto* ct = dynamic_cast<CustomTarget*>(target.get())) {
                 for (const auto& bp : ct->get_byproducts()) { output_to_target[bp] = name; }
             }
@@ -1191,7 +1195,7 @@ std::expected<BuildGraph, BuildError> Interpreter::generate_build_graph(const st
                 auto cc_it = cc_rules.find(missing);
                 if (cc_it != cc_rules.end() && !generated_cc_for_resolver.count(missing)) {
                     if (auto r = generate_custom_command_task_for_rule(resolve_txn, *cc_it->second, targets_, cc_rules,
-                                                                       generated_cc_for_resolver, get_target_aliases());
+                                                                       generated_cc_for_resolver, output_evaluator, get_target_aliases());
                         !r) {
                         return std::unexpected(BuildError{current_file_, r.error()});
                     }
@@ -1207,11 +1211,13 @@ std::expected<BuildGraph, BuildError> Interpreter::generate_build_graph(const st
     for (auto& [name, target] : targets_) { target->resolve_deferred_circular_deps(targets_); }
 
     // Wire link dependencies
+    auto output_genex_ctx = GenexEvaluationContext::from_interpreter(*this, targets_);
+    GenexEvaluator output_evaluator(output_genex_ctx);
     for (const auto& name : targets_to_build) {
         auto target = targets_[name];
         if (target->get_type() == TargetType::STATIC_LIBRARY) continue;
 
-        std::string out_path = target->get_output_path();
+        std::string out_path = target->get_output_path(&output_evaluator);
         std::string task_id = out_path.empty() ? target->get_name() : out_path;
 
         if (graph.has_task(task_id)) {
