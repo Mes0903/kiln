@@ -3,12 +3,13 @@
 #include "../command_parser.hpp"
 #include "../profiler.hpp"
 #include "../CMakeArray.hpp"
+#include "../platform/profile.hpp"
 #include "../utils.hpp"
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <cstdlib>
-#include <sys/stat.h>
+#include <cctype>
 #include <algorithm>
 #include <sstream>
 #include <iostream>
@@ -104,6 +105,86 @@ std::vector<std::filesystem::path> apply_find_root_path(Interpreter& interp, con
 
 namespace { // re-open anonymous namespace for the rest of the helpers
 
+platform::PlatformProfile effective_platform_profile(Interpreter& interp) {
+    std::string compiler_id = interp.get_variable("CMAKE_C_COMPILER_ID");
+    if (compiler_id.empty()) compiler_id = interp.get_variable("CMAKE_CXX_COMPILER_ID");
+
+    std::string system_name = interp.get_variable("CMAKE_SYSTEM_NAME");
+    if (system_name.empty()) system_name = interp.get_variable("CMAKE_HOST_SYSTEM_NAME");
+    if (system_name.empty()) return platform::host_profile();
+
+    return platform::profile_for(system_name, compiler_id);
+}
+
+bool is_windows_profile(Interpreter& interp) {
+    return effective_platform_profile(interp).path_list_separator == ";";
+}
+
+char host_env_path_separator() {
+    auto profile = platform::host_profile();
+    return profile.path_list_separator.empty() ? ':' : profile.path_list_separator.front();
+}
+
+void append_unique(std::vector<std::string>& values, std::string value) {
+    if (std::find(values.begin(), values.end(), value) == values.end()) { values.push_back(std::move(value)); }
+}
+
+std::vector<std::filesystem::path> split_path_list(std::string_view value, char separator) {
+    std::vector<std::filesystem::path> result;
+    size_t start = 0;
+    for (size_t i = 0; i <= value.size(); ++i) {
+        if (i == value.size() || value[i] == separator) {
+            if (i > start) result.emplace_back(std::string(value.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    return result;
+}
+
+std::vector<std::filesystem::path> split_env_path(const char* env_value, char separator) {
+    if (!env_value) return {};
+    return split_path_list(env_value, separator);
+}
+
+std::vector<std::filesystem::path> split_cmake_path_list(std::string_view value) {
+    std::vector<std::filesystem::path> result;
+    for (auto item : CMakeArrayIterator(value)) {
+        if (!item.empty()) result.emplace_back(std::string(item));
+    }
+    return result;
+}
+
+std::vector<std::string> split_cmake_string_list(std::string_view value) {
+    std::vector<std::string> result;
+    for (auto item : CMakeArrayIterator(value)) { result.emplace_back(std::string(item)); }
+    return result;
+}
+
+void append_paths(std::vector<std::filesystem::path>& paths, const std::vector<std::filesystem::path>& more) {
+    paths.insert(paths.end(), more.begin(), more.end());
+}
+
+bool has_path_component(std::string_view value) {
+    return value.find('/') != std::string_view::npos || value.find('\\') != std::string_view::npos;
+}
+
+std::string ascii_lower(std::string_view value) {
+    std::string result(value);
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return result;
+}
+
+bool ends_with_case_insensitive(std::string_view value, std::string_view suffix) {
+    if (suffix.empty() || value.size() < suffix.size()) return false;
+    return ascii_lower(value.substr(value.size() - suffix.size())) == ascii_lower(suffix);
+}
+
+bool starts_with_case_insensitive(std::string_view value, std::string_view prefix) {
+    if (prefix.empty() || value.size() < prefix.size()) return false;
+    return ascii_lower(value.substr(0, prefix.size())) == ascii_lower(prefix);
+}
+
 // Parse a path argument that could be literal or "ENV VAR_NAME"
 std::filesystem::path parse_path_arg(const std::string& arg) {
     if (arg.starts_with("ENV ")) {
@@ -112,26 +193,6 @@ std::filesystem::path parse_path_arg(const std::string& arg) {
         return value ? std::filesystem::path(value) : std::filesystem::path();
     }
     return std::filesystem::path(arg);
-}
-
-// Split PATH-like environment variable by colons
-std::vector<std::filesystem::path> split_env_path(const char* env_value) {
-    std::vector<std::filesystem::path> result;
-    if (!env_value) return result;
-
-    std::string value(env_value);
-    size_t start = 0;
-    size_t end = value.find(':');
-
-    while (end != std::string::npos) {
-        if (end > start) { result.emplace_back(value.substr(start, end - start)); }
-        start = end + 1;
-        end = value.find(':', start);
-    }
-
-    if (start < value.length()) { result.emplace_back(value.substr(start)); }
-
-    return result;
 }
 
 // Collect <PackageName>_ROOT prefixes from CMake vars and env vars.
@@ -220,21 +281,10 @@ std::vector<std::filesystem::path> build_search_paths(Interpreter& interp, const
             search_paths.push_back(prefix);
         }
     };
-    auto split_cmake_list = [](const std::string& s) {
-        std::vector<std::filesystem::path> result;
-        size_t start = 0;
-        for (size_t i = 0; i <= s.size(); ++i) {
-            if (i == s.size() || s[i] == ';') {
-                if (i > start) result.emplace_back(s.substr(start, i - start));
-                start = i + 1;
-            }
-        }
-        return result;
-    };
     std::string prefix_path = interp.get_variable("CMAKE_PREFIX_PATH");
-    if (!prefix_path.empty()) { append_prefix_paths(split_cmake_list(prefix_path)); }
+    if (!prefix_path.empty()) { append_prefix_paths(split_cmake_path_list(prefix_path)); }
     if (const char* env_prefix = std::getenv("CMAKE_PREFIX_PATH")) {
-        if (*env_prefix) append_prefix_paths(split_env_path(env_prefix));
+        if (*env_prefix) append_prefix_paths(split_env_path(env_prefix, host_env_path_separator()));
     }
 
     // 3. HINTS paths (system introspection)
@@ -268,6 +318,8 @@ struct SearchResult {
 // Compute cache signature for find command
 std::string compute_find_signature(const std::string& cmd_name, const FindOptions& opts,
                                    const std::vector<std::filesystem::path>& search_paths,
+                                   const std::vector<std::string>& variants,
+                                   const std::string& profile_id,
                                    // Toolchain context. Most of this is already reflected in search_paths
                                    // (CMAKE_FIND_ROOT_PATH re-rooting changes the resolved paths), but
                                    // mixing them in explicitly defends against edge cases where a toolchain
@@ -286,6 +338,13 @@ std::string compute_find_signature(const std::string& cmd_name, const FindOption
 
     // Search paths (in order - matters!)
     for (const auto& path : search_paths) { oss << "path:" << path.string() << "|"; }
+
+    // Candidate names (in order) can change when the effective platform or
+    // suffix variables change while the visible search paths stay the same.
+    for (const auto& variant : variants) { oss << "variant:" << variant << "|"; }
+
+    oss << "profile:" << profile_id << "|";
+    if (!opts.validator.empty()) oss << "validator:" << opts.validator << "|";
 
     // Suffixes (in order)
     for (const auto& suffix : opts.path_suffixes) { oss << "suffix:" << suffix << "|"; }
@@ -329,7 +388,7 @@ bool validate_find_cache_entry(Interpreter& interp, const FindResultCacheEntry& 
 // Core search engine - supports both default and NAMES_PER_DIR algorithms
 SearchResult search_for_file(Interpreter& interp, const FindOptions& opts, const std::vector<std::filesystem::path>& default_paths,
                              std::vector<std::string> (*name_variants)(Interpreter&, const std::string&),
-                             bool (*builtin_validator)(const std::filesystem::path&), const std::string& command_name) {
+                             bool (*builtin_validator)(Interpreter&, const std::filesystem::path&), const std::string& command_name) {
     auto search_paths = build_search_paths(interp, opts, default_paths, command_name);
 
     // Apply CMAKE_FIND_ROOT_PATH re-rooting
@@ -369,9 +428,9 @@ SearchResult search_for_file(Interpreter& interp, const FindOptions& opts, const
                     for (const auto& variant : variants) {
                         std::filesystem::path full_path = check_dir / variant;
                         // For names with path components (e.g., X11/X.h), use single-parameter check
-                        bool exists = (variant.find('/') != std::string::npos) ? interp.cached_file_exists(full_path.string())
-                                                                               : interp.cached_file_exists(check_dir.string(), variant);
-                        bool valid = exists && builtin_validator(full_path);
+                        bool exists = has_path_component(variant) ? interp.cached_file_exists(full_path.string())
+                                                                  : interp.cached_file_exists(check_dir.string(), variant);
+                        bool valid = exists && builtin_validator(interp, full_path);
 
                         // Check user-provided VALIDATOR function if specified
                         if (valid && !opts.validator.empty()) {
@@ -431,9 +490,9 @@ SearchResult search_for_file(Interpreter& interp, const FindOptions& opts, const
                     for (const auto& variant : variants) {
                         std::filesystem::path full_path = check_dir / variant;
                         // For names with path components (e.g., X11/X.h), use single-parameter check
-                        bool exists = (variant.find('/') != std::string::npos) ? interp.cached_file_exists(full_path.string())
-                                                                               : interp.cached_file_exists(check_dir.string(), variant);
-                        bool valid = exists && builtin_validator(full_path);
+                        bool exists = has_path_component(variant) ? interp.cached_file_exists(full_path.string())
+                                                                  : interp.cached_file_exists(check_dir.string(), variant);
+                        bool valid = exists && builtin_validator(interp, full_path);
 
                         // Check user-provided VALIDATOR function if specified
                         if (valid && !opts.validator.empty()) {
@@ -472,27 +531,50 @@ SearchResult search_for_file(Interpreter& interp, const FindOptions& opts, const
 }
 
 // Validate that a file is an executable program
-bool validate_program(const std::filesystem::path& p) {
+bool validate_program(Interpreter& interp, const std::filesystem::path& p) {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(p, ec)) { return false; }
 
-    // Check if file has executable permission (owner, group, or others)
-    struct stat st;
-    if (stat(p.c_str(), &st) != 0) { return false; }
+    if (is_windows_profile(interp)) return true;
 
-    return (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0;
+    auto perms = std::filesystem::status(p, ec).permissions();
+    if (ec) return false;
+    using perms_t = std::filesystem::perms;
+    return (perms & (perms_t::owner_exec | perms_t::group_exec | perms_t::others_exec)) != perms_t::none;
 }
 
 // Validate that a file exists and is a regular file
-bool validate_file(const std::filesystem::path& p) {
+bool validate_file(Interpreter&, const std::filesystem::path& p) {
     std::error_code ec;
     return std::filesystem::is_regular_file(p, ec);
 }
 
-// Generate name variants for programs (no transformation on Linux)
 std::vector<std::string> program_variants(Interpreter& interp, const std::string& name) {
-    // TODO: On Windows, would add .exe, .com, .bat extensions
-    return {name};
+    std::vector<std::string> variants;
+    append_unique(variants, name);
+
+    if (!is_windows_profile(interp)) return variants;
+
+    std::vector<std::string> suffixes;
+    append_unique(suffixes, interp.get_variable("CMAKE_EXECUTABLE_SUFFIX"));
+    append_unique(suffixes, ".exe");
+    append_unique(suffixes, ".com");
+    append_unique(suffixes, ".bat");
+    append_unique(suffixes, ".cmd");
+
+    bool already_has_executable_suffix = false;
+    for (const auto& suffix : suffixes) {
+        if (ends_with_case_insensitive(name, suffix)) {
+            already_has_executable_suffix = true;
+            break;
+        }
+    }
+    if (already_has_executable_suffix) return variants;
+
+    for (const auto& suffix : suffixes) {
+        if (!suffix.empty()) append_unique(variants, name + suffix);
+    }
+    return variants;
 }
 
 // Generate name variants for libraries (lib prefix and .so/.a suffixes)
@@ -506,46 +588,34 @@ std::vector<std::string> library_variants(Interpreter& interp, const std::string
     std::vector<std::string> prefixes;
     std::vector<std::string> suffixes;
 
-    if (!prefixes_str.empty()) {
-        // Split by semicolon
-        size_t start = 0;
-        size_t end = prefixes_str.find(';');
-        while (end != std::string::npos) {
-            prefixes.push_back(prefixes_str.substr(start, end - start));
-            start = end + 1;
-            end = prefixes_str.find(';', start);
+    if (!prefixes_str.empty()) { prefixes = split_cmake_string_list(prefixes_str); }
+    else { prefixes = effective_platform_profile(interp).find_library_prefixes; }
+
+    if (!suffixes_str.empty()) { suffixes = split_cmake_string_list(suffixes_str); }
+    else { suffixes = effective_platform_profile(interp).find_library_suffixes; }
+
+    bool name_has_configured_form = false;
+    for (const auto& suffix : suffixes) {
+        if (ends_with_case_insensitive(name, suffix)) {
+            name_has_configured_form = true;
+            break;
         }
-        prefixes.push_back(prefixes_str.substr(start));
-    } else {
-        // Linux defaults
-        prefixes = {"lib", ""};
+    }
+    if (!name_has_configured_form) {
+        for (const auto& prefix : prefixes) {
+            if (starts_with_case_insensitive(name, prefix)) {
+                name_has_configured_form = true;
+                break;
+            }
+        }
     }
 
-    if (!suffixes_str.empty()) {
-        // Split by semicolon
-        size_t start = 0;
-        size_t end = suffixes_str.find(';');
-        while (end != std::string::npos) {
-            suffixes.push_back(suffixes_str.substr(start, end - start));
-            start = end + 1;
-            end = suffixes_str.find(';', start);
-        }
-        suffixes.push_back(suffixes_str.substr(start));
-    } else {
-        // Linux defaults
-        suffixes = {".so", ".a", ""};
-    }
-
-    // Try name as-is first (might already have lib prefix or suffix)
-    variants.push_back(name);
+    if (!is_windows_profile(interp) || name_has_configured_form) append_unique(variants, name);
 
     // Then try all combinations
     for (const auto& prefix : prefixes) {
         for (const auto& suffix : suffixes) {
-            std::string variant = prefix + name + suffix;
-            if (variant != name) { // Don't duplicate
-                variants.push_back(variant);
-            }
+            append_unique(variants, prefix + name + suffix);
         }
     }
 
@@ -563,13 +633,14 @@ std::vector<std::filesystem::path> get_program_default_paths(Interpreter& interp
 
     // PATH environment variable
     const char* path_env = std::getenv("PATH");
-    auto path_dirs = split_env_path(path_env);
-    paths.insert(paths.end(), path_dirs.begin(), path_dirs.end());
+    append_paths(paths, split_env_path(path_env, host_env_path_separator()));
 
-    // Standard system paths
-    paths.emplace_back("/usr/local/bin");
-    paths.emplace_back("/usr/bin");
-    paths.emplace_back("/bin");
+    if (!is_windows_profile(interp)) {
+        // Standard system paths
+        paths.emplace_back("/usr/local/bin");
+        paths.emplace_back("/usr/bin");
+        paths.emplace_back("/bin");
+    }
 
     return paths;
 }
@@ -577,24 +648,49 @@ std::vector<std::filesystem::path> get_program_default_paths(Interpreter& interp
 // Get default search paths for libraries
 std::vector<std::filesystem::path> get_library_default_paths(Interpreter& interp) {
     std::vector<std::filesystem::path> paths;
+    const bool windows = is_windows_profile(interp);
 
-    // LD_LIBRARY_PATH environment variable
-    const char* ld_path = std::getenv("LD_LIBRARY_PATH");
-    auto ld_dirs = split_env_path(ld_path);
-    paths.insert(paths.end(), ld_dirs.begin(), ld_dirs.end());
+    append_paths(paths, split_cmake_path_list(interp.get_variable("CMAKE_LIBRARY_PATH")));
 
-    // Standard system library paths
-    paths.emplace_back("/usr/local/lib");
-    paths.emplace_back("/usr/local/lib64");
-    paths.emplace_back("/usr/lib");
-    paths.emplace_back("/usr/lib64");
-    paths.emplace_back("/lib");
-    paths.emplace_back("/lib64");
+    if (windows) {
+        append_paths(paths, split_env_path(std::getenv("LIB"), host_env_path_separator()));
+    } else {
+        append_paths(paths, split_env_path(std::getenv("LD_LIBRARY_PATH"), host_env_path_separator()));
+    }
 
-    // Architecture-specific paths (common on Debian/Ubuntu)
-    if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
-        paths.emplace_back("/usr/lib/" + triplet);
-        paths.emplace_back("/lib/" + triplet);
+    append_paths(paths, split_cmake_path_list(interp.get_variable("CMAKE_SYSTEM_LIBRARY_PATH")));
+
+    if (!windows) {
+        // Standard system library paths
+        paths.emplace_back("/usr/local/lib");
+        paths.emplace_back("/usr/local/lib64");
+        paths.emplace_back("/usr/lib");
+        paths.emplace_back("/usr/lib64");
+        paths.emplace_back("/lib");
+        paths.emplace_back("/lib64");
+
+        // Architecture-specific paths (common on Debian/Ubuntu)
+        if (auto& triplet = gnu_arch_triplet(); !triplet.empty()) {
+            paths.emplace_back("/usr/lib/" + triplet);
+            paths.emplace_back("/lib/" + triplet);
+        }
+    }
+
+    return paths;
+}
+
+std::vector<std::filesystem::path> get_include_default_paths(Interpreter& interp) {
+    std::vector<std::filesystem::path> paths;
+    const bool windows = is_windows_profile(interp);
+
+    append_paths(paths, split_cmake_path_list(interp.get_variable("CMAKE_INCLUDE_PATH")));
+    if (windows) { append_paths(paths, split_env_path(std::getenv("INCLUDE"), host_env_path_separator())); }
+    append_paths(paths, split_cmake_path_list(interp.get_variable("CMAKE_SYSTEM_INCLUDE_PATH")));
+
+    if (!windows) {
+        // Standard include paths
+        paths.emplace_back("/usr/local/include");
+        paths.emplace_back("/usr/include");
     }
 
     return paths;
@@ -602,43 +698,19 @@ std::vector<std::filesystem::path> get_library_default_paths(Interpreter& interp
 
 // Get default search paths for files (typically headers)
 std::vector<std::filesystem::path> get_file_default_paths(Interpreter& interp) {
-    std::vector<std::filesystem::path> paths;
-
-    // Standard include paths
-    paths.emplace_back("/usr/local/include");
-    paths.emplace_back("/usr/include");
-
-    return paths;
+    return get_include_default_paths(interp);
 }
 
-// Get default search paths for find_path (includes CMAKE_INCLUDE_PATH)
+// Get default search paths for find_path
 std::vector<std::filesystem::path> get_path_default_paths(Interpreter& interp) {
-    std::vector<std::filesystem::path> paths;
-
-    // CMAKE_INCLUDE_PATH variable
-    std::string include_path = interp.get_variable("CMAKE_INCLUDE_PATH");
-    if (!include_path.empty()) {
-        auto include_dirs = split_env_path(include_path.c_str());
-        paths.insert(paths.end(), include_dirs.begin(), include_dirs.end());
-    }
-
-    // INCLUDE environment variable
-    const char* include_env = std::getenv("INCLUDE");
-    auto include_env_dirs = split_env_path(include_env);
-    paths.insert(paths.end(), include_env_dirs.begin(), include_env_dirs.end());
-
-    // Standard include paths
-    paths.emplace_back("/usr/local/include");
-    paths.emplace_back("/usr/include");
-
-    return paths;
+    return get_include_default_paths(interp);
 }
 
 // Generic registration helper for all find commands
 void register_find_command(Interpreter& interp, const std::string& cmd_name,
                            std::vector<std::filesystem::path> (*get_defaults)(Interpreter&),
                            std::vector<std::string> (*get_variants)(Interpreter&, const std::string&),
-                           bool (*validator)(const std::filesystem::path&),
+                           bool (*validator)(Interpreter&, const std::filesystem::path&),
                            bool return_directory = false // find_path returns directory, not file
 ) {
     interp.add_builtin(cmd_name, [=](Interpreter& interp, const std::vector<std::string>& args) {
@@ -706,8 +778,16 @@ void register_find_command(Interpreter& interp, const std::string& cmd_name,
         std::string root_mode = get_find_root_path_mode(interp, opts, cmd_name);
         search_paths = apply_find_root_path(interp, search_paths, root_mode);
 
-        std::string signature = compute_find_signature(cmd_name, opts, search_paths, interp.get_variable("CMAKE_SYSROOT"),
-                                                       interp.get_variable("CMAKE_FIND_ROOT_PATH"), root_mode);
+        std::vector<std::string> signature_variants;
+        for (const auto& name : opts.names) {
+            auto variants = get_variants(interp, name);
+            signature_variants.insert(signature_variants.end(), variants.begin(), variants.end());
+        }
+
+        std::string signature = compute_find_signature(cmd_name, opts, search_paths, signature_variants,
+                                                       effective_platform_profile(interp).profile_id,
+                                                       interp.get_variable("CMAKE_SYSROOT"), interp.get_variable("CMAKE_FIND_ROOT_PATH"),
+                                                       root_mode);
 
         auto& cache = interp.get_cache_store();
         auto cached = cache.lookup<CacheSubsystem::FindResult>(signature);

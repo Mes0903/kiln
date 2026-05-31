@@ -2,10 +2,77 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include "kiln/interperter.hpp"
 #include "kiln/cmake-language.hpp"
+#include "kiln/platform/env.hpp"
 #include <sstream>
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <optional>
+#include <string>
+#include <utility>
+
+namespace {
+
+class ScopedEnvVar {
+  public:
+    ScopedEnvVar(std::string name, std::string value) : name_(std::move(name)), old_value_(kiln::platform::get_env(name_)) {
+        kiln::platform::set_env(name_, value);
+    }
+
+    ~ScopedEnvVar() {
+        if (old_value_) {
+            kiln::platform::set_env(name_, *old_value_);
+        } else {
+            kiln::platform::unset_env(name_);
+        }
+    }
+
+  private:
+    std::string name_;
+    std::optional<std::string> old_value_;
+};
+
+class ScopedTempDir {
+  public:
+    explicit ScopedTempDir(std::string name) {
+        static std::atomic<unsigned long long> counter{0};
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path()
+              / (std::move(name) + "-" + std::to_string(now) + "-" + std::to_string(counter.fetch_add(1)));
+        std::filesystem::remove_all(path_);
+        std::filesystem::create_directories(path_);
+    }
+
+    ~ScopedTempDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+  private:
+    std::filesystem::path path_;
+};
+
+std::string append_existing_env(std::string value, std::string_view separator, const std::string& name) {
+    if (auto old_value = kiln::platform::get_env(name); old_value && !old_value->empty()) {
+        value += separator;
+        value += *old_value;
+    }
+    return value;
+}
+
+std::string host_env_separator() {
+#ifdef _WIN32
+    return ";";
+#else
+    return ":";
+#endif
+}
+
+} // namespace
 
 std::string run_script(std::string src) {
     std::stringstream output;
@@ -3677,6 +3744,128 @@ TEST_CASE("find_library with custom prefixes and suffixes", "[interpreter][find]
         endif()
     )");
     REQUIRE(output.find("Found math library") != std::string::npos);
+}
+
+TEST_CASE("find_program uses host PATH separator and Windows executable suffixes", "[interpreter][find][windows]") {
+    ScopedTempDir temp_dir("kiln_test_find_program_windows");
+    auto first_dir = temp_dir.path() / "first";
+    auto second_dir = temp_dir.path() / "second";
+    std::filesystem::create_directories(first_dir);
+    std::filesystem::create_directories(second_dir);
+
+    const std::string tool_name = "kiln_task6_tool";
+    auto tool_path = second_dir / (tool_name + ".exe");
+    std::ofstream tool_file(tool_path);
+    tool_file << "not a real executable";
+    tool_file.close();
+
+    const std::string env_sep = host_env_separator();
+    ScopedEnvVar path_env("PATH", append_existing_env(first_dir.generic_string() + env_sep + second_dir.generic_string(), env_sep, "PATH"));
+
+    auto output = run_script(R"(
+        set(CMAKE_SYSTEM_NAME Windows)
+        set(CMAKE_C_COMPILER_ID MSVC)
+        set(CMAKE_EXECUTABLE_SUFFIX ".exe")
+        find_program(TOOL_PATH )"
+                             + tool_name + R"cmake()
+        message("Tool: ${TOOL_PATH}")
+    )cmake");
+
+    REQUIRE(output.find("Tool: ") != std::string::npos);
+    REQUIRE(output.find(tool_name + ".exe") != std::string::npos);
+    REQUIRE(output.find("NOTFOUND") == std::string::npos);
+}
+
+TEST_CASE("find_library uses Windows MSVC LIB paths and import library suffix order", "[interpreter][find][windows]") {
+    ScopedTempDir temp_dir("kiln_test_find_library_windows");
+    auto first_dir = temp_dir.path() / "first";
+    auto second_dir = temp_dir.path() / "second";
+    std::filesystem::create_directories(first_dir);
+    std::filesystem::create_directories(second_dir);
+
+    const std::string lib_name = "kiln_task6_sample";
+    std::ofstream(first_dir / (lib_name + ".dll")) << "runtime dll is not a link library";
+    std::ofstream(second_dir / (lib_name + ".dll.lib")) << "import library";
+    std::ofstream(second_dir / (lib_name + ".lib")) << "static or import library";
+
+    const std::string env_sep = host_env_separator();
+    ScopedEnvVar lib_env("LIB", append_existing_env(first_dir.generic_string() + env_sep + second_dir.generic_string(), env_sep, "LIB"));
+
+    auto output = run_script(R"(
+        set(CMAKE_SYSTEM_NAME Windows)
+        set(CMAKE_C_COMPILER_ID MSVC)
+        set(CMAKE_FIND_LIBRARY_PREFIXES ";lib")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".dll.lib;.lib;.a")
+        find_library(SAMPLE_LIB )"
+                             + lib_name + R"cmake()
+        message("Sample: ${SAMPLE_LIB}")
+    )cmake");
+
+    REQUIRE(output.find("Sample: ") != std::string::npos);
+    REQUIRE(output.find(lib_name + ".dll.lib") != std::string::npos);
+    REQUIRE(output.find(lib_name + ".dll\n") == std::string::npos);
+    REQUIRE(output.find("NOTFOUND") == std::string::npos);
+}
+
+TEST_CASE("find_path uses Windows INCLUDE and CMake include lists", "[interpreter][find][windows]") {
+    ScopedTempDir temp_dir("kiln_test_find_path_windows");
+    auto first_dir = temp_dir.path() / "first";
+    auto second_dir = temp_dir.path() / "second";
+    auto third_dir = temp_dir.path() / "third";
+    auto fourth_dir = temp_dir.path() / "fourth";
+    std::filesystem::create_directories(first_dir);
+    std::filesystem::create_directories(second_dir);
+    std::filesystem::create_directories(third_dir);
+    std::filesystem::create_directories(fourth_dir);
+
+    std::ofstream(second_dir / "from_include.h") << "// include env";
+    std::ofstream(fourth_dir / "from_system.h") << "// system include";
+
+    const std::string env_sep = host_env_separator();
+    ScopedEnvVar include_env("INCLUDE",
+                             append_existing_env(first_dir.generic_string() + env_sep + second_dir.generic_string(), env_sep, "INCLUDE"));
+
+    auto output = run_script(R"(
+        set(CMAKE_SYSTEM_NAME Windows)
+        set(CMAKE_C_COMPILER_ID MSVC)
+        set(CMAKE_SYSTEM_INCLUDE_PATH ")"
+                             + third_dir.generic_string() + ";" + fourth_dir.generic_string() + R"(")
+        find_path(INCLUDE_DIR from_include.h)
+        find_path(SYSTEM_INCLUDE_DIR from_system.h)
+        message("Include: ${INCLUDE_DIR}")
+        message("SystemInclude: ${SYSTEM_INCLUDE_DIR}")
+    )");
+
+    REQUIRE(output.find("Include: ") != std::string::npos);
+    REQUIRE(output.find(second_dir.generic_string()) != std::string::npos);
+    REQUIRE(output.find("SystemInclude: ") != std::string::npos);
+    REQUIRE(output.find(fourth_dir.generic_string()) != std::string::npos);
+    REQUIRE(output.find("NOTFOUND") == std::string::npos);
+}
+
+TEST_CASE("find command cache distinguishes validators", "[interpreter][find]") {
+    ScopedTempDir temp_dir("kiln_test_find_validator_cache");
+    std::ofstream(temp_dir.path() / "marker.txt") << "cache marker";
+
+    auto output = run_script(R"(
+        function(reject_candidate candidate)
+            set(REJECTED "" PARENT_SCOPE)
+        endfunction()
+
+        function(accept_candidate candidate)
+        endfunction()
+
+        find_file(REJECTED marker.txt PATHS ")"
+                             + temp_dir.path().generic_string() + R"(" NO_DEFAULT_PATH VALIDATOR reject_candidate)
+        find_file(ACCEPTED marker.txt PATHS ")"
+                             + temp_dir.path().generic_string() + R"(" NO_DEFAULT_PATH VALIDATOR accept_candidate)
+        message("Rejected: ${REJECTED}")
+        message("Accepted: ${ACCEPTED}")
+    )");
+
+    REQUIRE(output.find("Rejected: REJECTED-NOTFOUND") != std::string::npos);
+    REQUIRE(output.find("Accepted: ") != std::string::npos);
+    REQUIRE(output.find("marker.txt") != std::string::npos);
 }
 
 TEST_CASE("find commands with PATH_SUFFIXES", "[interpreter][find]") {
